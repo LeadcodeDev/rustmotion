@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "audio": [
+    {
+      "src": "examples/test_tone.wav",
+      "start": 0,
+      "volume": 0.5,
+      "fade_in": 0.5,
+      "fade_out": 1.0
+    }
+  ],
+  "scenes": [
+    {
+      "duration": 2.0,
+      "layers": [
+        {
+          "type": "text",
+          "content": "Audio Test",
+          "position": { "x": 540, "y": 900 },
+          "font_size": 72,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in_up"
+        }
+      ]
+    },
+    {
+      "duration": 2.0,
+      "background": "#1e3a5f",
+      "transition": { "type": "fade", "duration": 0.5 },
+      "layers": [
+        {
+          "type": "text",
+          "content": "With 440Hz Tone",
+          "position": { "x": 540, "y": 900 },
+          "font_size": 56,
+          "color": "#22c55e",
+          "align": "center"
+        }
+      ]
+    }
+  ]
+}

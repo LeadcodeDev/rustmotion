@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "background": "#1a1a2e"
+  },
+  "scenes": [
+    {
+      "duration": 3.0,
+      "background": "#1a1a2e",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 90, "y": 600 },
+          "size": { "width": 900, "height": 400 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#3b82f6", "#8b5cf6"],
+            "angle": 45
+          },
+          "corner_radius": 24
+        },
+        {
+          "type": "text",
+          "content": "Hello Rustmotion!",
+          "position": { "x": 540, "y": 780 },
+          "font_size": 64,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center"
+        },
+        {
+          "type": "text",
+          "content": "Video generation from JSON",
+          "position": { "x": 540, "y": 870 },
+          "font_size": 32,
+          "color": "#94a3b8",
+          "align": "center"
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 440, "y": 1200 },
+          "size": { "width": 200, "height": 200 },
+          "fill": "#22c55e",
+          "opacity": 0.8
+        }
+      ]
+    },
+    {
+      "duration": 2.0,
+      "background": "#0f172a",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1080, "height": 1920 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#1e3a5f", "#0f172a"]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Powered by Rust",
+          "position": { "x": 540, "y": 960 },
+          "font_size": 56,
+          "color": "#e94560",
+          "font_weight": "bold",
+          "align": "center"
+        }
+      ]
+    }
+  ]
+}

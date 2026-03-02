@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "scenes": [
+    {
+      "duration": 3.0,
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1080, "height": 1920 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#1e3a5f", "#0f172a"]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Ne ratez plus\naucun appel",
+          "position": { "x": 540, "y": 700 },
+          "font_size": 72,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.2, "duration": 0.8 }
+        },
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 240, "y": 1000 },
+          "size": { "width": 600, "height": 80 },
+          "fill": "#3b82f6",
+          "corner_radius": 40,
+          "preset": "scale_in",
+          "preset_config": { "delay": 1.0, "duration": 0.6 }
+        },
+        {
+          "type": "text",
+          "content": "Réservez votre démo",
+          "position": { "x": 540, "y": 1052 },
+          "font_size": 28,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "delay": 1.2, "duration": 0.5 }
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": { "type": "fade", "duration": 0.6 },
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1080, "height": 1920 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#3b82f6", "#8b5cf6"],
+            "angle": 135
+          }
+        },
+        {
+          "type": "text",
+          "content": "getnatalia.com",
+          "position": { "x": 540, "y": 960 },
+          "font_size": 56,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "animations": [
+            {
+              "property": "opacity",
+              "keyframes": [
+                { "time": 0.0, "value": 0 },
+                { "time": 0.8, "value": 1 },
+                { "time": 1.8, "value": 1 },
+                { "time": 2.6, "value": 0 },
+                { "time": 3.2, "value": 0 },
+                { "time": 4.0, "value": 1 }
+              ],
+              "easing": "ease_in_out"
+            },
+            {
+              "property": "position.y",
+              "keyframes": [
+                { "time": 0.0, "value": 40 },
+                { "time": 0.8, "value": 0 },
+                { "time": 1.8, "value": 0 },
+                { "time": 2.6, "value": -30 },
+                { "time": 3.2, "value": 40 },
+                { "time": 4.0, "value": 0 }
+              ],
+              "easing": "ease_in_out"
+            },
+            {
+              "property": "scale",
+              "keyframes": [
+                { "time": 0.0, "value": 0.8 },
+                { "time": 0.8, "value": 1.0 },
+                { "time": 1.8, "value": 1.0 },
+                { "time": 2.6, "value": 0.9 },
+                { "time": 3.2, "value": 0.8 },
+                { "time": 4.0, "value": 1.0 }
+              ],
+              "easing": "ease_in_out"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
