@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#1a1a2e"
+  },
+  "scenes": [
+    {
+      "duration": 4,
+      "layers": [
+        { "type": "text", "content": "Entrances (1/3)", "position": { "x": 960, "y": 60 }, "font_size": 36, "color": "#888888", "align": "center" },
+        { "type": "text", "content": "fade_in", "position": { "x": 200, "y": 200 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_in", "preset_config": { "delay": 0.5, "duration": 0.8 } },
+        { "type": "text", "content": "fade_in_up", "position": { "x": 200, "y": 300 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_in_up", "preset_config": { "delay": 0.8, "duration": 0.8 } },
+        { "type": "text", "content": "fade_in_down", "position": { "x": 200, "y": 400 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_in_down", "preset_config": { "delay": 1.1, "duration": 0.8 } },
+        { "type": "text", "content": "fade_in_left", "position": { "x": 200, "y": 500 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_in_left", "preset_config": { "delay": 1.4, "duration": 0.8 } },
+        { "type": "text", "content": "fade_in_right", "position": { "x": 200, "y": 600 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_in_right", "preset_config": { "delay": 1.7, "duration": 0.8 } },
+        { "type": "text", "content": "slide_in_left", "position": { "x": 1000, "y": 200 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_in_left", "preset_config": { "delay": 0.5, "duration": 0.8 } },
+        { "type": "text", "content": "slide_in_right", "position": { "x": 1000, "y": 300 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_in_right", "preset_config": { "delay": 0.8, "duration": 0.8 } },
+        { "type": "text", "content": "slide_in_up", "position": { "x": 1000, "y": 400 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_in_up", "preset_config": { "delay": 1.1, "duration": 0.8 } },
+        { "type": "text", "content": "slide_in_down", "position": { "x": 1000, "y": 500 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_in_down", "preset_config": { "delay": 1.4, "duration": 0.8 } }
+      ]
+    },
+    {
+      "duration": 4,
+      "layers": [
+        { "type": "text", "content": "Entrances (2/3)", "position": { "x": 960, "y": 60 }, "font_size": 36, "color": "#888888", "align": "center" },
+        { "type": "text", "content": "scale_in", "position": { "x": 200, "y": 200 }, "font_size": 32, "color": "#FF6B6B", "preset": "scale_in", "preset_config": { "delay": 0.5, "duration": 0.8 } },
+        { "type": "text", "content": "bounce_in", "position": { "x": 200, "y": 350 }, "font_size": 32, "color": "#FF6B6B", "preset": "bounce_in", "preset_config": { "delay": 0.8, "duration": 0.8 } },
+        { "type": "text", "content": "blur_in", "position": { "x": 200, "y": 500 }, "font_size": 32, "color": "#FF6B6B", "preset": "blur_in", "preset_config": { "delay": 1.1, "duration": 0.8 } },
+        { "type": "text", "content": "rotate_in", "position": { "x": 1000, "y": 200 }, "font_size": 32, "color": "#C084FC", "preset": "rotate_in", "preset_config": { "delay": 0.5, "duration": 0.8 } },
+        { "type": "text", "content": "elastic_in", "position": { "x": 1000, "y": 350 }, "font_size": 32, "color": "#C084FC", "preset": "elastic_in", "preset_config": { "delay": 0.8, "duration": 1.0 } }
+      ]
+    },
+    {
+      "duration": 4,
+      "layers": [
+        { "type": "text", "content": "Exits (1/2)", "position": { "x": 960, "y": 60 }, "font_size": 36, "color": "#888888", "align": "center" },
+        { "type": "text", "content": "fade_out", "position": { "x": 200, "y": 200 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_out", "preset_config": { "delay": 1.5, "duration": 0.8 } },
+        { "type": "text", "content": "fade_out_up", "position": { "x": 200, "y": 300 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_out_up", "preset_config": { "delay": 1.8, "duration": 0.8 } },
+        { "type": "text", "content": "fade_out_down", "position": { "x": 200, "y": 400 }, "font_size": 32, "color": "#FFFFFF", "preset": "fade_out_down", "preset_config": { "delay": 2.1, "duration": 0.8 } },
+        { "type": "text", "content": "slide_out_left", "position": { "x": 1000, "y": 200 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_out_left", "preset_config": { "delay": 1.5, "duration": 0.8 } },
+        { "type": "text", "content": "slide_out_right", "position": { "x": 1000, "y": 300 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_out_right", "preset_config": { "delay": 1.8, "duration": 0.8 } },
+        { "type": "text", "content": "slide_out_up", "position": { "x": 1000, "y": 400 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_out_up", "preset_config": { "delay": 2.1, "duration": 0.8 } },
+        { "type": "text", "content": "slide_out_down", "position": { "x": 1000, "y": 500 }, "font_size": 32, "color": "#00D4FF", "preset": "slide_out_down", "preset_config": { "delay": 2.4, "duration": 0.8 } }
+      ]
+    },
+    {
+      "duration": 4,
+      "layers": [
+        { "type": "text", "content": "Exits (2/2)", "position": { "x": 960, "y": 60 }, "font_size": 36, "color": "#888888", "align": "center" },
+        { "type": "text", "content": "scale_out", "position": { "x": 200, "y": 200 }, "font_size": 32, "color": "#FF6B6B", "preset": "scale_out", "preset_config": { "delay": 1.5, "duration": 0.8 } },
+        { "type": "text", "content": "bounce_out", "position": { "x": 200, "y": 350 }, "font_size": 32, "color": "#FF6B6B", "preset": "bounce_out", "preset_config": { "delay": 1.8, "duration": 0.8 } },
+        { "type": "text", "content": "blur_out", "position": { "x": 200, "y": 500 }, "font_size": 32, "color": "#FF6B6B", "preset": "blur_out", "preset_config": { "delay": 2.1, "duration": 0.8 } },
+        { "type": "text", "content": "rotate_out", "position": { "x": 1000, "y": 350 }, "font_size": 32, "color": "#C084FC", "preset": "rotate_out", "preset_config": { "delay": 1.5, "duration": 0.8 } }
+      ]
+    },
+    {
+      "duration": 5,
+      "layers": [
+        { "type": "text", "content": "Continuous Effects & Specials", "position": { "x": 960, "y": 60 }, "font_size": 36, "color": "#888888", "align": "center" },
+        { "type": "text", "content": "pulse (loop)", "position": { "x": 200, "y": 250 }, "font_size": 32, "color": "#4ADE80", "preset": "pulse", "preset_config": { "duration": 1.0, "loop": true } },
+        { "type": "text", "content": "float (loop)", "position": { "x": 200, "y": 400 }, "font_size": 32, "color": "#4ADE80", "preset": "float", "preset_config": { "duration": 1.5, "loop": true } },
+        { "type": "text", "content": "shake (loop)", "position": { "x": 200, "y": 550 }, "font_size": 32, "color": "#4ADE80", "preset": "shake", "preset_config": { "duration": 0.5, "loop": true } },
+        { "type": "text", "content": "spin (loop)", "position": { "x": 200, "y": 700 }, "font_size": 32, "color": "#4ADE80", "preset": "spin", "preset_config": { "duration": 2.0, "loop": true } },
+        { "type": "text", "content": "typewriter effect demo", "position": { "x": 1000, "y": 250 }, "font_size": 32, "color": "#FBBF24", "preset": "typewriter", "preset_config": { "delay": 0.5, "duration": 2.0 } },
+        { "type": "text", "content": "wipe_left (fixed)", "position": { "x": 1000, "y": 400 }, "font_size": 32, "color": "#FBBF24", "preset": "wipe_left", "preset_config": { "delay": 0.5, "duration": 0.8 } },
+        { "type": "text", "content": "wipe_right (fixed)", "position": { "x": 1000, "y": 550 }, "font_size": 32, "color": "#FBBF24", "preset": "wipe_right", "preset_config": { "delay": 1.0, "duration": 0.8 } }
+      ]
+    }
+  ]
+}

@@ -168,7 +168,30 @@ fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64,
 
 fn get_layer_center(layer: &Layer) -> (f32, f32) {
     match layer {
-        Layer::Text(t) => (t.position.x, t.position.y),
+        Layer::Text(t) => {
+            // Measure text to find its visual center
+            let font_mgr = FontMgr::default();
+            let font_style = match t.font_weight {
+                FontWeight::Bold => FontStyle::bold(),
+                FontWeight::Normal => FontStyle::normal(),
+            };
+            let typeface = font_mgr
+                .match_family_style(&t.font_family, font_style)
+                .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
+                .or_else(|| font_mgr.match_family_style("Arial", font_style))
+                .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", font_style).unwrap());
+            let font = Font::from_typeface(typeface, t.font_size);
+            let (text_width, _) = font.measure_str(&t.content, None);
+            let line_height = t.line_height.unwrap_or(t.font_size * 1.3);
+
+            let cx = match t.align {
+                TextAlign::Left => t.position.x + text_width / 2.0,
+                TextAlign::Center => t.position.x,
+                TextAlign::Right => t.position.x - text_width / 2.0,
+            };
+            let cy = t.position.y - line_height / 2.0;
+            (cx, cy)
+        }
         Layer::Shape(s) => (s.position.x + s.size.width / 2.0, s.position.y + s.size.height / 2.0),
         Layer::Image(i) => {
             let (w, h) = match &i.size {
@@ -212,8 +235,13 @@ fn render_text(
     let mut paint = paint_from_hex(&text.color);
     paint.set_alpha_f(1.0); // opacity handled at layer level
 
-    // Apply typewriter effect
-    let content = if props.visible_chars >= 0 {
+    // Apply typewriter effect (progress-based or absolute char count)
+    let content = if props.visible_chars_progress >= 0.0 {
+        let chars: Vec<char> = text.content.chars().collect();
+        let visible = (props.visible_chars_progress * chars.len() as f32).round() as usize;
+        let visible = visible.min(chars.len());
+        chars[..visible].iter().collect()
+    } else if props.visible_chars >= 0 {
         let chars: Vec<char> = text.content.chars().collect();
         let visible = (props.visible_chars as usize).min(chars.len());
         chars[..visible].iter().collect()

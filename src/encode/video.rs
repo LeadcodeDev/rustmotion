@@ -73,7 +73,12 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     let counter = AtomicU32::new(0);
 
     let api = OpenH264API::from_source();
-    let mut encoder = Encoder::with_api_config(api, EncoderConfig::new())?;
+    let pixels = (width * height) as u32;
+    let target_bitrate = (pixels as f64 * fps as f64 * 0.3) as u32;
+    let encoder_config = EncoderConfig::new()
+        .set_bitrate_bps(target_bitrate.max(10_000_000))
+        .max_frame_rate(fps as f32);
+    let mut encoder = Encoder::with_api_config(api, encoder_config)?;
     let mut h264_data: Vec<u8> = Vec::new();
 
     for batch in tasks.chunks(batch_size) {
@@ -96,6 +101,10 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
         // Encode sequentially (H.264 requires frame order)
         for yuv_result in yuv_frames {
             let yuv = yuv_result?;
+
+            // Force every frame as I-frame to prevent inter-frame artifacts
+            encoder.force_intra_frame();
+
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
             let bitstream = encoder.encode(&yuv_buf)?;
             h264_data.extend_from_slice(&bitstream.to_vec());

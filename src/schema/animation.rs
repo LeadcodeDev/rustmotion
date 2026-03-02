@@ -87,20 +87,42 @@ fn default_mass() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnimationPreset {
+    // Entrées
     FadeIn,
-    FadeOut,
     FadeInUp,
     FadeInDown,
+    FadeInLeft,
+    FadeInRight,
     SlideInLeft,
     SlideInRight,
+    SlideInUp,
+    SlideInDown,
     ScaleIn,
-    ScaleOut,
-    Typewriter,
     BounceIn,
+    BlurIn,
+    RotateIn,
+    ElasticIn,
+    // Sorties
+    FadeOut,
+    FadeOutUp,
+    FadeOutDown,
+    SlideOutLeft,
+    SlideOutRight,
+    SlideOutUp,
+    SlideOutDown,
+    ScaleOut,
+    BounceOut,
+    BlurOut,
+    RotateOut,
+    // Effets continus
+    Pulse,
+    Float,
+    Shake,
+    Spin,
+    // Spéciaux
+    Typewriter,
     WipeLeft,
     WipeRight,
-    Pulse,
-    BlurIn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -109,6 +131,9 @@ pub struct PresetConfig {
     pub delay: f64,
     #[serde(default = "default_preset_duration")]
     pub duration: f64,
+    /// Loop the animation continuously
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
 }
 
 impl Default for PresetConfig {
@@ -116,6 +141,7 @@ impl Default for PresetConfig {
         Self {
             delay: 0.0,
             duration: 0.8,
+            repeat: false,
         }
     }
 }

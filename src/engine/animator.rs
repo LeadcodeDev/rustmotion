@@ -95,6 +95,8 @@ pub struct AnimatedProperties {
     pub blur: f32,
     /// For typewriter effect: number of visible characters (-1 = all)
     pub visible_chars: i32,
+    /// For typewriter effect: progress 0.0→1.0 (-1.0 = unused, shows all)
+    pub visible_chars_progress: f32,
 }
 
 impl Default for AnimatedProperties {
@@ -108,6 +110,7 @@ impl Default for AnimatedProperties {
             rotation: 0.0,
             blur: 0.0,
             visible_chars: -1,
+            visible_chars_progress: -1.0,
         }
     }
 }
@@ -122,9 +125,11 @@ pub fn resolve_animations(
 ) -> AnimatedProperties {
     let mut props = AnimatedProperties::default();
 
+    let config = preset_config.cloned().unwrap_or_default();
+    let should_loop = config.repeat;
+
     // First, expand preset into animations
     let preset_animations = preset.map(|p| {
-        let config = preset_config.cloned().unwrap_or_default();
         expand_preset(p, &config, scene_duration)
     });
 
@@ -138,11 +143,31 @@ pub fn resolve_animations(
         .collect();
 
     for anim in all_animations {
-        let value = resolve_animation_value(anim, time);
+        let anim_time = if should_loop {
+            loop_time(anim, time)
+        } else {
+            time
+        };
+        let value = resolve_animation_value(anim, anim_time);
         apply_property(&mut props, &anim.property, value);
     }
 
     props
+}
+
+/// Wrap time within the animation's keyframe range for looping
+fn loop_time(anim: &Animation, time: f64) -> f64 {
+    let keyframes = &anim.keyframes;
+    if keyframes.len() < 2 {
+        return time;
+    }
+    let start = keyframes.first().unwrap().time;
+    let end = keyframes.last().unwrap().time;
+    let duration = end - start;
+    if duration < 1e-9 || time < start {
+        return time;
+    }
+    start + ((time - start) % duration)
 }
 
 fn resolve_animation_value(anim: &Animation, time: f64) -> f64 {
@@ -205,6 +230,7 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "rotation" => props.rotation = value as f32,
         "blur" => props.blur = value as f32,
         "visible_chars" => props.visible_chars = value as i32,
+        "visible_chars_progress" => props.visible_chars_progress = value as f32,
         _ => {} // Unknown property, ignore
     }
 }
@@ -217,8 +243,10 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
     let end = delay + dur;
 
     match preset {
-        AnimationPreset::FadeIn => vec![kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut)],
-        AnimationPreset::FadeOut => vec![kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn)],
+        // ── Entrées ──────────────────────────────────────────────────────
+        AnimationPreset::FadeIn => vec![
+            kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
+        ],
         AnimationPreset::FadeInUp => vec![
             kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
             kf_anim("position.y", delay, 60.0, end, 0.0, EasingType::EaseOutCubic),
@@ -226,6 +254,14 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
         AnimationPreset::FadeInDown => vec![
             kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
             kf_anim("position.y", delay, -60.0, end, 0.0, EasingType::EaseOutCubic),
+        ],
+        AnimationPreset::FadeInLeft => vec![
+            kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
+            kf_anim("position.x", delay, -60.0, end, 0.0, EasingType::EaseOutCubic),
+        ],
+        AnimationPreset::FadeInRight => vec![
+            kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
+            kf_anim("position.x", delay, 60.0, end, 0.0, EasingType::EaseOutCubic),
         ],
         AnimationPreset::SlideInLeft => vec![
             kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
@@ -235,33 +271,106 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
             kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
             kf_anim("position.x", delay, 200.0, end, 0.0, EasingType::EaseOutCubic),
         ],
+        AnimationPreset::SlideInUp => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("position.y", delay, 200.0, end, 0.0, EasingType::EaseOutCubic),
+        ],
+        AnimationPreset::SlideInDown => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("position.y", delay, -200.0, end, 0.0, EasingType::EaseOutCubic),
+        ],
         AnimationPreset::ScaleIn => vec![
             kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
             kf_anim_spring("scale", delay, 0.0, end, 1.0),
-        ],
-        AnimationPreset::ScaleOut => vec![
-            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
-            kf_anim("scale", delay, 1.0, end, 0.0, EasingType::EaseInCubic),
-        ],
-        AnimationPreset::Typewriter => vec![
-            kf_anim("visible_chars", delay, 0.0, end, 1000.0, EasingType::Linear),
         ],
         AnimationPreset::BounceIn => vec![
             kf_anim("opacity", delay, 0.0, delay + dur * 0.2, 1.0, EasingType::EaseOut),
             kf_anim_spring("scale", delay, 0.3, end, 1.0),
         ],
-        AnimationPreset::WipeLeft => vec![
-            kf_anim("clip_progress", delay, 0.0, end, 1.0, EasingType::EaseInOut),
-        ],
-        AnimationPreset::WipeRight => vec![
-            kf_anim("clip_progress", delay, 0.0, end, 1.0, EasingType::EaseInOut),
-        ],
-        AnimationPreset::Pulse => vec![
-            kf_anim_loop("scale", 0.95, 1.05),
-        ],
         AnimationPreset::BlurIn => vec![
             kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
             kf_anim("blur", delay, 20.0, end, 0.0, EasingType::EaseOutCubic),
+        ],
+        AnimationPreset::RotateIn => vec![
+            kf_anim("opacity", delay, 0.0, end, 1.0, EasingType::EaseOut),
+            kf_anim("rotation", delay, -90.0, end, 0.0, EasingType::EaseOutCubic),
+            kf_anim("scale", delay, 0.5, end, 1.0, EasingType::EaseOutCubic),
+        ],
+        AnimationPreset::ElasticIn => vec![
+            kf_anim_spring_underdamped("scale", delay, 0.0, end, 1.0),
+        ],
+
+        // ── Sorties ──────────────────────────────────────────────────────
+        AnimationPreset::FadeOut => vec![
+            kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn),
+        ],
+        AnimationPreset::FadeOutUp => vec![
+            kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.y", delay, 0.0, end, -60.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::FadeOutDown => vec![
+            kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.y", delay, 0.0, end, 60.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::SlideOutLeft => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.x", delay, 0.0, end, -200.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::SlideOutRight => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.x", delay, 0.0, end, 200.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::SlideOutUp => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.y", delay, 0.0, end, -200.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::SlideOutDown => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("position.y", delay, 0.0, end, 200.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::ScaleOut => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("scale", delay, 1.0, end, 0.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::BounceOut => vec![
+            kf_anim("opacity", delay + dur * 0.8, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim_spring("scale", delay, 1.0, end, 0.3),
+        ],
+        AnimationPreset::BlurOut => vec![
+            kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("blur", delay, 0.0, end, 20.0, EasingType::EaseInCubic),
+        ],
+        AnimationPreset::RotateOut => vec![
+            kf_anim("opacity", delay, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("rotation", delay, 0.0, end, 90.0, EasingType::EaseInCubic),
+            kf_anim("scale", delay, 1.0, end, 0.5, EasingType::EaseInCubic),
+        ],
+
+        // ── Effets continus ──────────────────────────────────────────────
+        AnimationPreset::Pulse => vec![
+            kf_anim_loop("scale", 0.95, 1.05),
+        ],
+        AnimationPreset::Float => vec![
+            kf_anim_3kf("position.y", 0.0, -10.0, 0.0, EasingType::EaseInOut),
+        ],
+        AnimationPreset::Shake => vec![
+            kf_anim_4kf("position.x", 0.0, 10.0, -10.0, 0.0, EasingType::EaseInOut),
+        ],
+        AnimationPreset::Spin => vec![
+            kf_anim("rotation", 0.0, 0.0, 1.0, 360.0, EasingType::Linear),
+        ],
+
+        // ── Spéciaux ────────────────────────────────────────────────────
+        AnimationPreset::Typewriter => vec![
+            kf_anim("visible_chars_progress", delay, 0.0, end, 1.0, EasingType::Linear),
+        ],
+        AnimationPreset::WipeLeft => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("position.x", delay, -200.0, end, 0.0, EasingType::EaseInOut),
+        ],
+        AnimationPreset::WipeRight => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("position.x", delay, 200.0, end, 0.0, EasingType::EaseInOut),
         ],
     }
 }
@@ -291,6 +400,49 @@ fn kf_anim_spring(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animati
             stiffness: 100.0,
             mass: 1.0,
         }),
+    }
+}
+
+fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animation {
+    Animation {
+        property: property.to_string(),
+        keyframes: vec![
+            Keyframe { time: t0, value: KeyframeValue::Number(v0) },
+            Keyframe { time: t1, value: KeyframeValue::Number(v1) },
+        ],
+        easing: EasingType::Spring,
+        spring: Some(SpringConfig {
+            damping: 6.0,
+            stiffness: 120.0,
+            mass: 1.0,
+        }),
+    }
+}
+
+fn kf_anim_3kf(property: &str, v0: f64, v1: f64, v2: f64, easing: EasingType) -> Animation {
+    Animation {
+        property: property.to_string(),
+        keyframes: vec![
+            Keyframe { time: 0.0, value: KeyframeValue::Number(v0) },
+            Keyframe { time: 0.5, value: KeyframeValue::Number(v1) },
+            Keyframe { time: 1.0, value: KeyframeValue::Number(v2) },
+        ],
+        easing,
+        spring: None,
+    }
+}
+
+fn kf_anim_4kf(property: &str, v0: f64, v1: f64, v2: f64, v3: f64, easing: EasingType) -> Animation {
+    Animation {
+        property: property.to_string(),
+        keyframes: vec![
+            Keyframe { time: 0.0, value: KeyframeValue::Number(v0) },
+            Keyframe { time: 0.25, value: KeyframeValue::Number(v1) },
+            Keyframe { time: 0.5, value: KeyframeValue::Number(v2) },
+            Keyframe { time: 1.0, value: KeyframeValue::Number(v3) },
+        ],
+        easing,
+        spring: None,
     }
 }
 
