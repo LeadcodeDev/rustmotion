@@ -33,9 +33,10 @@ impl KeyframeValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EasingType {
+    #[default]
     Linear,
     EaseIn,
     EaseOut,

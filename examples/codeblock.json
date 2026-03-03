@@ -1,0 +1,109 @@
+{
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f111a"
+  },
+  "scenes": [
+    {
+      "duration": 30.0,
+      "layers": [
+        {
+          "type": "text",
+          "content": "Building a Rust HTTP Server",
+          "position": { "x": 960, "y": 60 },
+          "font_size": 36,
+          "color": "#c3cee3",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "delay": 0, "duration": 0.6 }
+        },
+        {
+          "type": "codeblock",
+          "code": "use std::net::TcpListener;\n\nfn main() {\n    let listener = TcpListener::bind(\"127.0.0.1:8080\").unwrap();\n    println!(\"Server listening on port 8080\");\n\n    for stream in listener.incoming() {\n        let stream = stream.unwrap();\n        println!(\"Connection established!\");\n    }\n}",
+          "language": "rust",
+          "theme": "catppuccin-frappe",
+          "position": { "x": 160, "y": 120 },
+          "font_size": 18,
+          "line_height": 1.6,
+          "show_line_numbers": true,
+          "corner_radius": 12,
+          "chrome": { "enabled": true, "title": "src/main.rs" },
+          "padding": { "top": 20, "right": 24, "bottom": 20, "left": 16 },
+          "reveal": {
+            "mode": "line_by_line",
+            "start": 0.5,
+            "duration": 3.0,
+            "easing": "ease_out"
+          },
+          "highlights": [
+            { "lines": [4], "color": "#FFFF0018", "start": 4.0, "end": 6.0 },
+            {
+              "lines": [7, 8, 9],
+              "color": "#65737E18",
+              "start": 6.0,
+              "end": 8.0
+            }
+          ],
+          "states": [
+            {
+              "code": "use std::net::TcpListener;\nuse std::io::prelude::*;\n\nfn main() {\n    let listener = TcpListener::bind(\"127.0.0.1:8080\").unwrap();\n    println!(\"Server listening on port 8080\");\n\n    for stream in listener.incoming() {\n        let stream = stream.unwrap();\n        handle_connection(stream);\n    }\n}",
+              "at": 8.0,
+              "duration": 2.5,
+              "easing": "ease_in_out",
+              "cursor": {
+                "enabled": true,
+                "color": "#c0c5ce",
+                "blink": true,
+                "width": 2.0
+              },
+              "highlights": [
+                { "lines": [2], "color": "#a3be8c22" },
+                { "lines": [10], "color": "#a3be8c22" }
+              ]
+            },
+            {
+              "code": "use std::net::{TcpListener, TcpStream};\nuse std::io::prelude::*;\n\nfn main() {\n    let listener = TcpListener::bind(\"127.0.0.1:8080\").unwrap();\n    println!(\"Server listening on port 8080\");\n\n    for stream in listener.incoming() {\n        let stream = stream.unwrap();\n        handle_connection(stream);\n    }\n}\n\nfn handle_connection(mut stream: TcpStream) {\n    let mut buffer = [0; 1024];\n    stream.read(&mut buffer).unwrap();\n\n    let response = \"HTTP/1.1 200 OK\\r\\n\\r\\nHello, World!\";\n    stream.write(response.as_bytes()).unwrap();\n    stream.flush().unwrap();\n}",
+              "at": 13.0,
+              "duration": 3.0,
+              "easing": "ease_in_out",
+              "cursor": {
+                "enabled": true,
+                "color": "#c0c5ce",
+                "blink": true,
+                "width": 2.0
+              },
+              "highlights": [
+                {
+                  "lines": [14, 15, 16, 17, 18, 19, 20, 21],
+                  "color": "#a3be8c15"
+                }
+              ]
+            },
+            {
+              "code": "use std::net::{TcpListener, TcpStream};\nuse std::io::prelude::*;\n\nfn main() {\n    let listener = TcpListener::bind(\"127.0.0.1:8080\").unwrap();\n    println!(\"Server listening on port 8080\");\n\n    for stream in listener.incoming() {\n        let stream = stream.unwrap();\n        handle_connection(stream);\n    }\n}\n\nfn handle_connection(mut stream: TcpStream) {\n    let mut buffer = [0; 1024];\n    stream.read(&mut buffer).unwrap();\n\n    let request = String::from_utf8_lossy(&buffer);\n    let path = request.split_whitespace().nth(1).unwrap_or(\"/\");\n\n    let response = match path {\n        \"/\" => \"HTTP/1.1 200 OK\\r\\n\\r\\n<h1>Home</h1>\",\n        \"/about\" => \"HTTP/1.1 200 OK\\r\\n\\r\\n<h1>About</h1>\",\n        _ => \"HTTP/1.1 404 NOT FOUND\\r\\n\\r\\n<h1>404</h1>\",\n    };\n\n    stream.write(response.as_bytes()).unwrap();\n    stream.flush().unwrap();\n}",
+              "at": 19.0,
+              "duration": 3.5,
+              "easing": "ease_in_out",
+              "cursor": {
+                "enabled": true,
+                "color": "#c0c5ce",
+                "blink": true,
+                "width": 2.0
+              },
+              "highlights": [
+                {
+                  "lines": [18, 19, 20, 21, 22, 23, 24, 25],
+                  "color": "#ebcb8b15"
+                }
+              ]
+            }
+          ],
+          "preset": "fade_in",
+          "preset_config": { "delay": 0, "duration": 0.5 }
+        }
+      ]
+    }
+  ]
+}

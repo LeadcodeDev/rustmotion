@@ -46,6 +46,9 @@ Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opac
 ### `group`
 `position`, `layers` (array de sous-layers)
 
+### `codeblock`
+`code` (requis), `language` (défaut "plain"), `theme` (défaut "base16-ocean.dark" — 72 thèmes: catppuccin-mocha, dracula, github-dark, nord, tokyo-night, one-dark-pro, rose-pine, etc.), `position`, `size`, `font_family` (défaut "JetBrains Mono"), `font_size` (défaut 16), `font_weight` (défaut 400 — 100=Thin, 300=Light, 400=Normal, 500=Medium, 700=Bold, 900=Black), `line_height` (défaut 1.5), `background`, `show_line_numbers` (défaut false), `corner_radius` (défaut 12), `padding` {top, right, bottom, left}, `chrome` {enabled, title, color}, `highlights` [{lines, color, start, end}], `reveal` {mode: "typewriter"|"line_by_line", start, duration, easing}, `states` [{code, at, duration, easing, cursor: {enabled, color, width, blink}, highlights}]
+
 ## Presets d'animation (31)
 
 **Entrées :** fade_in, fade_in_up, fade_in_down, fade_in_left, fade_in_right, slide_in_left, slide_in_right, slide_in_up, slide_in_down, scale_in, bounce_in, blur_in, rotate_in, elastic_in

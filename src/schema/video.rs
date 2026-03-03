@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::animation::{Animation, AnimationPreset, PresetConfig};
+use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Scenario {
@@ -103,6 +103,7 @@ pub enum Layer {
     Video(VideoLayer),
     Gif(GifLayer),
     Caption(CaptionLayer),
+    Codeblock(CodeblockLayer),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -402,6 +403,149 @@ impl Default for VerticalAlign {
     }
 }
 
+// --- Codeblock Layer ---
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockLayer {
+    pub code: String,
+    #[serde(default = "default_codeblock_language")]
+    pub language: String,
+    #[serde(default = "default_codeblock_theme")]
+    pub theme: String,
+    #[serde(default)]
+    pub position: Position,
+    #[serde(default)]
+    pub size: Option<Size>,
+    #[serde(default = "default_codeblock_font_family")]
+    pub font_family: String,
+    #[serde(default = "default_codeblock_font_size")]
+    pub font_size: f32,
+    #[serde(default = "default_codeblock_font_weight")]
+    pub font_weight: u16,
+    #[serde(default = "default_codeblock_line_height")]
+    pub line_height: f32,
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub show_line_numbers: bool,
+    #[serde(default)]
+    pub chrome: Option<CodeblockChrome>,
+    #[serde(default)]
+    pub padding: Option<CodeblockPadding>,
+    #[serde(default = "default_codeblock_corner_radius")]
+    pub corner_radius: f32,
+    #[serde(default)]
+    pub highlights: Vec<CodeblockHighlight>,
+    #[serde(default)]
+    pub reveal: Option<CodeblockReveal>,
+    #[serde(default)]
+    pub states: Vec<CodeblockState>,
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockChrome {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockPadding {
+    #[serde(default = "default_codeblock_padding")]
+    pub top: f32,
+    #[serde(default = "default_codeblock_padding")]
+    pub right: f32,
+    #[serde(default = "default_codeblock_padding")]
+    pub bottom: f32,
+    #[serde(default = "default_codeblock_padding")]
+    pub left: f32,
+}
+
+impl Default for CodeblockPadding {
+    fn default() -> Self {
+        Self {
+            top: 16.0,
+            right: 16.0,
+            bottom: 16.0,
+            left: 16.0,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockHighlight {
+    pub lines: Vec<u32>,
+    #[serde(default = "default_highlight_color")]
+    pub color: String,
+    #[serde(default)]
+    pub start: Option<f64>,
+    #[serde(default)]
+    pub end: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockReveal {
+    pub mode: RevealMode,
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default = "default_reveal_duration")]
+    pub duration: f64,
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealMode {
+    Typewriter,
+    LineByLine,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockState {
+    pub code: String,
+    pub at: f64,
+    #[serde(default = "default_state_duration")]
+    pub duration: f64,
+    #[serde(default = "default_state_easing")]
+    pub easing: EasingType,
+    #[serde(default)]
+    pub cursor: Option<CodeblockCursor>,
+    #[serde(default)]
+    pub highlights: Option<Vec<CodeblockHighlight>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CodeblockCursor {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_cursor_color")]
+    pub color: String,
+    #[serde(default = "default_cursor_width")]
+    pub width: f32,
+    #[serde(default = "default_true")]
+    pub blink: bool,
+}
+
 // --- Wiggle Config ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -603,4 +747,64 @@ fn default_loop_true() -> bool {
 
 fn default_active_color() -> String {
     "#FFFF00".to_string()
+}
+
+fn default_codeblock_language() -> String {
+    "plain".to_string()
+}
+
+fn default_codeblock_theme() -> String {
+    "base16-ocean.dark".to_string()
+}
+
+fn default_codeblock_font_family() -> String {
+    "JetBrains Mono".to_string()
+}
+
+fn default_codeblock_font_size() -> f32 {
+    16.0
+}
+
+fn default_codeblock_font_weight() -> u16 {
+    400
+}
+
+fn default_codeblock_line_height() -> f32 {
+    1.5
+}
+
+fn default_codeblock_corner_radius() -> f32 {
+    12.0
+}
+
+fn default_codeblock_padding() -> f32 {
+    16.0
+}
+
+fn default_highlight_color() -> String {
+    "#FFFF0033".to_string()
+}
+
+fn default_reveal_duration() -> f64 {
+    1.0
+}
+
+fn default_state_duration() -> f64 {
+    0.6
+}
+
+fn default_state_easing() -> EasingType {
+    EasingType::EaseInOut
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cursor_color() -> String {
+    "#FFFFFF".to_string()
+}
+
+fn default_cursor_width() -> f32 {
+    2.0
 }

@@ -306,6 +306,71 @@ Groups multiple layers with shared position and animations.
 | `position` | `{x, y}` | `{0, 0}`             |
 | `layers`   | array    | `[]` — nested layers |
 
+### 9. `codeblock`
+
+Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
+
+```json
+{
+  "type": "codeblock",
+  "code": "fn main() {\n    println!(\"Hello\");\n}",
+  "language": "rust",
+  "theme": "base16-ocean.dark",
+  "position": { "x": 200, "y": 150 },
+  "font_size": 18,
+  "show_line_numbers": true,
+  "chrome": { "enabled": true, "title": "main.rs" },
+  "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
+  "states": [
+    {
+      "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
+      "at": 5.0,
+      "duration": 2.0,
+      "cursor": { "enabled": true }
+    }
+  ]
+}
+```
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `code` | string | required |
+| `language` | string | `"plain"` — e.g. `"rust"`, `"javascript"`, `"python"`, `"go"`, `"typescript"` |
+| `theme` | string | `"base16-ocean.dark"` — 72 themes available (see below) |
+| `position` | `{x, y}` | `{0, 0}` |
+| `size` | `{width, height}` | `null` (auto-calculated) |
+| `font_family` | string | `"JetBrains Mono"` |
+| `font_size` | f32 | `16.0` |
+| `font_weight` | u16 | `400` — 100=Thin, 300=Light, 400=Normal, 500=Medium, 600=SemiBold, 700=Bold, 900=Black |
+| `line_height` | f32 | `1.5` (multiplier) |
+| `background` | string | `null` (uses theme bg) |
+| `show_line_numbers` | bool | `false` |
+| `corner_radius` | f32 | `12.0` |
+| `padding` | `{top, right, bottom, left}` | `{16, 16, 16, 16}` |
+| `chrome` | object | `null` — `{ "enabled": true, "title": "file.rs", "color": "#343d46" }` |
+| `highlights` | array | `[]` — `[{ "lines": [2], "color": "#FFFF0033", "start": 1.0, "end": 3.0 }]` |
+| `reveal` | object | `null` — `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` |
+| `states` | array | `[]` — code mutations with diff transitions |
+
+**States (diff transitions):**
+
+```json
+{
+  "states": [{
+    "code": "new code...",
+    "at": 5.0,
+    "duration": 0.6,
+    "easing": "ease_in_out",
+    "cursor": { "enabled": true, "color": "#FFFFFF", "width": 2.0, "blink": true },
+    "highlights": [{ "lines": [1], "color": "#FFFF0022" }]
+  }]
+}
+```
+
+Unchanged lines slide to new positions, deleted lines fade out, inserted lines fade in, modified lines show a cursor editing effect (backspace then type new text).
+
+**Available themes (72):** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`, `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
+
 ---
 
 ## Animations

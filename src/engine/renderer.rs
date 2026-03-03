@@ -5,6 +5,7 @@ use skia_safe::{
 };
 
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
+use super::codeblock;
 use crate::schema::{
     CaptionLayer, CaptionStyle, Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText,
     ShapeType, TextAlign, VerticalAlign, VideoConfig, WiggleConfig,
@@ -27,7 +28,7 @@ pub fn parse_hex_color(hex: &str) -> (u8, u8, u8, u8) {
     (r, g, b, a)
 }
 
-fn color4f_from_hex(hex: &str) -> Color4f {
+pub fn color4f_from_hex(hex: &str) -> Color4f {
     let (r, g, b, a) = parse_hex_color(hex);
     Color4f::new(
         r as f32 / 255.0,
@@ -37,7 +38,7 @@ fn color4f_from_hex(hex: &str) -> Color4f {
     )
 }
 
-fn paint_from_hex(hex: &str) -> Paint {
+pub fn paint_from_hex(hex: &str) -> Paint {
     let mut paint = Paint::new(color4f_from_hex(hex), None);
     paint.set_anti_alias(true);
     paint
@@ -108,6 +109,7 @@ fn get_layer_animations(layer: &Layer) -> (&[crate::schema::Animation], Option<&
         Layer::Video(v) => (&v.animations, v.preset.as_ref(), v.preset_config.as_ref()),
         Layer::Gif(g) => (&g.animations, g.preset.as_ref(), g.preset_config.as_ref()),
         Layer::Caption(c) => (&c.animations, c.preset.as_ref(), c.preset_config.as_ref()),
+        Layer::Codeblock(cb) => (&cb.animations, cb.preset.as_ref(), cb.preset_config.as_ref()),
         Layer::Group(_) => (&[], None, None),
     }
 }
@@ -120,6 +122,7 @@ fn get_layer_timing(layer: &Layer) -> (Option<f64>, Option<f64>) {
         Layer::Svg(s) => (s.start_at, s.end_at),
         Layer::Video(v) => (v.start_at, v.end_at),
         Layer::Gif(g) => (g.start_at, g.end_at),
+        Layer::Codeblock(cb) => (cb.start_at, cb.end_at),
         Layer::Group(_) | Layer::Caption(_) => (None, None),
     }
 }
@@ -132,6 +135,7 @@ fn get_layer_wiggles(layer: &Layer) -> Option<&[WiggleConfig]> {
         Layer::Svg(s) => s.wiggle.as_deref(),
         Layer::Video(v) => v.wiggle.as_deref(),
         Layer::Gif(g) => g.wiggle.as_deref(),
+        Layer::Codeblock(cb) => cb.wiggle.as_deref(),
         _ => None,
     }
 }
@@ -144,6 +148,7 @@ fn get_layer_motion_blur(layer: &Layer) -> Option<f32> {
         Layer::Svg(s) => s.motion_blur,
         Layer::Video(v) => v.motion_blur,
         Layer::Gif(g) => g.motion_blur,
+        Layer::Codeblock(cb) => cb.motion_blur,
         _ => None,
     }
 }
@@ -245,6 +250,7 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         Layer::Video(video) => render_video(canvas, video, time)?,
         Layer::Gif(gif) => render_gif(canvas, gif, time)?,
         Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
+        Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
     }
 
     if needs_layer {
@@ -351,6 +357,13 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
                 None => (100.0, 100.0),
             };
             (g.position.x + w / 2.0, g.position.y + h / 2.0)
+        }
+        Layer::Codeblock(cb) => {
+            let (w, h) = match &cb.size {
+                Some(s) => (s.width, s.height),
+                None => (400.0, 300.0),
+            };
+            (cb.position.x + w / 2.0, cb.position.y + h / 2.0)
         }
         Layer::Caption(c) => (c.position.x, c.position.y),
         Layer::Group(g) => (g.position.x, g.position.y),

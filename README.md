@@ -479,6 +479,106 @@ TikTok-style word-by-word subtitles with active word highlighting.
 
 ---
 
+### Codeblock Layer
+
+Renders code with syntax highlighting (powered by Syntect), carbon.now.sh-style chrome (title bar with dots), reveal animations, and animated diff transitions between code states.
+
+```json
+{
+  "type": "codeblock",
+  "code": "fn main() {\n    println!(\"Hello\");\n}",
+  "language": "rust",
+  "theme": "base16-ocean.dark",
+  "position": { "x": 200, "y": 150 },
+  "font_size": 18,
+  "show_line_numbers": true,
+  "chrome": { "enabled": true, "title": "main.rs" },
+  "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
+  "highlights": [{ "lines": [2], "color": "#FFFF0022", "start": 3.0, "end": 4.5 }],
+  "states": [
+    {
+      "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
+      "at": 5.0,
+      "duration": 2.0,
+      "easing": "ease_in_out",
+      "cursor": { "enabled": true, "color": "#E0E0E0", "blink": true }
+    }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `code` | `string` | (required) | Initial code content |
+| `language` | `string` | `"plain"` | Language for syntax highlighting (e.g. `"rust"`, `"javascript"`, `"python"`) |
+| `theme` | `string` | `"base16-ocean.dark"` | Theme name (see available themes below) |
+| `font_family` | `string` | `"JetBrains Mono"` | Monospace font family |
+| `font_size` | `f32` | `16.0` | Font size in pixels |
+| `font_weight` | `u16` | `400` | Font weight (100=Thin, 300=Light, 400=Normal, 500=Medium, 600=SemiBold, 700=Bold, 900=Black) |
+| `line_height` | `f32` | `1.5` | Line height multiplier |
+| `background` | `string` | | Background color (uses theme default if omitted) |
+| `show_line_numbers` | `bool` | `false` | Show line numbers in the gutter |
+| `corner_radius` | `f32` | `12.0` | Background corner radius |
+| `padding` | `CodeblockPadding` | | Padding around the code area |
+
+#### Chrome (Title Bar)
+
+Carbon.now.sh-style title bar with colored dots.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `chrome.enabled` | `bool` | `true` | Show the title bar |
+| `chrome.title` | `string` | | Title text (e.g. filename) |
+| `chrome.color` | `string` | `"#343d46"` | Title bar background color |
+
+#### Line Highlights
+
+Highlight specific lines with a colored background, optionally timed.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `highlights[].lines` | `u32[]` | (required) | Line numbers to highlight (1-indexed) |
+| `highlights[].color` | `string` | `"#FFFF0033"` | Highlight color (hex with alpha) |
+| `highlights[].start` | `f64` | | Start time (always visible if omitted) |
+| `highlights[].end` | `f64` | | End time |
+
+#### Reveal Animation
+
+Animate the initial code appearance.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `reveal.mode` | `string` | (required) | `"typewriter"` (char by char) or `"line_by_line"` |
+| `reveal.start` | `f64` | `0.0` | Start time (seconds) |
+| `reveal.duration` | `f64` | `1.0` | Duration (seconds) |
+| `reveal.easing` | `string` | `"linear"` | Easing function |
+
+#### Code States (Diff Transitions)
+
+Animate between code versions with automatic diff detection. Unchanged lines slide smoothly, deleted lines fade out, inserted lines fade in, and modified lines show a cursor editing effect.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `states[].code` | `string` | (required) | New code content |
+| `states[].at` | `f64` | (required) | Transition start time (seconds) |
+| `states[].duration` | `f64` | `0.6` | Transition duration |
+| `states[].easing` | `string` | `"ease_in_out"` | Easing function |
+| `states[].cursor.enabled` | `bool` | `true` | Show editing cursor on modified lines |
+| `states[].cursor.color` | `string` | `"#FFFFFF"` | Cursor color |
+| `states[].cursor.width` | `f32` | `2.0` | Cursor width in pixels |
+| `states[].cursor.blink` | `bool` | `true` | Blink the cursor (~530ms) |
+| `states[].highlights` | `CodeblockHighlight[]` | | Override highlights for this state |
+
+#### Available Themes (72)
+
+**Syntect built-in:** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`
+
+**Catppuccin:** `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`
+
+**Shiki / VS Code:** `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
+
+---
+
 ### Group Layer
 
 Groups nested layers with a shared position and opacity.
