@@ -62,9 +62,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
 
     let api = OpenH264API::from_source();
     let pixels = (width * height) as u32;
-    let target_bitrate = (pixels as f64 * fps as f64 * 0.3) as u32;
+    let target_bitrate = (pixels as f64 * fps as f64 * 0.1) as u32;
     let encoder_config = EncoderConfig::new()
-        .set_bitrate_bps(target_bitrate.max(10_000_000))
+        .set_bitrate_bps(target_bitrate.max(3_000_000))
         .max_frame_rate(fps as f32);
     let mut encoder = Encoder::with_api_config(api, encoder_config)?;
     let mut h264_data: Vec<u8> = Vec::new();
