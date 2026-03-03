@@ -43,6 +43,9 @@ Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opac
 ### `caption`
 `words` (requis: [{text, start, end}]), `position`, `font_size`, `color`, `active_color` (défaut "#FFD700"), `style` ("default"|"highlight"|"karaoke"|"bounce"), `max_width`
 
+### `counter`
+Compteur animé qui interpole un nombre de `from` vers `to` sur la durée visible du layer. `from` (requis), `to` (requis), `decimals` (défaut 0), `separator` (séparateur de milliers, ex: " " ou ","), `prefix` (texte avant le nombre, ex: "$"), `suffix` (texte après, ex: "€"), `easing` (easing de l'interpolation du compteur, défaut "linear"), `position`, `font_size` (défaut 48), `color` (défaut "#FFFFFF"), `font_family` (défaut "Inter"), `font_weight` ("normal"|"bold"), `align` ("left"|"center"|"right"), `letter_spacing`, `shadow` {color, offset_x, offset_y, blur}, `stroke` {color, width}
+
 ### `group`
 `position`, `layers` (array de sous-layers)
 

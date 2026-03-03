@@ -579,6 +579,54 @@ Animate between code versions with automatic diff detection. Unchanged lines sli
 
 ---
 
+### Counter Layer
+
+Animated number counter that interpolates from a start value to an end value over the layer's visible duration. Uses text rendering internally.
+
+```json
+{
+  "type": "counter",
+  "from": 0,
+  "to": 1250,
+  "decimals": 0,
+  "separator": " ",
+  "prefix": "+",
+  "suffix": "€",
+  "easing": "ease_out",
+  "position": { "x": 540, "y": 960 },
+  "font_size": 72,
+  "color": "#FFFFFF",
+  "font_family": "Inter",
+  "font_weight": "bold",
+  "align": "center",
+  "start_at": 0.5,
+  "end_at": 2.5,
+  "preset": "fade_in_up"
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `from` | `f64` | (required) | Start value |
+| `to` | `f64` | (required) | End value |
+| `decimals` | `u8` | `0` | Number of decimal places |
+| `separator` | `string` | | Thousands separator (e.g. `" "`, `","`) |
+| `prefix` | `string` | | Text before the number (e.g. `"$"`, `"+"`) |
+| `suffix` | `string` | | Text after the number (e.g. `"%"`, `"€"`) |
+| `easing` | `string` | `"linear"` | Easing for the counter interpolation (see [Easing Functions](#easing-functions)) |
+| `font_size` | `f32` | `48.0` | Font size in pixels |
+| `color` | `string` | `"#FFFFFF"` | Text color (hex) |
+| `font_family` | `string` | `"Inter"` | Font family name |
+| `font_weight` | `string` | `"normal"` | `"normal"` or `"bold"` |
+| `align` | `string` | `"left"` | `"left"`, `"center"`, or `"right"` |
+| `letter_spacing` | `f32` | | Additional spacing between characters |
+| `shadow` | `TextShadow` | | Drop shadow behind text |
+| `stroke` | `Stroke` | | Text outline/stroke |
+
+The counter animates over the layer's visible duration (`start_at` to `end_at`, or the full scene duration if omitted). The `easing` field controls the interpolation curve of the number, independently from any visual animation presets applied to the layer.
+
+---
+
 ### Group Layer
 
 Groups nested layers with a shared position and opacity.

@@ -476,6 +476,16 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                         }
                     }
                 }
+                schema::Layer::Counter(ct) => {
+                    if let (Some(start), Some(end)) = (ct.start_at, ct.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
                 schema::Layer::Caption(_) | schema::Layer::Group(_) => {}
             }
         }

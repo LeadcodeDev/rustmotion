@@ -112,6 +112,7 @@ pub enum Layer {
     Gif(GifLayer),
     Caption(CaptionLayer),
     Codeblock(CodeblockLayer),
+    Counter(CounterLayer),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -164,7 +165,63 @@ pub struct TextLayer {
     pub motion_blur: Option<f32>,
 }
 
+// --- Counter Layer ---
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CounterLayer {
+    pub from: f64,
+    pub to: f64,
+    #[serde(default)]
+    pub decimals: u8,
+    #[serde(default)]
+    pub separator: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub suffix: Option<String>,
+    #[serde(default)]
+    pub easing: EasingType,
+    // --- Visual properties (same as TextLayer) ---
+    #[serde(default)]
+    pub position: Position,
+    #[serde(default = "default_font_size")]
+    pub font_size: f32,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
+    #[serde(default)]
+    pub font_weight: FontWeight,
+    #[serde(default)]
+    pub font_style: FontStyleType,
+    #[serde(default)]
+    pub align: TextAlign,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub letter_spacing: Option<f32>,
+    #[serde(default)]
+    pub shadow: Option<TextShadow>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
+    // --- Animation properties ---
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FontStyleType {
     Normal,
@@ -178,7 +235,7 @@ impl Default for FontStyleType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TextShadow {
     #[serde(default = "default_shadow_color")]
     pub color: String,
@@ -701,7 +758,7 @@ pub enum GradientType {
     Radial,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Stroke {
     pub color: String,
     #[serde(default = "default_stroke_width")]
@@ -722,7 +779,7 @@ impl Default for ImageFit {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TextAlign {
     Left,
@@ -736,7 +793,7 @@ impl Default for TextAlign {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FontWeight {
     Normal,
@@ -814,6 +871,17 @@ impl LayerProps for CaptionLayer {
     fn motion_blur(&self) -> Option<f32> { None }
 }
 
+impl LayerProps for CounterLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    // Only report start_at for visibility; end_at is used solely for counter interpolation
+    // so the layer remains visible (clamped at final value) after the counter finishes.
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, None) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
 impl LayerProps for CodeblockLayer {
     fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
         (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
@@ -844,6 +912,7 @@ impl Layer {
             Layer::Gif(l) => l,
             Layer::Caption(l) => l,
             Layer::Codeblock(l) => l,
+            Layer::Counter(l) => l,
             Layer::Group(l) => l,
         }
     }

@@ -288,7 +288,52 @@ Timed word-by-word captions with active word highlighting.
 | `style`        | enum     | `"default"` — options: `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
 | `max_width`    | f32      | `null`                                                                     |
 
-### 8. `group`
+### 8. `counter`
+
+Animated number counter that interpolates from a start value to an end value.
+
+```json
+{
+  "type": "counter",
+  "from": 0,
+  "to": 1250,
+  "decimals": 0,
+  "separator": " ",
+  "suffix": "€",
+  "easing": "ease_out",
+  "position": { "x": 540, "y": 960 },
+  "font_size": 72,
+  "color": "#FFFFFF",
+  "font_weight": "bold",
+  "align": "center",
+  "start_at": 0.5,
+  "end_at": 2.5,
+  "preset": "fade_in_up"
+}
+```
+
+| Field       | Type   | Default     |
+| ----------- | ------ | ----------- |
+| `from`      | f64    | required    |
+| `to`        | f64    | required    |
+| `decimals`  | u8     | `0`         |
+| `separator` | string | `null` — thousands separator (e.g. `" "`, `","`) |
+| `prefix`    | string | `null` — text before the number (e.g. `"$"`, `"+"`) |
+| `suffix`    | string | `null` — text after the number (e.g. `"%"`, `"€"`) |
+| `easing`    | enum   | `"linear"` — easing for the counter interpolation |
+| `position`  | `{x, y}` | `{0, 0}` |
+| `font_size` | f32    | `48.0`      |
+| `color`     | string | `"#FFFFFF"`  |
+| `font_family` | string | `"Inter"` |
+| `font_weight` | enum | `"normal"` — `"normal"`, `"bold"` |
+| `align`     | enum   | `"left"` — `"left"`, `"center"`, `"right"` |
+| `letter_spacing` | f32 | `null`   |
+| `shadow`    | object | `null` — `{ "color": "#00000080", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
+| `stroke`    | object | `null` — `{ "color": "#000", "width": 2 }` |
+
+The counter animates over the layer's visible duration (`start_at` to `end_at`, or full scene). The `easing` controls the number interpolation curve, independent from visual animation presets.
+
+### 9. `group`
 
 Groups multiple layers with shared position and animations.
 
@@ -306,7 +351,7 @@ Groups multiple layers with shared position and animations.
 | `position` | `{x, y}` | `{0, 0}`             |
 | `layers`   | array    | `[]` — nested layers |
 
-### 9. `codeblock`
+### 10. `codeblock`
 
 Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
 

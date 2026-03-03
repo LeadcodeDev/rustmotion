@@ -10,8 +10,8 @@ use skia_safe::{
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::codeblock;
 use crate::schema::{
-    CaptionLayer, CaptionStyle, Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText,
-    ShapeType, TextAlign, VerticalAlign, VideoConfig,
+    CaptionLayer, CaptionStyle, CounterLayer, Fill, FontWeight, GradientType, ImageFit, Layer,
+    Scene, ShapeText, ShapeType, TextAlign, TextLayer, VerticalAlign, VideoConfig,
 };
 
 // Thread-local FontMgr instance, created once per thread and reused
@@ -237,6 +237,7 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         Layer::Gif(gif) => render_gif(canvas, gif, time)?,
         Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
         Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
+        Layer::Counter(counter) => render_counter(canvas, counter, config, time, scene_duration, props)?,
     }
 
     if needs_layer {
@@ -359,9 +360,158 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             };
             (cb.position.x + w / 2.0, cb.position.y + h / 2.0)
         }
+        Layer::Counter(ct) => {
+            // Same logic as TextLayer — measure formatted text to find center
+            let font_mgr = font_mgr();
+            use crate::schema::FontStyleType;
+            let slant = match ct.font_style {
+                FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
+                FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
+                FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
+            };
+            let weight = match ct.font_weight {
+                FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
+                FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            };
+            let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
+            let typeface = font_mgr
+                .match_family_style(&ct.font_family, font_style)
+                .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
+                .or_else(|| font_mgr.match_family_style("Arial", font_style))
+                .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", font_style).unwrap());
+            let font = Font::from_typeface(typeface, ct.font_size);
+            let display = format_counter_value(ct.to, ct.decimals, &ct.separator, &ct.prefix, &ct.suffix);
+            let (text_width, _) = font.measure_str(&display, None);
+            let line_height = ct.font_size * 1.3;
+
+            let cx = match ct.align {
+                TextAlign::Left => ct.position.x + text_width / 2.0,
+                TextAlign::Center => ct.position.x,
+                TextAlign::Right => ct.position.x - text_width / 2.0,
+            };
+            let cy = ct.position.y - line_height / 2.0;
+            (cx, cy)
+        }
         Layer::Caption(c) => (c.position.x, c.position.y),
         Layer::Group(g) => (g.position.x, g.position.y),
     }
+}
+
+fn format_counter_value(
+    value: f64,
+    decimals: u8,
+    separator: &Option<String>,
+    prefix: &Option<String>,
+    suffix: &Option<String>,
+) -> String {
+    // Format with decimals
+    let formatted_number = format!("{:.prec$}", value, prec = decimals as usize);
+
+    // Apply thousands separator if specified
+    let formatted_number = if let Some(sep) = separator {
+        let parts: Vec<&str> = formatted_number.split('.').collect();
+        let integer_part = parts[0];
+
+        // Handle negative sign
+        let (sign, digits) = if integer_part.starts_with('-') {
+            ("-", &integer_part[1..])
+        } else {
+            ("", integer_part)
+        };
+
+        let mut result = String::new();
+        for (i, ch) in digits.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                result.insert(0, sep.chars().next().unwrap_or(' '));
+            }
+            result.insert(0, ch);
+        }
+
+        if !sign.is_empty() {
+            result.insert_str(0, sign);
+        }
+
+        if parts.len() > 1 {
+            result.push('.');
+            result.push_str(parts[1]);
+        }
+
+        result
+    } else {
+        formatted_number
+    };
+
+    // Build final string with prefix/suffix
+    let mut result = String::new();
+    if let Some(p) = prefix {
+        result.push_str(p);
+    }
+    result.push_str(&formatted_number);
+    if let Some(s) = suffix {
+        result.push_str(s);
+    }
+    result
+}
+
+fn render_counter(
+    canvas: &Canvas,
+    counter: &CounterLayer,
+    config: &VideoConfig,
+    time: f64,
+    scene_duration: f64,
+    props: &AnimatedProperties,
+) -> Result<()> {
+    use super::animator::ease;
+
+    // Calculate counter progress based on layer timing
+    let start = counter.start_at.unwrap_or(0.0);
+    let end = counter.end_at.unwrap_or(scene_duration);
+    let duration = end - start;
+
+    let t = if duration > 0.0 {
+        ((time - start) / duration).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let progress = ease(t, &counter.easing);
+    let value = counter.from + (counter.to - counter.from) * progress;
+
+    let content = format_counter_value(
+        value,
+        counter.decimals,
+        &counter.separator,
+        &counter.prefix,
+        &counter.suffix,
+    );
+
+    // Build a temporary TextLayer and delegate to render_text
+    let text_layer = TextLayer {
+        content,
+        position: counter.position.clone(),
+        font_size: counter.font_size,
+        color: counter.color.clone(),
+        font_family: counter.font_family.clone(),
+        font_weight: counter.font_weight.clone(),
+        font_style: counter.font_style.clone(),
+        align: counter.align.clone(),
+        max_width: None,
+        opacity: counter.opacity,
+        line_height: None,
+        letter_spacing: counter.letter_spacing,
+        shadow: counter.shadow.clone(),
+        stroke: counter.stroke.clone(),
+        background: None,
+        animations: Vec::new(),
+        preset: None,
+        preset_config: None,
+        start_at: None,
+        end_at: None,
+        wiggle: None,
+        motion_blur: None,
+    };
+
+    render_text(canvas, &text_layer, config, props)
 }
 
 fn render_text(
