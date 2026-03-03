@@ -9,7 +9,7 @@ use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
-use crate::engine::{render_frame, rgba_to_yuv420, preextract_video_frames};
+use crate::engine::{render_frame, rgba_to_yuv420, preextract_video_frames, prefetch_icons};
 use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
@@ -41,6 +41,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
 
     // Pre-extract video frames in bulk (if any VideoLayer present)
     preextract_video_frames(&scenario.scenes, fps);
+
+    // Pre-fetch icon SVGs from Iconify API before parallel rendering
+    prefetch_icons(&scenario.scenes);
 
     // Build a flat list of frame tasks
     let tasks = build_frame_tasks(scenario);
@@ -239,6 +242,8 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
     let width = config.width;
     let height = config.height;
 
+    prefetch_icons(&scenario.scenes);
+
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
 
@@ -294,6 +299,8 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
     let width = config.width;
     let height = config.height;
     let fps = config.fps;
+
+    prefetch_icons(&scenario.scenes);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -367,6 +374,8 @@ pub fn encode_with_ffmpeg(
     let width = config.width;
     let height = config.height;
     let fps = config.fps;
+
+    prefetch_icons(&scenario.scenes);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;

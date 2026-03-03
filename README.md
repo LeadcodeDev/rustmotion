@@ -209,6 +209,12 @@ These fields are available on all layer types (except `group` and `caption` wher
 | `end_at` | `f64` | | Layer disappears after this time (seconds within scene) |
 | `wiggle` | `WiggleConfig[]` | | Procedural noise-based animation (see [Wiggle](#wiggle)) |
 | `motion_blur` | `f32` | | Motion blur intensity (0.0 - 1.0). Uses temporal multi-sampling |
+| `padding` | `f32 \| {top, right, bottom, left}` | `null` | Inner spacing — enlarges the bounding box and insets the content |
+| `margin` | `f32 \| {top, right, bottom, left}` | `null` | Outer spacing — offsets the layer and affects card layout |
+
+Padding and margin accept either a uniform number (`"padding": 16`) or per-side values (`"margin": {"top": 32, "right": 16, "bottom": 32, "left": 16}`). In card layouts, margin adds space around the child; padding insets the content within the child. For standalone layers, margin offsets the rendered position, and padding offsets the content.
+
+> **Note:** `CardLayer` and `CodeblockLayer` manage their own internal padding. The global `padding` field does not apply to them — only `margin` is used.
 
 ---
 
@@ -371,6 +377,30 @@ Or with inline SVG:
 | `size` | `{width, height}` | | Target size (uses SVG intrinsic size if omitted) |
 
 One of `src` or `data` is required.
+
+---
+
+### Icon Layer
+
+Renders an icon from the [Iconify](https://iconify.design/) library. The icon SVG is fetched automatically from the Iconify API.
+
+```json
+{
+  "type": "icon",
+  "icon": "lucide:home",
+  "color": "#38bdf8",
+  "position": { "x": 540, "y": 400 },
+  "size": { "width": 64, "height": 64 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `icon` | `string` | (required) | Iconify identifier `"prefix:name"` (e.g. `"lucide:home"`, `"mdi:account"`) |
+| `color` | `string` | `"#FFFFFF"` | Icon color (replaces `currentColor`) |
+| `size` | `{width, height}` | `24x24` | Icon size in pixels |
+
+Browse available icons at [icon-sets.iconify.design](https://icon-sets.iconify.design/).
 
 ---
 
@@ -627,46 +657,118 @@ The counter animates over the layer's visible duration (`start_at` to `end_at`, 
 
 ---
 
-### Card Layer
+### Flex Layer (Layout Container)
 
-A visual container with flexbox layout for its children. Unlike `group` (which uses absolute positioning with no visual style), `card` automatically positions children using flexbox and supports background, border, shadow, corner radius, and padding.
+A pure layout container that automatically positions its children using flex or grid layout. It has no visual styling (no background, border, or shadow by default) — use it to stack or arrange layers without adding visual chrome.
+
+`flex` is an alias for `card` — they share the same properties. Use `flex` when you only need layout, and `card` when you need visual styling.
+
+```json
+{
+  "type": "flex",
+  "position": { "x": 100, "y": 200 },
+  "size": { "width": 750, "height": "auto" },
+  "direction": "column",
+  "gap": 20,
+  "layers": [
+    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... },
+    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... },
+    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... }
+  ]
+}
+```
+
+See [Card Layer](#card-layer-flex--grid-container) for all available properties (`direction`, `align`, `justify`, `gap`, `wrap`, `padding`, grid properties, etc.).
+
+---
+
+### Card Layer (Flex & Grid Container)
+
+A visual container with CSS-like layout (flex by default, grid optional) for its children. Unlike `group` (which uses absolute positioning with no visual style), `card` automatically positions children and supports background, border, shadow, corner radius, and padding.
+
+#### Flex Layout Example
 
 ```json
 {
   "type": "card",
-  "position": { "x": 100, "y": 200 },
-  "size": { "width": 400 },
-  "background": "#FFFFFF",
-  "corner_radius": 16,
-  "padding": 24,
+  "direction": "row",
+  "size": { "width": 800, "height": 100 },
   "gap": 16,
-  "direction": "column",
-  "align": "start",
-  "shadow": { "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 },
-  "border": { "color": "#E5E7EB", "width": 1 },
   "layers": [
-    { "type": "text", "content": "Card Title", "font_size": 32, "font_weight": "bold", "color": "#111827" },
-    { "type": "text", "content": "Description text", "font_size": 18, "color": "#6B7280" }
-  ],
-  "preset": "fade_in_up",
-  "preset_config": { "delay": 0.2, "duration": 0.6 }
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#FF0000" },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#00FF00", "flex_grow": 1 },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#0000FF" }
+  ]
+}
+```
+
+#### Grid Layout Example
+
+```json
+{
+  "type": "card",
+  "display": "grid",
+  "size": { "width": 600, "height": 400 },
+  "grid_template_columns": [{ "fr": 1 }, { "fr": 1 }],
+  "grid_template_rows": [{ "fr": 1 }, { "fr": 1 }],
+  "gap": 16,
+  "padding": 24,
+  "background": "#1a1a2e",
+  "corner_radius": 16,
+  "layers": [
+    { "type": "text", "content": "Cell 1", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 2", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 3", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 4", "color": "#FFFFFF" }
+  ]
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `size` | `{width, height}` | | Container size (auto-calculated from children if omitted) |
+| `display` | `string` | `"flex"` | Layout mode: `"flex"` or `"grid"` |
+| `size` | `{width, height}` | | Container size. Each dimension can be a number or `"auto"`. Auto-calculated from children if omitted |
 | `background` | `string` | | Background color (hex) |
 | `corner_radius` | `f32` | `12.0` | Corner radius for rounded corners |
 | `border` | `CardBorder` | | Border stroke |
 | `shadow` | `CardShadow` | | Drop shadow |
 | `padding` | `f32 \| {top, right, bottom, left}` | | Padding inside the card (uniform number or per-side) |
-| `direction` | `string` | `"column"` | `"column"` (vertical) or `"row"` (horizontal) |
+| `direction` | `string` | `"column"` | `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
 | `wrap` | `bool` | `false` | Wrap children to next line when they exceed available space |
-| `align` | `string` | `"start"` | Cross-axis alignment: `"start"`, `"center"`, `"end"` |
-| `justify` | `string` | `"start"` | Main-axis justification: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"` |
+| `align` | `string` | `"start"` | Cross-axis alignment: `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `justify` | `string` | `"start"` | Main-axis justification: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
 | `gap` | `f32` | `0.0` | Spacing between children (pixels) |
-| `layers` | `Layer[]` | `[]` | Child layers (positioned automatically; their `position` field is ignored) |
+| `grid_template_columns` | `GridTrack[]` | | Grid column definitions (required for grid display) |
+| `grid_template_rows` | `GridTrack[]` | | Grid row definitions (defaults to `[{"fr": 1}]`) |
+| `layers` | `CardChild[]` | `[]` | Child layers (positioned automatically; their `position` field is ignored) |
+
+#### Per-child Layout Properties
+
+These properties are set directly on child layers within `layers`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `flex_grow` | `f32` | `0` | How much the child grows to fill remaining space (flex only) |
+| `flex_shrink` | `f32` | `1` | How much the child shrinks when space is insufficient (flex only) |
+| `flex_basis` | `f32` | | Base size before grow/shrink (defaults to natural size) |
+| `align_self` | `string` | | Per-child cross-axis alignment override: `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `grid_column` | `GridPlacement` | | Grid column placement (grid only) |
+| `grid_row` | `GridPlacement` | | Grid row placement (grid only) |
+
+#### GridTrack
+
+| Format | Description |
+|---|---|
+| `{"px": N}` | Fixed size in pixels |
+| `{"fr": N}` | Fractional unit (distributes remaining space) |
+| `"auto"` | Sized to fit content |
+
+#### GridPlacement
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `start` | `i32` | | 1-indexed grid line (1 = first column/row) |
+| `span` | `u32` | `1` | Number of tracks to span |
 
 #### CardBorder
 

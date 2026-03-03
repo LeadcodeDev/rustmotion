@@ -84,6 +84,10 @@ All layers are discriminated by the `"type"` field. Layers are rendered in array
 | `end_at`        | f64    | `null`  | Hide layer after this time (seconds)             |
 | `wiggle`        | array  | `null`  | Procedural noise-based animation                 |
 | `motion_blur`   | f32    | `null`  | Motion blur intensity                            |
+| `padding`       | f32 or {top,right,bottom,left} | `null` | Inner spacing — insets content, enlarges bounding box |
+| `margin`        | f32 or {top,right,bottom,left} | `null` | Outer spacing — offsets layer, affects card layout |
+
+> `CardLayer` and `CodeblockLayer` manage their own internal padding; only `margin` applies to them.
 
 ### 1. `text`
 
@@ -212,7 +216,28 @@ Gradient types: `linear`, `radial`.
 | `position` | `{x, y}`          | `{0, 0}`                                                    |
 | `size`     | `{width, height}` | `null`                                                      |
 
-### 5. `video`
+### 5. `icon`
+
+Renders an icon from the Iconify library (fetched via API).
+
+```json
+{
+  "type": "icon",
+  "icon": "lucide:home",
+  "color": "#38bdf8",
+  "position": { "x": 540, "y": 400 },
+  "size": { "width": 64, "height": 64 }
+}
+```
+
+| Field      | Type              | Default                                                  |
+| ---------- | ----------------- | -------------------------------------------------------- |
+| `icon`     | string            | required — Iconify id `"prefix:name"` (e.g. `"lucide:home"`) |
+| `color`    | string            | `"#FFFFFF"` — icon color                                 |
+| `position` | `{x, y}`          | `{0, 0}`                                                 |
+| `size`     | `{width, height}` | `{24, 24}`                                               |
+
+### 6. `video`
 
 ```json
 {
@@ -237,7 +262,7 @@ Gradient types: `linear`, `radial`.
 | `volume`        | f32               | `1.0`     |
 | `loop_video`    | bool              | `null`    |
 
-### 6. `gif`
+### 7. `gif`
 
 ```json
 {
@@ -256,7 +281,7 @@ Gradient types: `linear`, `radial`.
 | `fit`      | enum              | `"cover"` |
 | `loop_gif` | bool              | `true`    |
 
-### 7. `caption`
+### 8. `caption`
 
 Timed word-by-word captions with active word highlighting.
 
@@ -288,7 +313,7 @@ Timed word-by-word captions with active word highlighting.
 | `style`        | enum     | `"default"` — options: `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
 | `max_width`    | f32      | `null`                                                                     |
 
-### 8. `counter`
+### 9. `counter`
 
 Animated number counter that interpolates from a start value to an end value.
 
@@ -333,7 +358,7 @@ Animated number counter that interpolates from a start value to an end value.
 
 The counter animates over the layer's visible duration (`start_at` to `end_at`, or full scene). The `easing` controls the number interpolation curve, independent from visual animation presets.
 
-### 9. `group`
+### 10. `group`
 
 Groups multiple layers with shared position and animations.
 
@@ -351,50 +376,81 @@ Groups multiple layers with shared position and animations.
 | `position` | `{x, y}` | `{0, 0}`             |
 | `layers`   | array    | `[]` — nested layers |
 
-### 10. `card`
+### 11. `card`
 
-Visual container with flexbox layout. Unlike `group` (absolute positioning, no style), `card` auto-positions children and supports background, border, shadow, padding, corner radius.
+Visual container with CSS-like flex & grid layout. Unlike `group` (absolute positioning, no style), `card` auto-positions children and supports background, border, shadow, padding, corner radius.
 
+Each dimension of `size` can be a number or `"auto"` (e.g. `"size": { "width": 750, "height": "auto" }`) to auto-size from children.
+
+### 12. `flex`
+
+Alias for `card` — same properties, same engine. Use `flex` for pure layout (no background/border), `card` for visual containers.
+
+**Flex example** (with `flex_grow`):
 ```json
 {
   "type": "card",
-  "position": { "x": 100, "y": 200 },
-  "size": { "width": 400 },
-  "background": "#FFFFFF",
-  "corner_radius": 16,
-  "padding": 24,
+  "direction": "row",
+  "size": { "width": 800, "height": 100 },
   "gap": 16,
-  "direction": "column",
-  "align": "start",
-  "shadow": { "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 },
-  "border": { "color": "#E5E7EB", "width": 1 },
   "layers": [
-    { "type": "text", "content": "Title", "font_size": 32, "font_weight": "bold", "color": "#111827" },
-    { "type": "text", "content": "Description", "font_size": 18, "color": "#6B7280" }
-  ],
-  "preset": "fade_in_up"
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#FF0000" },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#00FF00", "flex_grow": 1 },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#0000FF" }
+  ]
+}
+```
+
+**Grid example** (2x2):
+```json
+{
+  "type": "card",
+  "display": "grid",
+  "size": { "width": 600, "height": 400 },
+  "grid_template_columns": [{ "fr": 1 }, { "fr": 1 }],
+  "grid_template_rows": [{ "fr": 1 }, { "fr": 1 }],
+  "gap": 16,
+  "padding": 24,
+  "background": "#1a1a2e",
+  "layers": [
+    { "type": "text", "content": "Cell 1", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 2", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 3", "color": "#FFFFFF" },
+    { "type": "text", "content": "Cell 4", "color": "#FFFFFF" }
+  ]
 }
 ```
 
 | Field | Type | Default |
 | --- | --- | --- |
 | `position` | `{x, y}` | `{0, 0}` |
+| `display` | enum | `"flex"` — `"flex"` or `"grid"` |
 | `size` | `{width, height}` | `null` (auto-calculated from children) |
 | `background` | string | `null` — hex background color |
 | `corner_radius` | f32 | `12.0` |
 | `border` | object | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
 | `shadow` | object | `null` — `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
 | `padding` | f32 or object | `null` — uniform `24` or `{ "top": 24, "right": 24, "bottom": 24, "left": 24 }` |
-| `direction` | enum | `"column"` — `"column"` (vertical) or `"row"` (horizontal) |
+| `direction` | enum | `"column"` — `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
 | `wrap` | bool | `false` — wrap children to next line |
-| `align` | enum | `"start"` — cross-axis: `"start"`, `"center"`, `"end"` |
-| `justify` | enum | `"start"` — main-axis: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"` |
+| `align` | enum | `"start"` — cross-axis: `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `justify` | enum | `"start"` — main-axis: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
 | `gap` | f32 | `0` — spacing between children in pixels |
+| `grid_template_columns` | array | `null` — grid column defs: `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid_template_rows` | array | `null` — grid row defs (defaults to `[{"fr": 1}]`) |
 | `layers` | array | `[]` — child layers (positioned automatically, `position` field ignored) |
 
-Children `position` is ignored — the card computes layout from `direction`, `align`, `justify`, `gap`, and `wrap`. Supports all common fields (animations, presets, timing, wiggle, motion_blur).
+**Per-child layout properties** (applied directly on child layers in `layers`):
+- `flex_grow` (f32) — how much the child grows to fill remaining space (default 0)
+- `flex_shrink` (f32) — how much the child shrinks when space is insufficient (default 1)
+- `flex_basis` (f32) — base size before grow/shrink (defaults to natural size)
+- `align_self` (enum) — per-child cross-axis override: `"start"`, `"center"`, `"end"`, `"stretch"`
+- `grid_column` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid column placement
+- `grid_row` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid row placement
 
-### 11. `codeblock`
+Children `position` is ignored — the card computes layout from `display`, `direction`, `align`, `justify`, `gap`, `wrap`, and grid template. Supports all common fields (animations, presets, timing, wiggle, motion_blur).
+
+### 13. `codeblock`
 
 Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
 
@@ -646,7 +702,8 @@ rustmotion render scenario.json -o output.mp4 --output-format json
 4. **Layer order**: Layers render bottom-to-top (first layer in array = behind)
 5. **File paths**: Image, video, GIF, SVG `src` paths are relative to the working directory
 6. **SVG layers**: Must have either `src` or `data`, not both empty
-7. **At least one scene** is required, each with `duration > 0`
-8. **Colors**: Use hex format `#RRGGBB` or `#RRGGBBAA`
-9. **Presets vs animations**: `preset` is a shorthand; explicit `animations` override preset animations on the same property
-10. **Continuous presets** (`pulse`, `float`, `shake`, `spin`) should use `"loop": true` in `preset_config`
+7. **Icon layers**: `icon` must be in `"prefix:name"` format (e.g. `"lucide:home"`). Requires internet access to fetch from the Iconify API.
+8. **At least one scene** is required, each with `duration > 0`
+9. **Colors**: Use hex format `#RRGGBB` or `#RRGGBBAA`
+10. **Presets vs animations**: `preset` is a shorthand; explicit `animations` override preset animations on the same property
+11. **Continuous presets** (`pulse`, `float`, `shake`, `spin`) should use `"loop": true` in `preset_config`

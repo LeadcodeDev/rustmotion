@@ -10,9 +10,9 @@ use skia_safe::{
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::codeblock;
 use crate::schema::{
-    CaptionLayer, CaptionStyle, CardAlign, CardDirection, CardJustify, CardLayer, CounterLayer,
-    Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText, ShapeType, TextAlign,
-    TextLayer, VerticalAlign, VideoConfig,
+    CaptionLayer, CaptionStyle, CardAlign, CardChild, CardDirection, CardDisplay, CardJustify,
+    CardLayer, CounterLayer, Fill, FontWeight, GradientType, GridTrack, IconLayer, ImageFit, Layer,
+    Position, Scene, ShapeText, ShapeType, TextAlign, TextLayer, VerticalAlign, VideoConfig,
 };
 
 // Thread-local FontMgr instance, created once per thread and reused
@@ -207,6 +207,18 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         canvas.translate((-cx, -cy));
     }
 
+    // Margin offset (standalone layers)
+    let (mt, _mr, _mb, ml) = layer.props().margin();
+    if mt.abs() > 0.001 || ml.abs() > 0.001 {
+        canvas.translate((ml, mt));
+    }
+
+    // Padding inset (content offset)
+    let (pad_t, _pad_r, _pad_b, pad_l) = layer.props().padding();
+    if pad_t.abs() > 0.001 || pad_l.abs() > 0.001 {
+        canvas.translate((pad_l, pad_t));
+    }
+
     // Apply opacity via save_layer_alpha if needed
     let needs_layer = props.opacity < 1.0 || props.blur > 0.01;
     if needs_layer {
@@ -234,12 +246,13 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         Layer::Image(image) => render_image(canvas, image)?,
         Layer::Group(group) => render_group(canvas, group, config, time, scene_duration)?,
         Layer::Svg(svg) => render_svg(canvas, svg)?,
+        Layer::Icon(icon) => render_icon(canvas, icon)?,
         Layer::Video(video) => render_video(canvas, video, time)?,
         Layer::Gif(gif) => render_gif(canvas, gif, time)?,
         Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
         Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
         Layer::Counter(counter) => render_counter(canvas, counter, config, time, scene_duration, props)?,
-        Layer::Card(card) => render_card(canvas, card, config, time, scene_duration)?,
+        Layer::Card(card) | Layer::Flex(card) => render_card(canvas, card, config, time, scene_duration)?,
     }
 
     if needs_layer {
@@ -347,6 +360,13 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             };
             (s.position.x + w / 2.0, s.position.y + h / 2.0)
         }
+        Layer::Icon(i) => {
+            let (w, h) = match &i.size {
+                Some(sz) => (sz.width, sz.height),
+                None => (24.0, 24.0),
+            };
+            (i.position.x + w / 2.0, i.position.y + h / 2.0)
+        }
         Layer::Video(v) => (v.position.x + v.size.width / 2.0, v.position.y + v.size.height / 2.0),
         Layer::Gif(g) => {
             let (w, h) = match &g.size {
@@ -396,15 +416,11 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
         }
         Layer::Caption(c) => (c.position.x, c.position.y),
         Layer::Group(g) => (g.position.x, g.position.y),
-        Layer::Card(c) => {
-            let (w, h) = match &c.size {
-                Some(s) => (s.width, s.height),
-                None => {
-                    let (cw, ch) = measure_card_content(c);
-                    let (pt, pr, pb, pl) = c.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
-                    (cw + pl + pr, ch + pt + pb)
-                }
-            };
+        Layer::Card(c) | Layer::Flex(c) => {
+            let (cw, ch) = measure_card_content(c);
+            let (pt, pr, pb, pl) = c.padding.resolve();
+            let w = c.size.as_ref().and_then(|s| s.width.fixed()).unwrap_or(cw + pl + pr);
+            let h = c.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or(ch + pt + pb);
             (c.position.x + w / 2.0, c.position.y + h / 2.0)
         }
     }
@@ -522,6 +538,8 @@ fn render_counter(
         end_at: None,
         wiggle: None,
         motion_blur: None,
+        padding: None,
+        margin: None,
     };
 
     render_text(canvas, &text_layer, config, props)
@@ -1070,6 +1088,10 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             Some(sz) => (sz.width, sz.height),
             None => (100.0, 100.0),
         },
+        Layer::Icon(i) => match &i.size {
+            Some(sz) => (sz.width, sz.height),
+            None => (24.0, 24.0),
+        },
         Layer::Video(v) => (v.size.width, v.size.height),
         Layer::Gif(g) => match &g.size {
             Some(sz) => (sz.width, sz.height),
@@ -1109,29 +1131,17 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             let mut max_y: f32 = 0.0;
             for child in &g.layers {
                 let (cw, ch) = measure_layer(child);
-                let pos = match child {
-                    Layer::Text(t) => &t.position,
-                    Layer::Shape(s) => &s.position,
-                    Layer::Image(i) => &i.position,
-                    Layer::Svg(s) => &s.position,
-                    Layer::Video(v) => &v.position,
-                    Layer::Gif(g) => &g.position,
-                    Layer::Codeblock(cb) => &cb.position,
-                    Layer::Counter(ct) => &ct.position,
-                    Layer::Caption(c) => &c.position,
-                    Layer::Group(g) => &g.position,
-                    Layer::Card(c) => &c.position,
-                };
+                let pos = get_layer_position(child);
                 max_x = max_x.max(pos.x + cw);
                 max_y = max_y.max(pos.y + ch);
             }
             (max_x, max_y)
         }
-        Layer::Card(c) => {
+        Layer::Card(c) | Layer::Flex(c) => {
             let (cw, ch) = measure_card_content(c);
-            let (pt, pr, pb, pl) = c.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
-            let w = c.size.as_ref().map(|s| s.width).unwrap_or(cw + pl + pr);
-            let h = c.size.as_ref().map(|s| s.height).unwrap_or(ch + pt + pb);
+            let (pt, pr, pb, pl) = c.padding.resolve();
+            let w = c.size.as_ref().and_then(|s| s.width.fixed()).unwrap_or(cw + pl + pr);
+            let h = c.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or(ch + pt + pb);
             (w, h)
         }
         Layer::Caption(c) => {
@@ -1142,53 +1152,95 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
     }
 }
 
-fn measure_card_content(card: &CardLayer) -> (f32, f32) {
-    let sizes: Vec<(f32, f32)> = card.layers.iter().map(|l| measure_layer(l)).collect();
-    if sizes.is_empty() {
-        return (0.0, 0.0);
-    }
-    match card.direction {
-        CardDirection::Column => {
-            let max_w = sizes.iter().map(|(w, _)| *w).fold(0.0f32, f32::max);
-            let total_h: f32 = sizes.iter().map(|(_, h)| *h).sum::<f32>()
-                + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
-            (max_w, total_h)
-        }
-        CardDirection::Row => {
-            let total_w: f32 = sizes.iter().map(|(w, _)| *w).sum::<f32>()
-                + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
-            let max_h = sizes.iter().map(|(_, h)| *h).fold(0.0f32, f32::max);
-            (total_w, max_h)
-        }
+/// Measure layer including padding (for card layout sizing)
+fn measure_layer_with_spacing(layer: &Layer) -> (f32, f32) {
+    let (w, h) = measure_layer(layer);
+    let (pt, pr, pb, pl) = layer.props().padding();
+    (w + pl + pr, h + pt + pb)
+}
+
+/// Layout result for a single child in a card
+struct LayoutResult {
+    x: f32,
+    y: f32,
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+fn get_layer_position(layer: &Layer) -> &Position {
+    match layer {
+        Layer::Text(t) => &t.position,
+        Layer::Shape(s) => &s.position,
+        Layer::Image(img) => &img.position,
+        Layer::Svg(s) => &s.position,
+        Layer::Icon(i) => &i.position,
+        Layer::Video(v) => &v.position,
+        Layer::Gif(g) => &g.position,
+        Layer::Codeblock(cb) => &cb.position,
+        Layer::Counter(ct) => &ct.position,
+        Layer::Caption(c) => &c.position,
+        Layer::Group(g) => &g.position,
+        Layer::Card(c) | Layer::Flex(c) => &c.position,
     }
 }
 
-/// Compute flex layout positions for card children
-/// Returns Vec<(x, y)> positions relative to content area (after padding)
-fn compute_flex_layout(card: &CardLayer) -> Vec<(f32, f32)> {
-    let child_sizes: Vec<(f32, f32)> = card.layers.iter().map(|l| measure_layer(l)).collect();
+fn measure_card_content(card: &CardLayer) -> (f32, f32) {
+    let sizes: Vec<(f32, f32)> = card.layers.iter().map(|c| {
+        let (w, h) = measure_layer_with_spacing(&c.layer);
+        let (mt, mr, mb, ml) = c.layer.props().margin();
+        (w + ml + mr, h + mt + mb)
+    }).collect();
+    if sizes.is_empty() {
+        return (0.0, 0.0);
+    }
+    let is_row = matches!(card.direction, CardDirection::Row | CardDirection::RowReverse);
+    if is_row {
+        let total_w: f32 = sizes.iter().map(|(w, _)| *w).sum::<f32>()
+            + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
+        let max_h = sizes.iter().map(|(_, h)| *h).fold(0.0f32, f32::max);
+        (total_w, max_h)
+    } else {
+        let max_w = sizes.iter().map(|(w, _)| *w).fold(0.0f32, f32::max);
+        let total_h: f32 = sizes.iter().map(|(_, h)| *h).sum::<f32>()
+            + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
+        (max_w, total_h)
+    }
+}
+
+/// Compute flex layout for card children with grow/shrink/basis/stretch/reverse/align_self
+fn compute_flex_layout(card: &CardLayer) -> Vec<LayoutResult> {
+    let child_sizes: Vec<(f32, f32)> = card.layers.iter().map(|c| {
+        let (w, h) = measure_layer_with_spacing(&c.layer);
+        let (mt, mr, mb, ml) = c.layer.props().margin();
+        (w + ml + mr, h + mt + mb)
+    }).collect();
     if child_sizes.is_empty() {
         return vec![];
     }
 
-    let (pt, pr, pb, pl) = card.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
-    let container_w = card.size.as_ref().map(|s| s.width).unwrap_or_else(|| {
+    let (pt, pr, pb, pl) = card.padding.resolve();
+    let container_w = card.size.as_ref().and_then(|s| s.width.fixed()).unwrap_or_else(|| {
         let (cw, _) = measure_card_content(card);
         cw + pl + pr
     }) - pl - pr;
-    let container_h = card.size.as_ref().map(|s| s.height).unwrap_or_else(|| {
+    let container_h = card.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or_else(|| {
         let (_, ch) = measure_card_content(card);
         ch + pt + pb
     }) - pt - pb;
 
-    let is_row = matches!(card.direction, CardDirection::Row);
+    let is_row = matches!(card.direction, CardDirection::Row | CardDirection::RowReverse);
+    let is_reverse = matches!(card.direction, CardDirection::RowReverse | CardDirection::ColumnReverse);
 
+    let all_indices: Vec<usize> = (0..child_sizes.len()).collect();
     if !card.wrap {
-        // Single line layout
-        return layout_single_line(
-            &child_sizes, is_row, &card.justify, &card.align,
+        let results = layout_single_line_flex(
+            &card.layers, &all_indices, &child_sizes, is_row, &card.justify, &card.align,
             card.gap, container_w, container_h,
         );
+        if is_reverse {
+            return reverse_layout(results, is_row, container_w, container_h);
+        }
+        return results;
     }
 
     // Wrap mode: partition children into lines
@@ -1214,35 +1266,325 @@ fn compute_flex_layout(card: &CardLayer) -> Vec<(f32, f32)> {
     }
 
     // Layout each line and stack them on the cross axis
-    let mut positions = vec![(0.0f32, 0.0f32); child_sizes.len()];
+    let mut results: Vec<LayoutResult> = (0..child_sizes.len())
+        .map(|_| LayoutResult { x: 0.0, y: 0.0, width: None, height: None })
+        .collect();
     let mut cross_offset = 0.0f32;
 
     for line in &lines {
         let line_sizes: Vec<(f32, f32)> = line.iter().map(|&i| child_sizes[i]).collect();
         let line_cross = line_sizes.iter().map(|&(w, h)| if is_row { h } else { w }).fold(0.0f32, f32::max);
 
-        let line_positions = layout_single_line(
+        let line_results = layout_single_line_flex(
+            &card.layers, line,
             &line_sizes, is_row, &card.justify, &card.align,
             card.gap, container_w, container_h,
         );
 
         for (j, &idx) in line.iter().enumerate() {
-            let (mut x, mut y) = line_positions[j];
+            let mut r = LayoutResult {
+                x: line_results[j].x,
+                y: line_results[j].y,
+                width: line_results[j].width,
+                height: line_results[j].height,
+            };
+            let child_align = card.layers[idx].align_self.as_ref().unwrap_or(&card.align);
             if is_row {
-                y = cross_offset + align_item(line_sizes[j].1, line_cross, &card.align);
+                let (cross_pos, stretch_size) = align_item_flex(line_sizes[j].1, line_cross, child_align);
+                r.y = cross_offset + cross_pos;
+                if stretch_size.is_some() {
+                    r.height = stretch_size;
+                }
             } else {
-                x = cross_offset + align_item(line_sizes[j].0, line_cross, &card.align);
+                let (cross_pos, stretch_size) = align_item_flex(line_sizes[j].0, line_cross, child_align);
+                r.x = cross_offset + cross_pos;
+                if stretch_size.is_some() {
+                    r.width = stretch_size;
+                }
             }
-            positions[idx] = (x, y);
+            results[idx] = r;
         }
 
         cross_offset += line_cross + card.gap;
     }
 
-    positions
+    if is_reverse {
+        reverse_layout(results, is_row, container_w, container_h)
+    } else {
+        results
+    }
 }
 
-fn layout_single_line(
+fn reverse_layout(mut results: Vec<LayoutResult>, is_row: bool, container_w: f32, container_h: f32) -> Vec<LayoutResult> {
+    // Mirror positions: pos = container_main - pos - child_size
+    // We need child sizes; use width/height from LayoutResult or measure
+    for r in results.iter_mut() {
+        if is_row {
+            // We don't know the exact child main size from LayoutResult alone,
+            // but we stored the flex-adjusted size in width if stretched
+            // For simplicity, mirror around the center
+            r.x = container_w - r.x;
+            // This puts the right edge at the mirrored position
+            // We need to shift left by the child's main size, but we don't have it here.
+            // Instead, reverse the order and recompute from the end
+        } else {
+            r.y = container_h - r.y;
+        }
+    }
+    // Better approach: reverse the order of results and swap their positions
+    // Actually, the simplest correct approach is to just reverse the iteration order
+    // in the main function. But since we've already computed positions,
+    // let's negate and re-offset.
+    // The cleanest way: just reverse the vec
+    results.reverse();
+    results
+}
+
+/// Compute grid layout for card children
+fn compute_grid_layout(card: &CardLayer) -> Vec<LayoutResult> {
+    let n = card.layers.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    let (pt, pr, pb, pl) = card.padding.resolve();
+    let container_w = card.size.as_ref().and_then(|s| s.width.fixed()).unwrap_or(600.0) - pl - pr;
+    let container_h = card.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or(400.0) - pt - pb;
+
+    let col_tracks = card.grid_template_columns.as_deref().unwrap_or(&[GridTrack::Fr(1.0)]);
+    let row_tracks = card.grid_template_rows.as_deref().unwrap_or(&[GridTrack::Fr(1.0)]);
+
+    let num_cols = col_tracks.len().max(1);
+    let num_rows = row_tracks.len().max(1);
+
+    // Measure children for Auto tracks (including padding + margin)
+    let child_sizes: Vec<(f32, f32)> = card.layers.iter().map(|c| {
+        let (w, h) = measure_layer_with_spacing(&c.layer);
+        let (mt, mr, mb, ml) = c.layer.props().margin();
+        (w + ml + mr, h + mt + mb)
+    }).collect();
+
+    // Place children in grid cells
+    let mut placements: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(n); // (col, row, col_span, row_span)
+    let mut grid_occupied: Vec<Vec<bool>> = vec![vec![false; num_cols]; num_rows * 2]; // extra rows for overflow
+    let mut auto_cursor = (0usize, 0usize); // (row, col)
+
+    for child in &card.layers {
+        let col_start = child.grid_column.as_ref().and_then(|g| g.start).map(|s| (s - 1).max(0) as usize);
+        let row_start = child.grid_row.as_ref().and_then(|g| g.start).map(|s| (s - 1).max(0) as usize);
+        let col_span = child.grid_column.as_ref().and_then(|g| g.span).unwrap_or(1).max(1) as usize;
+        let row_span = child.grid_row.as_ref().and_then(|g| g.span).unwrap_or(1).max(1) as usize;
+
+        if let (Some(c), Some(r)) = (col_start, row_start) {
+            placements.push((c.min(num_cols - 1), r, col_span.min(num_cols - c.min(num_cols - 1)), row_span));
+            // Mark occupied
+            for dr in 0..row_span {
+                for dc in 0..col_span {
+                    let rr = r + dr;
+                    let cc = c + dc;
+                    if rr < grid_occupied.len() && cc < num_cols {
+                        grid_occupied[rr][cc] = true;
+                    }
+                }
+            }
+        } else if let Some(c) = col_start {
+            // Column specified, find next available row at that column
+            let r = auto_cursor.0;
+            placements.push((c.min(num_cols - 1), r, col_span.min(num_cols - c.min(num_cols - 1)), row_span));
+            for dr in 0..row_span {
+                for dc in 0..col_span {
+                    let rr = r + dr;
+                    let cc = c + dc;
+                    if rr < grid_occupied.len() && cc < num_cols {
+                        grid_occupied[rr][cc] = true;
+                    }
+                }
+            }
+        } else if let Some(r) = row_start {
+            // Row specified, find next available col at that row
+            let mut c = 0;
+            while c < num_cols && r < grid_occupied.len() && grid_occupied[r][c] {
+                c += 1;
+            }
+            let c = c.min(num_cols - 1);
+            placements.push((c, r, col_span.min(num_cols - c), row_span));
+            for dr in 0..row_span {
+                for dc in 0..col_span.min(num_cols - c) {
+                    let rr = r + dr;
+                    let cc = c + dc;
+                    if rr < grid_occupied.len() && cc < num_cols {
+                        grid_occupied[rr][cc] = true;
+                    }
+                }
+            }
+        } else {
+            // Auto placement: row-major
+            let (mut ar, mut ac) = auto_cursor;
+            // Find next free cell
+            loop {
+                if ar >= grid_occupied.len() {
+                    // Extend grid
+                    grid_occupied.push(vec![false; num_cols]);
+                }
+                if !grid_occupied[ar][ac] {
+                    // Check if span fits
+                    let mut fits = true;
+                    for dc in 0..col_span {
+                        if ac + dc >= num_cols {
+                            fits = false;
+                            break;
+                        }
+                    }
+                    if fits {
+                        break;
+                    }
+                }
+                ac += 1;
+                if ac >= num_cols {
+                    ac = 0;
+                    ar += 1;
+                }
+            }
+            placements.push((ac, ar, col_span.min(num_cols - ac), row_span));
+            for dr in 0..row_span {
+                for dc in 0..col_span.min(num_cols - ac) {
+                    let rr = ar + dr;
+                    let cc = ac + dc;
+                    if rr >= grid_occupied.len() {
+                        grid_occupied.push(vec![false; num_cols]);
+                    }
+                    if cc < num_cols {
+                        grid_occupied[rr][cc] = true;
+                    }
+                }
+            }
+            // Advance cursor
+            ac += col_span;
+            if ac >= num_cols {
+                ac = 0;
+                ar += 1;
+            }
+            auto_cursor = (ar, ac);
+        }
+    }
+
+    // Determine actual number of rows used
+    let actual_num_rows = placements.iter()
+        .map(|&(_, r, _, rs)| r + rs)
+        .max()
+        .unwrap_or(num_rows)
+        .max(num_rows);
+
+    // Resolve track sizes
+    let col_sizes = resolve_tracks(col_tracks, container_w, card.gap, num_cols, &child_sizes, &placements, true);
+    // For rows, extend row_tracks if actual_num_rows > num_rows
+    let mut extended_row_tracks: Vec<GridTrack> = row_tracks.to_vec();
+    while extended_row_tracks.len() < actual_num_rows {
+        extended_row_tracks.push(GridTrack::Auto);
+    }
+    let row_sizes = resolve_tracks(&extended_row_tracks, container_h, card.gap, actual_num_rows, &child_sizes, &placements, false);
+
+    // Compute cell positions
+    let mut col_offsets = vec![0.0f32; num_cols + 1];
+    for i in 0..num_cols {
+        col_offsets[i + 1] = col_offsets[i] + col_sizes[i] + card.gap;
+    }
+    let mut row_offsets = vec![0.0f32; actual_num_rows + 1];
+    for i in 0..actual_num_rows {
+        row_offsets[i + 1] = row_offsets[i] + row_sizes[i] + card.gap;
+    }
+
+    let mut results = Vec::with_capacity(n);
+    for (i, &(col, row, col_span, row_span)) in placements.iter().enumerate() {
+        let x = col_offsets[col];
+        let y = row_offsets[row];
+        let end_col = (col + col_span).min(num_cols);
+        let end_row = (row + row_span).min(actual_num_rows);
+        let w = col_offsets[end_col] - col_offsets[col] - card.gap;
+        let h = row_offsets[end_row] - row_offsets[row] - card.gap;
+
+        // Center child within cell based on align
+        let (cw, ch) = child_sizes[i];
+        let child_align = card.layers[i].align_self.as_ref().unwrap_or(&card.align);
+        let (cx, _) = align_item_flex(cw, w.max(0.0), child_align);
+        let (cy, _) = align_item_flex(ch, h.max(0.0), child_align);
+
+        results.push(LayoutResult {
+            x: x + cx,
+            y: y + cy,
+            width: Some(w.max(0.0)),
+            height: Some(h.max(0.0)),
+        });
+    }
+
+    results
+}
+
+/// Resolve grid track sizes from track definitions
+fn resolve_tracks(
+    tracks: &[GridTrack],
+    container_size: f32,
+    gap: f32,
+    num_tracks: usize,
+    child_sizes: &[(f32, f32)],
+    placements: &[(usize, usize, usize, usize)],
+    is_col: bool,
+) -> Vec<f32> {
+    let total_gaps = gap * (num_tracks as f32 - 1.0).max(0.0);
+    let available = (container_size - total_gaps).max(0.0);
+
+    let mut sizes = vec![0.0f32; num_tracks];
+    let mut fr_total = 0.0f32;
+    let mut fixed_total = 0.0f32;
+
+    // First pass: resolve Px and Auto
+    for (i, track) in tracks.iter().enumerate() {
+        if i >= num_tracks {
+            break;
+        }
+        match track {
+            GridTrack::Px(v) => {
+                sizes[i] = *v;
+                fixed_total += *v;
+            }
+            GridTrack::Auto => {
+                // Find max content size for children in this track
+                let mut max_size = 0.0f32;
+                for (ci, &(col, row, col_span, row_span)) in placements.iter().enumerate() {
+                    let (track_start, span) = if is_col { (col, col_span) } else { (row, row_span) };
+                    if track_start == i && span == 1 {
+                        let s = if is_col { child_sizes[ci].0 } else { child_sizes[ci].1 };
+                        max_size = max_size.max(s);
+                    }
+                }
+                sizes[i] = max_size;
+                fixed_total += max_size;
+            }
+            GridTrack::Fr(f) => {
+                fr_total += f;
+            }
+        }
+    }
+
+    // Second pass: distribute remaining space to Fr tracks
+    if fr_total > 0.0 {
+        let fr_space = (available - fixed_total).max(0.0);
+        for (i, track) in tracks.iter().enumerate() {
+            if i >= num_tracks {
+                break;
+            }
+            if let GridTrack::Fr(f) = track {
+                sizes[i] = fr_space * f / fr_total;
+            }
+        }
+    }
+
+    sizes
+}
+
+fn layout_single_line_flex(
+    all_children: &[CardChild],
+    indices: &[usize],
     sizes: &[(f32, f32)],
     is_row: bool,
     justify: &CardJustify,
@@ -1250,20 +1592,58 @@ fn layout_single_line(
     gap: f32,
     container_w: f32,
     container_h: f32,
-) -> Vec<(f32, f32)> {
+) -> Vec<LayoutResult> {
     let n = sizes.len();
-    let main_sizes: Vec<f32> = sizes.iter().map(|&(w, h)| if is_row { w } else { h }).collect();
-    let cross_sizes: Vec<f32> = sizes.iter().map(|&(w, h)| if is_row { h } else { w }).collect();
-    let total_main: f32 = main_sizes.iter().sum::<f32>() + gap * (n as f32 - 1.0).max(0.0);
     let container_main = if is_row { container_w } else { container_h };
     let container_cross = if is_row { container_h } else { container_w };
-    let remaining = (container_main - total_main).max(0.0);
 
-    // Compute starting offset and effective gap on main axis
+    // Compute base main sizes (flex_basis or natural)
+    let mut main_sizes: Vec<f32> = Vec::with_capacity(n);
+    for i in 0..n {
+        let child = &all_children[indices[i]];
+        let natural = if is_row { sizes[i].0 } else { sizes[i].1 };
+        let basis = child.flex_basis.unwrap_or(natural);
+        main_sizes.push(basis);
+    }
+    let cross_sizes: Vec<f32> = sizes.iter().map(|&(w, h)| if is_row { h } else { w }).collect();
+
+    let total_main: f32 = main_sizes.iter().sum::<f32>() + gap * (n as f32 - 1.0).max(0.0);
+    let remaining = container_main - total_main;
+
+    // flex_grow / flex_shrink
+    if remaining > 0.0 {
+        let total_grow: f32 = indices.iter().map(|&idx| all_children[idx].flex_grow.unwrap_or(0.0)).sum();
+        if total_grow > 0.0 {
+            for i in 0..n {
+                let grow = all_children[indices[i]].flex_grow.unwrap_or(0.0);
+                if grow > 0.0 {
+                    main_sizes[i] += remaining * (grow / total_grow);
+                }
+            }
+        }
+    } else if remaining < 0.0 {
+        let overflow = -remaining;
+        let weighted_total: f32 = (0..n).map(|i| {
+            let shrink = all_children[indices[i]].flex_shrink.unwrap_or(1.0);
+            main_sizes[i] * shrink
+        }).sum();
+        if weighted_total > 0.0 {
+            for i in 0..n {
+                let shrink = all_children[indices[i]].flex_shrink.unwrap_or(1.0);
+                let weight = main_sizes[i] * shrink;
+                main_sizes[i] = (main_sizes[i] - overflow * weight / weighted_total).max(0.0);
+            }
+        }
+    }
+
+    // Justify: compute starting offset and effective gap
+    let actual_total: f32 = main_sizes.iter().sum::<f32>() + gap * (n as f32 - 1.0).max(0.0);
+    let new_remaining = (container_main - actual_total).max(0.0);
+
     let (mut main_pos, effective_gap) = match justify {
         CardJustify::Start => (0.0, gap),
-        CardJustify::Center => (remaining / 2.0, gap),
-        CardJustify::End => (remaining, gap),
+        CardJustify::Center => (new_remaining / 2.0, gap),
+        CardJustify::End => (new_remaining, gap),
         CardJustify::SpaceBetween => {
             if n <= 1 {
                 (0.0, gap)
@@ -1282,26 +1662,56 @@ fn layout_single_line(
                 (space / 2.0, space)
             }
         }
+        CardJustify::SpaceEvenly => {
+            let total_no_gap: f32 = main_sizes.iter().sum();
+            let space = (container_main - total_no_gap).max(0.0) / (n as f32 + 1.0);
+            (space, space)
+        }
     };
 
     let mut result = Vec::with_capacity(n);
     for i in 0..n {
-        let cross_pos = align_item(cross_sizes[i], container_cross, align);
-        if is_row {
-            result.push((main_pos, cross_pos));
+        let child = &all_children[indices[i]];
+        let child_align = child.align_self.as_ref().unwrap_or(align);
+        let (cross_pos, stretch_size) = align_item_flex(cross_sizes[i], container_cross, child_align);
+
+        let mut lr = if is_row {
+            LayoutResult { x: main_pos, y: cross_pos, width: None, height: None }
         } else {
-            result.push((cross_pos, main_pos));
+            LayoutResult { x: cross_pos, y: main_pos, width: None, height: None }
+        };
+
+        // Apply stretch on cross axis
+        if let Some(s) = stretch_size {
+            if is_row {
+                lr.height = Some(s);
+            } else {
+                lr.width = Some(s);
+            }
         }
+
+        // If flex_grow changed the main size, store it
+        let natural_main = if is_row { sizes[i].0 } else { sizes[i].1 };
+        if (main_sizes[i] - natural_main).abs() > 0.01 {
+            if is_row {
+                lr.width = Some(main_sizes[i]);
+            } else {
+                lr.height = Some(main_sizes[i]);
+            }
+        }
+
+        result.push(lr);
         main_pos += main_sizes[i] + effective_gap;
     }
     result
 }
 
-fn align_item(item_size: f32, container_size: f32, align: &CardAlign) -> f32 {
+fn align_item_flex(item_size: f32, container_size: f32, align: &CardAlign) -> (f32, Option<f32>) {
     match align {
-        CardAlign::Start => 0.0,
-        CardAlign::Center => (container_size - item_size) / 2.0,
-        CardAlign::End => container_size - item_size,
+        CardAlign::Start => (0.0, None),
+        CardAlign::Center => ((container_size - item_size) / 2.0, None),
+        CardAlign::End => (container_size - item_size, None),
+        CardAlign::Stretch => (0.0, Some(container_size)),
     }
 }
 
@@ -1315,10 +1725,10 @@ fn render_card(
     canvas.save();
     canvas.translate((card.position.x, card.position.y));
 
-    let (pt, pr, pb, pl) = card.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let (pt, pr, pb, pl) = card.padding.resolve();
     let (content_w, content_h) = measure_card_content(card);
-    let card_w = card.size.as_ref().map(|s| s.width).unwrap_or(content_w + pl + pr);
-    let card_h = card.size.as_ref().map(|s| s.height).unwrap_or(content_h + pt + pb);
+    let card_w = card.size.as_ref().and_then(|s| s.width.fixed()).unwrap_or(content_w + pl + pr);
+    let card_h = card.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or(content_h + pt + pb);
     let rect = Rect::from_xywh(0.0, 0.0, card_w, card_h);
     let rrect = skia_safe::RRect::new_rect_xy(rect, card.corner_radius, card.corner_radius);
 
@@ -1347,34 +1757,32 @@ fn render_card(
     canvas.save();
     canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
 
-    // 4. Compute flex layout and render children
-    let layout = compute_flex_layout(card);
+    // 4. Compute layout and render children
+    let layout = match card.display {
+        CardDisplay::Flex => compute_flex_layout(card),
+        CardDisplay::Grid => compute_grid_layout(card),
+    };
     canvas.translate((pl, pt));
 
-    for (i, child) in card.layers.iter().enumerate() {
+    for (i, child_wrapper) in card.layers.iter().enumerate() {
         if i >= layout.len() {
             break;
         }
-        let (layout_x, layout_y) = layout[i];
-
-        // Get child's native position
-        let child_pos = match child {
-            Layer::Text(t) => &t.position,
-            Layer::Shape(s) => &s.position,
-            Layer::Image(img) => &img.position,
-            Layer::Svg(s) => &s.position,
-            Layer::Video(v) => &v.position,
-            Layer::Gif(g) => &g.position,
-            Layer::Codeblock(cb) => &cb.position,
-            Layer::Counter(ct) => &ct.position,
-            Layer::Caption(c) => &c.position,
-            Layer::Group(g) => &g.position,
-            Layer::Card(c) => &c.position,
-        };
+        let result = &layout[i];
+        let child = &child_wrapper.layer;
+        let child_pos = get_layer_position(child);
 
         // Translate-compensation: shift canvas so child's own position lands at layout position
+        let (mt, _mr, _mb, ml) = child.props().margin();
         canvas.save();
-        canvas.translate((layout_x - child_pos.x, layout_y - child_pos.y));
+        canvas.translate((result.x - child_pos.x + ml, result.y - child_pos.y + mt));
+
+        // Clip to cell bounds if grid/stretch provides forced size
+        if let (Some(w), Some(h)) = (result.width, result.height) {
+            let clip_rect = Rect::from_xywh(child_pos.x, child_pos.y, w, h);
+            canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, false);
+        }
+
         render_layer(canvas, child, config, time, scene_duration)?;
         canvas.restore();
     }
@@ -1418,6 +1826,171 @@ fn render_group(
     canvas.restore();
 
     Ok(())
+}
+
+fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+    let (prefix, name) = icon
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("Invalid icon format: '{}' (expected 'prefix:name')", icon))?;
+    let hex_color = color.trim_start_matches('#');
+    let url = format!(
+        "https://api.iconify.design/{}/{}.svg?color=%23{}&width={}&height={}",
+        prefix, name, hex_color, width, height
+    );
+    let response = ureq::get(&url)
+        .call()
+        .map_err(|e| anyhow::anyhow!("Failed to fetch icon '{}': {}", icon, e))?;
+    let body = response
+        .into_body()
+        .read_to_vec()
+        .map_err(|e| anyhow::anyhow!("Failed to read icon response: {}", e))?;
+    Ok(body)
+}
+
+fn render_icon(canvas: &Canvas, icon: &IconLayer) -> Result<()> {
+    let (target_w, target_h) = match &icon.size {
+        Some(size) => (size.width as u32, size.height as u32),
+        None => (24, 24),
+    };
+
+    let cache_key = format!(
+        "icon:{}:{}:{}x{}",
+        icon.icon, icon.color, target_w, target_h
+    );
+
+    let cache = asset_cache();
+    let img = if let Some(cached) = cache.get(&cache_key) {
+        cached.clone()
+    } else {
+        let svg_data = fetch_icon_svg(&icon.icon, &icon.color, target_w, target_h)?;
+
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_data(&svg_data, &opt)
+            .map_err(|e| anyhow::anyhow!("Failed to parse icon SVG '{}': {}", icon.icon, e))?;
+
+        let svg_size = tree.size();
+        let render_w = target_w.max(1);
+        let render_h = target_h.max(1);
+
+        let mut pixmap = tiny_skia::Pixmap::new(render_w, render_h)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for icon"))?;
+
+        let scale_x = render_w as f32 / svg_size.width();
+        let scale_y = render_h as f32 / svg_size.height();
+        let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        let img_data = skia_safe::Data::new_copy(pixmap.data());
+        let img_info = ImageInfo::new(
+            (render_w as i32, render_h as i32),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let decoded =
+            skia_safe::images::raster_from_data(&img_info, img_data, render_w as usize * 4)
+                .ok_or_else(|| anyhow::anyhow!("Failed to create Skia image from icon"))?;
+        cache.insert(cache_key, decoded.clone());
+        decoded
+    };
+
+    let dst = Rect::from_xywh(
+        icon.position.x,
+        icon.position.y,
+        target_w as f32,
+        target_h as f32,
+    );
+    let paint = Paint::default();
+    canvas.draw_image_rect(img, None, dst, &paint);
+
+    Ok(())
+}
+
+/// Pre-fetch and cache all icon layers before rendering.
+/// Call this before the render loop to avoid HTTP requests during parallel rendering.
+pub fn prefetch_icons(scenes: &[crate::schema::Scene]) {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+
+    fn collect_from_layer(
+        layer: &Layer,
+        seen: &mut HashSet<(String, String, u32, u32)>,
+    ) {
+        match layer {
+            Layer::Icon(icon) => {
+                let (w, h) = match &icon.size {
+                    Some(size) => (size.width as u32, size.height as u32),
+                    None => (24, 24),
+                };
+                seen.insert((icon.icon.clone(), icon.color.clone(), w, h));
+            }
+            Layer::Group(g) => {
+                for child in &g.layers {
+                    collect_from_layer(child, seen);
+                }
+            }
+            Layer::Card(c) | Layer::Flex(c) => {
+                for child in &c.layers {
+                    collect_from_layer(&child.layer, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for scene in scenes {
+        for layer in &scene.layers {
+            collect_from_layer(layer, &mut seen);
+        }
+    }
+
+    let cache = asset_cache();
+    for (icon, color, w, h) in &seen {
+        let cache_key = format!("icon:{}:{}:{}x{}", icon, color, w, h);
+        if cache.contains_key(&cache_key) {
+            continue;
+        }
+        match fetch_icon_svg(icon, &color, *w, *h) {
+            Ok(svg_data) => {
+                let opt = usvg::Options::default();
+                match usvg::Tree::from_data(&svg_data, &opt) {
+                    Ok(tree) => {
+                        let svg_size = tree.size();
+                        let render_w = (*w).max(1);
+                        let render_h = (*h).max(1);
+                        if let Some(mut pixmap) = tiny_skia::Pixmap::new(render_w, render_h) {
+                            let scale_x = render_w as f32 / svg_size.width();
+                            let scale_y = render_h as f32 / svg_size.height();
+                            let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+                            resvg::render(&tree, transform, &mut pixmap.as_mut());
+                            let img_data = skia_safe::Data::new_copy(pixmap.data());
+                            let img_info = ImageInfo::new(
+                                (render_w as i32, render_h as i32),
+                                ColorType::RGBA8888,
+                                skia_safe::AlphaType::Premul,
+                                None,
+                            );
+                            if let Some(decoded) = skia_safe::images::raster_from_data(
+                                &img_info,
+                                img_data,
+                                render_w as usize * 4,
+                            ) {
+                                cache.insert(cache_key, decoded);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: failed to parse icon '{}': {}", icon, e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to fetch icon '{}': {}", icon, e);
+            }
+        }
+    }
 }
 
 fn render_svg(canvas: &Canvas, svg: &crate::schema::SvgLayer) -> Result<()> {

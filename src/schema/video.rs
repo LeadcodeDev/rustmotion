@@ -9,6 +9,8 @@ pub trait LayerProps {
     fn timing(&self) -> (Option<f64>, Option<f64>);
     fn wiggle(&self) -> Option<&[WiggleConfig]>;
     fn motion_blur(&self) -> Option<f32>;
+    fn padding(&self) -> (f32, f32, f32, f32) { (0.0, 0.0, 0.0, 0.0) }
+    fn margin(&self) -> (f32, f32, f32, f32) { (0.0, 0.0, 0.0, 0.0) }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -105,6 +107,8 @@ fn default_transition_duration() -> f64 {
 pub enum CardDirection {
     Column,
     Row,
+    ColumnReverse,
+    RowReverse,
 }
 
 impl Default for CardDirection {
@@ -119,6 +123,7 @@ pub enum CardAlign {
     Start,
     Center,
     End,
+    Stretch,
 }
 
 impl Default for CardAlign {
@@ -135,6 +140,7 @@ pub enum CardJustify {
     End,
     SpaceBetween,
     SpaceAround,
+    SpaceEvenly,
 }
 
 impl Default for CardJustify {
@@ -163,7 +169,7 @@ pub struct CardShadow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
-pub enum CardPadding {
+pub enum Spacing {
     Uniform(f32),
     Sides {
         top: f32,
@@ -173,13 +179,42 @@ pub enum CardPadding {
     },
 }
 
-impl CardPadding {
+impl Spacing {
     pub fn resolve(&self) -> (f32, f32, f32, f32) {
         match self {
-            CardPadding::Uniform(v) => (*v, *v, *v, *v),
-            CardPadding::Sides { top, right, bottom, left } => (*top, *right, *bottom, *left),
+            Spacing::Uniform(v) => (*v, *v, *v, *v),
+            Spacing::Sides { top, right, bottom, left } => (*top, *right, *bottom, *left),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CardDisplay {
+    Flex,
+    Grid,
+}
+
+impl Default for CardDisplay {
+    fn default() -> Self {
+        Self::Flex
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GridTrack {
+    Px(f32),
+    Fr(f32),
+    Auto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridPlacement {
+    #[serde(default)]
+    pub start: Option<i32>,
+    #[serde(default)]
+    pub span: Option<u32>,
 }
 
 // --- Layers ---
@@ -192,12 +227,14 @@ pub enum Layer {
     Image(ImageLayer),
     Group(GroupLayer),
     Svg(SvgLayer),
+    Icon(IconLayer),
     Video(VideoLayer),
     Gif(GifLayer),
     Caption(CaptionLayer),
     Codeblock(CodeblockLayer),
     Counter(CounterLayer),
     Card(CardLayer),
+    Flex(CardLayer),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -248,6 +285,10 @@ pub struct TextLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 // --- Counter Layer ---
@@ -304,6 +345,62 @@ pub struct CounterLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
+}
+
+// --- Card Child wrapper ---
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CardChild {
+    #[serde(flatten)]
+    pub layer: Layer,
+    // Flex per-child
+    #[serde(default)]
+    pub flex_grow: Option<f32>,
+    #[serde(default)]
+    pub flex_shrink: Option<f32>,
+    #[serde(default)]
+    pub flex_basis: Option<f32>,
+    #[serde(default)]
+    pub align_self: Option<CardAlign>,
+    // Grid per-child
+    #[serde(default)]
+    pub grid_column: Option<GridPlacement>,
+    #[serde(default)]
+    pub grid_row: Option<GridPlacement>,
+}
+
+// --- Card Size (each dimension can be a number or "auto") ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SizeDimension {
+    Fixed(f32),
+    Auto(AutoValue),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum AutoValue {
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+impl SizeDimension {
+    pub fn fixed(&self) -> Option<f32> {
+        match self {
+            SizeDimension::Fixed(v) => Some(*v),
+            SizeDimension::Auto(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CardSize {
+    pub width: SizeDimension,
+    pub height: SizeDimension,
 }
 
 // --- Card Layer ---
@@ -313,7 +410,7 @@ pub struct CardLayer {
     #[serde(default)]
     pub position: Position,
     #[serde(default)]
-    pub size: Option<Size>,
+    pub size: Option<CardSize>,
     // Style visuel
     #[serde(default)]
     pub background: Option<String>,
@@ -323,9 +420,14 @@ pub struct CardLayer {
     pub border: Option<CardBorder>,
     #[serde(default)]
     pub shadow: Option<CardShadow>,
+    #[serde(default = "default_card_padding")]
+    pub padding: Spacing,
     #[serde(default)]
-    pub padding: Option<CardPadding>,
-    // Layout flexbox
+    pub margin: Option<Spacing>,
+    // Layout mode
+    #[serde(default)]
+    pub display: CardDisplay,
+    // Flex layout
     #[serde(default)]
     pub direction: CardDirection,
     #[serde(default)]
@@ -336,9 +438,14 @@ pub struct CardLayer {
     pub justify: CardJustify,
     #[serde(default)]
     pub gap: f32,
+    // Grid layout
+    #[serde(default)]
+    pub grid_template_columns: Option<Vec<GridTrack>>,
+    #[serde(default)]
+    pub grid_template_rows: Option<Vec<GridTrack>>,
     // Enfants
     #[serde(default)]
-    pub layers: Vec<Layer>,
+    pub layers: Vec<CardChild>,
     // Apparence + animation
     #[serde(default = "default_opacity")]
     pub opacity: f32,
@@ -424,6 +531,10 @@ pub struct ShapeLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -451,6 +562,10 @@ pub struct ImageLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -461,6 +576,44 @@ pub struct GroupLayer {
     pub position: Position,
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
+}
+
+// --- Icon Layer (Iconify) ---
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IconLayer {
+    /// Iconify identifier: "prefix:name" (e.g. "lucide:home", "mdi:account")
+    pub icon: String,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default)]
+    pub position: Position,
+    #[serde(default)]
+    pub size: Option<Size>,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 // --- SVG Layer ---
@@ -491,6 +644,10 @@ pub struct SvgLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 // --- Video Layer ---
@@ -529,6 +686,10 @@ pub struct VideoLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 // --- GIF Layer ---
@@ -560,6 +721,10 @@ pub struct GifLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 // --- Caption Layer ---
@@ -589,6 +754,10 @@ pub struct CaptionLayer {
     pub preset_config: Option<PresetConfig>,
     #[serde(default)]
     pub max_width: Option<f32>,
+    #[serde(default)]
+    pub padding: Option<Spacing>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -704,6 +873,8 @@ pub struct CodeblockLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub margin: Option<Spacing>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -952,6 +1123,8 @@ impl LayerProps for TextLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for ShapeLayer {
@@ -961,6 +1134,8 @@ impl LayerProps for ShapeLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for ImageLayer {
@@ -970,6 +1145,19 @@ impl LayerProps for ImageLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+}
+
+impl LayerProps for IconLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for SvgLayer {
@@ -979,6 +1167,8 @@ impl LayerProps for SvgLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for VideoLayer {
@@ -988,6 +1178,8 @@ impl LayerProps for VideoLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for GifLayer {
@@ -997,6 +1189,8 @@ impl LayerProps for GifLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for CaptionLayer {
@@ -1006,6 +1200,8 @@ impl LayerProps for CaptionLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
     fn motion_blur(&self) -> Option<f32> { None }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for CounterLayer {
@@ -1017,6 +1213,8 @@ impl LayerProps for CounterLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, None) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for CodeblockLayer {
@@ -1026,6 +1224,7 @@ impl LayerProps for CodeblockLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for GroupLayer {
@@ -1035,6 +1234,8 @@ impl LayerProps for GroupLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
     fn motion_blur(&self) -> Option<f32> { None }
+    fn padding(&self) -> (f32, f32, f32, f32) { self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl LayerProps for CardLayer {
@@ -1044,6 +1245,7 @@ impl LayerProps for CardLayer {
     fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
     fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
     fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+    fn margin(&self) -> (f32, f32, f32, f32) { self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0)) }
 }
 
 impl Layer {
@@ -1054,6 +1256,7 @@ impl Layer {
             Layer::Shape(l) => l,
             Layer::Image(l) => l,
             Layer::Svg(l) => l,
+            Layer::Icon(l) => l,
             Layer::Video(l) => l,
             Layer::Gif(l) => l,
             Layer::Caption(l) => l,
@@ -1061,6 +1264,7 @@ impl Layer {
             Layer::Counter(l) => l,
             Layer::Group(l) => l,
             Layer::Card(l) => l,
+            Layer::Flex(l) => l,
         }
     }
 }
@@ -1197,6 +1401,10 @@ fn default_text_bg_padding() -> f32 {
 
 fn default_card_corner_radius() -> f32 {
     12.0
+}
+
+fn default_card_padding() -> Spacing {
+    Spacing::Uniform(16.0)
 }
 
 fn default_card_border_width() -> f32 {

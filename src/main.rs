@@ -486,8 +486,57 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                         }
                     }
                 }
-                schema::Layer::Card(card) => {
+                schema::Layer::Card(card) | schema::Layer::Flex(card) => {
                     if let (Some(start), Some(end)) = (card.start_at, card.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                    // Grid validation
+                    if matches!(card.display, schema::CardDisplay::Grid) && card.grid_template_columns.is_none() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}]: grid display without grid_template_columns",
+                            i, j
+                        ));
+                    }
+                    // Per-child validation
+                    for (k, child) in card.layers.iter().enumerate() {
+                        if let Some(grow) = child.flex_grow {
+                            if grow < 0.0 {
+                                errors.push(format!(
+                                    "scenes[{}].layers[{}].layers[{}]: flex_grow must be >= 0",
+                                    i, j, k
+                                ));
+                            }
+                        }
+                        if let Some(shrink) = child.flex_shrink {
+                            if shrink < 0.0 {
+                                errors.push(format!(
+                                    "scenes[{}].layers[{}].layers[{}]: flex_shrink must be >= 0",
+                                    i, j, k
+                                ));
+                            }
+                        }
+                    }
+                }
+                schema::Layer::Icon(icon) => {
+                    if let Some((prefix, name)) = icon.icon.split_once(':') {
+                        if prefix.is_empty() || name.is_empty() {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: icon '{}' has empty prefix or name (expected 'prefix:name')",
+                                i, j, icon.icon
+                            ));
+                        }
+                    } else {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}]: invalid icon format '{}' (expected 'prefix:name', e.g. 'lucide:home')",
+                            i, j, icon.icon
+                        ));
+                    }
+                    if let (Some(start), Some(end)) = (icon.start_at, icon.end_at) {
                         if start >= end {
                             errors.push(format!(
                                 "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
