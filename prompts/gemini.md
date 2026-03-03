@@ -49,6 +49,13 @@ Compteur animé qui interpole un nombre de `from` vers `to` sur la durée visibl
 ### `group`
 `position`, `layers` (array de sous-layers)
 
+### `card`
+Conteneur visuel avec layout flexbox. Contrairement à `group` (positionnement absolu, pas de style), `card` positionne automatiquement ses enfants et supporte fond, bordure, ombre, padding, coins arrondis.
+
+`position`, `size` {width,height} (optionnel, auto-calculé sinon), `background` (couleur hex), `corner_radius` (défaut 12), `border` {color, width}, `shadow` {color, offset_x, offset_y, blur}, `padding` (nombre uniforme ou {top, right, bottom, left}), `direction` ("column"|"row", défaut "column"), `wrap` (défaut false), `align` ("start"|"center"|"end", axe transversal, défaut "start"), `justify` ("start"|"center"|"end"|"space_between"|"space_around", axe principal, défaut "start"), `gap` (espacement entre enfants, défaut 0), `layers` (enfants positionnés automatiquement — leur `position` est ignorée)
+
+Supporte toutes les animations/presets/timing/wiggle/motion_blur.
+
 ### `codeblock`
 `code` (requis), `language` (défaut "plain"), `theme` (défaut "base16-ocean.dark" — 72 thèmes: catppuccin-mocha, dracula, github-dark, nord, tokyo-night, one-dark-pro, rose-pine, etc.), `position`, `size`, `font_family` (défaut "JetBrains Mono"), `font_size` (défaut 16), `font_weight` (défaut 400 — 100=Thin, 300=Light, 400=Normal, 500=Medium, 700=Bold, 900=Black), `line_height` (défaut 1.5), `background`, `show_line_numbers` (défaut false), `corner_radius` (défaut 12), `padding` {top, right, bottom, left}, `chrome` {enabled, title, color}, `highlights` [{lines, color, start, end}], `reveal` {mode: "typewriter"|"line_by_line", start, duration, easing}, `states` [{code, at, duration, easing, cursor: {enabled, color, width, blink}, highlights}]
 

@@ -351,7 +351,50 @@ Groups multiple layers with shared position and animations.
 | `position` | `{x, y}` | `{0, 0}`             |
 | `layers`   | array    | `[]` — nested layers |
 
-### 10. `codeblock`
+### 10. `card`
+
+Visual container with flexbox layout. Unlike `group` (absolute positioning, no style), `card` auto-positions children and supports background, border, shadow, padding, corner radius.
+
+```json
+{
+  "type": "card",
+  "position": { "x": 100, "y": 200 },
+  "size": { "width": 400 },
+  "background": "#FFFFFF",
+  "corner_radius": 16,
+  "padding": 24,
+  "gap": 16,
+  "direction": "column",
+  "align": "start",
+  "shadow": { "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 },
+  "border": { "color": "#E5E7EB", "width": 1 },
+  "layers": [
+    { "type": "text", "content": "Title", "font_size": 32, "font_weight": "bold", "color": "#111827" },
+    { "type": "text", "content": "Description", "font_size": 18, "color": "#6B7280" }
+  ],
+  "preset": "fade_in_up"
+}
+```
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `position` | `{x, y}` | `{0, 0}` |
+| `size` | `{width, height}` | `null` (auto-calculated from children) |
+| `background` | string | `null` — hex background color |
+| `corner_radius` | f32 | `12.0` |
+| `border` | object | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
+| `shadow` | object | `null` — `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
+| `padding` | f32 or object | `null` — uniform `24` or `{ "top": 24, "right": 24, "bottom": 24, "left": 24 }` |
+| `direction` | enum | `"column"` — `"column"` (vertical) or `"row"` (horizontal) |
+| `wrap` | bool | `false` — wrap children to next line |
+| `align` | enum | `"start"` — cross-axis: `"start"`, `"center"`, `"end"` |
+| `justify` | enum | `"start"` — main-axis: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"` |
+| `gap` | f32 | `0` — spacing between children in pixels |
+| `layers` | array | `[]` — child layers (positioned automatically, `position` field ignored) |
+
+Children `position` is ignored — the card computes layout from `direction`, `align`, `justify`, `gap`, and `wrap`. Supports all common fields (animations, presets, timing, wiggle, motion_blur).
+
+### 11. `codeblock`
 
 Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
 

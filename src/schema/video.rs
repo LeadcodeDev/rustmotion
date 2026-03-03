@@ -98,6 +98,90 @@ fn default_transition_duration() -> f64 {
     0.5
 }
 
+// --- Card types ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CardDirection {
+    Column,
+    Row,
+}
+
+impl Default for CardDirection {
+    fn default() -> Self {
+        Self::Column
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CardAlign {
+    Start,
+    Center,
+    End,
+}
+
+impl Default for CardAlign {
+    fn default() -> Self {
+        Self::Start
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CardJustify {
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+    SpaceAround,
+}
+
+impl Default for CardJustify {
+    fn default() -> Self {
+        Self::Start
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CardBorder {
+    pub color: String,
+    #[serde(default = "default_card_border_width")]
+    pub width: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CardShadow {
+    pub color: String,
+    #[serde(default)]
+    pub offset_x: f32,
+    #[serde(default)]
+    pub offset_y: f32,
+    #[serde(default)]
+    pub blur: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum CardPadding {
+    Uniform(f32),
+    Sides {
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+    },
+}
+
+impl CardPadding {
+    pub fn resolve(&self) -> (f32, f32, f32, f32) {
+        match self {
+            CardPadding::Uniform(v) => (*v, *v, *v, *v),
+            CardPadding::Sides { top, right, bottom, left } => (*top, *right, *bottom, *left),
+        }
+    }
+}
+
 // --- Layers ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -113,6 +197,7 @@ pub enum Layer {
     Caption(CaptionLayer),
     Codeblock(CodeblockLayer),
     Counter(CounterLayer),
+    Card(CardLayer),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -205,6 +290,58 @@ pub struct CounterLayer {
     #[serde(default)]
     pub stroke: Option<Stroke>,
     // --- Animation properties ---
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
+// --- Card Layer ---
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CardLayer {
+    #[serde(default)]
+    pub position: Position,
+    #[serde(default)]
+    pub size: Option<Size>,
+    // Style visuel
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default = "default_card_corner_radius")]
+    pub corner_radius: f32,
+    #[serde(default)]
+    pub border: Option<CardBorder>,
+    #[serde(default)]
+    pub shadow: Option<CardShadow>,
+    #[serde(default)]
+    pub padding: Option<CardPadding>,
+    // Layout flexbox
+    #[serde(default)]
+    pub direction: CardDirection,
+    #[serde(default)]
+    pub wrap: bool,
+    #[serde(default)]
+    pub align: CardAlign,
+    #[serde(default)]
+    pub justify: CardJustify,
+    #[serde(default)]
+    pub gap: f32,
+    // Enfants
+    #[serde(default)]
+    pub layers: Vec<Layer>,
+    // Apparence + animation
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
     #[serde(default)]
     pub animations: Vec<Animation>,
     #[serde(default)]
@@ -900,6 +1037,15 @@ impl LayerProps for GroupLayer {
     fn motion_blur(&self) -> Option<f32> { None }
 }
 
+impl LayerProps for CardLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
 impl Layer {
     /// Access LayerProps for any layer variant
     pub fn props(&self) -> &dyn LayerProps {
@@ -914,6 +1060,7 @@ impl Layer {
             Layer::Codeblock(l) => l,
             Layer::Counter(l) => l,
             Layer::Group(l) => l,
+            Layer::Card(l) => l,
         }
     }
 }
@@ -1046,4 +1193,12 @@ fn default_shadow_blur() -> f32 {
 
 fn default_text_bg_padding() -> f32 {
     8.0
+}
+
+fn default_card_corner_radius() -> f32 {
+    12.0
+}
+
+fn default_card_border_width() -> f32 {
+    1.0
 }

@@ -10,8 +10,9 @@ use skia_safe::{
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::codeblock;
 use crate::schema::{
-    CaptionLayer, CaptionStyle, CounterLayer, Fill, FontWeight, GradientType, ImageFit, Layer,
-    Scene, ShapeText, ShapeType, TextAlign, TextLayer, VerticalAlign, VideoConfig,
+    CaptionLayer, CaptionStyle, CardAlign, CardDirection, CardJustify, CardLayer, CounterLayer,
+    Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText, ShapeType, TextAlign,
+    TextLayer, VerticalAlign, VideoConfig,
 };
 
 // Thread-local FontMgr instance, created once per thread and reused
@@ -238,6 +239,7 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
         Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
         Layer::Counter(counter) => render_counter(canvas, counter, config, time, scene_duration, props)?,
+        Layer::Card(card) => render_card(canvas, card, config, time, scene_duration)?,
     }
 
     if needs_layer {
@@ -394,6 +396,17 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
         }
         Layer::Caption(c) => (c.position.x, c.position.y),
         Layer::Group(g) => (g.position.x, g.position.y),
+        Layer::Card(c) => {
+            let (w, h) = match &c.size {
+                Some(s) => (s.width, s.height),
+                None => {
+                    let (cw, ch) = measure_card_content(c);
+                    let (pt, pr, pb, pl) = c.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+                    (cw + pl + pr, ch + pt + pb)
+                }
+            };
+            (c.position.x + w / 2.0, c.position.y + h / 2.0)
+        }
     }
 }
 
@@ -1012,6 +1025,371 @@ fn render_image(canvas: &Canvas, image: &crate::schema::ImageLayer) -> Result<()
     } else {
         canvas.draw_image_rect(img, None, dst, &paint);
     }
+
+    Ok(())
+}
+
+// --- Card layout helpers ---
+
+fn measure_layer(layer: &Layer) -> (f32, f32) {
+    match layer {
+        Layer::Text(t) => {
+            let font_mgr = font_mgr();
+            use crate::schema::FontStyleType;
+            let slant = match t.font_style {
+                FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
+                FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
+                FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
+            };
+            let weight = match t.font_weight {
+                FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
+                FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            };
+            let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
+            let typeface = font_mgr
+                .match_family_style(&t.font_family, font_style)
+                .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
+                .or_else(|| font_mgr.match_family_style("Arial", font_style))
+                .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", font_style).unwrap());
+            let font = Font::from_typeface(typeface, t.font_size);
+            let lines = wrap_text(&t.content, &font, t.max_width);
+            let line_height = t.line_height.unwrap_or(t.font_size * 1.3);
+            let max_w = lines.iter().map(|l| {
+                let (w, _) = font.measure_str(l, None);
+                w
+            }).fold(0.0f32, f32::max);
+            let h = lines.len() as f32 * line_height;
+            (max_w, h)
+        }
+        Layer::Shape(s) => (s.size.width, s.size.height),
+        Layer::Image(i) => match &i.size {
+            Some(s) => (s.width, s.height),
+            None => (100.0, 100.0),
+        },
+        Layer::Svg(s) => match &s.size {
+            Some(sz) => (sz.width, sz.height),
+            None => (100.0, 100.0),
+        },
+        Layer::Video(v) => (v.size.width, v.size.height),
+        Layer::Gif(g) => match &g.size {
+            Some(sz) => (sz.width, sz.height),
+            None => (100.0, 100.0),
+        },
+        Layer::Codeblock(cb) => match &cb.size {
+            Some(s) => (s.width, s.height),
+            None => (400.0, 300.0),
+        },
+        Layer::Counter(ct) => {
+            let font_mgr = font_mgr();
+            use crate::schema::FontStyleType;
+            let slant = match ct.font_style {
+                FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
+                FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
+                FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
+            };
+            let weight = match ct.font_weight {
+                FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
+                FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            };
+            let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
+            let typeface = font_mgr
+                .match_family_style(&ct.font_family, font_style)
+                .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
+                .or_else(|| font_mgr.match_family_style("Arial", font_style))
+                .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", font_style).unwrap());
+            let font = Font::from_typeface(typeface, ct.font_size);
+            let display = format_counter_value(ct.to, ct.decimals, &ct.separator, &ct.prefix, &ct.suffix);
+            let (text_width, _) = font.measure_str(&display, None);
+            let line_height = ct.font_size * 1.3;
+            (text_width, line_height)
+        }
+        Layer::Group(g) => {
+            // Bounding box of children
+            let mut max_x: f32 = 0.0;
+            let mut max_y: f32 = 0.0;
+            for child in &g.layers {
+                let (cw, ch) = measure_layer(child);
+                let pos = match child {
+                    Layer::Text(t) => &t.position,
+                    Layer::Shape(s) => &s.position,
+                    Layer::Image(i) => &i.position,
+                    Layer::Svg(s) => &s.position,
+                    Layer::Video(v) => &v.position,
+                    Layer::Gif(g) => &g.position,
+                    Layer::Codeblock(cb) => &cb.position,
+                    Layer::Counter(ct) => &ct.position,
+                    Layer::Caption(c) => &c.position,
+                    Layer::Group(g) => &g.position,
+                    Layer::Card(c) => &c.position,
+                };
+                max_x = max_x.max(pos.x + cw);
+                max_y = max_y.max(pos.y + ch);
+            }
+            (max_x, max_y)
+        }
+        Layer::Card(c) => {
+            let (cw, ch) = measure_card_content(c);
+            let (pt, pr, pb, pl) = c.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let w = c.size.as_ref().map(|s| s.width).unwrap_or(cw + pl + pr);
+            let h = c.size.as_ref().map(|s| s.height).unwrap_or(ch + pt + pb);
+            (w, h)
+        }
+        Layer::Caption(c) => {
+            let w = c.max_width.unwrap_or(400.0);
+            let h = c.font_size * 1.3;
+            (w, h)
+        }
+    }
+}
+
+fn measure_card_content(card: &CardLayer) -> (f32, f32) {
+    let sizes: Vec<(f32, f32)> = card.layers.iter().map(|l| measure_layer(l)).collect();
+    if sizes.is_empty() {
+        return (0.0, 0.0);
+    }
+    match card.direction {
+        CardDirection::Column => {
+            let max_w = sizes.iter().map(|(w, _)| *w).fold(0.0f32, f32::max);
+            let total_h: f32 = sizes.iter().map(|(_, h)| *h).sum::<f32>()
+                + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
+            (max_w, total_h)
+        }
+        CardDirection::Row => {
+            let total_w: f32 = sizes.iter().map(|(w, _)| *w).sum::<f32>()
+                + card.gap * (sizes.len() as f32 - 1.0).max(0.0);
+            let max_h = sizes.iter().map(|(_, h)| *h).fold(0.0f32, f32::max);
+            (total_w, max_h)
+        }
+    }
+}
+
+/// Compute flex layout positions for card children
+/// Returns Vec<(x, y)> positions relative to content area (after padding)
+fn compute_flex_layout(card: &CardLayer) -> Vec<(f32, f32)> {
+    let child_sizes: Vec<(f32, f32)> = card.layers.iter().map(|l| measure_layer(l)).collect();
+    if child_sizes.is_empty() {
+        return vec![];
+    }
+
+    let (pt, pr, pb, pl) = card.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let container_w = card.size.as_ref().map(|s| s.width).unwrap_or_else(|| {
+        let (cw, _) = measure_card_content(card);
+        cw + pl + pr
+    }) - pl - pr;
+    let container_h = card.size.as_ref().map(|s| s.height).unwrap_or_else(|| {
+        let (_, ch) = measure_card_content(card);
+        ch + pt + pb
+    }) - pt - pb;
+
+    let is_row = matches!(card.direction, CardDirection::Row);
+
+    if !card.wrap {
+        // Single line layout
+        return layout_single_line(
+            &child_sizes, is_row, &card.justify, &card.align,
+            card.gap, container_w, container_h,
+        );
+    }
+
+    // Wrap mode: partition children into lines
+    let main_limit = if is_row { container_w } else { container_h };
+    let mut lines: Vec<Vec<usize>> = vec![vec![]];
+    let mut current_main = 0.0f32;
+
+    for (i, &(cw, ch)) in child_sizes.iter().enumerate() {
+        let child_main = if is_row { cw } else { ch };
+        let needed = if lines.last().unwrap().is_empty() {
+            child_main
+        } else {
+            current_main + card.gap + child_main
+        };
+
+        if needed > main_limit && !lines.last().unwrap().is_empty() {
+            lines.push(vec![i]);
+            current_main = child_main;
+        } else {
+            lines.last_mut().unwrap().push(i);
+            current_main = needed;
+        }
+    }
+
+    // Layout each line and stack them on the cross axis
+    let mut positions = vec![(0.0f32, 0.0f32); child_sizes.len()];
+    let mut cross_offset = 0.0f32;
+
+    for line in &lines {
+        let line_sizes: Vec<(f32, f32)> = line.iter().map(|&i| child_sizes[i]).collect();
+        let line_cross = line_sizes.iter().map(|&(w, h)| if is_row { h } else { w }).fold(0.0f32, f32::max);
+
+        let line_positions = layout_single_line(
+            &line_sizes, is_row, &card.justify, &card.align,
+            card.gap, container_w, container_h,
+        );
+
+        for (j, &idx) in line.iter().enumerate() {
+            let (mut x, mut y) = line_positions[j];
+            if is_row {
+                y = cross_offset + align_item(line_sizes[j].1, line_cross, &card.align);
+            } else {
+                x = cross_offset + align_item(line_sizes[j].0, line_cross, &card.align);
+            }
+            positions[idx] = (x, y);
+        }
+
+        cross_offset += line_cross + card.gap;
+    }
+
+    positions
+}
+
+fn layout_single_line(
+    sizes: &[(f32, f32)],
+    is_row: bool,
+    justify: &CardJustify,
+    align: &CardAlign,
+    gap: f32,
+    container_w: f32,
+    container_h: f32,
+) -> Vec<(f32, f32)> {
+    let n = sizes.len();
+    let main_sizes: Vec<f32> = sizes.iter().map(|&(w, h)| if is_row { w } else { h }).collect();
+    let cross_sizes: Vec<f32> = sizes.iter().map(|&(w, h)| if is_row { h } else { w }).collect();
+    let total_main: f32 = main_sizes.iter().sum::<f32>() + gap * (n as f32 - 1.0).max(0.0);
+    let container_main = if is_row { container_w } else { container_h };
+    let container_cross = if is_row { container_h } else { container_w };
+    let remaining = (container_main - total_main).max(0.0);
+
+    // Compute starting offset and effective gap on main axis
+    let (mut main_pos, effective_gap) = match justify {
+        CardJustify::Start => (0.0, gap),
+        CardJustify::Center => (remaining / 2.0, gap),
+        CardJustify::End => (remaining, gap),
+        CardJustify::SpaceBetween => {
+            if n <= 1 {
+                (0.0, gap)
+            } else {
+                let total_no_gap: f32 = main_sizes.iter().sum();
+                let space = (container_main - total_no_gap).max(0.0) / (n as f32 - 1.0);
+                (0.0, space)
+            }
+        }
+        CardJustify::SpaceAround => {
+            if n == 0 {
+                (0.0, gap)
+            } else {
+                let total_no_gap: f32 = main_sizes.iter().sum();
+                let space = (container_main - total_no_gap).max(0.0) / n as f32;
+                (space / 2.0, space)
+            }
+        }
+    };
+
+    let mut result = Vec::with_capacity(n);
+    for i in 0..n {
+        let cross_pos = align_item(cross_sizes[i], container_cross, align);
+        if is_row {
+            result.push((main_pos, cross_pos));
+        } else {
+            result.push((cross_pos, main_pos));
+        }
+        main_pos += main_sizes[i] + effective_gap;
+    }
+    result
+}
+
+fn align_item(item_size: f32, container_size: f32, align: &CardAlign) -> f32 {
+    match align {
+        CardAlign::Start => 0.0,
+        CardAlign::Center => (container_size - item_size) / 2.0,
+        CardAlign::End => container_size - item_size,
+    }
+}
+
+fn render_card(
+    canvas: &Canvas,
+    card: &CardLayer,
+    config: &VideoConfig,
+    time: f64,
+    scene_duration: f64,
+) -> Result<()> {
+    canvas.save();
+    canvas.translate((card.position.x, card.position.y));
+
+    let (pt, pr, pb, pl) = card.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let (content_w, content_h) = measure_card_content(card);
+    let card_w = card.size.as_ref().map(|s| s.width).unwrap_or(content_w + pl + pr);
+    let card_h = card.size.as_ref().map(|s| s.height).unwrap_or(content_h + pt + pb);
+    let rect = Rect::from_xywh(0.0, 0.0, card_w, card_h);
+    let rrect = skia_safe::RRect::new_rect_xy(rect, card.corner_radius, card.corner_radius);
+
+    // 1. Shadow
+    if let Some(ref shadow) = card.shadow {
+        let shadow_rect = Rect::from_xywh(shadow.offset_x, shadow.offset_y, card_w, card_h);
+        let shadow_rrect = skia_safe::RRect::new_rect_xy(shadow_rect, card.corner_radius, card.corner_radius);
+        let mut shadow_paint = paint_from_hex(&shadow.color);
+        if shadow.blur > 0.0 {
+            shadow_paint.set_mask_filter(skia_safe::MaskFilter::blur(
+                skia_safe::BlurStyle::Normal,
+                shadow.blur / 2.0,
+                false,
+            ));
+        }
+        canvas.draw_rrect(shadow_rrect, &shadow_paint);
+    }
+
+    // 2. Background
+    if let Some(ref bg) = card.background {
+        let bg_paint = paint_from_hex(bg);
+        canvas.draw_rrect(rrect, &bg_paint);
+    }
+
+    // 3. Clip to rounded rect for children
+    canvas.save();
+    canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
+
+    // 4. Compute flex layout and render children
+    let layout = compute_flex_layout(card);
+    canvas.translate((pl, pt));
+
+    for (i, child) in card.layers.iter().enumerate() {
+        if i >= layout.len() {
+            break;
+        }
+        let (layout_x, layout_y) = layout[i];
+
+        // Get child's native position
+        let child_pos = match child {
+            Layer::Text(t) => &t.position,
+            Layer::Shape(s) => &s.position,
+            Layer::Image(img) => &img.position,
+            Layer::Svg(s) => &s.position,
+            Layer::Video(v) => &v.position,
+            Layer::Gif(g) => &g.position,
+            Layer::Codeblock(cb) => &cb.position,
+            Layer::Counter(ct) => &ct.position,
+            Layer::Caption(c) => &c.position,
+            Layer::Group(g) => &g.position,
+            Layer::Card(c) => &c.position,
+        };
+
+        // Translate-compensation: shift canvas so child's own position lands at layout position
+        canvas.save();
+        canvas.translate((layout_x - child_pos.x, layout_y - child_pos.y));
+        render_layer(canvas, child, config, time, scene_duration)?;
+        canvas.restore();
+    }
+
+    canvas.restore(); // clip
+
+    // 5. Border on top
+    if let Some(ref border) = card.border {
+        let mut border_paint = paint_from_hex(&border.color);
+        border_paint.set_style(PaintStyle::Stroke);
+        border_paint.set_stroke_width(border.width);
+        canvas.draw_rrect(rrect, &border_paint);
+    }
+
+    canvas.restore(); // position translate
 
     Ok(())
 }

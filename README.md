@@ -627,6 +627,65 @@ The counter animates over the layer's visible duration (`start_at` to `end_at`, 
 
 ---
 
+### Card Layer
+
+A visual container with flexbox layout for its children. Unlike `group` (which uses absolute positioning with no visual style), `card` automatically positions children using flexbox and supports background, border, shadow, corner radius, and padding.
+
+```json
+{
+  "type": "card",
+  "position": { "x": 100, "y": 200 },
+  "size": { "width": 400 },
+  "background": "#FFFFFF",
+  "corner_radius": 16,
+  "padding": 24,
+  "gap": 16,
+  "direction": "column",
+  "align": "start",
+  "shadow": { "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 },
+  "border": { "color": "#E5E7EB", "width": 1 },
+  "layers": [
+    { "type": "text", "content": "Card Title", "font_size": 32, "font_weight": "bold", "color": "#111827" },
+    { "type": "text", "content": "Description text", "font_size": 18, "color": "#6B7280" }
+  ],
+  "preset": "fade_in_up",
+  "preset_config": { "delay": 0.2, "duration": 0.6 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `size` | `{width, height}` | | Container size (auto-calculated from children if omitted) |
+| `background` | `string` | | Background color (hex) |
+| `corner_radius` | `f32` | `12.0` | Corner radius for rounded corners |
+| `border` | `CardBorder` | | Border stroke |
+| `shadow` | `CardShadow` | | Drop shadow |
+| `padding` | `f32 \| {top, right, bottom, left}` | | Padding inside the card (uniform number or per-side) |
+| `direction` | `string` | `"column"` | `"column"` (vertical) or `"row"` (horizontal) |
+| `wrap` | `bool` | `false` | Wrap children to next line when they exceed available space |
+| `align` | `string` | `"start"` | Cross-axis alignment: `"start"`, `"center"`, `"end"` |
+| `justify` | `string` | `"start"` | Main-axis justification: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"` |
+| `gap` | `f32` | `0.0` | Spacing between children (pixels) |
+| `layers` | `Layer[]` | `[]` | Child layers (positioned automatically; their `position` field is ignored) |
+
+#### CardBorder
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `color` | `string` | (required) | Border color (hex) |
+| `width` | `f32` | `1.0` | Border width in pixels |
+
+#### CardShadow
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `color` | `string` | (required) | Shadow color (hex with alpha, e.g. `"#00000040"`) |
+| `offset_x` | `f32` | `0.0` | Horizontal shadow offset |
+| `offset_y` | `f32` | `0.0` | Vertical shadow offset |
+| `blur` | `f32` | `0.0` | Shadow blur radius |
+
+---
+
 ### Group Layer
 
 Groups nested layers with a shared position and opacity.
