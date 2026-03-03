@@ -4,9 +4,10 @@ use skia_safe::{
     Point, Rect, TextBlob,
 };
 
-use super::animator::{resolve_animations, AnimatedProperties};
+use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use crate::schema::{
-    Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeType, TextAlign, VideoConfig,
+    CaptionLayer, CaptionStyle, Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText,
+    ShapeType, TextAlign, VerticalAlign, VideoConfig, WiggleConfig,
 };
 
 /// Parse a hex color string (#RRGGBB or #RRGGBBAA) into RGBA components
@@ -51,7 +52,14 @@ pub fn render_frame(
 ) -> Result<Vec<u8>> {
     let width = config.width as i32;
     let height = config.height as i32;
-    let time = frame_index as f64 / config.fps as f64;
+    let mut time = frame_index as f64 / config.fps as f64;
+
+    // Apply freeze_at: clamp time to freeze point
+    if let Some(freeze_at) = scene.freeze_at {
+        if time > freeze_at {
+            time = freeze_at;
+        }
+    }
 
     let info = ImageInfo::new(
         (width, height),
@@ -96,19 +104,96 @@ fn get_layer_animations(layer: &Layer) -> (&[crate::schema::Animation], Option<&
         Layer::Text(t) => (&t.animations, t.preset.as_ref(), t.preset_config.as_ref()),
         Layer::Shape(s) => (&s.animations, s.preset.as_ref(), s.preset_config.as_ref()),
         Layer::Image(i) => (&i.animations, i.preset.as_ref(), i.preset_config.as_ref()),
+        Layer::Svg(s) => (&s.animations, s.preset.as_ref(), s.preset_config.as_ref()),
+        Layer::Video(v) => (&v.animations, v.preset.as_ref(), v.preset_config.as_ref()),
+        Layer::Gif(g) => (&g.animations, g.preset.as_ref(), g.preset_config.as_ref()),
+        Layer::Caption(c) => (&c.animations, c.preset.as_ref(), c.preset_config.as_ref()),
         Layer::Group(_) => (&[], None, None),
     }
 }
 
+fn get_layer_timing(layer: &Layer) -> (Option<f64>, Option<f64>) {
+    match layer {
+        Layer::Text(t) => (t.start_at, t.end_at),
+        Layer::Shape(s) => (s.start_at, s.end_at),
+        Layer::Image(i) => (i.start_at, i.end_at),
+        Layer::Svg(s) => (s.start_at, s.end_at),
+        Layer::Video(v) => (v.start_at, v.end_at),
+        Layer::Gif(g) => (g.start_at, g.end_at),
+        Layer::Group(_) | Layer::Caption(_) => (None, None),
+    }
+}
+
+fn get_layer_wiggles(layer: &Layer) -> Option<&[WiggleConfig]> {
+    match layer {
+        Layer::Text(t) => t.wiggle.as_deref(),
+        Layer::Shape(s) => s.wiggle.as_deref(),
+        Layer::Image(i) => i.wiggle.as_deref(),
+        Layer::Svg(s) => s.wiggle.as_deref(),
+        Layer::Video(v) => v.wiggle.as_deref(),
+        Layer::Gif(g) => g.wiggle.as_deref(),
+        _ => None,
+    }
+}
+
+fn get_layer_motion_blur(layer: &Layer) -> Option<f32> {
+    match layer {
+        Layer::Text(t) => t.motion_blur,
+        Layer::Shape(s) => s.motion_blur,
+        Layer::Image(i) => i.motion_blur,
+        Layer::Svg(s) => s.motion_blur,
+        Layer::Video(v) => v.motion_blur,
+        Layer::Gif(g) => g.motion_blur,
+        _ => None,
+    }
+}
+
 fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64) -> Result<()> {
+    // Check start_at / end_at timing
+    let (start_at, end_at) = get_layer_timing(layer);
+    if let Some(start) = start_at {
+        if time < start {
+            return Ok(());
+        }
+    }
+    if let Some(end) = end_at {
+        if time > end {
+            return Ok(());
+        }
+    }
+
+    // Adjust time for animation: offset by start_at
+    let anim_time = if let Some(start) = start_at {
+        time - start
+    } else {
+        time
+    };
+
     let (animations, preset, preset_config) = get_layer_animations(layer);
-    let props = resolve_animations(animations, preset, preset_config, time, scene_duration);
+    let mut props = resolve_animations(animations, preset, preset_config, anim_time, scene_duration);
+
+    // Apply wiggles additively
+    if let Some(wiggles) = get_layer_wiggles(layer) {
+        apply_wiggles(&mut props, wiggles, time);
+    }
 
     // Skip rendering if fully transparent
     if props.opacity <= 0.0 {
         return Ok(());
     }
 
+    // Motion blur: multi-sampling approach
+    let motion_blur = get_layer_motion_blur(layer);
+    if let Some(blur_intensity) = motion_blur {
+        if blur_intensity > 0.01 {
+            return render_layer_with_motion_blur(canvas, layer, config, time, scene_duration, blur_intensity);
+        }
+    }
+
+    render_layer_inner(canvas, layer, config, time, scene_duration, &props)
+}
+
+fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, props: &AnimatedProperties) -> Result<()> {
     // Apply animated transforms
     canvas.save();
 
@@ -152,16 +237,68 @@ fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64,
     }
 
     match layer {
-        Layer::Text(text) => render_text(canvas, text, config, &props)?,
-        Layer::Shape(shape) => render_shape(canvas, shape)?,
+        Layer::Text(text) => render_text(canvas, text, config, props)?,
+        Layer::Shape(shape) => render_shape(canvas, shape, props)?,
         Layer::Image(image) => render_image(canvas, image)?,
         Layer::Group(group) => render_group(canvas, group, config, time, scene_duration)?,
+        Layer::Svg(svg) => render_svg(canvas, svg)?,
+        Layer::Video(video) => render_video(canvas, video, time)?,
+        Layer::Gif(gif) => render_gif(canvas, gif, time)?,
+        Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
     }
 
     if needs_layer {
         canvas.restore(); // layer
     }
     canvas.restore(); // transform
+
+    Ok(())
+}
+
+fn render_layer_with_motion_blur(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, intensity: f32) -> Result<()> {
+    let num_samples = 5;
+    let fps = config.fps as f64;
+    let frame_duration = 1.0 / fps;
+    let spread = frame_duration * intensity as f64;
+
+    // Create a temporary surface to composite sub-frames
+    let width = config.width as i32;
+    let height = config.height as i32;
+    let info = ImageInfo::new(
+        (width, height),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut temp_surface = surfaces::raster(&info, None, None)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create motion blur surface"))?;
+
+    temp_surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+    for i in 0..num_samples {
+        let offset = (i as f64 / (num_samples - 1) as f64 - 0.5) * spread;
+        let sample_time = (time + offset).max(0.0);
+
+        let (start_at, _) = get_layer_timing(layer);
+        let anim_time = if let Some(start) = start_at {
+            sample_time - start
+        } else {
+            sample_time
+        };
+
+        let (animations, preset, preset_config) = get_layer_animations(layer);
+        let mut props = resolve_animations(animations, preset, preset_config, anim_time, scene_duration);
+        if let Some(wiggles) = get_layer_wiggles(layer) {
+            apply_wiggles(&mut props, wiggles, sample_time);
+        }
+        props.opacity /= num_samples as f32;
+
+        render_layer_inner(temp_surface.canvas(), layer, config, sample_time, scene_duration, &props)?;
+    }
+
+    // Draw the composited result onto the main canvas
+    let image = temp_surface.image_snapshot();
+    canvas.draw_image(&image, (0.0, 0.0), None);
 
     Ok(())
 }
@@ -200,6 +337,22 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             };
             (i.position.x + w / 2.0, i.position.y + h / 2.0)
         }
+        Layer::Svg(s) => {
+            let (w, h) = match &s.size {
+                Some(sz) => (sz.width, sz.height),
+                None => (100.0, 100.0),
+            };
+            (s.position.x + w / 2.0, s.position.y + h / 2.0)
+        }
+        Layer::Video(v) => (v.position.x + v.size.width / 2.0, v.position.y + v.size.height / 2.0),
+        Layer::Gif(g) => {
+            let (w, h) = match &g.size {
+                Some(sz) => (sz.width, sz.height),
+                None => (100.0, 100.0),
+            };
+            (g.position.x + w / 2.0, g.position.y + h / 2.0)
+        }
+        Layer::Caption(c) => (c.position.x, c.position.y),
         Layer::Group(g) => (g.position.x, g.position.y),
     }
 }
@@ -232,7 +385,8 @@ fn render_text(
 
     let font = Font::from_typeface(typeface, text.font_size);
 
-    let mut paint = paint_from_hex(&text.color);
+    let color = props.color.as_deref().unwrap_or(&text.color);
+    let mut paint = paint_from_hex(color);
     paint.set_alpha_f(1.0); // opacity handled at layer level
 
     // Apply typewriter effect (progress-based or absolute char count)
@@ -340,17 +494,19 @@ fn make_text_blob_with_spacing(text: &str, font: &Font, spacing: f32) -> Option<
     TextBlob::from_pos_text(text, &positions, font)
 }
 
-fn render_shape(canvas: &Canvas, shape: &crate::schema::ShapeLayer) -> Result<()> {
+fn render_shape(canvas: &Canvas, shape: &crate::schema::ShapeLayer, props: &AnimatedProperties) -> Result<()> {
     let x = shape.position.x;
     let y = shape.position.y;
     let w = shape.size.width;
     let h = shape.size.height;
-    let rect = Rect::from_xywh(x, y, w, h);
 
     // Fill
     if let Some(fill) = &shape.fill {
         let mut paint = match fill {
-            Fill::Solid(color) => paint_from_hex(color),
+            Fill::Solid(color) => {
+                let c = props.color.as_deref().unwrap_or(color);
+                paint_from_hex(c)
+            }
             Fill::Gradient(gradient) => {
                 let colors: Vec<Color4f> = gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
                 let stops: Option<Vec<f32>> = gradient.stops.clone();
@@ -405,19 +561,7 @@ fn render_shape(canvas: &Canvas, shape: &crate::schema::ShapeLayer) -> Result<()
         };
         paint.set_style(PaintStyle::Fill);
 
-        match shape.shape {
-            ShapeType::Rect => canvas.draw_rect(rect, &paint),
-            ShapeType::RoundedRect => {
-                let r = shape.corner_radius.unwrap_or(8.0);
-                let rrect = skia_safe::RRect::new_rect_xy(rect, r, r);
-                canvas.draw_rrect(rrect, &paint)
-            }
-            ShapeType::Circle => {
-                let radius = w.min(h) / 2.0;
-                canvas.draw_circle((x + w / 2.0, y + h / 2.0), radius, &paint)
-            }
-            ShapeType::Ellipse => canvas.draw_oval(rect, &paint),
-        };
+        draw_shape_path(canvas, &shape.shape, x, y, w, h, shape.corner_radius, &paint);
     }
 
     // Stroke
@@ -425,23 +569,172 @@ fn render_shape(canvas: &Canvas, shape: &crate::schema::ShapeLayer) -> Result<()
         let mut paint = paint_from_hex(&stroke.color);
         paint.set_style(PaintStyle::Stroke);
         paint.set_stroke_width(stroke.width);
+        draw_shape_path(canvas, &shape.shape, x, y, w, h, shape.corner_radius, &paint);
+    }
 
-        match shape.shape {
-            ShapeType::Rect => canvas.draw_rect(rect, &paint),
-            ShapeType::RoundedRect => {
-                let r = shape.corner_radius.unwrap_or(8.0);
-                let rrect = skia_safe::RRect::new_rect_xy(rect, r, r);
-                canvas.draw_rrect(rrect, &paint)
-            }
-            ShapeType::Circle => {
-                let radius = w.min(h) / 2.0;
-                canvas.draw_circle((x + w / 2.0, y + h / 2.0), radius, &paint)
-            }
-            ShapeType::Ellipse => canvas.draw_oval(rect, &paint),
-        };
+    // Text
+    if let Some(text) = &shape.text {
+        render_shape_text(canvas, text, x, y, w, h)?;
     }
 
     Ok(())
+}
+
+fn render_shape_text(
+    canvas: &Canvas,
+    text: &ShapeText,
+    shape_x: f32,
+    shape_y: f32,
+    shape_w: f32,
+    shape_h: f32,
+) -> Result<()> {
+    let pad = text.padding.unwrap_or(0.0);
+    let area_x = shape_x + pad;
+    let area_y = shape_y + pad;
+    let area_w = shape_w - 2.0 * pad;
+    let area_h = shape_h - 2.0 * pad;
+
+    let font_mgr = FontMgr::default();
+    let font_style = match text.font_weight {
+        FontWeight::Bold => FontStyle::bold(),
+        FontWeight::Normal => FontStyle::normal(),
+    };
+
+    let typeface = font_mgr
+        .match_family_style(&text.font_family, font_style)
+        .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
+        .or_else(|| font_mgr.match_family_style("Arial", font_style))
+        .or_else(|| font_mgr.match_family_style("sans-serif", font_style))
+        .or_else(|| {
+            if font_mgr.count_families() > 0 {
+                font_mgr.match_family_style(&font_mgr.family_name(0), font_style)
+            } else {
+                None
+            }
+        })
+        .expect("No fonts available on this system");
+
+    let font = Font::from_typeface(typeface, text.font_size);
+    let (_strike_width, metrics) = font.metrics();
+    let ascent = -metrics.ascent;
+    let line_height = text.line_height.unwrap_or(text.font_size * 1.3);
+    let letter_spacing = text.letter_spacing.unwrap_or(0.0);
+
+    let lines = wrap_text(&text.content, &font, Some(area_w));
+    let descent = metrics.descent;
+    // Total visual height: inter-line spacing for all but the last line, plus actual text height
+    let total_h = if lines.len() > 1 {
+        (lines.len() - 1) as f32 * line_height + ascent + descent
+    } else {
+        ascent + descent
+    };
+
+    let y_start = match text.vertical_align {
+        VerticalAlign::Top => area_y + ascent,
+        VerticalAlign::Middle => area_y + (area_h - total_h) / 2.0 + ascent,
+        VerticalAlign::Bottom => area_y + area_h - total_h + ascent,
+    };
+
+    let mut paint = paint_from_hex(&text.color);
+    paint.set_alpha_f(1.0);
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let blob = if letter_spacing.abs() > 0.01 {
+            make_text_blob_with_spacing(line, &font, letter_spacing)
+        } else {
+            TextBlob::new(line, &font)
+        };
+
+        if let Some(blob) = blob {
+            let blob_bounds = blob.bounds();
+            let line_width = blob_bounds.width();
+
+            let x = match text.align {
+                TextAlign::Left => area_x - blob_bounds.left,
+                TextAlign::Center => area_x + (area_w - line_width) / 2.0 - blob_bounds.left,
+                TextAlign::Right => area_x + area_w - line_width - blob_bounds.left,
+            };
+            let y = y_start + i as f32 * line_height;
+
+            canvas.draw_text_blob(&blob, (x, y), &paint);
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, corner_radius: Option<f32>, paint: &Paint) {
+    let rect = Rect::from_xywh(x, y, w, h);
+    match shape_type {
+        ShapeType::Rect => { canvas.draw_rect(rect, paint); }
+        ShapeType::RoundedRect => {
+            let r = corner_radius.unwrap_or(8.0);
+            let rrect = skia_safe::RRect::new_rect_xy(rect, r, r);
+            canvas.draw_rrect(rrect, paint);
+        }
+        ShapeType::Circle => {
+            let radius = w.min(h) / 2.0;
+            canvas.draw_circle((x + w / 2.0, y + h / 2.0), radius, paint);
+        }
+        ShapeType::Ellipse => { canvas.draw_oval(rect, paint); }
+        ShapeType::Triangle => {
+            let mut path = skia_safe::Path::new();
+            path.move_to((x + w / 2.0, y));
+            path.line_to((x + w, y + h));
+            path.line_to((x, y + h));
+            path.close();
+            canvas.draw_path(&path, paint);
+        }
+        ShapeType::Star { points } => {
+            let cx = x + w / 2.0;
+            let cy = y + h / 2.0;
+            let outer_r = w.min(h) / 2.0;
+            let inner_r = outer_r * 0.4;
+            let n = *points as usize;
+            let mut path = skia_safe::Path::new();
+            for i in 0..(n * 2) {
+                let angle = (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let r = if i % 2 == 0 { outer_r } else { inner_r };
+                let px = cx + r * angle.cos();
+                let py = cy + r * angle.sin();
+                if i == 0 {
+                    path.move_to((px, py));
+                } else {
+                    path.line_to((px, py));
+                }
+            }
+            path.close();
+            canvas.draw_path(&path, paint);
+        }
+        ShapeType::Polygon { sides } => {
+            let cx = x + w / 2.0;
+            let cy = y + h / 2.0;
+            let r = w.min(h) / 2.0;
+            let n = *sides as usize;
+            let mut path = skia_safe::Path::new();
+            for i in 0..n {
+                let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let px = cx + r * angle.cos();
+                let py = cy + r * angle.sin();
+                if i == 0 {
+                    path.move_to((px, py));
+                } else {
+                    path.line_to((px, py));
+                }
+            }
+            path.close();
+            canvas.draw_path(&path, paint);
+        }
+        ShapeType::Path { data } => {
+            if let Some(path) = skia_safe::Path::from_svg(data) {
+                canvas.draw_path(&path, paint);
+            }
+        }
+    }
 }
 
 fn render_image(canvas: &Canvas, image: &crate::schema::ImageLayer) -> Result<()> {
@@ -523,6 +816,270 @@ fn render_group(
         canvas.restore();
     }
     canvas.restore();
+
+    Ok(())
+}
+
+fn render_svg(canvas: &Canvas, svg: &crate::schema::SvgLayer) -> Result<()> {
+    let svg_data = if let Some(ref src) = svg.src {
+        std::fs::read(src)
+            .map_err(|e| anyhow::anyhow!("Failed to load SVG '{}': {}", src, e))?
+    } else if let Some(ref data) = svg.data {
+        data.as_bytes().to_vec()
+    } else {
+        return Err(anyhow::anyhow!("SVG layer must have either 'src' or 'data'"));
+    };
+
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_data(&svg_data, &opt)
+        .map_err(|e| anyhow::anyhow!("Failed to parse SVG: {}", e))?;
+
+    let svg_size = tree.size();
+    let (target_w, target_h) = match &svg.size {
+        Some(size) => (size.width as u32, size.height as u32),
+        None => (svg_size.width() as u32, svg_size.height() as u32),
+    };
+
+    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for SVG"))?;
+
+    let scale_x = target_w as f32 / svg_size.width();
+    let scale_y = target_h as f32 / svg_size.height();
+    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    // Convert tiny_skia pixmap to skia_safe image
+    let img_data = skia_safe::Data::new_copy(pixmap.data());
+    let img_info = ImageInfo::new(
+        (target_w as i32, target_h as i32),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    if let Some(img) = skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4) {
+        let dst = Rect::from_xywh(svg.position.x, svg.position.y, target_w as f32, target_h as f32);
+        let paint = Paint::default();
+        canvas.draw_image_rect(img, None, dst, &paint);
+    }
+
+    Ok(())
+}
+
+fn render_video(canvas: &Canvas, video: &crate::schema::VideoLayer, time: f64) -> Result<()> {
+    // Calculate source time based on trim and playback rate
+    let rate = video.playback_rate.unwrap_or(1.0);
+    let trim_start = video.trim_start.unwrap_or(0.0);
+    let source_time = trim_start + time * rate;
+
+    // Extract frame using FFmpeg
+    let frame_data = extract_video_frame(&video.src, source_time, video.size.width as u32, video.size.height as u32)?;
+
+    let skia_data = skia_safe::Data::new_copy(&frame_data);
+    if let Some(img) = skia_safe::Image::from_encoded(skia_data) {
+        let dst = Rect::from_xywh(video.position.x, video.position.y, video.size.width, video.size.height);
+        let paint = Paint::default();
+        canvas.draw_image_rect(img, None, dst, &paint);
+    }
+
+    Ok(())
+}
+
+fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
+    let output = std::process::Command::new("ffmpeg")
+        .args([
+            "-ss", &format!("{:.3}", time),
+            "-i", src,
+            "-vframes", "1",
+            "-vf", &format!("scale={}:{}", width, height),
+            "-f", "image2pipe",
+            "-vcodec", "png",
+            "-y", "pipe:1",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg for video frame extraction: {}. Is ffmpeg installed?", e))?;
+
+    if !output.status.success() {
+        anyhow::bail!("ffmpeg failed to extract frame from '{}'", src);
+    }
+
+    Ok(output.stdout)
+}
+
+fn render_gif(canvas: &Canvas, gif_layer: &crate::schema::GifLayer, time: f64) -> Result<()> {
+    let file = std::fs::File::open(&gif_layer.src)
+        .map_err(|e| anyhow::anyhow!("Failed to open GIF '{}': {}", gif_layer.src, e))?;
+
+    let mut decoder = gif::DecodeOptions::new();
+    decoder.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = decoder.read_info(file)
+        .map_err(|e| anyhow::anyhow!("Failed to decode GIF '{}': {}", gif_layer.src, e))?;
+
+    let gif_width = decoder.width() as u32;
+    let gif_height = decoder.height() as u32;
+
+    // Collect frames and their delays
+    let mut frames: Vec<(Vec<u8>, f64)> = Vec::new();
+    while let Some(frame) = decoder.read_next_frame()
+        .map_err(|e| anyhow::anyhow!("Failed to read GIF frame: {}", e))? {
+        let delay = frame.delay as f64 / 100.0; // GIF delay is in 1/100s
+        let delay = if delay < 0.01 { 0.1 } else { delay }; // default 100ms for 0-delay
+        frames.push((frame.buffer.to_vec(), delay));
+    }
+
+    if frames.is_empty() {
+        return Ok(());
+    }
+
+    // Find the right frame for the current time
+    let total_duration: f64 = frames.iter().map(|(_, d)| d).sum();
+    let effective_time = if gif_layer.loop_gif {
+        time % total_duration
+    } else {
+        time.min(total_duration)
+    };
+
+    let mut accumulated = 0.0;
+    let mut frame_idx = 0;
+    for (i, (_, delay)) in frames.iter().enumerate() {
+        accumulated += delay;
+        if effective_time < accumulated {
+            frame_idx = i;
+            break;
+        }
+        frame_idx = i;
+    }
+
+    let (ref frame_data, _) = frames[frame_idx];
+
+    let (target_w, target_h) = match &gif_layer.size {
+        Some(size) => (size.width, size.height),
+        None => (gif_width as f32, gif_height as f32),
+    };
+
+    let img_info = ImageInfo::new(
+        (gif_width as i32, gif_height as i32),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let row_bytes = gif_width as usize * 4;
+    let data = skia_safe::Data::new_copy(frame_data);
+    if let Some(img) = skia_safe::images::raster_from_data(&img_info, data, row_bytes) {
+        let dst = Rect::from_xywh(gif_layer.position.x, gif_layer.position.y, target_w, target_h);
+        let paint = Paint::default();
+        canvas.draw_image_rect(img, None, dst, &paint);
+    }
+
+    Ok(())
+}
+
+fn render_caption(
+    canvas: &Canvas,
+    caption: &CaptionLayer,
+    _config: &VideoConfig,
+    time: f64,
+) -> Result<()> {
+    let font_mgr = FontMgr::default();
+    let font_family = caption.font_family.as_deref().unwrap_or("Inter");
+    let typeface = font_mgr
+        .match_family_style(font_family, FontStyle::bold())
+        .or_else(|| font_mgr.match_family_style("Helvetica", FontStyle::bold()))
+        .or_else(|| font_mgr.match_family_style("Arial", FontStyle::bold()))
+        .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", FontStyle::bold()).unwrap());
+
+    let font = Font::from_typeface(typeface, caption.font_size);
+
+    match caption.style {
+        CaptionStyle::WordByWord => {
+            // Show only the active word
+            for word in &caption.words {
+                if time >= word.start && time < word.end {
+                    let paint = paint_from_hex(&caption.active_color);
+                    let (text_width, _) = font.measure_str(&word.text, None);
+
+                    if let Some(ref bg_color) = caption.background {
+                        let padding = caption.font_size * 0.3;
+                        let bg_rect = Rect::from_xywh(
+                            caption.position.x - text_width / 2.0 - padding,
+                            caption.position.y - caption.font_size - padding / 2.0,
+                            text_width + padding * 2.0,
+                            caption.font_size * 1.4 + padding,
+                        );
+                        let bg_paint = paint_from_hex(bg_color);
+                        let rrect = skia_safe::RRect::new_rect_xy(bg_rect, padding, padding);
+                        canvas.draw_rrect(rrect, &bg_paint);
+                    }
+
+                    if let Some(blob) = TextBlob::new(&word.text, &font) {
+                        let x = caption.position.x - text_width / 2.0;
+                        canvas.draw_text_blob(&blob, (x, caption.position.y), &paint);
+                    }
+                    break;
+                }
+            }
+        }
+        CaptionStyle::Highlight | CaptionStyle::Karaoke => {
+            // Show all words, highlight the active one
+            let max_width = caption.max_width.unwrap_or(f32::MAX);
+            let space_width = font.measure_str(" ", None).0;
+
+            // Build lines with word wrapping
+            let mut lines: Vec<Vec<(usize, f32)>> = vec![vec![]]; // (word_index, width)
+            let mut current_x = 0.0f32;
+
+            for (i, word) in caption.words.iter().enumerate() {
+                let (word_width, _) = font.measure_str(&word.text, None);
+                if current_x + word_width > max_width && !lines.last().unwrap().is_empty() {
+                    lines.push(vec![]);
+                    current_x = 0.0;
+                }
+                lines.last_mut().unwrap().push((i, word_width));
+                current_x += word_width + space_width;
+            }
+
+            let line_height = caption.font_size * 1.4;
+
+            // Draw background pill if configured
+            if let Some(ref bg_color) = caption.background {
+                let padding = caption.font_size * 0.3;
+                let total_height = lines.len() as f32 * line_height;
+                let max_line_width = lines.iter().map(|line| {
+                    line.iter().map(|(_, w)| w).sum::<f32>() + (line.len().saturating_sub(1)) as f32 * space_width
+                }).fold(0.0f32, f32::max);
+                let bg_rect = Rect::from_xywh(
+                    caption.position.x - max_line_width / 2.0 - padding,
+                    caption.position.y - caption.font_size - padding / 2.0,
+                    max_line_width + padding * 2.0,
+                    total_height + padding,
+                );
+                let bg_paint = paint_from_hex(bg_color);
+                let rrect = skia_safe::RRect::new_rect_xy(bg_rect, padding, padding);
+                canvas.draw_rrect(rrect, &bg_paint);
+            }
+
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_width: f32 = line.iter().map(|(_, w)| w).sum::<f32>()
+                    + (line.len().saturating_sub(1)) as f32 * space_width;
+                let mut x = caption.position.x - line_width / 2.0;
+                let y = caption.position.y + line_idx as f32 * line_height;
+
+                for (word_idx, word_width) in line {
+                    let word = &caption.words[*word_idx];
+                    let is_active = time >= word.start && time < word.end;
+                    let color = if is_active { &caption.active_color } else { &caption.color };
+                    let paint = paint_from_hex(color);
+
+                    if let Some(blob) = TextBlob::new(&word.text, &font) {
+                        canvas.draw_text_blob(&blob, (x, y), &paint);
+                    }
+                    x += word_width + space_width;
+                }
+            }
+        }
+    }
 
     Ok(())
 }

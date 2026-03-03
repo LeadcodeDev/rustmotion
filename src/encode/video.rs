@@ -1,5 +1,4 @@
 use anyhow::Result;
-use indicatif::{ProgressBar, ProgressStyle};
 use minimp4::Mp4Muxer;
 use openh264::encoder::{Encoder, EncoderConfig};
 use openh264::formats::YUVBuffer;
@@ -12,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::engine::transition::apply_transition;
 use crate::engine::{render_frame, rgba_to_yuv420};
 use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
+use crate::tui::TuiProgress;
 
 /// Description of what to render for a specific frame
 #[derive(Clone)]
@@ -47,23 +47,8 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
         anyhow::bail!("No frames to render (total duration is 0)");
     }
 
-    if !quiet {
-        eprintln!(
-            "Rendering {}x{} @ {}fps — {} frames ({:.1}s) [{}]",
-            width, height, fps, total_frames,
-            total_frames as f64 / fps as f64,
-            format!("{} threads", rayon::current_num_threads()),
-        );
-    }
-
-    let pb = if !quiet {
-        let pb = ProgressBar::new(total_frames as u64);
-        pb.set_style(
-            ProgressStyle::with_template("  {bar:40.cyan/blue} {pos}/{len} frames ({eta} remaining)")
-                .unwrap()
-                .progress_chars("##-"),
-        );
-        Some(pb)
+    let mut tui = if !quiet {
+        Some(TuiProgress::new(total_frames, output_path, width, height, fps, "h264")?)
     } else {
         None
     };
@@ -88,15 +73,14 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
             .map(|task| {
                 let rgba = render_frame_task(config, &scenario.scenes, task)?;
                 let yuv = rgba_to_yuv420(&rgba, width, height);
-
-                let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if let Some(ref pb) = pb {
-                    pb.set_position(count as u64);
-                }
-
+                counter.fetch_add(1, Ordering::Relaxed);
                 Ok(yuv)
             })
             .collect();
+
+        if let Some(ref mut tui) = tui {
+            tui.set_progress(counter.load(Ordering::Relaxed));
+        }
 
         // Encode sequentially (H.264 requires frame order)
         for yuv_result in yuv_frames {
@@ -111,15 +95,11 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
         }
     }
 
-    if let Some(ref pb) = pb {
-        pb.finish_and_clear();
-    }
-
     // Process audio
     let total_duration = total_frames as f64 / fps as f64;
     let pcm_data = if !scenario.audio.is_empty() {
-        if !quiet {
-            eprintln!("Processing audio...");
+        if let Some(ref mut tui) = tui {
+            tui.set_status("Processing audio");
         }
         super::audio::mix_audio_tracks(&scenario.audio, total_duration)?
     } else {
@@ -127,8 +107,8 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     };
 
     // Mux
-    if !quiet {
-        eprintln!("Muxing to MP4: {}", output_path);
+    if let Some(ref mut tui) = tui {
+        tui.set_status("Muxing to MP4");
     }
     let file = File::create(output_path)?;
     let writer = BufWriter::new(file);
@@ -142,8 +122,8 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     }
     muxer.close();
 
-    if !quiet {
-        eprintln!("Done! Output: {}", output_path);
+    if let Some(tui) = tui {
+        tui.finish("Done!");
     }
     Ok(())
 }
@@ -247,4 +227,260 @@ fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     }
 
     tasks
+}
+
+/// Encode frames as a PNG sequence (one PNG file per frame)
+pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _transparent: bool) -> Result<()> {
+    let config = &scenario.video;
+    let width = config.width;
+    let height = config.height;
+
+    let tasks = build_frame_tasks(scenario);
+    let total_frames = tasks.len() as u32;
+
+    if total_frames == 0 {
+        anyhow::bail!("No frames to render");
+    }
+
+    // Create output directory
+    std::fs::create_dir_all(output_dir)?;
+
+    let mut tui = if !quiet {
+        Some(TuiProgress::new(total_frames, output_dir, width, height, config.fps, "png")?)
+    } else {
+        None
+    };
+
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let counter = AtomicU32::new(0);
+
+    for batch in tasks.chunks(batch_size) {
+        let results: Vec<Result<(u32, Vec<u8>)>> = batch
+            .par_iter()
+            .map(|task| {
+                let frame_num = counter.fetch_add(1, Ordering::Relaxed);
+                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                Ok((frame_num, rgba))
+            })
+            .collect();
+
+        if let Some(ref mut tui) = tui {
+            tui.set_progress(counter.load(Ordering::Relaxed));
+        }
+
+        for result in results {
+            let (frame_num, rgba) = result?;
+            let path = format!("{}/frame_{:05}.png", output_dir, frame_num);
+            let img = image::RgbaImage::from_raw(width, height, rgba)
+                .ok_or_else(|| anyhow::anyhow!("Failed to create image"))?;
+            img.save(&path)?;
+        }
+    }
+
+    if let Some(tui) = tui {
+        tui.finish("Done!");
+    }
+
+    Ok(())
+}
+
+/// Encode frames as an animated GIF
+pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result<()> {
+    let config = &scenario.video;
+    let width = config.width;
+    let height = config.height;
+    let fps = config.fps;
+
+    let tasks = build_frame_tasks(scenario);
+    let total_frames = tasks.len() as u32;
+
+    if total_frames == 0 {
+        anyhow::bail!("No frames to render");
+    }
+
+    let mut tui = if !quiet {
+        Some(TuiProgress::new(total_frames, output_path, width, height, fps, "gif")?)
+    } else {
+        None
+    };
+
+    // GIF requires width/height to fit in u16
+    let gif_w = width.min(65535) as u16;
+    let gif_h = height.min(65535) as u16;
+
+    let file = File::create(output_path)?;
+    let mut encoder = gif::Encoder::new(BufWriter::new(file), gif_w, gif_h, &[])
+        .map_err(|e| anyhow::anyhow!("Failed to create GIF encoder: {}", e))?;
+
+    encoder.set_repeat(gif::Repeat::Infinite)
+        .map_err(|e| anyhow::anyhow!("Failed to set GIF repeat: {}", e))?;
+
+    let delay = (100.0 / fps as f64).round() as u16; // GIF delay in 1/100 seconds
+
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let counter = AtomicU32::new(0);
+
+    for batch in tasks.chunks(batch_size) {
+        let results: Vec<Result<Vec<u8>>> = batch
+            .par_iter()
+            .map(|task| {
+                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                counter.fetch_add(1, Ordering::Relaxed);
+                Ok(rgba)
+            })
+            .collect();
+
+        if let Some(ref mut tui) = tui {
+            tui.set_progress(counter.load(Ordering::Relaxed));
+        }
+
+        for result in results {
+            let rgba = result?;
+            let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba.clone(), 10);
+            frame.delay = delay;
+            encoder.write_frame(&frame)
+                .map_err(|e| anyhow::anyhow!("Failed to write GIF frame: {}", e))?;
+        }
+    }
+
+    if let Some(tui) = tui {
+        tui.finish("Done!");
+    }
+
+    Ok(())
+}
+
+/// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency)
+pub fn encode_with_ffmpeg(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    codec: &str,
+    crf: Option<u8>,
+    transparent: bool,
+) -> Result<()> {
+    let config = &scenario.video;
+    let width = config.width;
+    let height = config.height;
+    let fps = config.fps;
+
+    let tasks = build_frame_tasks(scenario);
+    let total_frames = tasks.len() as u32;
+
+    if total_frames == 0 {
+        anyhow::bail!("No frames to render");
+    }
+
+    let mut tui = if !quiet {
+        Some(TuiProgress::new(total_frames, output_path, width, height, fps, codec)?)
+    } else {
+        None
+    };
+
+    // First render to a temporary PNG sequence
+    let tmp_dir = std::env::temp_dir().join(format!("rustmotion_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let counter = AtomicU32::new(0);
+
+    for batch in tasks.chunks(batch_size) {
+        let results: Vec<Result<(u32, Vec<u8>)>> = batch
+            .par_iter()
+            .map(|task| {
+                let frame_num = counter.fetch_add(1, Ordering::Relaxed);
+                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                Ok((frame_num, rgba))
+            })
+            .collect();
+
+        if let Some(ref mut tui) = tui {
+            tui.set_progress(counter.load(Ordering::Relaxed));
+        }
+
+        for result in results {
+            let (frame_num, rgba) = result?;
+            let path = tmp_dir.join(format!("frame_{:05}.png", frame_num));
+            let img = image::RgbaImage::from_raw(width, height, rgba)
+                .ok_or_else(|| anyhow::anyhow!("Failed to create image"))?;
+            img.save(&path)?;
+        }
+    }
+
+    if let Some(ref mut tui) = tui {
+        tui.set_status("Encoding with FFmpeg");
+    }
+
+    // Build FFmpeg command
+    let input_pattern = tmp_dir.join("frame_%05d.png");
+    let crf_val = crf.unwrap_or(23);
+
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-framerate", &fps.to_string(), "-i", input_pattern.to_str().unwrap()]);
+
+    match codec {
+        "h265" | "hevc" => {
+            cmd.args(["-c:v", "libx265", "-crf", &crf_val.to_string(), "-preset", "medium"]);
+            if transparent {
+                cmd.args(["-pix_fmt", "yuva420p"]);
+            } else {
+                cmd.args(["-pix_fmt", "yuv420p"]);
+            }
+        }
+        "vp9" => {
+            cmd.args(["-c:v", "libvpx-vp9", "-crf", &crf_val.to_string(), "-b:v", "0"]);
+            if transparent {
+                cmd.args(["-pix_fmt", "yuva420p"]);
+            } else {
+                cmd.args(["-pix_fmt", "yuv420p"]);
+            }
+        }
+        "prores" => {
+            cmd.args(["-c:v", "prores_ks", "-profile:v", "4"]);
+            if transparent {
+                cmd.args(["-pix_fmt", "yuva444p10le"]);
+            } else {
+                cmd.args(["-pix_fmt", "yuv422p10le"]);
+            }
+        }
+        _ => {
+            // h264
+            cmd.args(["-c:v", "libx264", "-crf", &crf_val.to_string(), "-preset", "medium", "-pix_fmt", "yuv420p"]);
+        }
+    }
+
+    // Process audio if present
+    let total_duration = total_frames as f64 / fps as f64;
+    if !scenario.audio.is_empty() {
+        if let Some(pcm_data) = super::audio::mix_audio_tracks(&scenario.audio, total_duration)? {
+            let audio_path = tmp_dir.join("audio.raw");
+            std::fs::write(&audio_path, &pcm_data)?;
+            cmd.args([
+                "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
+                audio_path.to_str().unwrap(),
+                "-c:a", "aac", "-b:a", "128k",
+            ]);
+        }
+    }
+
+    cmd.arg(output_path);
+
+    let output = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(if quiet { std::process::Stdio::null() } else { std::process::Stdio::inherit() })
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}. Is ffmpeg installed?", e))?;
+
+    // Cleanup temp directory
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    if !output.success() {
+        anyhow::bail!("FFmpeg encoding failed");
+    }
+
+    if let Some(tui) = tui {
+        tui.finish("Done!");
+    }
+
+    Ok(())
 }

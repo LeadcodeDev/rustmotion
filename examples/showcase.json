@@ -1,0 +1,1530 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0B0B0F"
+  },
+  "scenes": [
+    {
+      "duration": 5.0,
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#1A0A00", "#0B0B0F"],
+            "stops": [0.0, 1.0]
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 810, "y": 280 },
+          "size": { "width": 300, "height": 300 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#F7600020", "#F7600000"],
+            "stops": [0.0, 1.0]
+          },
+          "preset": "scale_in",
+          "preset_config": { "duration": 1.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": { "polygon": { "sides": 6 } },
+          "position": { "x": 140, "y": 80 },
+          "size": { "width": 60, "height": 60 },
+          "fill": "#F74C0025",
+          "start_at": 0.5,
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "position.y",
+              "amplitude": 8.0,
+              "frequency": 0.6,
+              "seed": 1
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 1650, "y": 150 },
+          "size": { "width": 40, "height": 40 },
+          "fill": "#CE412B20",
+          "start_at": 0.8,
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "position.y",
+              "amplitude": 12.0,
+              "frequency": 0.4,
+              "seed": 7
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": "triangle",
+          "position": { "x": 1500, "y": 800 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#FFB34718",
+          "start_at": 1.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.2 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 15.0,
+              "frequency": 0.3,
+              "seed": 13
+            },
+            {
+              "property": "position.y",
+              "amplitude": 6.0,
+              "frequency": 0.5,
+              "seed": 14
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 4 } },
+          "position": { "x": 250, "y": 750 },
+          "size": { "width": 35, "height": 35 },
+          "fill": "#F74C0018",
+          "start_at": 1.2,
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 20.0,
+              "frequency": 0.7,
+              "seed": 20
+            }
+          ]
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 760, "y": 365 },
+          "size": { "width": 400, "height": 100 },
+          "corner_radius": 50,
+          "fill": "#F74C00",
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.3, "duration": 0.8 },
+          "text": {
+            "content": "rustmotion",
+            "font_size": 52,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle",
+            "letter_spacing": 4.0
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Motion design videos from JSON.",
+          "position": { "x": 960, "y": 530 },
+          "font_size": 36,
+          "color": "#FFB347",
+          "align": "center",
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 1.2, "duration": 0.8 }
+        },
+        {
+          "type": "text",
+          "content": "No browser. No Node.js. Just Rust.",
+          "position": { "x": 960, "y": 590 },
+          "font_size": 24,
+          "color": "#888888",
+          "align": "center",
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 1.6, "duration": 0.8 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 830, "y": 660 },
+          "size": { "width": 260, "height": 3 },
+          "fill": "#F74C0060",
+          "start_at": 2.5,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+
+        {
+          "type": "text",
+          "content": "cargo install rustmotion",
+          "position": { "x": 960, "y": 720 },
+          "font_size": 22,
+          "color": "#F74C00",
+          "align": "center",
+          "start_at": 2.8,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.6 }
+        }
+      ],
+      "transition": {
+        "type": "flip",
+        "duration": 0.7
+      }
+    },
+
+    {
+      "duration": 5.0,
+      "background": "#0B0B0F",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#0B0B0F", "#1A0800"],
+            "angle": 135
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 6, "height": 1080 },
+          "fill": "#F74C00",
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.4 }
+        },
+
+        {
+          "type": "text",
+          "content": "8 Layer Types",
+          "position": { "x": 140, "y": 120 },
+          "font_size": 56,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.6 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 120, "y": 200 },
+          "size": { "width": 350, "height": 60 },
+          "corner_radius": 12,
+          "fill": "#F74C0015",
+          "stroke": { "color": "#F74C0040", "width": 1 },
+          "start_at": 0.3,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "Text",
+          "position": { "x": 160, "y": 242 },
+          "font_size": 26,
+          "color": "#FFFFFF",
+          "start_at": 0.3,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.1, "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "fonts, alignment, wrapping",
+          "position": { "x": 240, "y": 242 },
+          "font_size": 18,
+          "color": "#666666",
+          "start_at": 0.3,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.15, "duration": 0.4 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 120, "y": 280 },
+          "size": { "width": 350, "height": 60 },
+          "corner_radius": 12,
+          "fill": "#F74C0015",
+          "stroke": { "color": "#F74C0040", "width": 1 },
+          "start_at": 0.6,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "Shape",
+          "position": { "x": 160, "y": 322 },
+          "font_size": 26,
+          "color": "#FFFFFF",
+          "start_at": 0.6,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.1, "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "8 types, gradients, SVG paths",
+          "position": { "x": 255, "y": 322 },
+          "font_size": 18,
+          "color": "#666666",
+          "start_at": 0.6,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.15, "duration": 0.4 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 120, "y": 360 },
+          "size": { "width": 350, "height": 60 },
+          "corner_radius": 12,
+          "fill": "#F74C0015",
+          "stroke": { "color": "#F74C0040", "width": 1 },
+          "start_at": 0.9,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "Image  SVG  Video  GIF",
+          "position": { "x": 160, "y": 402 },
+          "font_size": 26,
+          "color": "#FFFFFF",
+          "start_at": 0.9,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.1, "duration": 0.4 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 120, "y": 440 },
+          "size": { "width": 350, "height": 60 },
+          "corner_radius": 12,
+          "fill": "#F74C0015",
+          "stroke": { "color": "#F74C0040", "width": 1 },
+          "start_at": 1.2,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "Caption",
+          "position": { "x": 160, "y": 482 },
+          "font_size": 26,
+          "color": "#FFFFFF",
+          "start_at": 1.2,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.1, "duration": 0.4 }
+        },
+        {
+          "type": "text",
+          "content": "TikTok-style word highlights",
+          "position": { "x": 280, "y": 482 },
+          "font_size": 18,
+          "color": "#666666",
+          "start_at": 1.2,
+          "preset": "fade_in_right",
+          "preset_config": { "delay": 0.15, "duration": 0.4 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 600, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#F74C00", "#CE412B"],
+            "angle": 135
+          },
+          "start_at": 0.3,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 790, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#FFB347", "#F74C00"]
+          },
+          "start_at": 0.6,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 980, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "corner_radius": 24,
+          "fill": "#CE412B",
+          "start_at": 0.9,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+        {
+          "type": "shape",
+          "shape": "triangle",
+          "position": { "x": 1170, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "fill": "#F74C00",
+          "start_at": 1.2,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 5 } },
+          "position": { "x": 1360, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#FFB347", "#CE412B"]
+          },
+          "start_at": 1.5,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 5.0,
+              "frequency": 0.8,
+              "seed": 42
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": { "polygon": { "sides": 6 } },
+          "position": { "x": 1550, "y": 180 },
+          "size": { "width": 160, "height": 160 },
+          "fill": "#F74C00",
+          "stroke": { "color": "#FFB347", "width": 2 },
+          "start_at": 1.8,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 }
+        },
+
+        {
+          "type": "shape",
+          "shape": {
+            "path": {
+              "data": "M 0 80 C 100 0, 200 0, 300 80 C 400 160, 500 160, 600 80 C 700 0, 800 0, 900 80"
+            }
+          },
+          "position": { "x": 600, "y": 420 },
+          "size": { "width": 900, "height": 160 },
+          "fill": "#F74C0000",
+          "stroke": { "color": "#F74C0050", "width": 2 },
+          "start_at": 2.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.8 }
+        },
+
+        {
+          "type": "caption",
+          "words": [
+            { "text": "Captions", "start": 2.5, "end": 3.0 },
+            { "text": "with", "start": 3.0, "end": 3.3 },
+            { "text": "word-level", "start": 3.3, "end": 3.8 },
+            { "text": "timing", "start": 3.8, "end": 4.3 }
+          ],
+          "position": { "x": 960, "y": 700 },
+          "font_size": 40,
+          "color": "#555555",
+          "active_color": "#F74C00",
+          "background": "#1A1A1A",
+          "style": "highlight",
+          "max_width": 800,
+          "preset": "fade_in",
+          "preset_config": { "delay": 2.3, "duration": 0.5 }
+        }
+      ],
+      "transition": {
+        "type": "iris",
+        "duration": 0.8
+      }
+    },
+
+    {
+      "duration": 5.0,
+      "background": "#0B0B0F",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#0B0B0F", "#150800"],
+            "angle": 45
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "32 Animation Presets",
+          "position": { "x": 960, "y": 100 },
+          "font_size": 56,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+        {
+          "type": "text",
+          "content": "11 Easing Functions + Spring Physics",
+          "position": { "x": 960, "y": 160 },
+          "font_size": 24,
+          "color": "#666666",
+          "align": "center",
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.3, "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 240 },
+          "size": { "width": 280, "height": 140 },
+          "corner_radius": 16,
+          "fill": "#F74C0010",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 0.5,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "fade_in_up",
+            "font_size": 20,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "top",
+            "padding": 20
+          }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 210, "y": 310 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#F74C00",
+          "start_at": 0.5,
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.1, "duration": 0.6 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 420, "y": 240 },
+          "size": { "width": 280, "height": 140 },
+          "corner_radius": 16,
+          "fill": "#F74C0010",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 0.8,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "bounce_in",
+            "font_size": 20,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "top",
+            "padding": 20
+          }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 530, "y": 310 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#CE412B",
+          "start_at": 0.8,
+          "preset": "bounce_in",
+          "preset_config": { "duration": 0.7 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 740, "y": 240 },
+          "size": { "width": 280, "height": 140 },
+          "corner_radius": 16,
+          "fill": "#F74C0010",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 1.1,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "scale_in",
+            "font_size": 20,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "top",
+            "padding": 20
+          }
+        },
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 5 } },
+          "position": { "x": 850, "y": 310 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#FFB347",
+          "start_at": 1.1,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.7 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1060, "y": 240 },
+          "size": { "width": 280, "height": 140 },
+          "corner_radius": 16,
+          "fill": "#F74C0010",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 1.4,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "rotate_in",
+            "font_size": 20,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "top",
+            "padding": 20
+          }
+        },
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1175, "y": 315 },
+          "size": { "width": 45, "height": 45 },
+          "fill": "#F74C00",
+          "start_at": 1.4,
+          "preset": "rotate_in",
+          "preset_config": { "duration": 0.7 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1380, "y": 240 },
+          "size": { "width": 280, "height": 140 },
+          "corner_radius": 16,
+          "fill": "#F74C0010",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 1.7,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "elastic_in",
+            "font_size": 20,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "top",
+            "padding": 20
+          }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 1495, "y": 310 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#CE412B",
+          "start_at": 1.7,
+          "preset": "elastic_in",
+          "preset_config": { "duration": 0.9 }
+        },
+
+        {
+          "type": "text",
+          "content": "Typewriter effect",
+          "position": { "x": 960, "y": 510 },
+          "font_size": 44,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "start_at": 2.2,
+          "preset": "typewriter",
+          "preset_config": { "duration": 1.2 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 290, "y": 600 },
+          "size": { "width": 200, "height": 200 },
+          "corner_radius": 20,
+          "fill": "#F74C00",
+          "start_at": 2.5,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 3.0,
+              "frequency": 1.0,
+              "seed": 1
+            }
+          ],
+          "text": {
+            "content": "Wiggle",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 590, "y": 600 },
+          "size": { "width": 200, "height": 200 },
+          "fill": "#CE412B",
+          "start_at": 2.8,
+          "preset": "bounce_in",
+          "preset_config": { "duration": 0.6 },
+          "text": {
+            "content": "Spring",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 6 } },
+          "position": { "x": 860, "y": 600 },
+          "size": { "width": 200, "height": 200 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#FFB347", "#F74C00"],
+            "angle": 45
+          },
+          "start_at": 3.1,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 },
+          "animations": [
+            {
+              "property": "rotation",
+              "keyframes": [
+                { "time": 0.0, "value": 0 },
+                { "time": 4.0, "value": 360 }
+              ],
+              "easing": "linear"
+            }
+          ],
+          "text": {
+            "content": "Spin",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Color Animation",
+          "position": { "x": 1350, "y": 710 },
+          "font_size": 32,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "align": "center",
+          "start_at": 3.3,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.4 },
+          "animations": [
+            {
+              "property": "color",
+              "keyframes": [
+                { "time": 0.0, "value": "#F74C00" },
+                { "time": 0.8, "value": "#FFB347" },
+                { "time": 1.6, "value": "#CE412B" }
+              ],
+              "easing": "linear"
+            }
+          ]
+        }
+      ],
+      "transition": {
+        "type": "clock_wipe",
+        "duration": 0.8
+      }
+    },
+
+    {
+      "duration": 5.0,
+      "background": "#0B0B0F",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#150800", "#0B0B0F"],
+            "angle": 270
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "12 Scene Transitions",
+          "position": { "x": 960, "y": 100 },
+          "font_size": 56,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 200 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#F74C00",
+          "start_at": 0.3,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "fade",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 275 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#CE412B",
+          "start_at": 0.5,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "wipe (4 directions)",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 350 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#F74C00",
+          "start_at": 0.7,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "zoom in / out",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 425 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#CE412B",
+          "start_at": 0.9,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "flip",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 500 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#F74C00",
+          "start_at": 1.1,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "clock wipe",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 100, "y": 575 },
+          "size": { "width": 270, "height": 55 },
+          "corner_radius": 10,
+          "fill": "#CE412B",
+          "start_at": 1.3,
+          "preset": "fade_in_right",
+          "preset_config": { "duration": 0.4 },
+          "text": {
+            "content": "iris / slide / dissolve",
+            "font_size": 22,
+            "color": "#FFFFFF",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "6 Output Formats",
+          "position": { "x": 1200, "y": 220 },
+          "font_size": 44,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "start_at": 1.5,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 900, "y": 290 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#F74C00",
+          "start_at": 2.0,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "MP4",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1110, "y": 290 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#CE412B",
+          "start_at": 2.2,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "WebM",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1320, "y": 290 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#F74C00",
+          "start_at": 2.4,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "MOV",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 900, "y": 360 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#CE412B",
+          "start_at": 2.6,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "GIF",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1110, "y": 360 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#F74C00",
+          "start_at": 2.8,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "PNG Seq",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 1320, "y": 360 },
+          "size": { "width": 180, "height": 50 },
+          "corner_radius": 25,
+          "fill": "#CE412B",
+          "start_at": 3.0,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "ProRes",
+            "font_size": 20,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "H.264 / H.265 / VP9 / ProRes",
+          "position": { "x": 1200, "y": 470 },
+          "font_size": 20,
+          "color": "#666666",
+          "align": "center",
+          "start_at": 3.2,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 600, "y": 720 },
+          "size": { "width": 720, "height": 3 },
+          "fill": "#F74C0040",
+          "start_at": 3.5,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5 }
+        },
+        {
+          "type": "text",
+          "content": "Multi-threaded rendering with Rayon",
+          "position": { "x": 960, "y": 790 },
+          "font_size": 28,
+          "color": "#FFB347",
+          "font_weight": "bold",
+          "align": "center",
+          "start_at": 3.8,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 }
+        },
+        {
+          "type": "text",
+          "content": "Skia rendering engine  /  JSON Schema for LLM integration",
+          "position": { "x": 960, "y": 840 },
+          "font_size": 20,
+          "color": "#555555",
+          "align": "center",
+          "start_at": 4.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        }
+      ],
+      "transition": {
+        "type": "dissolve",
+        "duration": 0.8
+      }
+    },
+
+    {
+      "duration": 5.0,
+      "background": "#0B0B0F",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#0B0B0F", "#1A0800", "#0B0B0F"],
+            "stops": [0.0, 0.5, 1.0],
+            "angle": 180
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Define your video in JSON.",
+          "position": { "x": 960, "y": 140 },
+          "font_size": 44,
+          "color": "#FFFFFF",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.6 }
+        },
+        {
+          "type": "text",
+          "content": "Render with one command.",
+          "position": { "x": 960, "y": 200 },
+          "font_size": 44,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "align": "center",
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.4, "duration": 0.6 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 360, "y": 300 },
+          "size": { "width": 1200, "height": 440 },
+          "corner_radius": 20,
+          "fill": "#0D0D12",
+          "stroke": { "color": "#F74C0030", "width": 1 },
+          "start_at": 0.8,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 385, "y": 320 },
+          "size": { "width": 12, "height": 12 },
+          "fill": "#FF5F56",
+          "start_at": 0.8,
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.3, "duration": 0.3 }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 405, "y": 320 },
+          "size": { "width": 12, "height": 12 },
+          "fill": "#FFBD2E",
+          "start_at": 0.8,
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.3, "duration": 0.3 }
+        },
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 425, "y": 320 },
+          "size": { "width": 12, "height": 12 },
+          "fill": "#27C93F",
+          "start_at": 0.8,
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.3, "duration": 0.3 }
+        },
+
+        {
+          "type": "text",
+          "content": "{",
+          "position": { "x": 420, "y": 380 },
+          "font_size": 20,
+          "color": "#888888",
+          "start_at": 1.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"type\": \"text\",",
+          "position": { "x": 420, "y": 410 },
+          "font_size": 20,
+          "color": "#CE412B",
+          "start_at": 1.1,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"content\": \"Hello World\",",
+          "position": { "x": 420, "y": 440 },
+          "font_size": 20,
+          "color": "#FFB347",
+          "start_at": 1.3,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"position\": { \"x\": 960, \"y\": 540 },",
+          "position": { "x": 420, "y": 470 },
+          "font_size": 20,
+          "color": "#FFB347",
+          "start_at": 1.5,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"font_size\": 64,",
+          "position": { "x": 420, "y": 500 },
+          "font_size": 20,
+          "color": "#FFB347",
+          "start_at": 1.7,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"color\": \"#F74C00\",",
+          "position": { "x": 420, "y": 530 },
+          "font_size": 20,
+          "color": "#F74C00",
+          "start_at": 1.9,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "  \"preset\": \"bounce_in\"",
+          "position": { "x": 420, "y": 560 },
+          "font_size": 20,
+          "color": "#CE412B",
+          "start_at": 2.1,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+        {
+          "type": "text",
+          "content": "}",
+          "position": { "x": 420, "y": 590 },
+          "font_size": 20,
+          "color": "#888888",
+          "start_at": 2.3,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.2 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 960, "y": 310 },
+          "size": { "width": 1, "height": 420 },
+          "fill": "#F74C0030",
+          "start_at": 1.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.3 }
+        },
+
+        {
+          "type": "text",
+          "content": "Hello World",
+          "position": { "x": 1260, "y": 510 },
+          "font_size": 64,
+          "color": "#F74C00",
+          "font_weight": "bold",
+          "align": "center",
+          "start_at": 2.5,
+          "preset": "bounce_in",
+          "preset_config": { "duration": 0.8 }
+        },
+
+        {
+          "type": "text",
+          "content": "JSON",
+          "position": { "x": 660, "y": 680 },
+          "font_size": 14,
+          "color": "#555555",
+          "align": "center",
+          "start_at": 1.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.3 }
+        },
+        {
+          "type": "text",
+          "content": "Result",
+          "position": { "x": 1260, "y": 680 },
+          "font_size": 14,
+          "color": "#555555",
+          "align": "center",
+          "start_at": 2.5,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.3 }
+        },
+
+        {
+          "type": "text",
+          "content": "$ rustmotion render scenario.json -o video.mp4",
+          "position": { "x": 960, "y": 820 },
+          "font_size": 26,
+          "color": "#F74C00",
+          "align": "center",
+          "start_at": 3.5,
+          "preset": "typewriter",
+          "preset_config": { "duration": 1.2 }
+        }
+      ],
+      "transition": {
+        "type": "slide",
+        "duration": 0.6
+      }
+    },
+
+    {
+      "duration": 5.0,
+      "background": "#0B0B0F",
+      "layers": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#2A1000", "#0B0B0F"],
+            "stops": [0.0, 0.8]
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "This video was made with rustmotion.",
+          "position": { "x": 960, "y": 320 },
+          "font_size": 28,
+          "color": "#888888",
+          "align": "center",
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.8 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 660, "y": 380 },
+          "size": { "width": 600, "height": 90 },
+          "corner_radius": 45,
+          "fill": "#F74C00",
+          "start_at": 0.8,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 },
+          "text": {
+            "content": "cargo install rustmotion",
+            "font_size": 32,
+            "color": "#FFFFFF",
+            "font_weight": "bold",
+            "align": "center",
+            "vertical_align": "middle",
+            "letter_spacing": 1.0
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 660, "y": 500 },
+          "size": { "width": 600, "height": 70 },
+          "corner_radius": 35,
+          "fill": "#FFFFFF08",
+          "stroke": { "color": "#F74C0060", "width": 1 },
+          "start_at": 1.5,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.5 },
+          "text": {
+            "content": "github.com/LeadcodeDev/rustmotion",
+            "font_size": 22,
+            "color": "#FFB347",
+            "align": "center",
+            "vertical_align": "middle"
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "MIT License  /  Open Source  /  Single Binary",
+          "position": { "x": 960, "y": 640 },
+          "font_size": 18,
+          "color": "#555555",
+          "align": "center",
+          "start_at": 2.2,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 5 } },
+          "position": { "x": 860, "y": 700 },
+          "size": { "width": 200, "height": 200 },
+          "fill": {
+            "type": "radial",
+            "colors": ["#F74C00", "#CE412B"]
+          },
+          "start_at": 2.5,
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.8 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 3.0,
+              "frequency": 0.5,
+              "seed": 42
+            }
+          ]
+        },
+
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 200, "y": 100 },
+          "size": { "width": 30, "height": 30 },
+          "fill": "#F74C0020",
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "position.y",
+              "amplitude": 15.0,
+              "frequency": 0.3,
+              "seed": 1
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": "triangle",
+          "position": { "x": 1600, "y": 200 },
+          "size": { "width": 40, "height": 40 },
+          "fill": "#CE412B15",
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 20.0,
+              "frequency": 0.4,
+              "seed": 5
+            },
+            {
+              "property": "position.y",
+              "amplitude": 10.0,
+              "frequency": 0.5,
+              "seed": 6
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": { "polygon": { "sides": 6 } },
+          "position": { "x": 300, "y": 800 },
+          "size": { "width": 50, "height": 50 },
+          "fill": "#FFB34712",
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "position.y",
+              "amplitude": 8.0,
+              "frequency": 0.6,
+              "seed": 10
+            }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": { "star": { "points": 4 } },
+          "position": { "x": 1500, "y": 850 },
+          "size": { "width": 35, "height": 35 },
+          "fill": "#F74C0015",
+          "preset": "fade_in",
+          "preset_config": { "duration": 1.0 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 25.0,
+              "frequency": 0.3,
+              "seed": 15
+            }
+          ]
+        },
+
+        {
+          "type": "text",
+          "content": "rustmotion",
+          "position": { "x": 960, "y": 985 },
+          "font_size": 18,
+          "color": "#333333",
+          "align": "center",
+          "start_at": 3.0,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        }
+      ]
+    }
+  ]
+}

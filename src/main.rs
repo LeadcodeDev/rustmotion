@@ -1,6 +1,7 @@
 mod encode;
 mod engine;
 mod schema;
+mod tui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -24,7 +25,7 @@ enum Commands {
         /// Path to the JSON scenario file
         input: PathBuf,
 
-        /// Output MP4 file path
+        /// Output file path
         #[arg(short, long, default_value = "output.mp4")]
         output: PathBuf,
 
@@ -35,6 +36,22 @@ enum Commands {
         /// Output format for machine consumption
         #[arg(long, value_enum)]
         output_format: Option<OutputFormat>,
+
+        /// Video codec (h264, h265, vp9, prores)
+        #[arg(long)]
+        codec: Option<String>,
+
+        /// Constant Rate Factor (0-51, lower = better quality)
+        #[arg(long)]
+        crf: Option<u8>,
+
+        /// Output file format (mp4, webm, mov, gif, png-seq)
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Enable transparent background (for PNG sequence, WebM, ProRes 4444)
+        #[arg(long)]
+        transparent: bool,
     },
 
     /// Validate a JSON scenario without rendering
@@ -71,7 +88,11 @@ fn main() -> Result<()> {
             output,
             frame,
             output_format,
-        } => cmd_render(&input, &output, frame, output_format.as_ref(), cli.quiet),
+            codec,
+            crf,
+            format,
+            transparent,
+        } => cmd_render(&input, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent),
         Commands::Validate { input } => cmd_validate(&input),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
         Commands::Info { input } => cmd_info(&input),
@@ -92,9 +113,20 @@ fn cmd_render(
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
     quiet: bool,
+    codec: Option<String>,
+    crf: Option<u8>,
+    format: Option<String>,
+    transparent: bool,
 ) -> Result<()> {
     let scenario = load_scenario(input)?;
     let start = std::time::Instant::now();
+
+    // Create parent directories if they don't exist
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
 
     if let Some(frame_num) = frame {
         // Single frame render to PNG
@@ -108,7 +140,40 @@ fn cmd_render(
             eprintln!("Frame {} saved to {}", frame_num, png_path.display());
         }
     } else {
-        encode::encode_video(&scenario, output.to_str().unwrap(), quiet)?;
+        // Determine output format
+        let fmt = format.as_deref().unwrap_or_else(|| {
+            output.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("mp4")
+        });
+
+        match fmt {
+            "png-seq" => {
+                encode::encode_png_sequence(&scenario, output.to_str().unwrap(), quiet, transparent)?;
+            }
+            "gif" => {
+                encode::encode_gif(&scenario, output.to_str().unwrap(), quiet)?;
+            }
+            _ => {
+                // Check if we need FFmpeg (for h265, vp9, prores, webm, mov)
+                let use_ffmpeg = codec.as_deref().map_or(false, |c| c != "h264")
+                    || matches!(fmt, "webm" | "mov")
+                    || transparent;
+
+                if use_ffmpeg {
+                    encode::encode_with_ffmpeg(
+                        &scenario,
+                        output.to_str().unwrap(),
+                        quiet,
+                        codec.as_deref().unwrap_or("h264"),
+                        crf,
+                        transparent,
+                    )?;
+                } else {
+                    encode::encode_video(&scenario, output.to_str().unwrap(), quiet)?;
+                }
+            }
+        }
     }
 
     let elapsed = start.elapsed();
@@ -209,13 +274,76 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
         }
 
         for (j, layer) in scene.layers.iter().enumerate() {
-            if let schema::Layer::Image(img) = layer {
-                if !std::path::Path::new(&img.src).exists() {
-                    errors.push(format!(
-                        "scenes[{}].layers[{}].src: file not found '{}'",
-                        i, j, img.src
-                    ));
+            match layer {
+                schema::Layer::Image(img) => {
+                    if !std::path::Path::new(&img.src).exists() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            i, j, img.src
+                        ));
+                    }
+                    if let (Some(start), Some(end)) = (img.start_at, img.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
                 }
+                schema::Layer::Text(t) => {
+                    if let (Some(start), Some(end)) = (t.start_at, t.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::Shape(s) => {
+                    if let (Some(start), Some(end)) = (s.start_at, s.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::Svg(svg) => {
+                    if svg.src.is_none() && svg.data.is_none() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}]: SVG layer must have 'src' or 'data'",
+                            i, j
+                        ));
+                    }
+                    if let Some(ref src) = svg.src {
+                        if !std::path::Path::new(src).exists() {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}].src: file not found '{}'",
+                                i, j, src
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::Video(v) => {
+                    if !std::path::Path::new(&v.src).exists() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            i, j, v.src
+                        ));
+                    }
+                }
+                schema::Layer::Gif(g) => {
+                    if !std::path::Path::new(&g.src).exists() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            i, j, g.src
+                        ));
+                    }
+                }
+                _ => {}
             }
         }
     }

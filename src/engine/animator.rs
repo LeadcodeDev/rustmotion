@@ -1,5 +1,6 @@
 use crate::schema::{
     Animation, AnimationPreset, EasingType, Keyframe, KeyframeValue, PresetConfig, SpringConfig,
+    WiggleConfig,
 };
 
 // ─── Easing functions ───────────────────────────────────────────────────────
@@ -97,6 +98,8 @@ pub struct AnimatedProperties {
     pub visible_chars: i32,
     /// For typewriter effect: progress 0.0→1.0 (-1.0 = unused, shows all)
     pub visible_chars_progress: f32,
+    /// Animated color override (hex string)
+    pub color: Option<String>,
 }
 
 impl Default for AnimatedProperties {
@@ -111,6 +114,7 @@ impl Default for AnimatedProperties {
             blur: 0.0,
             visible_chars: -1,
             visible_chars_progress: -1.0,
+            color: None,
         }
     }
 }
@@ -148,8 +152,15 @@ pub fn resolve_animations(
         } else {
             time
         };
-        let value = resolve_animation_value(anim, anim_time);
-        apply_property(&mut props, &anim.property, value);
+        let resolved = resolve_animation_value_full(anim, anim_time);
+        match resolved {
+            ResolvedValue::Number(value) => apply_property(&mut props, &anim.property, value),
+            ResolvedValue::Color(color) => {
+                if anim.property == "color" {
+                    props.color = Some(color);
+                }
+            }
+        }
     }
 
     props
@@ -170,21 +181,35 @@ fn loop_time(anim: &Animation, time: f64) -> f64 {
     start + ((time - start) % duration)
 }
 
-fn resolve_animation_value(anim: &Animation, time: f64) -> f64 {
+/// Result of resolving an animation value — either a number or a color
+enum ResolvedValue {
+    Number(f64),
+    Color(String),
+}
+
+fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
     let keyframes = &anim.keyframes;
     if keyframes.is_empty() {
-        return 0.0;
+        return ResolvedValue::Number(0.0);
     }
     if keyframes.len() == 1 {
-        return keyframes[0].value.as_f64();
+        return match &keyframes[0].value {
+            KeyframeValue::Color(c) => ResolvedValue::Color(c.clone()),
+            KeyframeValue::Number(n) => ResolvedValue::Number(*n),
+        };
     }
 
-    // Find the two surrounding keyframes
     if time <= keyframes[0].time {
-        return keyframes[0].value.as_f64();
+        return match &keyframes[0].value {
+            KeyframeValue::Color(c) => ResolvedValue::Color(c.clone()),
+            KeyframeValue::Number(n) => ResolvedValue::Number(*n),
+        };
     }
     if time >= keyframes.last().unwrap().time {
-        return keyframes.last().unwrap().value.as_f64();
+        return match &keyframes.last().unwrap().value {
+            KeyframeValue::Color(c) => ResolvedValue::Color(c.clone()),
+            KeyframeValue::Number(n) => ResolvedValue::Number(*n),
+        };
     }
 
     for i in 0..keyframes.len() - 1 {
@@ -194,7 +219,10 @@ fn resolve_animation_value(anim: &Animation, time: f64) -> f64 {
         if time >= kf0.time && time <= kf1.time {
             let segment_duration = kf1.time - kf0.time;
             if segment_duration < 1e-9 {
-                return kf1.value.as_f64();
+                return match &kf1.value {
+                    KeyframeValue::Color(c) => ResolvedValue::Color(c.clone()),
+                    KeyframeValue::Number(n) => ResolvedValue::Number(*n),
+                };
             }
 
             let local_t = (time - kf0.time) / segment_duration;
@@ -207,13 +235,53 @@ fn resolve_animation_value(anim: &Animation, time: f64) -> f64 {
                 other => ease(local_t, other),
             };
 
+            // Check if both keyframes are colors
+            if let (KeyframeValue::Color(c0), KeyframeValue::Color(c1)) = (&kf0.value, &kf1.value) {
+                return ResolvedValue::Color(lerp_color(c0, c1, progress));
+            }
+
             let v0 = kf0.value.as_f64();
             let v1 = kf1.value.as_f64();
-            return v0 + (v1 - v0) * progress;
+            return ResolvedValue::Number(v0 + (v1 - v0) * progress);
         }
     }
 
-    keyframes.last().unwrap().value.as_f64()
+    match &keyframes.last().unwrap().value {
+        KeyframeValue::Color(c) => ResolvedValue::Color(c.clone()),
+        KeyframeValue::Number(n) => ResolvedValue::Number(*n),
+    }
+}
+
+/// Parse hex color to (r, g, b, a) as f64 components (0-255)
+fn parse_hex_components(hex: &str) -> (f64, f64, f64, f64) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() < 6 {
+        return (0.0, 0.0, 0.0, 255.0);
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f64;
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f64;
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f64;
+    let a = if hex.len() >= 8 {
+        u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f64
+    } else {
+        255.0
+    };
+    (r, g, b, a)
+}
+
+/// Interpolate between two hex colors
+fn lerp_color(c1: &str, c2: &str, t: f64) -> String {
+    let (r1, g1, b1, a1) = parse_hex_components(c1);
+    let (r2, g2, b2, a2) = parse_hex_components(c2);
+    let r = (r1 + (r2 - r1) * t).clamp(0.0, 255.0) as u8;
+    let g = (g1 + (g2 - g1) * t).clamp(0.0, 255.0) as u8;
+    let b = (b1 + (b2 - b1) * t).clamp(0.0, 255.0) as u8;
+    let a = (a1 + (a2 - a1) * t).clamp(0.0, 255.0) as u8;
+    if a == 255 {
+        format!("#{:02X}{:02X}{:02X}", r, g, b)
+    } else {
+        format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, a)
+    }
 }
 
 fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
@@ -232,6 +300,40 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "visible_chars" => props.visible_chars = value as i32,
         "visible_chars_progress" => props.visible_chars_progress = value as f32,
         _ => {} // Unknown property, ignore
+    }
+}
+
+// ─── Wiggle resolution ──────────────────────────────────────────────────────
+
+/// Simple noise function based on sine waves with seed for pseudo-random behavior
+fn simplex_noise_1d(x: f64, seed: u64) -> f64 {
+    let s = seed as f64;
+    let v = (x * 1.0 + s * 0.1234).sin() * 0.5
+        + (x * 2.3 + s * 0.5678).sin() * 0.25
+        + (x * 4.7 + s * 0.9012).sin() * 0.125;
+    v / 0.875 // normalize to roughly -1..1
+}
+
+/// Apply wiggle offsets additively to animated properties
+pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], time: f64) {
+    for wiggle in wiggles {
+        let noise_val = simplex_noise_1d(time * wiggle.frequency, wiggle.seed);
+        let offset = wiggle.amplitude * noise_val;
+        apply_property(props, &wiggle.property, get_property_value(props, &wiggle.property) + offset);
+    }
+}
+
+fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
+    match property {
+        "opacity" => props.opacity as f64,
+        "position.x" | "translate_x" => props.translate_x as f64,
+        "position.y" | "translate_y" => props.translate_y as f64,
+        "scale" => props.scale_x as f64,
+        "scale.x" => props.scale_x as f64,
+        "scale.y" => props.scale_y as f64,
+        "rotation" => props.rotation as f64,
+        "blur" => props.blur as f64,
+        _ => 0.0,
     }
 }
 
