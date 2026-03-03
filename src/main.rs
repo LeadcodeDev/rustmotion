@@ -23,7 +23,11 @@ enum Commands {
     /// Render a JSON scenario to MP4
     Render {
         /// Path to the JSON scenario file
-        input: PathBuf,
+        input: Option<PathBuf>,
+
+        /// Inline JSON scenario string
+        #[arg(long)]
+        json: Option<String>,
 
         /// Output file path
         #[arg(short, long, default_value = "output.mp4")]
@@ -85,6 +89,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Render {
             input,
+            json,
             output,
             frame,
             output_format,
@@ -92,7 +97,10 @@ fn main() -> Result<()> {
             crf,
             format,
             transparent,
-        } => cmd_render(&input, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent),
+        } => {
+            let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
+            cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+        }
         Commands::Validate { input } => cmd_validate(&input),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
         Commands::Info { input } => cmd_info(&input),
@@ -107,8 +115,28 @@ fn load_scenario(input: &PathBuf) -> Result<schema::Scenario> {
     Ok(scenario)
 }
 
+fn load_scenario_from_source(
+    input: Option<&PathBuf>,
+    json: Option<&str>,
+) -> Result<schema::Scenario> {
+    match (input, json) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("Cannot use both input file and --json")
+        }
+        (Some(path), None) => load_scenario(path),
+        (None, Some(json_str)) => {
+            let scenario: schema::Scenario = serde_json::from_str(json_str)
+                .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
+            Ok(scenario)
+        }
+        (None, None) => {
+            anyhow::bail!("Provide either an input file or --json")
+        }
+    }
+}
+
 fn cmd_render(
-    input: &PathBuf,
+    scenario: schema::Scenario,
     output: &PathBuf,
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
@@ -118,7 +146,6 @@ fn cmd_render(
     format: Option<String>,
     transparent: bool,
 ) -> Result<()> {
-    let scenario = load_scenario(input)?;
     let start = std::time::Instant::now();
 
     // Create parent directories if they don't exist
