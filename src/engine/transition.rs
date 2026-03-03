@@ -65,27 +65,40 @@ fn wipe(
     progress: f32,
     direction: Direction,
 ) -> Vec<u8> {
-    let w = width as usize;
-    let h = height as usize;
-    let mut result = vec![0u8; w * h * 4];
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_a = match frame_to_image(frame_a, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_b = match frame_to_image(frame_b, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
 
-    for row in 0..h {
-        for col in 0..w {
-            let idx = (row * w + col) * 4;
+    let canvas = surface.canvas();
+    let w = width as f32;
+    let h = height as f32;
 
-            let use_b = match direction {
-                Direction::Left => (col as f32 / w as f32) < progress,
-                Direction::Right => (col as f32 / w as f32) > (1.0 - progress),
-                Direction::Up => (row as f32 / h as f32) < progress,
-                Direction::Down => (row as f32 / h as f32) > (1.0 - progress),
-            };
+    // Draw frame A as background
+    canvas.draw_image(&img_a, (0.0, 0.0), None);
 
-            let src = if use_b { frame_b } else { frame_a };
-            result[idx..idx + 4].copy_from_slice(&src[idx..idx + 4]);
-        }
-    }
+    // Clip frame B to the wipe region
+    let clip_rect = match direction {
+        Direction::Left => Rect::from_xywh(0.0, 0.0, w * progress, h),
+        Direction::Right => Rect::from_xywh(w * (1.0 - progress), 0.0, w * progress, h),
+        Direction::Up => Rect::from_xywh(0.0, 0.0, w, h * progress),
+        Direction::Down => Rect::from_xywh(0.0, h * (1.0 - progress), w, h * progress),
+    };
 
-    result
+    canvas.save();
+    canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, true);
+    canvas.draw_image(&img_b, (0.0, 0.0), None);
+    canvas.restore();
+
+    surface_to_pixels(surface, width, height)
 }
 
 fn create_skia_surface(width: u32, height: u32) -> Option<skia_safe::Surface> {

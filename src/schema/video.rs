@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig};
 
+/// Common trait for layer types that support animation, timing, wiggle, and motion blur
+pub trait LayerProps {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>);
+    fn timing(&self) -> (Option<f64>, Option<f64>);
+    fn wiggle(&self) -> Option<&[WiggleConfig]>;
+    fn motion_blur(&self) -> Option<f32>;
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Scenario {
     #[serde(default = "default_version")]
@@ -120,6 +128,8 @@ pub struct TextLayer {
     #[serde(default)]
     pub font_weight: FontWeight,
     #[serde(default)]
+    pub font_style: FontStyleType,
+    #[serde(default)]
     pub align: TextAlign,
     #[serde(default)]
     pub max_width: Option<f32>,
@@ -129,6 +139,15 @@ pub struct TextLayer {
     pub line_height: Option<f32>,
     #[serde(default)]
     pub letter_spacing: Option<f32>,
+    /// Drop shadow behind text
+    #[serde(default)]
+    pub shadow: Option<TextShadow>,
+    /// Text outline/stroke
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
+    /// Background highlight behind text
+    #[serde(default)]
+    pub background: Option<TextBackground>,
     #[serde(default)]
     pub animations: Vec<Animation>,
     #[serde(default)]
@@ -143,6 +162,41 @@ pub struct TextLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FontStyleType {
+    Normal,
+    Italic,
+    Oblique,
+}
+
+impl Default for FontStyleType {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct TextShadow {
+    #[serde(default = "default_shadow_color")]
+    pub color: String,
+    #[serde(default = "default_shadow_offset")]
+    pub offset_x: f32,
+    #[serde(default = "default_shadow_offset")]
+    pub offset_y: f32,
+    #[serde(default = "default_shadow_blur")]
+    pub blur: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct TextBackground {
+    pub color: String,
+    #[serde(default = "default_text_bg_padding")]
+    pub padding: f32,
+    #[serde(default)]
+    pub corner_radius: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -695,6 +749,106 @@ impl Default for FontWeight {
     }
 }
 
+// --- LayerProps implementations ---
+
+impl LayerProps for TextLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for ShapeLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for ImageLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for SvgLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for VideoLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for GifLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for CaptionLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
+    fn motion_blur(&self) -> Option<f32> { None }
+}
+
+impl LayerProps for CodeblockLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
+    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
+}
+
+impl LayerProps for GroupLayer {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&[], None, None)
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
+    fn motion_blur(&self) -> Option<f32> { None }
+}
+
+impl Layer {
+    /// Access LayerProps for any layer variant
+    pub fn props(&self) -> &dyn LayerProps {
+        match self {
+            Layer::Text(l) => l,
+            Layer::Shape(l) => l,
+            Layer::Image(l) => l,
+            Layer::Svg(l) => l,
+            Layer::Video(l) => l,
+            Layer::Gif(l) => l,
+            Layer::Caption(l) => l,
+            Layer::Codeblock(l) => l,
+            Layer::Group(l) => l,
+        }
+    }
+}
+
 // --- Default functions ---
 
 fn default_version() -> String {
@@ -807,4 +961,20 @@ fn default_cursor_color() -> String {
 
 fn default_cursor_width() -> f32 {
     2.0
+}
+
+fn default_shadow_color() -> String {
+    "#00000080".to_string()
+}
+
+fn default_shadow_offset() -> f32 {
+    2.0
+}
+
+fn default_shadow_blur() -> f32 {
+    4.0
+}
+
+fn default_text_bg_padding() -> f32 {
+    8.0
 }

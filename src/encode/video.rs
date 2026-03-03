@@ -5,11 +5,11 @@ use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
-use crate::engine::{render_frame, rgba_to_yuv420};
+use crate::engine::{render_frame, rgba_to_yuv420, preextract_video_frames};
 use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
@@ -38,6 +38,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     let width = config.width;
     let height = config.height;
     let fps = config.fps;
+
+    // Pre-extract video frames in bulk (if any VideoLayer present)
+    preextract_video_frames(&scenario.scenes, fps);
 
     // Build a flat list of frame tasks
     let tasks = build_frame_tasks(scenario);
@@ -86,12 +89,13 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
         for yuv_result in yuv_frames {
             let yuv = yuv_result?;
 
-            // Force every frame as I-frame to prevent inter-frame artifacts
+            // Force every frame as I-frame to prevent inter-frame prediction
+            // artifacts (ghost pixels at moving edges like growing codeblocks)
             encoder.force_intra_frame();
 
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
             let bitstream = encoder.encode(&yuv_buf)?;
-            h264_data.extend_from_slice(&bitstream.to_vec());
+            bitstream.write_vec(&mut h264_data);
         }
     }
 
@@ -377,46 +381,35 @@ pub fn encode_with_ffmpeg(
         None
     };
 
-    // First render to a temporary PNG sequence
-    let tmp_dir = std::env::temp_dir().join(format!("rustmotion_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
-
-    let batch_size = (rayon::current_num_threads() * 2).max(4);
-    let counter = AtomicU32::new(0);
-
-    for batch in tasks.chunks(batch_size) {
-        let results: Vec<Result<(u32, Vec<u8>)>> = batch
-            .par_iter()
-            .map(|task| {
-                let frame_num = counter.fetch_add(1, Ordering::Relaxed);
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
-                Ok((frame_num, rgba))
-            })
-            .collect();
-
-        if let Some(ref mut tui) = tui {
-            tui.set_progress(counter.load(Ordering::Relaxed));
+    // Process audio first (needs a temp file for FFmpeg -i)
+    let total_duration = total_frames as f64 / fps as f64;
+    let audio_tmp_dir = if !scenario.audio.is_empty() {
+        Some(std::env::temp_dir().join(format!("rustmotion_audio_{}", std::process::id())))
+    } else {
+        None
+    };
+    let pcm_data = if !scenario.audio.is_empty() {
+        if let Some(ref tmp_dir) = audio_tmp_dir {
+            std::fs::create_dir_all(tmp_dir)?;
         }
+        super::audio::mix_audio_tracks(&scenario.audio, total_duration)?
+    } else {
+        None
+    };
 
-        for result in results {
-            let (frame_num, rgba) = result?;
-            let path = tmp_dir.join(format!("frame_{:05}.png", frame_num));
-            let img = image::RgbaImage::from_raw(width, height, rgba)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create image"))?;
-            img.save(&path)?;
-        }
-    }
-
-    if let Some(ref mut tui) = tui {
-        tui.set_status("Encoding with FFmpeg");
-    }
-
-    // Build FFmpeg command
-    let input_pattern = tmp_dir.join("frame_%05d.png");
+    // Build FFmpeg command with rawvideo pipe input
     let crf_val = crf.unwrap_or(23);
+    let pix_fmt = if transparent { "rgba" } else { "rgba" };
 
     let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-framerate", &fps.to_string(), "-i", input_pattern.to_str().unwrap()]);
+    cmd.args([
+        "-y",
+        "-f", "rawvideo",
+        "-pixel_format", pix_fmt,
+        "-video_size", &format!("{}x{}", width, height),
+        "-framerate", &fps.to_string(),
+        "-i", "pipe:0",
+    ]);
 
     match codec {
         "h265" | "hevc" => {
@@ -449,32 +442,86 @@ pub fn encode_with_ffmpeg(
         }
     }
 
-    // Process audio if present
-    let total_duration = total_frames as f64 / fps as f64;
-    if !scenario.audio.is_empty() {
-        if let Some(pcm_data) = super::audio::mix_audio_tracks(&scenario.audio, total_duration)? {
-            let audio_path = tmp_dir.join("audio.raw");
-            std::fs::write(&audio_path, &pcm_data)?;
-            cmd.args([
-                "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
-                audio_path.to_str().unwrap(),
-                "-c:a", "aac", "-b:a", "128k",
-            ]);
-        }
+    // Add audio input if present
+    if let Some(ref pcm) = pcm_data {
+        let audio_path = audio_tmp_dir.as_ref().unwrap().join("audio.raw");
+        std::fs::write(&audio_path, pcm)?;
+        cmd.args([
+            "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
+            audio_path.to_str().unwrap(),
+            "-c:a", "aac", "-b:a", "128k",
+        ]);
     }
 
     cmd.arg(output_path);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(if quiet { std::process::Stdio::null() } else { std::process::Stdio::inherit() });
 
-    let output = cmd
-        .stdout(std::process::Stdio::null())
-        .stderr(if quiet { std::process::Stdio::null() } else { std::process::Stdio::inherit() })
-        .status()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}. Is ffmpeg installed?", e))?;
 
-    // Cleanup temp directory
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let mut stdin = child.stdin.take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin pipe"))?;
 
-    if !output.success() {
+    // Render frames in parallel batches, pipe RGBA sequentially to FFmpeg
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let counter = AtomicU32::new(0);
+    let mut pipe_error: Option<anyhow::Error> = None;
+
+    for batch in tasks.chunks(batch_size) {
+        if pipe_error.is_some() {
+            break;
+        }
+
+        // Render batch in parallel
+        let results: Vec<Result<Vec<u8>>> = batch
+            .par_iter()
+            .map(|task| {
+                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                counter.fetch_add(1, Ordering::Relaxed);
+                Ok(rgba)
+            })
+            .collect();
+
+        if let Some(ref mut tui) = tui {
+            tui.set_progress(counter.load(Ordering::Relaxed));
+        }
+
+        // Write RGBA sequentially to FFmpeg pipe (preserves frame order)
+        for result in results {
+            match result {
+                Ok(rgba) => {
+                    if let Err(e) = stdin.write_all(&rgba) {
+                        pipe_error = Some(anyhow::anyhow!("Failed to write to FFmpeg pipe: {}", e));
+                        break;
+                    }
+                }
+                Err(e) => {
+                    pipe_error = Some(e);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Close stdin to signal end of input
+    drop(stdin);
+
+    let status = child.wait()
+        .map_err(|e| anyhow::anyhow!("Failed to wait for FFmpeg: {}", e))?;
+
+    // Cleanup audio temp directory
+    if let Some(ref tmp_dir) = audio_tmp_dir {
+        let _ = std::fs::remove_dir_all(tmp_dir);
+    }
+
+    if let Some(e) = pipe_error {
+        return Err(e);
+    }
+
+    if !status.success() {
         anyhow::bail!("FFmpeg encoding failed");
     }
 

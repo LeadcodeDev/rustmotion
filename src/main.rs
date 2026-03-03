@@ -56,6 +56,10 @@ enum Commands {
         /// Enable transparent background (for PNG sequence, WebM, ProRes 4444)
         #[arg(long)]
         transparent: bool,
+
+        /// Watch the input file for changes and re-render automatically
+        #[arg(long)]
+        watch: bool,
     },
 
     /// Validate a JSON scenario without rendering
@@ -97,9 +101,15 @@ fn main() -> Result<()> {
             crf,
             format,
             transparent,
+            watch,
         } => {
-            let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
-            cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+            if watch {
+                let input_path = input.ok_or_else(|| anyhow::anyhow!("--watch requires an input file path (cannot use --json or stdin)"))?;
+                cmd_watch(&input_path, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+            } else {
+                let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
+                cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+            }
         }
         Commands::Validate { input } => cmd_validate(&input),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
@@ -215,6 +225,68 @@ fn cmd_render(
     }
 
     Ok(())
+}
+
+fn cmd_watch(
+    input: &PathBuf,
+    output: &PathBuf,
+    frame: Option<u32>,
+    output_format: Option<&OutputFormat>,
+    quiet: bool,
+    codec: Option<String>,
+    crf: Option<u8>,
+    format: Option<String>,
+    transparent: bool,
+) -> Result<()> {
+    use notify::{Watcher, RecursiveMode};
+    use std::sync::mpsc;
+
+    eprintln!("Watching {} for changes... (Ctrl+C to stop)", input.display());
+
+    // Initial render
+    match load_scenario(input) {
+        Ok(scenario) => {
+            engine::clear_asset_cache();
+            if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                eprintln!("Render error: {}", e);
+            }
+        }
+        Err(e) => eprintln!("Load error: {}", e),
+    }
+
+    let (tx, rx) = mpsc::channel();
+
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(event) = res {
+            if event.kind.is_modify() || event.kind.is_create() {
+                let _ = tx.send(());
+            }
+        }
+    })?;
+
+    watcher.watch(input.as_ref(), RecursiveMode::NonRecursive)?;
+
+    // Debounce: wait for changes, then re-render
+    loop {
+        // Block until a change event
+        rx.recv().map_err(|_| anyhow::anyhow!("File watcher channel closed"))?;
+
+        // Drain any additional events (debounce)
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        while rx.try_recv().is_ok() {}
+
+        eprintln!("\nFile changed, re-rendering...");
+
+        match load_scenario(input) {
+            Ok(scenario) => {
+                engine::clear_asset_cache();
+                if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                    eprintln!("Render error: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Load error: {}", e),
+        }
+    }
 }
 
 fn render_single_frame(scenario: &schema::Scenario, frame_num: u32, output: &PathBuf) -> Result<()> {
@@ -353,13 +425,13 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                             ));
                         }
                     }
-                }
-                schema::Layer::Video(v) => {
-                    if !std::path::Path::new(&v.src).exists() {
-                        errors.push(format!(
-                            "scenes[{}].layers[{}].src: file not found '{}'",
-                            i, j, v.src
-                        ));
+                    if let (Some(start), Some(end)) = (svg.start_at, svg.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
                     }
                 }
                 schema::Layer::Gif(g) => {
@@ -369,8 +441,42 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                             i, j, g.src
                         ));
                     }
+                    if let (Some(start), Some(end)) = (g.start_at, g.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
                 }
-                _ => {}
+                schema::Layer::Codeblock(cb) => {
+                    if let (Some(start), Some(end)) = (cb.start_at, cb.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::Video(v) => {
+                    if !std::path::Path::new(&v.src).exists() {
+                        errors.push(format!(
+                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            i, j, v.src
+                        ));
+                    }
+                    if let (Some(start), Some(end)) = (v.start_at, v.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::Caption(_) | schema::Layer::Group(_) => {}
             }
         }
     }

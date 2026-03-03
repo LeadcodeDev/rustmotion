@@ -1,4 +1,7 @@
+use std::sync::{Arc, OnceLock};
+
 use anyhow::Result;
+use dashmap::DashMap;
 use skia_safe::{
     surfaces, Canvas, Color4f, ColorType, Font, FontMgr, FontStyle, ImageInfo, Paint, PaintStyle,
     Point, Rect, TextBlob,
@@ -8,8 +11,39 @@ use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::codeblock;
 use crate::schema::{
     CaptionLayer, CaptionStyle, Fill, FontWeight, GradientType, ImageFit, Layer, Scene, ShapeText,
-    ShapeType, TextAlign, VerticalAlign, VideoConfig, WiggleConfig,
+    ShapeType, TextAlign, VerticalAlign, VideoConfig,
 };
+
+// Thread-local FontMgr instance, created once per thread and reused
+thread_local! {
+    static THREAD_FONT_MGR: FontMgr = FontMgr::default();
+}
+
+pub(crate) fn font_mgr() -> FontMgr {
+    THREAD_FONT_MGR.with(|mgr| mgr.clone())
+}
+
+/// Global asset cache for decoded images (keyed by file path)
+static ASSET_CACHE: OnceLock<Arc<DashMap<String, skia_safe::Image>>> = OnceLock::new();
+
+fn asset_cache() -> &'static Arc<DashMap<String, skia_safe::Image>> {
+    ASSET_CACHE.get_or_init(|| Arc::new(DashMap::new()))
+}
+
+/// Clear the asset cache (call between renders if needed)
+pub fn clear_asset_cache() {
+    if let Some(cache) = ASSET_CACHE.get() {
+        cache.clear();
+    }
+}
+
+/// GIF frame data cache: stores decoded frames with pre-computed cumulative timestamps
+/// (frames_rgba, cumulative_times, total_duration) keyed by file path
+static GIF_CACHE: OnceLock<Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>>> = OnceLock::new();
+
+fn gif_cache() -> &'static Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>> {
+    GIF_CACHE.get_or_init(|| Arc::new(DashMap::new()))
+}
 
 /// Parse a hex color string (#RRGGBB or #RRGGBBAA) into RGBA components
 pub fn parse_hex_color(hex: &str) -> (u8, u8, u8, u8) {
@@ -74,7 +108,8 @@ pub fn render_frame(
 
     let canvas = surface.canvas();
 
-    // Fill background
+    // Fill background (Skia handles premul conversion — must match exactly
+    // so anti-aliased layer edges blend seamlessly with the background)
     let bg = scene.background.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
 
@@ -100,62 +135,14 @@ pub fn render_frame(
     Ok(pixels)
 }
 
-fn get_layer_animations(layer: &Layer) -> (&[crate::schema::Animation], Option<&crate::schema::AnimationPreset>, Option<&crate::schema::PresetConfig>) {
-    match layer {
-        Layer::Text(t) => (&t.animations, t.preset.as_ref(), t.preset_config.as_ref()),
-        Layer::Shape(s) => (&s.animations, s.preset.as_ref(), s.preset_config.as_ref()),
-        Layer::Image(i) => (&i.animations, i.preset.as_ref(), i.preset_config.as_ref()),
-        Layer::Svg(s) => (&s.animations, s.preset.as_ref(), s.preset_config.as_ref()),
-        Layer::Video(v) => (&v.animations, v.preset.as_ref(), v.preset_config.as_ref()),
-        Layer::Gif(g) => (&g.animations, g.preset.as_ref(), g.preset_config.as_ref()),
-        Layer::Caption(c) => (&c.animations, c.preset.as_ref(), c.preset_config.as_ref()),
-        Layer::Codeblock(cb) => (&cb.animations, cb.preset.as_ref(), cb.preset_config.as_ref()),
-        Layer::Group(_) => (&[], None, None),
-    }
-}
-
-fn get_layer_timing(layer: &Layer) -> (Option<f64>, Option<f64>) {
-    match layer {
-        Layer::Text(t) => (t.start_at, t.end_at),
-        Layer::Shape(s) => (s.start_at, s.end_at),
-        Layer::Image(i) => (i.start_at, i.end_at),
-        Layer::Svg(s) => (s.start_at, s.end_at),
-        Layer::Video(v) => (v.start_at, v.end_at),
-        Layer::Gif(g) => (g.start_at, g.end_at),
-        Layer::Codeblock(cb) => (cb.start_at, cb.end_at),
-        Layer::Group(_) | Layer::Caption(_) => (None, None),
-    }
-}
-
-fn get_layer_wiggles(layer: &Layer) -> Option<&[WiggleConfig]> {
-    match layer {
-        Layer::Text(t) => t.wiggle.as_deref(),
-        Layer::Shape(s) => s.wiggle.as_deref(),
-        Layer::Image(i) => i.wiggle.as_deref(),
-        Layer::Svg(s) => s.wiggle.as_deref(),
-        Layer::Video(v) => v.wiggle.as_deref(),
-        Layer::Gif(g) => g.wiggle.as_deref(),
-        Layer::Codeblock(cb) => cb.wiggle.as_deref(),
-        _ => None,
-    }
-}
-
-fn get_layer_motion_blur(layer: &Layer) -> Option<f32> {
-    match layer {
-        Layer::Text(t) => t.motion_blur,
-        Layer::Shape(s) => s.motion_blur,
-        Layer::Image(i) => i.motion_blur,
-        Layer::Svg(s) => s.motion_blur,
-        Layer::Video(v) => v.motion_blur,
-        Layer::Gif(g) => g.motion_blur,
-        Layer::Codeblock(cb) => cb.motion_blur,
-        _ => None,
-    }
-}
+// Layer property access is now handled via the LayerProps trait (see schema/video.rs)
+// accessed through layer.props()
 
 fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64) -> Result<()> {
+    let lp = layer.props();
+
     // Check start_at / end_at timing
-    let (start_at, end_at) = get_layer_timing(layer);
+    let (start_at, end_at) = lp.timing();
     if let Some(start) = start_at {
         if time < start {
             return Ok(());
@@ -174,11 +161,11 @@ fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64,
         time
     };
 
-    let (animations, preset, preset_config) = get_layer_animations(layer);
+    let (animations, preset, preset_config) = lp.animations();
     let mut props = resolve_animations(animations, preset, preset_config, anim_time, scene_duration);
 
     // Apply wiggles additively
-    if let Some(wiggles) = get_layer_wiggles(layer) {
+    if let Some(wiggles) = lp.wiggle() {
         apply_wiggles(&mut props, wiggles, time);
     }
 
@@ -188,8 +175,7 @@ fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64,
     }
 
     // Motion blur: multi-sampling approach
-    let motion_blur = get_layer_motion_blur(layer);
-    if let Some(blur_intensity) = motion_blur {
+    if let Some(blur_intensity) = lp.motion_blur() {
         if blur_intensity > 0.01 {
             return render_layer_with_motion_blur(canvas, layer, config, time, scene_duration, blur_intensity);
         }
@@ -262,12 +248,11 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
 }
 
 fn render_layer_with_motion_blur(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, intensity: f32) -> Result<()> {
-    let num_samples = 5;
+    let num_samples = if intensity < 0.3 { 3 } else { 5 };
     let fps = config.fps as f64;
     let frame_duration = 1.0 / fps;
     let spread = frame_duration * intensity as f64;
 
-    // Create a temporary surface to composite sub-frames
     let width = config.width as i32;
     let height = config.height as i32;
     let info = ImageInfo::new(
@@ -281,20 +266,22 @@ fn render_layer_with_motion_blur(canvas: &Canvas, layer: &Layer, config: &VideoC
 
     temp_surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
 
+    let lp = layer.props();
+
     for i in 0..num_samples {
         let offset = (i as f64 / (num_samples - 1) as f64 - 0.5) * spread;
         let sample_time = (time + offset).max(0.0);
 
-        let (start_at, _) = get_layer_timing(layer);
+        let (start_at, _) = lp.timing();
         let anim_time = if let Some(start) = start_at {
             sample_time - start
         } else {
             sample_time
         };
 
-        let (animations, preset, preset_config) = get_layer_animations(layer);
+        let (animations, preset, preset_config) = lp.animations();
         let mut props = resolve_animations(animations, preset, preset_config, anim_time, scene_duration);
-        if let Some(wiggles) = get_layer_wiggles(layer) {
+        if let Some(wiggles) = lp.wiggle() {
             apply_wiggles(&mut props, wiggles, sample_time);
         }
         props.opacity /= num_samples as f32;
@@ -313,11 +300,18 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
     match layer {
         Layer::Text(t) => {
             // Measure text to find its visual center
-            let font_mgr = FontMgr::default();
-            let font_style = match t.font_weight {
-                FontWeight::Bold => FontStyle::bold(),
-                FontWeight::Normal => FontStyle::normal(),
+            let font_mgr = font_mgr();
+            use crate::schema::FontStyleType;
+            let slant = match t.font_style {
+                FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
+                FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
+                FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
             };
+            let weight = match t.font_weight {
+                FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
+                FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            };
+            let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
             let typeface = font_mgr
                 .match_family_style(&t.font_family, font_style)
                 .or_else(|| font_mgr.match_family_style("Helvetica", font_style))
@@ -376,11 +370,19 @@ fn render_text(
     _config: &VideoConfig,
     props: &AnimatedProperties,
 ) -> Result<()> {
-    let font_mgr = FontMgr::default();
-    let font_style = match text.font_weight {
-        FontWeight::Bold => FontStyle::bold(),
-        FontWeight::Normal => FontStyle::normal(),
+    use crate::schema::FontStyleType;
+
+    let font_mgr = font_mgr();
+    let slant = match text.font_style {
+        FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
+        FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
+        FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
     };
+    let weight = match text.font_weight {
+        FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
+        FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+    };
+    let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
     let typeface = font_mgr
         .match_family_style(&text.font_family, font_style)
@@ -420,6 +422,29 @@ fn render_text(
     let line_height = text.line_height.unwrap_or(text.font_size * 1.3);
     let letter_spacing = text.letter_spacing.unwrap_or(0.0);
 
+    // Prepare optional shadow and stroke paints
+    let shadow_paint = text.shadow.as_ref().map(|shadow| {
+        let mut p = paint_from_hex(&shadow.color);
+        if shadow.blur > 0.01 {
+            if let Some(filter) = skia_safe::image_filters::blur(
+                (shadow.blur, shadow.blur),
+                skia_safe::TileMode::Clamp,
+                None,
+                None,
+            ) {
+                p.set_image_filter(filter);
+            }
+        }
+        (p, shadow.offset_x, shadow.offset_y)
+    });
+
+    let stroke_paint = text.stroke.as_ref().map(|stroke| {
+        let mut p = paint_from_hex(&stroke.color);
+        p.set_style(PaintStyle::Stroke);
+        p.set_stroke_width(stroke.width);
+        p
+    });
+
     for (i, line) in lines.iter().enumerate() {
         if line.is_empty() {
             continue;
@@ -442,6 +467,34 @@ fn render_text(
             };
             let y = text.position.y + i as f32 * line_height;
 
+            // Draw background highlight behind text
+            if let Some(ref bg) = text.background {
+                let bg_paint = paint_from_hex(&bg.color);
+                let bg_rect = Rect::from_xywh(
+                    x - bg.padding + blob_bounds.left,
+                    y - text.font_size + blob_bounds.top.min(0.0) - bg.padding / 2.0,
+                    line_width + bg.padding * 2.0,
+                    line_height + bg.padding,
+                );
+                if bg.corner_radius > 0.0 {
+                    let rrect = skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
+                    canvas.draw_rrect(rrect, &bg_paint);
+                } else {
+                    canvas.draw_rect(bg_rect, &bg_paint);
+                }
+            }
+
+            // Draw shadow
+            if let Some((ref sp, ox, oy)) = shadow_paint {
+                canvas.draw_text_blob(&blob, (x + ox, y + oy), sp);
+            }
+
+            // Draw stroke (outline)
+            if let Some(ref sp) = stroke_paint {
+                canvas.draw_text_blob(&blob, (x, y), sp);
+            }
+
+            // Draw fill
             canvas.draw_text_blob(&blob, (x, y), &paint);
         }
     }
@@ -607,7 +660,7 @@ fn render_shape_text(
     let area_w = shape_w - 2.0 * pad;
     let area_h = shape_h - 2.0 * pad;
 
-    let font_mgr = FontMgr::default();
+    let font_mgr = font_mgr();
     let font_style = match text.font_weight {
         FontWeight::Bold => FontStyle::bold(),
         FontWeight::Normal => FontStyle::normal(),
@@ -751,12 +804,18 @@ fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, w: f
 }
 
 fn render_image(canvas: &Canvas, image: &crate::schema::ImageLayer) -> Result<()> {
-    let data = std::fs::read(&image.src)
-        .map_err(|e| anyhow::anyhow!("Failed to load image '{}': {}", image.src, e))?;
-
-    let skia_data = skia_safe::Data::new_copy(&data);
-    let img = skia_safe::Image::from_encoded(skia_data)
-        .ok_or_else(|| anyhow::anyhow!("Failed to decode image '{}'", image.src))?;
+    let cache = asset_cache();
+    let img = if let Some(cached) = cache.get(&image.src) {
+        cached.clone()
+    } else {
+        let data = std::fs::read(&image.src)
+            .map_err(|e| anyhow::anyhow!("Failed to load image '{}': {}", image.src, e))?;
+        let skia_data = skia_safe::Data::new_copy(&data);
+        let decoded = skia_safe::Image::from_encoded(skia_data)
+            .ok_or_else(|| anyhow::anyhow!("Failed to decode image '{}'", image.src))?;
+        cache.insert(image.src.clone(), decoded.clone());
+        decoded
+    };
 
     let img_w = img.width() as f32;
     let img_h = img.height() as f32;
@@ -834,49 +893,168 @@ fn render_group(
 }
 
 fn render_svg(canvas: &Canvas, svg: &crate::schema::SvgLayer) -> Result<()> {
-    let svg_data = if let Some(ref src) = svg.src {
-        std::fs::read(src)
-            .map_err(|e| anyhow::anyhow!("Failed to load SVG '{}': {}", src, e))?
+    // Build a cache key: for file-based SVGs use path + size, for inline use hash of data + size
+    let (target_w_opt, target_h_opt) = match &svg.size {
+        Some(size) => (Some(size.width as u32), Some(size.height as u32)),
+        None => (None, None),
+    };
+    let cache_key = if let Some(ref src) = svg.src {
+        format!("svg:{}:{}x{}", src, target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
     } else if let Some(ref data) = svg.data {
-        data.as_bytes().to_vec()
+        // Use a simple hash for inline SVG data
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        format!("svg-inline:{}:{}x{}", hasher.finish(), target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
     } else {
         return Err(anyhow::anyhow!("SVG layer must have either 'src' or 'data'"));
     };
 
-    let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(&svg_data, &opt)
-        .map_err(|e| anyhow::anyhow!("Failed to parse SVG: {}", e))?;
+    let cache = asset_cache();
+    let img = if let Some(cached) = cache.get(&cache_key) {
+        cached.clone()
+    } else {
+        let svg_data = if let Some(ref src) = svg.src {
+            std::fs::read(src)
+                .map_err(|e| anyhow::anyhow!("Failed to load SVG '{}': {}", src, e))?
+        } else if let Some(ref data) = svg.data {
+            data.as_bytes().to_vec()
+        } else {
+            unreachable!()
+        };
 
-    let svg_size = tree.size();
-    let (target_w, target_h) = match &svg.size {
-        Some(size) => (size.width as u32, size.height as u32),
-        None => (svg_size.width() as u32, svg_size.height() as u32),
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_data(&svg_data, &opt)
+            .map_err(|e| anyhow::anyhow!("Failed to parse SVG: {}", e))?;
+
+        let svg_size = tree.size();
+        let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
+        let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
+
+        let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for SVG"))?;
+
+        let scale_x = target_w as f32 / svg_size.width();
+        let scale_y = target_h as f32 / svg_size.height();
+        let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        let img_data = skia_safe::Data::new_copy(pixmap.data());
+        let img_info = ImageInfo::new(
+            (target_w as i32, target_h as i32),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let decoded = skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create Skia image from SVG"))?;
+        cache.insert(cache_key, decoded.clone());
+        decoded
     };
 
-    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
-        .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for SVG"))?;
+    let (target_w, target_h) = match &svg.size {
+        Some(size) => (size.width, size.height),
+        None => (img.width() as f32, img.height() as f32),
+    };
 
-    let scale_x = target_w as f32 / svg_size.width();
-    let scale_y = target_h as f32 / svg_size.height();
-    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
-
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    // Convert tiny_skia pixmap to skia_safe image
-    let img_data = skia_safe::Data::new_copy(pixmap.data());
-    let img_info = ImageInfo::new(
-        (target_w as i32, target_h as i32),
-        ColorType::RGBA8888,
-        skia_safe::AlphaType::Premul,
-        None,
-    );
-    if let Some(img) = skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4) {
-        let dst = Rect::from_xywh(svg.position.x, svg.position.y, target_w as f32, target_h as f32);
-        let paint = Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
-    }
+    let dst = Rect::from_xywh(svg.position.x, svg.position.y, target_w, target_h);
+    let paint = Paint::default();
+    canvas.draw_image_rect(img, None, dst, &paint);
 
     Ok(())
+}
+
+/// Cache for pre-extracted video frames: key = "src:width:height", value = sorted list of (time, PNG data)
+/// Video frame cache: stores decoded RGBA pixels + dimensions instead of raw PNG bytes
+static VIDEO_FRAME_CACHE: OnceLock<Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>>> = OnceLock::new();
+
+fn video_frame_cache() -> &'static Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>> {
+    VIDEO_FRAME_CACHE.get_or_init(|| Arc::new(DashMap::new()))
+}
+
+/// Pre-extract all needed frames from a video source in a single ffmpeg pass.
+/// Called before the render loop to populate the video frame cache.
+pub fn preextract_video_frames(
+    scenarios_scenes: &[crate::schema::Scene],
+    fps: u32,
+) {
+    for scene in scenarios_scenes {
+        let scene_frames = (scene.duration * fps as f64).round() as u32;
+        for layer in &scene.layers {
+            if let Layer::Video(video) = layer {
+                let rate = video.playback_rate.unwrap_or(1.0);
+                let trim_start = video.trim_start.unwrap_or(0.0);
+                let width = video.size.width as u32;
+                let height = video.size.height as u32;
+
+                let cache_key = format!("{}:{}x{}", video.src, width, height);
+                let cache = video_frame_cache();
+
+                // Skip if already cached
+                if cache.contains_key(&cache_key) {
+                    continue;
+                }
+
+                // Collect all timestamps we need
+                let start_frame = video.start_at.map(|s| (s * fps as f64).round() as u32).unwrap_or(0);
+                let end_frame = video.end_at.map(|e| (e * fps as f64).round() as u32).unwrap_or(scene_frames);
+
+                let mut times = Vec::new();
+                for f in start_frame..end_frame {
+                    let time = f as f64 / fps as f64;
+                    let source_time = trim_start + time * rate;
+                    times.push(source_time);
+                }
+
+                if times.is_empty() {
+                    continue;
+                }
+
+                // Extract frames using a single ffmpeg process with fps filter
+                let min_time = times.first().copied().unwrap_or(0.0);
+                let max_time = times.last().copied().unwrap_or(0.0);
+                let duration = max_time - min_time + (1.0 / fps as f64);
+
+                // Extract as raw RGBA pixels directly (no PNG encode/decode overhead)
+                let output = std::process::Command::new("ffmpeg")
+                    .args([
+                        "-ss", &format!("{:.3}", min_time),
+                        "-t", &format!("{:.3}", duration),
+                        "-i", &video.src,
+                        "-vf", &format!("fps={},scale={}:{}", fps, width, height),
+                        "-f", "rawvideo",
+                        "-pix_fmt", "rgba",
+                        "-y", "pipe:1",
+                    ])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+
+                match output {
+                    Ok(output) if output.status.success() => {
+                        let frame_size = (width * height * 4) as usize;
+                        let data = &output.stdout;
+                        let num_frames = data.len() / frame_size;
+                        let mut frames: Vec<(f64, Vec<u8>, u32, u32)> = Vec::with_capacity(num_frames);
+
+                        for idx in 0..num_frames {
+                            let start = idx * frame_size;
+                            let frame_data = data[start..start + frame_size].to_vec();
+                            let time = min_time + idx as f64 / fps as f64;
+                            frames.push((time, frame_data, width, height));
+                        }
+
+                        cache.insert(cache_key, Arc::new(frames));
+                    }
+                    _ => {
+                        // Fallback: cache will miss and we'll extract per-frame
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn render_video(canvas: &Canvas, video: &crate::schema::VideoLayer, time: f64) -> Result<()> {
@@ -884,10 +1062,34 @@ fn render_video(canvas: &Canvas, video: &crate::schema::VideoLayer, time: f64) -
     let rate = video.playback_rate.unwrap_or(1.0);
     let trim_start = video.trim_start.unwrap_or(0.0);
     let source_time = trim_start + time * rate;
+    let width = video.size.width as u32;
+    let height = video.size.height as u32;
 
-    // Extract frame using FFmpeg
-    let frame_data = extract_video_frame(&video.src, source_time, video.size.width as u32, video.size.height as u32)?;
+    // Try to get frame from cache first (RGBA pixels)
+    let cache_key = format!("{}:{}x{}", video.src, width, height);
+    let cache = video_frame_cache();
 
+    if let Some(cached_frames) = cache.get(&cache_key) {
+        if let Some((rgba, fw, fh)) = find_closest_frame(&cached_frames, source_time) {
+            let img_info = ImageInfo::new(
+                (fw as i32, fh as i32),
+                ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let row_bytes = fw as usize * 4;
+            let data = skia_safe::Data::new_copy(rgba);
+            if let Some(img) = skia_safe::images::raster_from_data(&img_info, data, row_bytes) {
+                let dst = Rect::from_xywh(video.position.x, video.position.y, video.size.width, video.size.height);
+                let paint = Paint::default();
+                canvas.draw_image_rect(img, None, dst, &paint);
+            }
+            return Ok(());
+        }
+    }
+
+    // Fallback: extract single frame via ffmpeg (returns PNG)
+    let frame_data = extract_video_frame(&video.src, source_time, width, height)?;
     let skia_data = skia_safe::Data::new_copy(&frame_data);
     if let Some(img) = skia_safe::Image::from_encoded(skia_data) {
         let dst = Rect::from_xywh(video.position.x, video.position.y, video.size.width, video.size.height);
@@ -896,6 +1098,28 @@ fn render_video(canvas: &Canvas, video: &crate::schema::VideoLayer, time: f64) -
     }
 
     Ok(())
+}
+
+fn find_closest_frame(frames: &[(f64, Vec<u8>, u32, u32)], target_time: f64) -> Option<(&[u8], u32, u32)> {
+    if frames.is_empty() {
+        return None;
+    }
+    // Binary search for closest time
+    let idx = frames.partition_point(|(t, _, _, _)| *t < target_time);
+    let best = if idx == 0 {
+        0
+    } else if idx >= frames.len() {
+        frames.len() - 1
+    } else {
+        // Compare prev and current
+        if (frames[idx].0 - target_time).abs() < (frames[idx - 1].0 - target_time).abs() {
+            idx
+        } else {
+            idx - 1
+        }
+    };
+    let (_, ref rgba, w, h) = frames[best];
+    Some((rgba, w, h))
 }
 
 fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
@@ -922,50 +1146,58 @@ fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<
 }
 
 fn render_gif(canvas: &Canvas, gif_layer: &crate::schema::GifLayer, time: f64) -> Result<()> {
-    let file = std::fs::File::open(&gif_layer.src)
-        .map_err(|e| anyhow::anyhow!("Failed to open GIF '{}': {}", gif_layer.src, e))?;
+    let gcache = gif_cache();
 
-    let mut decoder = gif::DecodeOptions::new();
-    decoder.set_color_output(gif::ColorOutput::RGBA);
-    let mut decoder = decoder.read_info(file)
-        .map_err(|e| anyhow::anyhow!("Failed to decode GIF '{}': {}", gif_layer.src, e))?;
+    // Load or retrieve cached GIF frames
+    let cached = if let Some(cached) = gcache.get(&gif_layer.src) {
+        cached.clone()
+    } else {
+        let file = std::fs::File::open(&gif_layer.src)
+            .map_err(|e| anyhow::anyhow!("Failed to open GIF '{}': {}", gif_layer.src, e))?;
 
-    let gif_width = decoder.width() as u32;
-    let gif_height = decoder.height() as u32;
+        let mut decoder = gif::DecodeOptions::new();
+        decoder.set_color_output(gif::ColorOutput::RGBA);
+        let mut decoder = decoder.read_info(file)
+            .map_err(|e| anyhow::anyhow!("Failed to decode GIF '{}': {}", gif_layer.src, e))?;
 
-    // Collect frames and their delays
-    let mut frames: Vec<(Vec<u8>, f64)> = Vec::new();
-    while let Some(frame) = decoder.read_next_frame()
-        .map_err(|e| anyhow::anyhow!("Failed to read GIF frame: {}", e))? {
-        let delay = frame.delay as f64 / 100.0; // GIF delay is in 1/100s
-        let delay = if delay < 0.01 { 0.1 } else { delay }; // default 100ms for 0-delay
-        frames.push((frame.buffer.to_vec(), delay));
-    }
+        let gif_width = decoder.width() as u32;
+        let gif_height = decoder.height() as u32;
+
+        let mut frames: Vec<(Vec<u8>, u32, u32)> = Vec::new();
+        let mut cumulative_times: Vec<f64> = Vec::new();
+        let mut accumulated = 0.0;
+
+        while let Some(frame) = decoder.read_next_frame()
+            .map_err(|e| anyhow::anyhow!("Failed to read GIF frame: {}", e))? {
+            let delay = frame.delay as f64 / 100.0;
+            let delay = if delay < 0.01 { 0.1 } else { delay };
+            accumulated += delay;
+            frames.push((frame.buffer.to_vec(), gif_width, gif_height));
+            cumulative_times.push(accumulated);
+        }
+
+        let total_duration = accumulated;
+        let cached = Arc::new((frames, cumulative_times, total_duration));
+        gcache.insert(gif_layer.src.clone(), cached.clone());
+        cached
+    };
+
+    let (ref frames, ref cumulative_times, total_duration) = *cached;
 
     if frames.is_empty() {
         return Ok(());
     }
 
-    // Find the right frame for the current time
-    let total_duration: f64 = frames.iter().map(|(_, d)| d).sum();
+    // Find the right frame for the current time using binary search
     let effective_time = if gif_layer.loop_gif {
         time % total_duration
     } else {
         time.min(total_duration)
     };
 
-    let mut accumulated = 0.0;
-    let mut frame_idx = 0;
-    for (i, (_, delay)) in frames.iter().enumerate() {
-        accumulated += delay;
-        if effective_time < accumulated {
-            frame_idx = i;
-            break;
-        }
-        frame_idx = i;
-    }
+    let frame_idx = cumulative_times.partition_point(|&t| t <= effective_time).min(frames.len() - 1);
 
-    let (ref frame_data, _) = frames[frame_idx];
+    let (ref frame_data, gif_width, gif_height) = frames[frame_idx];
 
     let (target_w, target_h) = match &gif_layer.size {
         Some(size) => (size.width, size.height),
@@ -995,7 +1227,7 @@ fn render_caption(
     _config: &VideoConfig,
     time: f64,
 ) -> Result<()> {
-    let font_mgr = FontMgr::default();
+    let font_mgr = font_mgr();
     let font_family = caption.font_family.as_deref().unwrap_or("Inter");
     let typeface = font_mgr
         .match_family_style(font_family, FontStyle::bold())
@@ -1097,35 +1329,72 @@ fn render_caption(
     Ok(())
 }
 
-/// Convert RGBA pixels to YUV420 (I420) for H.264 encoding
+/// Convert RGBA pixels to YUV420 (I420) for H.264 encoding.
+/// Uses integer BT.601 arithmetic and rayon parallelization for performance.
 pub fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    use rayon::prelude::*;
+
     let w = width as usize;
     let h = height as usize;
     let y_size = w * h;
-    let uv_size = (w / 2) * (h / 2);
+    let uv_w = w / 2;
+    let uv_h = h / 2;
+    let uv_size = uv_w * uv_h;
     let mut yuv = vec![0u8; y_size + 2 * uv_size];
 
     let (y_plane, uv_planes) = yuv.split_at_mut(y_size);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_size);
 
-    for row in 0..h {
-        for col in 0..w {
-            let idx = (row * w + col) * 4;
-            let r = rgba[idx] as f32;
-            let g = rgba[idx + 1] as f32;
-            let b = rgba[idx + 2] as f32;
-
-            let y = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 255.0);
-            y_plane[row * w + col] = y as u8;
-
-            if row % 2 == 0 && col % 2 == 0 {
-                let u = (-0.169 * r - 0.331 * g + 0.500 * b + 128.0).clamp(0.0, 255.0);
-                let v = (0.500 * r - 0.419 * g - 0.081 * b + 128.0).clamp(0.0, 255.0);
-                let uv_idx = (row / 2) * (w / 2) + (col / 2);
-                u_plane[uv_idx] = u as u8;
-                v_plane[uv_idx] = v as u8;
+    // Compute Y plane in parallel (one row per task)
+    y_plane
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(row, y_row)| {
+            let row_offset = row * w * 4;
+            for col in 0..w {
+                let idx = row_offset + col * 4;
+                let r = rgba[idx] as i32;
+                let g = rgba[idx + 1] as i32;
+                let b = rgba[idx + 2] as i32;
+                y_row[col] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).clamp(0, 255) as u8;
             }
-        }
+        });
+
+    // Compute U and V planes in parallel (one row-pair per task)
+    // Process pairs of rows for chroma subsampling
+    let uv_combined: Vec<(u8, u8)> = (0..uv_h)
+        .into_par_iter()
+        .flat_map(|uv_row| {
+            let row = uv_row * 2;
+            (0..uv_w)
+                .map(move |uv_col| {
+                    let col = uv_col * 2;
+                    // Average 2x2 block for chroma
+                    let mut r_sum = 0i32;
+                    let mut g_sum = 0i32;
+                    let mut b_sum = 0i32;
+                    for dr in 0..2 {
+                        for dc in 0..2 {
+                            let idx = ((row + dr) * w + (col + dc)) * 4;
+                            r_sum += rgba[idx] as i32;
+                            g_sum += rgba[idx + 1] as i32;
+                            b_sum += rgba[idx + 2] as i32;
+                        }
+                    }
+                    let r = r_sum >> 2;
+                    let g = g_sum >> 2;
+                    let b = b_sum >> 2;
+                    let u = (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128).clamp(0, 255) as u8;
+                    let v = (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128).clamp(0, 255) as u8;
+                    (u, v)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    for (i, (u, v)) in uv_combined.into_iter().enumerate() {
+        u_plane[i] = u;
+        v_plane[i] = v;
     }
 
     yuv

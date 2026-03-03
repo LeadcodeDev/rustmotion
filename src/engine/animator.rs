@@ -32,7 +32,46 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
             }
         }
         EasingType::Spring => t, // Spring handled separately
+        EasingType::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
     }
+}
+
+/// Evaluate a cubic-bezier curve at parameter t using Newton's method
+/// Control points: P0=(0,0), P1=(x1,y1), P2=(x2,y2), P3=(1,1)
+fn cubic_bezier_ease(t: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+    // Find the parameter t_curve such that bezier_x(t_curve) = t
+    // Then return bezier_y(t_curve)
+    let t_curve = find_bezier_t_for_x(t, x1, x2);
+    bezier_component(t_curve, y1, y2)
+}
+
+fn bezier_component(t: f64, p1: f64, p2: f64) -> f64 {
+    // B(t) = 3(1-t)^2*t*p1 + 3(1-t)*t^2*p2 + t^3
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let mt = 1.0 - t;
+    let mt2 = mt * mt;
+    3.0 * mt2 * t * p1 + 3.0 * mt * t2 * p2 + t3
+}
+
+fn bezier_component_derivative(t: f64, p1: f64, p2: f64) -> f64 {
+    let mt = 1.0 - t;
+    3.0 * mt * mt * p1 + 6.0 * mt * t * (p2 - p1) + 3.0 * t * t * (1.0 - p2)
+}
+
+fn find_bezier_t_for_x(x: f64, x1: f64, x2: f64) -> f64 {
+    // Newton-Raphson to solve bezier_x(t) = x
+    let mut t = x; // Initial guess
+    for _ in 0..8 {
+        let current_x = bezier_component(t, x1, x2);
+        let dx = bezier_component_derivative(t, x1, x2);
+        if dx.abs() < 1e-10 {
+            break;
+        }
+        t -= (current_x - x) / dx;
+        t = t.clamp(0.0, 1.0);
+    }
+    t
 }
 
 fn ease_in_cubic(t: f64) -> f64 {
@@ -227,7 +266,10 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
 
             let local_t = (time - kf0.time) / segment_duration;
 
-            let progress = match &anim.easing {
+            // Use per-keyframe easing if specified, otherwise fall back to animation-level easing
+            let segment_easing = kf0.easing.as_ref().unwrap_or(&anim.easing);
+
+            let progress = match segment_easing {
                 EasingType::Spring => {
                     let spring_config = anim.spring.clone().unwrap_or_default();
                     spring_value(local_t * segment_duration, &spring_config)
@@ -254,19 +296,8 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
 
 /// Parse hex color to (r, g, b, a) as f64 components (0-255)
 fn parse_hex_components(hex: &str) -> (f64, f64, f64, f64) {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() < 6 {
-        return (0.0, 0.0, 0.0, 255.0);
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f64;
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f64;
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f64;
-    let a = if hex.len() >= 8 {
-        u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f64
-    } else {
-        255.0
-    };
-    (r, g, b, a)
+    let (r, g, b, a) = super::renderer::parse_hex_color(hex);
+    (r as f64, g as f64, b as f64, a as f64)
 }
 
 /// Interpolate between two hex colors
@@ -477,13 +508,14 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
     }
 }
 
+fn kf(time: f64, value: f64) -> Keyframe {
+    Keyframe { time, value: KeyframeValue::Number(value), easing: None }
+}
+
 fn kf_anim(property: &str, t0: f64, v0: f64, t1: f64, v1: f64, easing: EasingType) -> Animation {
     Animation {
         property: property.to_string(),
-        keyframes: vec![
-            Keyframe { time: t0, value: KeyframeValue::Number(v0) },
-            Keyframe { time: t1, value: KeyframeValue::Number(v1) },
-        ],
+        keyframes: vec![kf(t0, v0), kf(t1, v1)],
         easing,
         spring: None,
     }
@@ -492,10 +524,7 @@ fn kf_anim(property: &str, t0: f64, v0: f64, t1: f64, v1: f64, easing: EasingTyp
 fn kf_anim_spring(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animation {
     Animation {
         property: property.to_string(),
-        keyframes: vec![
-            Keyframe { time: t0, value: KeyframeValue::Number(v0) },
-            Keyframe { time: t1, value: KeyframeValue::Number(v1) },
-        ],
+        keyframes: vec![kf(t0, v0), kf(t1, v1)],
         easing: EasingType::Spring,
         spring: Some(SpringConfig {
             damping: 12.0,
@@ -508,10 +537,7 @@ fn kf_anim_spring(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animati
 fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animation {
     Animation {
         property: property.to_string(),
-        keyframes: vec![
-            Keyframe { time: t0, value: KeyframeValue::Number(v0) },
-            Keyframe { time: t1, value: KeyframeValue::Number(v1) },
-        ],
+        keyframes: vec![kf(t0, v0), kf(t1, v1)],
         easing: EasingType::Spring,
         spring: Some(SpringConfig {
             damping: 6.0,
@@ -524,11 +550,7 @@ fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64
 fn kf_anim_3kf(property: &str, v0: f64, v1: f64, v2: f64, easing: EasingType) -> Animation {
     Animation {
         property: property.to_string(),
-        keyframes: vec![
-            Keyframe { time: 0.0, value: KeyframeValue::Number(v0) },
-            Keyframe { time: 0.5, value: KeyframeValue::Number(v1) },
-            Keyframe { time: 1.0, value: KeyframeValue::Number(v2) },
-        ],
+        keyframes: vec![kf(0.0, v0), kf(0.5, v1), kf(1.0, v2)],
         easing,
         spring: None,
     }
@@ -537,27 +559,16 @@ fn kf_anim_3kf(property: &str, v0: f64, v1: f64, v2: f64, easing: EasingType) ->
 fn kf_anim_4kf(property: &str, v0: f64, v1: f64, v2: f64, v3: f64, easing: EasingType) -> Animation {
     Animation {
         property: property.to_string(),
-        keyframes: vec![
-            Keyframe { time: 0.0, value: KeyframeValue::Number(v0) },
-            Keyframe { time: 0.25, value: KeyframeValue::Number(v1) },
-            Keyframe { time: 0.5, value: KeyframeValue::Number(v2) },
-            Keyframe { time: 1.0, value: KeyframeValue::Number(v3) },
-        ],
+        keyframes: vec![kf(0.0, v0), kf(0.25, v1), kf(0.5, v2), kf(1.0, v3)],
         easing,
         spring: None,
     }
 }
 
-fn kf_anim_loop(_property: &str, _min: f64, _max: f64) -> Animation {
-    // Pulse is a special case: we create a simple oscillation
-    // For now, use a 3-keyframe approach
+fn kf_anim_loop(property: &str, min: f64, max: f64) -> Animation {
     Animation {
-        property: "scale".to_string(),
-        keyframes: vec![
-            Keyframe { time: 0.0, value: KeyframeValue::Number(1.0) },
-            Keyframe { time: 0.5, value: KeyframeValue::Number(1.05) },
-            Keyframe { time: 1.0, value: KeyframeValue::Number(1.0) },
-        ],
+        property: property.to_string(),
+        keyframes: vec![kf(0.0, min), kf(0.5, max), kf(1.0, min)],
         easing: EasingType::EaseInOut,
         spring: None,
     }

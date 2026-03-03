@@ -1,6 +1,6 @@
 use anyhow::Result;
 use similar::{ChangeTag, TextDiff};
-use skia_safe::{Canvas, Font, FontMgr, FontStyle, Paint, PaintStyle, Rect, TextBlob};
+use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect, TextBlob};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
@@ -340,15 +340,23 @@ pub fn render_codeblock(
         }
     };
 
-    let x = layer.position.x;
-    let y = layer.position.y;
+    // Snap to integer pixel boundaries to eliminate sub-pixel anti-aliasing
+    // artifacts on the edges (jagged/crenelated borders)
+    let x = layer.position.x.round();
+    let y = layer.position.y.round();
+    let total_width = total_width.round();
+    let total_height = total_height.round();
 
-    // Background
     let bg_color = layer.background.as_deref().unwrap_or("#2b303b");
     let bg_paint = paint_from_hex(bg_color);
     let bg_rect = Rect::from_xywh(x, y, total_width, total_height);
     let rrect = skia_safe::RRect::new_rect_xy(bg_rect, layer.corner_radius, layer.corner_radius);
-    canvas.draw_rrect(rrect, &bg_paint);
+
+    canvas.save();
+    canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
+
+    // Background (plain rect — the clip handles the rounding)
+    canvas.draw_rect(bg_rect, &bg_paint);
 
     // Chrome (title bar)
     if chrome_enabled {
@@ -358,11 +366,6 @@ pub fn render_codeblock(
     // Code area
     let code_x = x + padding.left + gutter_width;
     let code_y = y + chrome_height + padding.top;
-
-    // Clip to content area
-    canvas.save();
-    let clip_rect = Rect::from_xywh(x, y + chrome_height, total_width, total_height - chrome_height);
-    canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, true);
 
     if let Some(ref trans) = transition {
         render_diff_transition(
@@ -538,7 +541,7 @@ fn draw_chrome(canvas: &Canvas, layer: &CodeblockLayer, x: f32, y: f32, width: f
     }
 
     if let Some(ref title) = chrome.title {
-        let font_mgr = FontMgr::default();
+        let font_mgr = super::renderer::font_mgr();
         let typeface = font_mgr
             .match_family_style("Inter", FontStyle::normal())
             .or_else(|| font_mgr.match_family_style("Helvetica", FontStyle::normal()))
@@ -1106,7 +1109,7 @@ fn draw_single_highlighted_line(
 // ─── Font resolution ─────────────────────────────────────────────────────────
 
 fn resolve_monospace_font(family: &str, size: f32, weight: Option<u16>) -> Font {
-    let font_mgr = FontMgr::default();
+    let font_mgr = super::renderer::font_mgr();
     let w = weight.unwrap_or(400);
     let skia_weight = skia_safe::font_style::Weight::from(w as i32);
     let style = FontStyle::new(skia_weight, skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright);

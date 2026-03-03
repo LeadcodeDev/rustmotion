@@ -15,6 +15,9 @@ pub struct Animation {
 pub struct Keyframe {
     pub time: f64,
     pub value: KeyframeValue,
+    /// Optional per-keyframe easing (overrides animation-level easing for the segment starting at this keyframe)
+    #[serde(default)]
+    pub easing: Option<EasingType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +51,13 @@ pub enum EasingType {
     EaseInExpo,
     EaseOutExpo,
     Spring,
+    /// Custom cubic-bezier easing curve: cubic_bezier(x1, y1, x2, y2)
+    CubicBezier {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    },
 }
 
 fn default_easing() -> EasingType {

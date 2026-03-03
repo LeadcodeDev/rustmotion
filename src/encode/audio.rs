@@ -180,14 +180,99 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         return samples.to_vec();
     }
 
-    let ratio = dst_rate as f64 / src_rate as f64;
-    let new_len = (samples.len() as f64 * ratio) as usize;
-    let mut result = Vec::with_capacity(new_len);
+    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 
-    // Simple linear interpolation resampling (stereo-aware)
+    let channels = 2usize;
+    let src_frames = samples.len() / channels;
+
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+    let ratio = dst_rate as f64 / src_rate as f64;
+    let chunk_size = 1024.min(src_frames);
+
+    let mut resampler = match SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, channels) {
+        Ok(r) => r,
+        Err(_) => {
+            // Fallback to linear interpolation if rubato fails to initialize
+            return resample_linear(samples, src_rate, dst_rate);
+        }
+    };
+
+    // Deinterleave samples into per-channel vectors
+    let mut channel_data: Vec<Vec<f64>> = vec![Vec::with_capacity(src_frames); channels];
+    for (i, &s) in samples.iter().enumerate() {
+        channel_data[i % channels].push(s as f64);
+    }
+
+    let mut output_channels: Vec<Vec<f64>> = vec![Vec::new(); channels];
+
+    // Process in chunks
+    let mut pos = 0;
+    while pos + chunk_size <= src_frames {
+        let chunk: Vec<Vec<f64>> = channel_data
+            .iter()
+            .map(|ch| ch[pos..pos + chunk_size].to_vec())
+            .collect();
+
+        match resampler.process(&chunk, None) {
+            Ok(out) => {
+                for (ch, data) in out.iter().enumerate() {
+                    output_channels[ch].extend_from_slice(data);
+                }
+            }
+            Err(_) => break,
+        }
+        pos += chunk_size;
+    }
+
+    // Process remaining samples
+    if pos < src_frames {
+        let remaining = src_frames - pos;
+        let chunk: Vec<Vec<f64>> = channel_data
+            .iter()
+            .map(|ch| {
+                let mut v = ch[pos..].to_vec();
+                v.resize(chunk_size, 0.0);
+                v
+            })
+            .collect();
+
+        match resampler.process(&chunk, None) {
+            Ok(out) => {
+                let expected_out = (remaining as f64 * ratio).ceil() as usize;
+                for (ch, data) in out.iter().enumerate() {
+                    let take = expected_out.min(data.len());
+                    output_channels[ch].extend_from_slice(&data[..take]);
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    // Re-interleave
+    let out_frames = output_channels[0].len();
+    let mut result = Vec::with_capacity(out_frames * channels);
+    for i in 0..out_frames {
+        for ch in &output_channels {
+            result.push(ch.get(i).copied().unwrap_or(0.0) as f32);
+        }
+    }
+
+    result
+}
+
+fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    let ratio = dst_rate as f64 / src_rate as f64;
     let channels = 2usize;
     let src_frames = samples.len() / channels;
     let dst_frames = (src_frames as f64 * ratio) as usize;
+    let mut result = Vec::with_capacity(dst_frames * channels);
 
     for frame in 0..dst_frames {
         let src_pos = frame as f64 / ratio;

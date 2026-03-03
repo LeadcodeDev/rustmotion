@@ -56,3 +56,12 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 
 # Text diffing
 similar = "2"
+
+# Concurrent hash map for asset caching
+dashmap = "6"
+
+# Audio resampling (sinc)
+rubato = "0.16"
+
+# File watching
+notify = "7"
