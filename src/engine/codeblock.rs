@@ -4,15 +4,15 @@ use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect, TextBlob};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
-    Color as SynColor, FontStyle as SynFontStyle, ScopeSelectors, StyleModifier, Theme,
-    ThemeItem, ThemeSet, ThemeSettings,
+    Color as SynColor, FontStyle as SynFontStyle, ScopeSelectors, StyleModifier, Theme, ThemeItem,
+    ThemeSet, ThemeSettings,
 };
 use syntect::parsing::SyntaxSet;
 
 use super::renderer::paint_from_hex;
 use crate::engine::animator::{ease, AnimatedProperties};
 use crate::schema::{
-    CodeblockHighlight, CodeblockLayer, CodeblockPadding, EasingType, RevealMode, VideoConfig,
+    CodeblockHighlight, CodeblockLayer, EasingType, FontWeight, RevealMode, Spacing, VideoConfig,
 };
 
 // ─── Syntect caches ──────────────────────────────────────────────────────────
@@ -86,20 +86,50 @@ fn parse_font_style(s: &str) -> Option<SynFontStyle> {
 fn load_vscode_theme(json: &str) -> Option<Theme> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
 
-    let name = v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string());
 
     // Parse ThemeSettings from "colors" object
     let mut settings = ThemeSettings::default();
     if let Some(colors) = v.get("colors").and_then(|c| c.as_object()) {
-        settings.foreground = colors.get("editor.foreground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.background = colors.get("editor.background").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.caret = colors.get("editorCursor.foreground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.line_highlight = colors.get("editor.lineHighlightBackground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.selection = colors.get("editor.selectionBackground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.selection_foreground = colors.get("editor.selectionForeground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.gutter = colors.get("editorGutter.background").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.gutter_foreground = colors.get("editorLineNumber.foreground").and_then(|v| v.as_str()).and_then(parse_syn_color);
-        settings.find_highlight = colors.get("editor.findMatchHighlightBackground").and_then(|v| v.as_str()).and_then(parse_syn_color);
+        settings.foreground = colors
+            .get("editor.foreground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.background = colors
+            .get("editor.background")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.caret = colors
+            .get("editorCursor.foreground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.line_highlight = colors
+            .get("editor.lineHighlightBackground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.selection = colors
+            .get("editor.selectionBackground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.selection_foreground = colors
+            .get("editor.selectionForeground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.gutter = colors
+            .get("editorGutter.background")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.gutter_foreground = colors
+            .get("editorLineNumber.foreground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
+        settings.find_highlight = colors
+            .get("editor.findMatchHighlightBackground")
+            .and_then(|v| v.as_str())
+            .and_then(parse_syn_color);
     }
 
     // Parse scopes from "tokenColors" array
@@ -117,10 +147,16 @@ fn load_vscode_theme(json: &str) -> Option<Theme> {
                     // Global settings entry (no scope) — apply to foreground/background
                     if let Some(s) = tc.get("settings").and_then(|s| s.as_object()) {
                         if settings.foreground.is_none() {
-                            settings.foreground = s.get("foreground").and_then(|v| v.as_str()).and_then(parse_syn_color);
+                            settings.foreground = s
+                                .get("foreground")
+                                .and_then(|v| v.as_str())
+                                .and_then(parse_syn_color);
                         }
                         if settings.background.is_none() {
-                            settings.background = s.get("background").and_then(|v| v.as_str()).and_then(parse_syn_color);
+                            settings.background = s
+                                .get("background")
+                                .and_then(|v| v.as_str())
+                                .and_then(parse_syn_color);
                         }
                     }
                     continue;
@@ -139,16 +175,30 @@ fn load_vscode_theme(json: &str) -> Option<Theme> {
             };
 
             let style = StyleModifier {
-                foreground: tc_settings.get("foreground").and_then(|v| v.as_str()).and_then(parse_syn_color),
-                background: tc_settings.get("background").and_then(|v| v.as_str()).and_then(parse_syn_color),
-                font_style: tc_settings.get("fontStyle").and_then(|v| v.as_str()).and_then(parse_font_style),
+                foreground: tc_settings
+                    .get("foreground")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_syn_color),
+                background: tc_settings
+                    .get("background")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_syn_color),
+                font_style: tc_settings
+                    .get("fontStyle")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_font_style),
             };
 
             scopes.push(ThemeItem { scope, style });
         }
     }
 
-    Some(Theme { name, author: None, settings, scopes })
+    Some(Theme {
+        name,
+        author: None,
+        settings,
+        scopes,
+    })
 }
 
 fn theme_set() -> &'static ThemeSet {
@@ -157,10 +207,22 @@ fn theme_set() -> &'static ThemeSet {
 
         // Catppuccin themes (tmTheme format)
         let catppuccin_themes: &[(&str, &str)] = &[
-            ("catppuccin-latte", include_str!("../../themes/Catppuccin Latte.tmTheme")),
-            ("catppuccin-frappe", include_str!("../../themes/Catppuccin Frappe.tmTheme")),
-            ("catppuccin-macchiato", include_str!("../../themes/Catppuccin Macchiato.tmTheme")),
-            ("catppuccin-mocha", include_str!("../../themes/Catppuccin Mocha.tmTheme")),
+            (
+                "catppuccin-latte",
+                include_str!("../../themes/Catppuccin Latte.tmTheme"),
+            ),
+            (
+                "catppuccin-frappe",
+                include_str!("../../themes/Catppuccin Frappe.tmTheme"),
+            ),
+            (
+                "catppuccin-macchiato",
+                include_str!("../../themes/Catppuccin Macchiato.tmTheme"),
+            ),
+            (
+                "catppuccin-mocha",
+                include_str!("../../themes/Catppuccin Mocha.tmTheme"),
+            ),
         ];
         for (name, xml) in catppuccin_themes {
             if let Some(theme) = load_theme_from_str(xml) {
@@ -170,67 +232,226 @@ fn theme_set() -> &'static ThemeSet {
 
         // VS Code / Shiki themes (JSON format)
         let vscode_themes: &[(&str, &str)] = &[
-            ("andromeeda", include_str!("../../themes/vscode/andromeeda.json")),
-            ("aurora-x", include_str!("../../themes/vscode/aurora-x.json")),
-            ("ayu-dark", include_str!("../../themes/vscode/ayu-dark.json")),
-            ("ayu-light", include_str!("../../themes/vscode/ayu-light.json")),
-            ("ayu-mirage", include_str!("../../themes/vscode/ayu-mirage.json")),
-            ("dark-plus", include_str!("../../themes/vscode/dark-plus.json")),
+            (
+                "andromeeda",
+                include_str!("../../themes/vscode/andromeeda.json"),
+            ),
+            (
+                "aurora-x",
+                include_str!("../../themes/vscode/aurora-x.json"),
+            ),
+            (
+                "ayu-dark",
+                include_str!("../../themes/vscode/ayu-dark.json"),
+            ),
+            (
+                "ayu-light",
+                include_str!("../../themes/vscode/ayu-light.json"),
+            ),
+            (
+                "ayu-mirage",
+                include_str!("../../themes/vscode/ayu-mirage.json"),
+            ),
+            (
+                "dark-plus",
+                include_str!("../../themes/vscode/dark-plus.json"),
+            ),
             ("dracula", include_str!("../../themes/vscode/dracula.json")),
-            ("dracula-soft", include_str!("../../themes/vscode/dracula-soft.json")),
-            ("everforest-dark", include_str!("../../themes/vscode/everforest-dark.json")),
-            ("everforest-light", include_str!("../../themes/vscode/everforest-light.json")),
-            ("github-dark", include_str!("../../themes/vscode/github-dark.json")),
-            ("github-dark-default", include_str!("../../themes/vscode/github-dark-default.json")),
-            ("github-dark-dimmed", include_str!("../../themes/vscode/github-dark-dimmed.json")),
-            ("github-dark-high-contrast", include_str!("../../themes/vscode/github-dark-high-contrast.json")),
-            ("github-light", include_str!("../../themes/vscode/github-light.json")),
-            ("github-light-default", include_str!("../../themes/vscode/github-light-default.json")),
-            ("github-light-high-contrast", include_str!("../../themes/vscode/github-light-high-contrast.json")),
-            ("gruvbox-dark-hard", include_str!("../../themes/vscode/gruvbox-dark-hard.json")),
-            ("gruvbox-dark-medium", include_str!("../../themes/vscode/gruvbox-dark-medium.json")),
-            ("gruvbox-dark-soft", include_str!("../../themes/vscode/gruvbox-dark-soft.json")),
-            ("gruvbox-light-hard", include_str!("../../themes/vscode/gruvbox-light-hard.json")),
-            ("gruvbox-light-medium", include_str!("../../themes/vscode/gruvbox-light-medium.json")),
-            ("gruvbox-light-soft", include_str!("../../themes/vscode/gruvbox-light-soft.json")),
+            (
+                "dracula-soft",
+                include_str!("../../themes/vscode/dracula-soft.json"),
+            ),
+            (
+                "everforest-dark",
+                include_str!("../../themes/vscode/everforest-dark.json"),
+            ),
+            (
+                "everforest-light",
+                include_str!("../../themes/vscode/everforest-light.json"),
+            ),
+            (
+                "github-dark",
+                include_str!("../../themes/vscode/github-dark.json"),
+            ),
+            (
+                "github-dark-default",
+                include_str!("../../themes/vscode/github-dark-default.json"),
+            ),
+            (
+                "github-dark-dimmed",
+                include_str!("../../themes/vscode/github-dark-dimmed.json"),
+            ),
+            (
+                "github-dark-high-contrast",
+                include_str!("../../themes/vscode/github-dark-high-contrast.json"),
+            ),
+            (
+                "github-light",
+                include_str!("../../themes/vscode/github-light.json"),
+            ),
+            (
+                "github-light-default",
+                include_str!("../../themes/vscode/github-light-default.json"),
+            ),
+            (
+                "github-light-high-contrast",
+                include_str!("../../themes/vscode/github-light-high-contrast.json"),
+            ),
+            (
+                "gruvbox-dark-hard",
+                include_str!("../../themes/vscode/gruvbox-dark-hard.json"),
+            ),
+            (
+                "gruvbox-dark-medium",
+                include_str!("../../themes/vscode/gruvbox-dark-medium.json"),
+            ),
+            (
+                "gruvbox-dark-soft",
+                include_str!("../../themes/vscode/gruvbox-dark-soft.json"),
+            ),
+            (
+                "gruvbox-light-hard",
+                include_str!("../../themes/vscode/gruvbox-light-hard.json"),
+            ),
+            (
+                "gruvbox-light-medium",
+                include_str!("../../themes/vscode/gruvbox-light-medium.json"),
+            ),
+            (
+                "gruvbox-light-soft",
+                include_str!("../../themes/vscode/gruvbox-light-soft.json"),
+            ),
             ("horizon", include_str!("../../themes/vscode/horizon.json")),
-            ("horizon-bright", include_str!("../../themes/vscode/horizon-bright.json")),
+            (
+                "horizon-bright",
+                include_str!("../../themes/vscode/horizon-bright.json"),
+            ),
             ("houston", include_str!("../../themes/vscode/houston.json")),
-            ("kanagawa-dragon", include_str!("../../themes/vscode/kanagawa-dragon.json")),
-            ("kanagawa-lotus", include_str!("../../themes/vscode/kanagawa-lotus.json")),
-            ("kanagawa-wave", include_str!("../../themes/vscode/kanagawa-wave.json")),
-            ("laserwave", include_str!("../../themes/vscode/laserwave.json")),
-            ("light-plus", include_str!("../../themes/vscode/light-plus.json")),
-            ("material-theme", include_str!("../../themes/vscode/material-theme.json")),
-            ("material-theme-darker", include_str!("../../themes/vscode/material-theme-darker.json")),
-            ("material-theme-lighter", include_str!("../../themes/vscode/material-theme-lighter.json")),
-            ("material-theme-ocean", include_str!("../../themes/vscode/material-theme-ocean.json")),
-            ("material-theme-palenight", include_str!("../../themes/vscode/material-theme-palenight.json")),
-            ("min-dark", include_str!("../../themes/vscode/min-dark.json")),
-            ("min-light", include_str!("../../themes/vscode/min-light.json")),
+            (
+                "kanagawa-dragon",
+                include_str!("../../themes/vscode/kanagawa-dragon.json"),
+            ),
+            (
+                "kanagawa-lotus",
+                include_str!("../../themes/vscode/kanagawa-lotus.json"),
+            ),
+            (
+                "kanagawa-wave",
+                include_str!("../../themes/vscode/kanagawa-wave.json"),
+            ),
+            (
+                "laserwave",
+                include_str!("../../themes/vscode/laserwave.json"),
+            ),
+            (
+                "light-plus",
+                include_str!("../../themes/vscode/light-plus.json"),
+            ),
+            (
+                "material-theme",
+                include_str!("../../themes/vscode/material-theme.json"),
+            ),
+            (
+                "material-theme-darker",
+                include_str!("../../themes/vscode/material-theme-darker.json"),
+            ),
+            (
+                "material-theme-lighter",
+                include_str!("../../themes/vscode/material-theme-lighter.json"),
+            ),
+            (
+                "material-theme-ocean",
+                include_str!("../../themes/vscode/material-theme-ocean.json"),
+            ),
+            (
+                "material-theme-palenight",
+                include_str!("../../themes/vscode/material-theme-palenight.json"),
+            ),
+            (
+                "min-dark",
+                include_str!("../../themes/vscode/min-dark.json"),
+            ),
+            (
+                "min-light",
+                include_str!("../../themes/vscode/min-light.json"),
+            ),
             ("monokai", include_str!("../../themes/vscode/monokai.json")),
-            ("night-owl", include_str!("../../themes/vscode/night-owl.json")),
-            ("night-owl-light", include_str!("../../themes/vscode/night-owl-light.json")),
+            (
+                "night-owl",
+                include_str!("../../themes/vscode/night-owl.json"),
+            ),
+            (
+                "night-owl-light",
+                include_str!("../../themes/vscode/night-owl-light.json"),
+            ),
             ("nord", include_str!("../../themes/vscode/nord.json")),
-            ("one-dark-pro", include_str!("../../themes/vscode/one-dark-pro.json")),
-            ("one-light", include_str!("../../themes/vscode/one-light.json")),
+            (
+                "one-dark-pro",
+                include_str!("../../themes/vscode/one-dark-pro.json"),
+            ),
+            (
+                "one-light",
+                include_str!("../../themes/vscode/one-light.json"),
+            ),
             ("plastic", include_str!("../../themes/vscode/plastic.json")),
-            ("poimandres", include_str!("../../themes/vscode/poimandres.json")),
+            (
+                "poimandres",
+                include_str!("../../themes/vscode/poimandres.json"),
+            ),
             ("red", include_str!("../../themes/vscode/red.json")),
-            ("rose-pine", include_str!("../../themes/vscode/rose-pine.json")),
-            ("rose-pine-dawn", include_str!("../../themes/vscode/rose-pine-dawn.json")),
-            ("rose-pine-moon", include_str!("../../themes/vscode/rose-pine-moon.json")),
-            ("slack-dark", include_str!("../../themes/vscode/slack-dark.json")),
-            ("slack-ochin", include_str!("../../themes/vscode/slack-ochin.json")),
-            ("snazzy-light", include_str!("../../themes/vscode/snazzy-light.json")),
-            ("solarized-dark", include_str!("../../themes/vscode/solarized-dark.json")),
-            ("solarized-light", include_str!("../../themes/vscode/solarized-light.json")),
-            ("synthwave-84", include_str!("../../themes/vscode/synthwave-84.json")),
-            ("tokyo-night", include_str!("../../themes/vscode/tokyo-night.json")),
+            (
+                "rose-pine",
+                include_str!("../../themes/vscode/rose-pine.json"),
+            ),
+            (
+                "rose-pine-dawn",
+                include_str!("../../themes/vscode/rose-pine-dawn.json"),
+            ),
+            (
+                "rose-pine-moon",
+                include_str!("../../themes/vscode/rose-pine-moon.json"),
+            ),
+            (
+                "slack-dark",
+                include_str!("../../themes/vscode/slack-dark.json"),
+            ),
+            (
+                "slack-ochin",
+                include_str!("../../themes/vscode/slack-ochin.json"),
+            ),
+            (
+                "snazzy-light",
+                include_str!("../../themes/vscode/snazzy-light.json"),
+            ),
+            (
+                "solarized-dark",
+                include_str!("../../themes/vscode/solarized-dark.json"),
+            ),
+            (
+                "solarized-light",
+                include_str!("../../themes/vscode/solarized-light.json"),
+            ),
+            (
+                "synthwave-84",
+                include_str!("../../themes/vscode/synthwave-84.json"),
+            ),
+            (
+                "tokyo-night",
+                include_str!("../../themes/vscode/tokyo-night.json"),
+            ),
             ("vesper", include_str!("../../themes/vscode/vesper.json")),
-            ("vitesse-black", include_str!("../../themes/vscode/vitesse-black.json")),
-            ("vitesse-dark", include_str!("../../themes/vscode/vitesse-dark.json")),
-            ("vitesse-light", include_str!("../../themes/vscode/vitesse-light.json")),
+            (
+                "vitesse-black",
+                include_str!("../../themes/vscode/vitesse-black.json"),
+            ),
+            (
+                "vitesse-dark",
+                include_str!("../../themes/vscode/vitesse-dark.json"),
+            ),
+            (
+                "vitesse-light",
+                include_str!("../../themes/vscode/vitesse-light.json"),
+            ),
         ];
         for (name, json) in vscode_themes {
             if let Some(theme) = load_vscode_theme(json) {
@@ -308,9 +529,26 @@ pub fn render_codeblock(
     time: f64,
     _props: &AnimatedProperties,
 ) -> Result<()> {
-    let font = resolve_monospace_font(&layer.font_family, layer.font_size, Some(layer.font_weight));
-    let actual_line_height = layer.font_size * layer.line_height;
-    let padding = layer.padding.as_ref().cloned().unwrap_or_default();
+    let font_family = layer
+        .style
+        .font_family
+        .as_deref()
+        .unwrap_or("JetBrains Mono");
+    let font_size = layer.style.font_size.unwrap_or(14.0);
+    let font_weight = layer
+        .style
+        .font_weight
+        .clone()
+        .unwrap_or(FontWeight::Normal);
+    let line_height = layer.style.line_height.unwrap_or(1.5);
+    let font = resolve_monospace_font(font_family, font_size, font_weight);
+    let actual_line_height = font_size * line_height;
+    let padding = layer
+        .style
+        .padding
+        .as_ref()
+        .cloned()
+        .unwrap_or(Spacing::Uniform(16.0));
     let theme = get_theme(&layer.theme);
 
     let (current_code, transition) = determine_active_state(layer, time);
@@ -347,10 +585,13 @@ pub fn render_codeblock(
     let total_width = total_width.round();
     let total_height = total_height.round();
 
-    let bg_color = layer.background.as_deref().unwrap_or("#2b303b");
+    let (pad_top, pad_right, _pad_bottom, pad_left) = padding.resolve();
+    let corner_radius = layer.style.border_radius.unwrap_or(12.0);
+
+    let bg_color = layer.style.background.as_deref().unwrap_or("#2b303b");
     let bg_paint = paint_from_hex(bg_color);
     let bg_rect = Rect::from_xywh(x, y, total_width, total_height);
-    let rrect = skia_safe::RRect::new_rect_xy(bg_rect, layer.corner_radius, layer.corner_radius);
+    let rrect = skia_safe::RRect::new_rect_xy(bg_rect, corner_radius, corner_radius);
 
     canvas.save();
     canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
@@ -360,17 +601,26 @@ pub fn render_codeblock(
 
     // Chrome (title bar)
     if chrome_enabled {
-        draw_chrome(canvas, layer, x, y, total_width, layer.corner_radius);
+        draw_chrome(canvas, layer, x, y, total_width, corner_radius);
     }
 
     // Code area
-    let code_x = x + padding.left + gutter_width;
-    let code_y = y + chrome_height + padding.top;
+    let code_x = x + pad_left + gutter_width;
+    let code_y = y + chrome_height + pad_top;
 
     if let Some(ref trans) = transition {
         render_diff_transition(
-            canvas, layer, &font, theme, code_x, code_y, actual_line_height,
-            gutter_width, &padding, x, trans,
+            canvas,
+            layer,
+            &font,
+            theme,
+            code_x,
+            code_y,
+            actual_line_height,
+            gutter_width,
+            pad_left,
+            x,
+            trans,
         )?;
     } else {
         let highlighted = highlight_code(&current_code, &layer.language, theme);
@@ -378,17 +628,36 @@ pub fn render_codeblock(
             compute_reveal(layer, time, &highlighted);
 
         if layer.show_line_numbers {
-            draw_line_numbers(canvas, &font, x + padding.left, code_y, actual_line_height, visible_lines);
+            draw_line_numbers(
+                canvas,
+                &font,
+                x + pad_left,
+                code_y,
+                actual_line_height,
+                visible_lines,
+            );
         }
 
         draw_highlights(
-            canvas, &layer.highlights, time, x + padding.left, code_y,
-            actual_line_height, total_width - padding.left - padding.right,
+            canvas,
+            &layer.highlights,
+            time,
+            x + pad_left,
+            code_y,
+            actual_line_height,
+            total_width - pad_left - pad_right,
         );
 
         draw_highlighted_lines(
-            canvas, &highlighted, &font, code_x, code_y, actual_line_height,
-            visible_lines, visible_chars, last_line_opacity,
+            canvas,
+            &highlighted,
+            &font,
+            code_x,
+            code_y,
+            actual_line_height,
+            visible_lines,
+            visible_chars,
+            last_line_opacity,
         );
     }
 
@@ -403,8 +672,8 @@ pub fn render_codeblock_v2(
     cb: &crate::components::Codeblock,
     time: f64,
 ) -> Result<()> {
-    use crate::schema::{Position, CodeblockLayer};
     use crate::engine::animator::AnimatedProperties;
+    use crate::schema::{CodeblockLayer, Position};
 
     let layer = CodeblockLayer {
         code: cb.code.clone(),
@@ -412,19 +681,12 @@ pub fn render_codeblock_v2(
         theme: cb.theme.clone(),
         position: Position { x: 0.0, y: 0.0 },
         size: cb.size.clone(),
-        font_family: cb.font_family.clone(),
-        font_size: cb.font_size,
-        font_weight: cb.font_weight,
-        line_height: cb.line_height,
-        background: cb.background.clone(),
-        opacity: 1.0,
         show_line_numbers: cb.show_line_numbers,
         chrome: cb.chrome.clone(),
-        padding: cb.padding.clone(),
-        corner_radius: cb.corner_radius,
         highlights: cb.highlights.clone(),
         reveal: cb.reveal.clone(),
         states: cb.states.clone(),
+        style: cb.style.clone(),
         animations: vec![],
         preset: None,
         preset_config: None,
@@ -432,7 +694,6 @@ pub fn render_codeblock_v2(
         end_at: None,
         wiggle: None,
         motion_blur: None,
-        margin: None,
     };
 
     let dummy_config = crate::schema::VideoConfig {
@@ -444,7 +705,13 @@ pub fn render_codeblock_v2(
         crf: None,
     };
 
-    render_codeblock(canvas, &layer, &dummy_config, time, &AnimatedProperties::default())
+    render_codeblock(
+        canvas,
+        &layer,
+        &dummy_config,
+        time,
+        &AnimatedProperties::default(),
+    )
 }
 
 // ─── Dimension computation ───────────────────────────────────────────────────
@@ -452,11 +719,13 @@ pub fn render_codeblock_v2(
 fn compute_code_dimensions(
     code: &str,
     font: &Font,
-    padding: &CodeblockPadding,
+    padding: &Spacing,
     chrome_height: f32,
     layer: &CodeblockLayer,
 ) -> CodeDimensions {
-    let actual_line_height = layer.font_size * layer.line_height;
+    let font_size = layer.style.font_size.unwrap_or(14.0);
+    let line_height = layer.style.line_height.unwrap_or(1.5);
+    let actual_line_height = font_size * line_height;
     let lines: Vec<&str> = code.lines().collect();
     let line_count = lines.len().max(1);
 
@@ -473,8 +742,9 @@ fn compute_code_dimensions(
         .map(|l| font.measure_str(l, None).0)
         .fold(0.0f32, f32::max);
 
-    let content_width = max_line_width + gutter_width + padding.left + padding.right;
-    let content_height = line_count as f32 * actual_line_height + padding.top + padding.bottom;
+    let (pad_top, pad_right, pad_bottom, pad_left) = padding.resolve();
+    let content_width = max_line_width + gutter_width + pad_left + pad_right;
+    let content_height = line_count as f32 * actual_line_height + pad_top + pad_bottom;
 
     CodeDimensions {
         line_count,
@@ -532,7 +802,9 @@ fn determine_active_state(layer: &CodeblockLayer, time: f64) -> (String, Option<
 
 fn get_theme(name: &str) -> &'static Theme {
     let ts = theme_set();
-    ts.themes.get(name).unwrap_or_else(|| ts.themes.values().next().unwrap())
+    ts.themes
+        .get(name)
+        .unwrap_or_else(|| ts.themes.values().next().unwrap())
 }
 
 fn highlight_code(code: &str, language: &str, theme: &Theme) -> Vec<HighlightedLine> {
@@ -565,7 +837,14 @@ fn highlight_code(code: &str, language: &str, theme: &Theme) -> Vec<HighlightedL
 
 // ─── Chrome (title bar) ──────────────────────────────────────────────────────
 
-fn draw_chrome(canvas: &Canvas, layer: &CodeblockLayer, x: f32, y: f32, width: f32, corner_radius: f32) {
+fn draw_chrome(
+    canvas: &Canvas,
+    layer: &CodeblockLayer,
+    x: f32,
+    y: f32,
+    width: f32,
+    corner_radius: f32,
+) {
     let chrome = layer.chrome.as_ref().unwrap();
     let chrome_height = 36.0;
 
@@ -597,7 +876,11 @@ fn draw_chrome(canvas: &Canvas, layer: &CodeblockLayer, x: f32, y: f32, width: f
             .match_family_style("Inter", FontStyle::normal())
             .or_else(|| font_mgr.match_family_style("Helvetica", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Arial", FontStyle::normal()))
-            .unwrap_or_else(|| font_mgr.match_family_style("sans-serif", FontStyle::normal()).unwrap());
+            .unwrap_or_else(|| {
+                font_mgr
+                    .match_family_style("sans-serif", FontStyle::normal())
+                    .unwrap()
+            });
         let title_font = Font::from_typeface(typeface, 13.0);
         let (title_width, _) = title_font.measure_str(title, None);
         let title_x = x + width / 2.0 - title_width / 2.0;
@@ -612,7 +895,14 @@ fn draw_chrome(canvas: &Canvas, layer: &CodeblockLayer, x: f32, y: f32, width: f
 
 // ─── Line numbers ────────────────────────────────────────────────────────────
 
-fn draw_line_numbers(canvas: &Canvas, font: &Font, x: f32, y: f32, line_height: f32, visible_lines: usize) {
+fn draw_line_numbers(
+    canvas: &Canvas,
+    font: &Font,
+    x: f32,
+    y: f32,
+    line_height: f32,
+    visible_lines: usize,
+) {
     let mut paint = paint_from_hex("#65737E");
     paint.set_anti_alias(true);
     let (_sw, metrics) = font.metrics();
@@ -641,15 +931,30 @@ fn draw_line_number_at(canvas: &Canvas, font: &Font, x: f32, y: f32, num: usize,
 // ─── Highlights ──────────────────────────────────────────────────────────────
 
 fn draw_highlights(
-    canvas: &Canvas, highlights: &[CodeblockHighlight], time: f64,
-    x: f32, y: f32, line_height: f32, width: f32,
+    canvas: &Canvas,
+    highlights: &[CodeblockHighlight],
+    time: f64,
+    x: f32,
+    y: f32,
+    line_height: f32,
+    width: f32,
 ) {
     for hl in highlights {
-        if let Some(start) = hl.start { if time < start { continue; } }
-        if let Some(end) = hl.end { if time > end { continue; } }
+        if let Some(start) = hl.start {
+            if time < start {
+                continue;
+            }
+        }
+        if let Some(end) = hl.end {
+            if time > end {
+                continue;
+            }
+        }
         let hl_paint = paint_from_hex(&hl.color);
         for &line_num in &hl.lines {
-            if line_num == 0 { continue; }
+            if line_num == 0 {
+                continue;
+            }
             let line_idx = line_num - 1;
             let hl_rect = Rect::from_xywh(x, y + line_idx as f32 * line_height, width, line_height);
             canvas.draw_rect(hl_rect, &hl_paint);
@@ -660,21 +965,28 @@ fn draw_highlights(
 // ─── Reveal ──────────────────────────────────────────────────────────────────
 
 fn compute_reveal(
-    layer: &CodeblockLayer, time: f64, highlighted: &[HighlightedLine],
+    layer: &CodeblockLayer,
+    time: f64,
+    highlighted: &[HighlightedLine],
 ) -> (usize, Option<usize>, f32) {
     let total_lines = highlighted.len();
-    if total_lines == 0 { return (0, None, 1.0); }
+    if total_lines == 0 {
+        return (0, None, 1.0);
+    }
 
     match &layer.reveal {
         None => (total_lines, None, 1.0),
         Some(reveal) => {
-            if time < reveal.start { return (0, None, 1.0); }
+            if time < reveal.start {
+                return (0, None, 1.0);
+            }
             let raw_progress = ((time - reveal.start) / reveal.duration).clamp(0.0, 1.0);
             let progress = ease(raw_progress, &reveal.easing);
 
             match reveal.mode {
                 RevealMode::Typewriter => {
-                    let total_chars: usize = highlighted.iter()
+                    let total_chars: usize = highlighted
+                        .iter()
                         .map(|l| l.spans.iter().map(|s| s.text.len()).sum::<usize>())
                         .sum();
                     let visible_chars = (total_chars as f64 * progress).round() as usize;
@@ -712,26 +1024,47 @@ fn compute_reveal(
 // ─── Draw highlighted lines ──────────────────────────────────────────────────
 
 fn draw_highlighted_lines(
-    canvas: &Canvas, highlighted: &[HighlightedLine], font: &Font,
-    x: f32, y: f32, line_height: f32, visible_lines: usize,
-    visible_chars_last_line: Option<usize>, last_line_opacity: f32,
+    canvas: &Canvas,
+    highlighted: &[HighlightedLine],
+    font: &Font,
+    x: f32,
+    y: f32,
+    line_height: f32,
+    visible_lines: usize,
+    visible_chars_last_line: Option<usize>,
+    last_line_opacity: f32,
 ) {
     let (_sw, metrics) = font.metrics();
     let ascent = -metrics.ascent;
 
     for (i, line) in highlighted.iter().enumerate() {
-        if i >= visible_lines { break; }
+        if i >= visible_lines {
+            break;
+        }
         let is_last_visible = i == visible_lines - 1;
         let line_y = y + i as f32 * line_height + ascent;
-        let char_limit = if is_last_visible { visible_chars_last_line } else { None };
-        let opacity = if is_last_visible && last_line_opacity < 1.0 { last_line_opacity } else { 1.0 };
+        let char_limit = if is_last_visible {
+            visible_chars_last_line
+        } else {
+            None
+        };
+        let opacity = if is_last_visible && last_line_opacity < 1.0 {
+            last_line_opacity
+        } else {
+            1.0
+        };
         draw_single_highlighted_line_partial(canvas, line, font, x, line_y, opacity, char_limit);
     }
 }
 
 fn draw_single_highlighted_line_partial(
-    canvas: &Canvas, line: &HighlightedLine, font: &Font,
-    x: f32, y: f32, opacity: f32, char_limit: Option<usize>,
+    canvas: &Canvas,
+    line: &HighlightedLine,
+    font: &Font,
+    x: f32,
+    y: f32,
+    opacity: f32,
+    char_limit: Option<usize>,
 ) {
     let mut cursor_x = x;
     let mut chars_drawn = 0usize;
@@ -739,7 +1072,9 @@ fn draw_single_highlighted_line_partial(
     for span in &line.spans {
         let text_to_draw = if let Some(limit) = char_limit {
             let remaining = limit.saturating_sub(chars_drawn);
-            if remaining == 0 { break; }
+            if remaining == 0 {
+                break;
+            }
             let chars: Vec<char> = span.text.chars().collect();
             let take = remaining.min(chars.len());
             chars[..take].iter().collect::<String>()
@@ -756,8 +1091,10 @@ fn draw_single_highlighted_line_partial(
         paint.set_anti_alias(true);
         paint.set_color4f(
             skia_safe::Color4f::new(
-                span.r as f32 / 255.0, span.g as f32 / 255.0,
-                span.b as f32 / 255.0, (span.a as f32 / 255.0) * opacity,
+                span.r as f32 / 255.0,
+                span.g as f32 / 255.0,
+                span.b as f32 / 255.0,
+                (span.a as f32 / 255.0) * opacity,
             ),
             None,
         );
@@ -770,7 +1107,9 @@ fn draw_single_highlighted_line_partial(
         chars_drawn += text_to_draw.len();
 
         if let Some(limit) = char_limit {
-            if chars_drawn >= limit { break; }
+            if chars_drawn >= limit {
+                break;
+            }
         }
     }
 }
@@ -815,7 +1154,7 @@ fn render_diff_transition(
     code_y: f32,
     line_height: f32,
     _gutter_width: f32,
-    padding: &CodeblockPadding,
+    pad_left: f32,
     block_x: f32,
     trans: &TransitionInfo,
 ) -> Result<()> {
@@ -828,7 +1167,10 @@ fn render_diff_transition(
     let highlighted_b = highlight_code(&trans.code_b, &layer.language, theme);
 
     let cursor_enabled = trans.cursor_config.as_ref().map_or(true, |c| c.enabled);
-    let cursor_color = trans.cursor_config.as_ref().map_or("#FFFFFF", |c| c.color.as_str());
+    let cursor_color = trans
+        .cursor_config
+        .as_ref()
+        .map_or("#FFFFFF", |c| c.color.as_str());
     let cursor_width = trans.cursor_config.as_ref().map_or(2.0, |c| c.width);
     let cursor_blink = trans.cursor_config.as_ref().map_or(true, |c| c.blink);
 
@@ -841,7 +1183,9 @@ fn render_diff_transition(
 
     for op in &diff_ops {
         match op {
-            LineDiffOp::Equal { old_idx, new_idx, .. } => {
+            LineDiffOp::Equal {
+                old_idx, new_idx, ..
+            } => {
                 placements.push(AnimatedLinePlacement {
                     old_y_idx: *old_idx as f32,
                     new_y_idx: *new_idx as f32,
@@ -882,7 +1226,12 @@ fn render_diff_transition(
                 _new_cursor = *new_idx as f32 + 1.0;
                 // _old_cursor does NOT advance for inserts
             }
-            LineDiffOp::Replace { old_line, new_line, old_idx, new_idx } => {
+            LineDiffOp::Replace {
+                old_line,
+                new_line,
+                old_idx,
+                new_idx,
+            } => {
                 placements.push(AnimatedLinePlacement {
                     old_y_idx: *old_idx as f32,
                     new_y_idx: *new_idx as f32,
@@ -906,18 +1255,35 @@ fn render_diff_transition(
     // Pre-compute fragment edits for Replace ops
     let mut fragment_edits: Vec<(usize, usize, Vec<FragmentEdit>)> = Vec::new();
     for op in &diff_ops {
-        if let LineDiffOp::Replace { old_line, new_line, old_idx, new_idx } = op {
+        if let LineDiffOp::Replace {
+            old_line,
+            new_line,
+            old_idx,
+            new_idx,
+        } = op
+        {
             let edits = compute_word_diff(old_line, new_line);
             fragment_edits.push((*old_idx, *new_idx, edits));
         }
     }
 
     // Render all placements
-    let gutter_x = block_x + padding.left;
+    let gutter_x = block_x + pad_left;
 
     for pl in &placements {
         let y_pos = code_y + lerp(pl.old_y_idx, pl.new_y_idx, progress) * line_height;
-        let opacity = lerp(pl.opacity_start, pl.opacity_end, progress);
+        let opacity = if pl.opacity_start == 0.0 && pl.opacity_end == 1.0 {
+            // Inserted lines: wait until the expand animation is mostly done
+            // before fading in the new code, to avoid overlapping text.
+            let fade_start = 0.95;
+            if progress < fade_start {
+                0.0
+            } else {
+                (progress - fade_start) / (1.0 - fade_start)
+            }
+        } else {
+            lerp(pl.opacity_start, pl.opacity_end, progress)
+        };
 
         // Skip fully transparent lines
         if opacity < 0.005 {
@@ -926,7 +1292,11 @@ fn render_diff_transition(
 
         // Draw line number — use old number at start, new number at end
         if layer.show_line_numbers {
-            let line_num = if progress < 0.5 { pl.old_line_number } else { pl.new_line_number };
+            let line_num = if progress < 0.5 {
+                pl.old_line_number
+            } else {
+                pl.new_line_number
+            };
             draw_line_number_at(canvas, font, gutter_x, y_pos + ascent, line_num, opacity);
         }
 
@@ -934,23 +1304,53 @@ fn render_diff_transition(
         match &pl.content {
             AnimatedLineContent::FromB { idx } => {
                 if let Some(line) = highlighted_b.get(*idx) {
-                    draw_single_highlighted_line(canvas, line, font, code_x, y_pos + ascent, opacity);
+                    draw_single_highlighted_line(
+                        canvas,
+                        line,
+                        font,
+                        code_x,
+                        y_pos + ascent,
+                        opacity,
+                    );
                 }
             }
             AnimatedLineContent::FromA { idx } => {
                 if let Some(line) = highlighted_a.get(*idx) {
-                    draw_single_highlighted_line(canvas, line, font, code_x, y_pos + ascent, opacity);
+                    draw_single_highlighted_line(
+                        canvas,
+                        line,
+                        font,
+                        code_x,
+                        y_pos + ascent,
+                        opacity,
+                    );
                 }
             }
-            AnimatedLineContent::CursorEdit { old_line, new_line, old_idx, new_idx } => {
-                if let Some((_oi, _ni, edits)) =
-                    fragment_edits.iter().find(|(oi, ni, _)| oi == old_idx && ni == new_idx)
+            AnimatedLineContent::CursorEdit {
+                old_line,
+                new_line,
+                old_idx,
+                new_idx,
+            } => {
+                if let Some((_oi, _ni, edits)) = fragment_edits
+                    .iter()
+                    .find(|(oi, ni, _)| oi == old_idx && ni == new_idx)
                 {
                     draw_cursor_edited_line(
-                        canvas, font, old_line, new_line, edits,
-                        code_x, y_pos + ascent, trans.progress,
-                        cursor_enabled, cursor_color, cursor_width, cursor_blink,
-                        &layer.language, theme,
+                        canvas,
+                        font,
+                        old_line,
+                        new_line,
+                        edits,
+                        code_x,
+                        y_pos + ascent,
+                        trans.progress,
+                        cursor_enabled,
+                        cursor_color,
+                        cursor_width,
+                        cursor_blink,
+                        &layer.language,
+                        theme,
                     );
                 }
             }
@@ -972,24 +1372,41 @@ fn compute_line_diff(code_a: &str, code_b: &str) -> Vec<LineDiffOp> {
         let text = change.value().trim_end_matches('\n').to_string();
         match change.tag() {
             ChangeTag::Equal => {
-                ops.push(LineDiffOp::Equal { line: text, old_idx, new_idx });
+                ops.push(LineDiffOp::Equal {
+                    line: text,
+                    old_idx,
+                    new_idx,
+                });
                 old_idx += 1;
                 new_idx += 1;
             }
             ChangeTag::Delete => {
-                ops.push(LineDiffOp::Delete { line: text, old_idx });
+                ops.push(LineDiffOp::Delete {
+                    line: text,
+                    old_idx,
+                });
                 old_idx += 1;
             }
             ChangeTag::Insert => {
                 let merged = matches!(ops.last(), Some(LineDiffOp::Delete { .. }));
                 if merged {
-                    if let Some(LineDiffOp::Delete { line: old_line, old_idx: oi }) = ops.pop() {
+                    if let Some(LineDiffOp::Delete {
+                        line: old_line,
+                        old_idx: oi,
+                    }) = ops.pop()
+                    {
                         ops.push(LineDiffOp::Replace {
-                            old_line, new_line: text, old_idx: oi, new_idx,
+                            old_line,
+                            new_line: text,
+                            old_idx: oi,
+                            new_idx,
                         });
                     }
                 } else {
-                    ops.push(LineDiffOp::Insert { line: text, new_idx });
+                    ops.push(LineDiffOp::Insert {
+                        line: text,
+                        new_idx,
+                    });
                 }
                 new_idx += 1;
             }
@@ -1011,7 +1428,11 @@ fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentEdit> {
         match change.tag() {
             ChangeTag::Equal => {
                 if !pending_delete.is_empty() {
-                    edits.push(FragmentEdit { col, delete: pending_delete.clone(), insert: String::new() });
+                    edits.push(FragmentEdit {
+                        col,
+                        delete: pending_delete.clone(),
+                        insert: String::new(),
+                    });
                     pending_delete.clear();
                 }
                 col += change.value().len();
@@ -1021,7 +1442,9 @@ fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentEdit> {
             }
             ChangeTag::Insert => {
                 edits.push(FragmentEdit {
-                    col, delete: pending_delete.clone(), insert: change.value().to_string(),
+                    col,
+                    delete: pending_delete.clone(),
+                    insert: change.value().to_string(),
                 });
                 pending_delete.clear();
                 col += change.value().len();
@@ -1030,7 +1453,11 @@ fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentEdit> {
     }
 
     if !pending_delete.is_empty() {
-        edits.push(FragmentEdit { col, delete: pending_delete, insert: String::new() });
+        edits.push(FragmentEdit {
+            col,
+            delete: pending_delete,
+            insert: String::new(),
+        });
     }
 
     edits
@@ -1039,10 +1466,20 @@ fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentEdit> {
 // ─── Cursor-animated line editing ────────────────────────────────────────────
 
 fn draw_cursor_edited_line(
-    canvas: &Canvas, font: &Font, old_line: &str, new_line: &str,
-    edits: &[FragmentEdit], x: f32, y: f32, progress: f64,
-    cursor_enabled: bool, cursor_color: &str, cursor_width: f32, cursor_blink: bool,
-    language: &str, theme: &Theme,
+    canvas: &Canvas,
+    font: &Font,
+    old_line: &str,
+    new_line: &str,
+    edits: &[FragmentEdit],
+    x: f32,
+    y: f32,
+    progress: f64,
+    cursor_enabled: bool,
+    cursor_color: &str,
+    cursor_width: f32,
+    cursor_blink: bool,
+    language: &str,
+    theme: &Theme,
 ) {
     if edits.is_empty() {
         let highlighted = highlight_code(new_line, language, theme);
@@ -1124,7 +1561,12 @@ fn draw_cursor_edited_line(
                 let (_sw, metrics) = font.metrics();
                 let cursor_top = y - (-metrics.ascent);
                 let cursor_bottom = y + metrics.descent;
-                let cursor_rect = Rect::from_xywh(cursor_x, cursor_top, cursor_width, cursor_bottom - cursor_top);
+                let cursor_rect = Rect::from_xywh(
+                    cursor_x,
+                    cursor_top,
+                    cursor_width,
+                    cursor_bottom - cursor_top,
+                );
                 canvas.draw_rect(cursor_rect, &cursor_paint);
             }
         }
@@ -1134,18 +1576,26 @@ fn draw_cursor_edited_line(
 // ─── Helper: draw a single highlighted line ──────────────────────────────────
 
 fn draw_single_highlighted_line(
-    canvas: &Canvas, line: &HighlightedLine, font: &Font,
-    x: f32, y: f32, opacity: f32,
+    canvas: &Canvas,
+    line: &HighlightedLine,
+    font: &Font,
+    x: f32,
+    y: f32,
+    opacity: f32,
 ) {
     let mut cursor_x = x;
     for span in &line.spans {
-        if span.text.is_empty() { continue; }
+        if span.text.is_empty() {
+            continue;
+        }
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color4f(
             skia_safe::Color4f::new(
-                span.r as f32 / 255.0, span.g as f32 / 255.0,
-                span.b as f32 / 255.0, (span.a as f32 / 255.0) * opacity,
+                span.r as f32 / 255.0,
+                span.g as f32 / 255.0,
+                span.b as f32 / 255.0,
+                (span.a as f32 / 255.0) * opacity,
             ),
             None,
         );
@@ -1159,18 +1609,35 @@ fn draw_single_highlighted_line(
 
 // ─── Font resolution ─────────────────────────────────────────────────────────
 
-fn resolve_monospace_font(family: &str, size: f32, weight: Option<u16>) -> Font {
+fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Font {
     let font_mgr = super::renderer::font_mgr();
-    let w = weight.unwrap_or(400);
-    let skia_weight = skia_safe::font_style::Weight::from(w as i32);
-    let style = FontStyle::new(skia_weight, skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright);
-    let fallbacks = [family, "JetBrains Mono", "Fira Code", "Menlo", "Courier New", "monospace"];
-    let typeface = fallbacks.iter()
+    let w: i32 = match weight {
+        FontWeight::Normal => 400,
+        FontWeight::Bold => 700,
+    };
+    let skia_weight = skia_safe::font_style::Weight::from(w);
+    let style = FontStyle::new(
+        skia_weight,
+        skia_safe::font_style::Width::NORMAL,
+        skia_safe::font_style::Slant::Upright,
+    );
+    let fallbacks = [
+        family,
+        "JetBrains Mono",
+        "Fira Code",
+        "Menlo",
+        "Courier New",
+        "monospace",
+    ];
+    let typeface = fallbacks
+        .iter()
         .filter_map(|name| font_mgr.match_family_style(name, style))
         .next()
         .unwrap_or_else(|| {
             if font_mgr.count_families() > 0 {
-                font_mgr.match_family_style(&font_mgr.family_name(0), style).unwrap()
+                font_mgr
+                    .match_family_style(&font_mgr.family_name(0), style)
+                    .unwrap()
             } else {
                 panic!("No fonts available on this system");
             }

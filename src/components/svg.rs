@@ -5,8 +5,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::asset_cache;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::Size;
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{LayerStyle, Size};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Svg {
@@ -20,8 +20,8 @@ pub struct Svg {
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Svg {

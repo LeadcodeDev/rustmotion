@@ -37,13 +37,13 @@ macro_rules! impl_traits {
 
     (@single $type:ty, Styled, $field:ident) => {
         impl $crate::traits::Styled for $type {
-            fn style_config(&self) -> &$crate::traits::StyleConfig {
+            fn style_config(&self) -> &$crate::schema::LayerStyle {
                 &self.$field
             }
         }
 
         impl $crate::traits::StyledMut for $type {
-            fn style_config_mut(&mut self) -> &mut $crate::traits::StyleConfig {
+            fn style_config_mut(&mut self) -> &mut $crate::schema::LayerStyle {
                 &mut self.$field
             }
         }

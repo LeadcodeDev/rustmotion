@@ -341,46 +341,53 @@ pub fn render_frame_v2(
 /// This matches the centering logic in Text::render(): (line_height + ascent - descent) / 2.
 fn compute_text_baseline_offset(text: &crate::components::text::Text) -> f32 {
     let fm = font_mgr();
-    let weight = match text.font_weight {
+    let font_size = text.style.font_size_or(48.0);
+    let font_weight = text.style.font_weight_or(crate::schema::FontWeight::Normal);
+    let font_style_type = text.style.font_style_or(crate::schema::FontStyleType::Normal);
+    let font_family = text.style.font_family_or("Inter");
+    let weight = match font_weight {
         crate::schema::FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
         crate::schema::FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
     };
-    let slant = match text.font_style {
+    let slant = match font_style_type {
         crate::schema::FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
         crate::schema::FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
         crate::schema::FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
     };
     let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
     let typeface = fm
-        .match_family_style(&text.font_family, font_style)
+        .match_family_style(font_family, font_style)
         .or_else(|| fm.match_family_style("Helvetica", font_style))
         .or_else(|| fm.match_family_style("Arial", font_style))
         .unwrap_or_else(|| fm.match_family_style("sans-serif", font_style).unwrap());
-    let font = Font::from_typeface(typeface, text.font_size);
+    let font = Font::from_typeface(typeface, font_size);
     let (_, metrics) = font.metrics();
     let ascent = -metrics.ascent;
     let descent = metrics.descent;
-    let line_height = text.line_height.unwrap_or(text.font_size * 1.3);
+    let line_height = text.style.line_height.unwrap_or(font_size * 1.3);
     (line_height + ascent - descent) / 2.0
 }
 
 /// Compute baseline offset for a Counter component (used for v1 baseline compatibility).
 fn compute_counter_baseline_offset(counter: &crate::components::counter::Counter) -> f32 {
     let fm = font_mgr();
-    let font_style = match counter.font_weight {
+    let font_size = counter.style.font_size_or(48.0);
+    let font_weight = counter.style.font_weight_or(crate::schema::FontWeight::Normal);
+    let font_family = counter.style.font_family_or("Inter");
+    let font_style = match font_weight {
         crate::schema::FontWeight::Bold => FontStyle::bold(),
         crate::schema::FontWeight::Normal => FontStyle::normal(),
     };
     let typeface = fm
-        .match_family_style(&counter.font_family, font_style)
+        .match_family_style(font_family, font_style)
         .or_else(|| fm.match_family_style("Helvetica", font_style))
         .or_else(|| fm.match_family_style("Arial", font_style))
         .unwrap_or_else(|| fm.match_family_style("sans-serif", font_style).unwrap());
-    let font = Font::from_typeface(typeface, counter.font_size);
+    let font = Font::from_typeface(typeface, font_size);
     let (_, metrics) = font.metrics();
     let ascent = -metrics.ascent;
     let descent = metrics.descent;
-    let line_height = counter.font_size * 1.3;
+    let line_height = font_size * 1.3;
     (line_height + ascent - descent) / 2.0
 }
 
@@ -404,7 +411,7 @@ pub fn compute_root_layout(
         // the box. Subtract the ascent so standalone text baseline stays at position.y.
         match &child.component {
             crate::components::Component::Text(ref text) => {
-                match text.align {
+                match text.style.text_align_or(crate::schema::TextAlign::Left) {
                     crate::schema::TextAlign::Center => x -= node.width / 2.0,
                     crate::schema::TextAlign::Right => x -= node.width,
                     crate::schema::TextAlign::Left => {}
@@ -463,7 +470,7 @@ pub fn prepare_scene(
     scene: &Scene,
     config: &VideoConfig,
 ) -> Result<(Vec<ChildComponent>, LayoutNode)> {
-    let children = convert_layers_to_components(&scene.layers)?;
+    let children = convert_layers_to_components(&scene.children)?;
     let layout = compute_root_layout(&children, config);
     Ok((children, layout))
 }

@@ -1,74 +1,30 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use crate::schema::{LayerStyle, Spacing};
 
-use crate::schema::Spacing;
-
-/// Configuration for visual style (opacity, padding, margin).
-/// Embedded via `#[serde(flatten)]` in components that support styling.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StyleConfig {
-    #[serde(default = "default_opacity")]
-    pub opacity: f32,
-    #[serde(default)]
-    pub padding: Option<Spacing>,
-    #[serde(default)]
-    pub margin: Option<Spacing>,
-}
-
-impl Default for StyleConfig {
-    fn default() -> Self {
-        Self {
-            opacity: 1.0,
-            padding: None,
-            margin: None,
-        }
-    }
-}
-
-fn default_opacity() -> f32 {
-    1.0
-}
-
-/// Object-safe trait for components that support styling (opacity, padding, margin).
+/// Object-safe trait for components that support styling.
 /// Used by the render pipeline via `as_styled() -> &dyn Styled`.
 pub trait Styled {
-    fn style_config(&self) -> &StyleConfig;
+    fn style_config(&self) -> &LayerStyle;
 
     fn opacity(&self) -> f32 {
         self.style_config().opacity
     }
 
     fn padding(&self) -> (f32, f32, f32, f32) {
-        self.style_config()
-            .padding
-            .as_ref()
-            .map(|p| p.resolve())
-            .unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.style_config().padding_resolved()
     }
 
     fn margin(&self) -> (f32, f32, f32, f32) {
-        self.style_config()
-            .margin
-            .as_ref()
-            .map(|m| m.resolve())
-            .unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.style_config().margin_resolved()
     }
 }
 
 /// Mutable access to style config — needed by builder traits.
 pub trait StyledMut: Styled {
-    fn style_config_mut(&mut self) -> &mut StyleConfig;
+    fn style_config_mut(&mut self) -> &mut LayerStyle;
 }
 
 /// Tailwind/GPUI-style builder API for styling.
 /// Not object-safe (requires `Sized`). Used at construction time.
-///
-/// ```ignore
-/// let text = Text::new("hello")
-///     .p_4()
-///     .mx(8.0)
-///     .opacity(0.8);
-/// ```
 pub trait StyledExt: StyledMut + Sized {
     // --- Opacity ---
 
@@ -79,13 +35,11 @@ pub trait StyledExt: StyledMut + Sized {
 
     // --- Padding: arbitrary values ---
 
-    /// Set uniform padding on all sides.
     fn p(mut self, value: f32) -> Self {
         self.style_config_mut().padding = Some(Spacing::Uniform(value));
         self
     }
 
-    /// Set horizontal padding (left + right).
     fn px(mut self, value: f32) -> Self {
         let cfg = self.style_config_mut();
         let (top, _, bottom, _) = cfg.padding.as_ref().map(|s| s.resolve()).unwrap_or_default();
@@ -93,7 +47,6 @@ pub trait StyledExt: StyledMut + Sized {
         self
     }
 
-    /// Set vertical padding (top + bottom).
     fn py(mut self, value: f32) -> Self {
         let cfg = self.style_config_mut();
         let (_, right, _, left) = cfg.padding.as_ref().map(|s| s.resolve()).unwrap_or_default();
@@ -130,7 +83,6 @@ pub trait StyledExt: StyledMut + Sized {
     }
 
     // --- Padding: Tailwind scale ---
-    // 0=0, 1=4, 2=8, 3=12, 4=16, 5=20, 6=24, 7=28, 8=32, 10=40, 12=48, 16=64, 20=80, 24=96
 
     fn p_0(self) -> Self { self.p(0.0) }
     fn p_1(self) -> Self { self.p(4.0) }

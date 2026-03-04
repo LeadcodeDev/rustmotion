@@ -5,12 +5,12 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 
 use crate::engine::renderer::paint_from_hex;
 use crate::layout::{layout_grid, Constraints, LayoutNode};
+use crate::schema::LayerStyle;
 use crate::traits::{
     AnimationConfig, Border, Bordered, BorderedMut, Container, GridConfig, GridContainer,
     GridContainerMut, RenderContext, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut,
-    StyleConfig, TimingConfig, Widget,
+    TimingConfig, Widget,
 };
-
 
 use super::flex::FlexSize;
 use super::ChildComponent;
@@ -19,28 +19,16 @@ use super::ChildComponent;
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Grid {
     #[serde(default)]
-    pub layers: Vec<ChildComponent>,
+    pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub size: Option<FlexSize>,
-    // Visual
-    #[serde(default)]
-    pub background: Option<String>,
-    #[serde(default = "default_corner_radius")]
-    pub corner_radius: f32,
-    #[serde(default)]
-    pub border: Option<Border>,
-    #[serde(default)]
-    pub shadow: Option<Shadow>,
-    // Grid config
-    #[serde(flatten)]
-    pub grid: GridConfig,
     // Behaviors
     #[serde(flatten)]
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Grid {
@@ -51,67 +39,63 @@ crate::impl_traits!(Grid {
 
 impl Container for Grid {
     fn children(&self) -> &[ChildComponent] {
-        &self.layers
+        &self.children
     }
 }
 
 impl GridContainer for Grid {
     fn grid_config(&self) -> &GridConfig {
-        &self.grid
+        unreachable!("Use style directly for grid config")
     }
 }
 
 impl GridContainerMut for Grid {
     fn grid_config_mut(&mut self) -> &mut GridConfig {
-        &mut self.grid
+        unreachable!("Use style directly for grid config")
     }
 }
 
 impl Bordered for Grid {
     fn border(&self) -> Option<&Border> {
-        self.border.as_ref()
+        None // Handled directly in render via self.style.border
     }
 }
 
 impl BorderedMut for Grid {
-    fn set_border(&mut self, border: Option<Border>) {
-        self.border = border;
-    }
+    fn set_border(&mut self, _border: Option<Border>) {}
 }
 
 impl Rounded for Grid {
     fn corner_radius(&self) -> f32 {
-        self.corner_radius
+        self.style.border_radius_or(12.0)
     }
 }
 
 impl RoundedMut for Grid {
     fn set_corner_radius(&mut self, radius: f32) {
-        self.corner_radius = radius;
+        self.style.border_radius = Some(radius);
     }
 }
 
 impl Shadowed for Grid {
     fn shadow(&self) -> Option<&Shadow> {
-        self.shadow.as_ref()
+        None // Handled directly in render via self.style.box_shadow
     }
 }
 
 impl ShadowedMut for Grid {
-    fn set_shadow(&mut self, shadow: Option<Shadow>) {
-        self.shadow = shadow;
-    }
+    fn set_shadow(&mut self, _shadow: Option<Shadow>) {}
 }
 
 impl crate::traits::Backgrounded for Grid {
     fn background(&self) -> Option<&str> {
-        self.background.as_deref()
+        self.style.background.as_deref()
     }
 }
 
 impl crate::traits::BackgroundedMut for Grid {
     fn set_background(&mut self, bg: Option<String>) {
-        self.background = bg;
+        self.style.background = bg;
     }
 }
 
@@ -123,17 +107,18 @@ impl crate::traits::Clipped for Grid {
 
 impl Widget for Grid {
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+        let corner_radius = self.style.border_radius_or(12.0);
         let rect = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-        let rrect = skia_safe::RRect::new_rect_xy(rect, self.corner_radius, self.corner_radius);
+        let rrect = skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius);
 
         // 1. Shadow
-        if let Some(ref shadow) = self.shadow {
+        if let Some(ref shadow) = self.style.box_shadow {
             let shadow_rect = Rect::from_xywh(
                 shadow.offset_x, shadow.offset_y,
                 layout.width, layout.height,
             );
             let shadow_rrect = skia_safe::RRect::new_rect_xy(
-                shadow_rect, self.corner_radius, self.corner_radius,
+                shadow_rect, corner_radius, corner_radius,
             );
             let mut shadow_paint = paint_from_hex(&shadow.color);
             if shadow.blur > 0.0 {
@@ -147,7 +132,7 @@ impl Widget for Grid {
         }
 
         // 2. Background
-        if let Some(ref bg) = self.background {
+        if let Some(ref bg) = self.style.background {
             let bg_paint = paint_from_hex(bg);
             canvas.draw_rrect(rrect, &bg_paint);
         }
@@ -157,12 +142,12 @@ impl Widget for Grid {
         canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
 
         // 4. Render children with animation support
-        crate::engine::render_v2::render_children(canvas, &self.layers, layout, ctx)?;
+        crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
 
-        canvas.restore(); // undo clip
+        canvas.restore();
 
-        // 5. Border (on top of children)
-        if let Some(ref border) = self.border {
+        // 5. Border
+        if let Some(ref border) = self.style.border {
             let mut border_paint = paint_from_hex(&border.color);
             border_paint.set_style(PaintStyle::Stroke);
             border_paint.set_stroke_width(border.width);
@@ -182,5 +167,3 @@ impl Widget for Grid {
         layout_grid(self, &c)
     }
 }
-
-fn default_corner_radius() -> f32 { 12.0 }

@@ -5,8 +5,8 @@ use skia_safe::{Canvas, Paint, PaintStyle, Point};
 
 use crate::engine::renderer::{color4f_from_hex, draw_shape_path, font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{Fill, GradientType, ShapeText, ShapeType, Size, Stroke, TextAlign, FontWeight};
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Shape {
@@ -14,19 +14,13 @@ pub struct Shape {
     #[serde(default)]
     pub size: Size,
     #[serde(default)]
-    pub fill: Option<Fill>,
-    #[serde(default)]
-    pub stroke: Option<Stroke>,
-    #[serde(default)]
-    pub corner_radius: Option<f32>,
-    #[serde(default)]
     pub text: Option<ShapeText>,
     #[serde(flatten)]
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Shape {
@@ -39,9 +33,10 @@ impl Widget for Shape {
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
         let w = layout.width;
         let h = layout.height;
+        let corner_radius = self.style.border_radius;
 
         // Fill
-        if let Some(fill) = &self.fill {
+        if let Some(fill) = &self.style.fill {
             let mut paint = match fill {
                 Fill::Solid(color) => paint_from_hex(color),
                 Fill::Gradient(gradient) => {
@@ -96,15 +91,15 @@ impl Widget for Shape {
                 }
             };
             paint.set_style(PaintStyle::Fill);
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, self.corner_radius, &paint);
+            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
         // Stroke
-        if let Some(stroke) = &self.stroke {
+        if let Some(stroke) = &self.style.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
             paint.set_stroke_width(stroke.width);
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, self.corner_radius, &paint);
+            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
         // Text inside shape

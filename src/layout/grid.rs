@@ -1,7 +1,15 @@
 use crate::components::ChildComponent;
-use crate::traits::{Align, Container, GridConfig, GridContainer, GridTrack, Styled};
+use crate::traits::{Align, Container, GridConfig, GridTrack, Styled};
 
 use super::{Constraints, LayoutNode};
+
+/// Helper to get per-child grid placement from the child's component style.
+fn child_grid_column(child: &ChildComponent) -> Option<&crate::schema::GridPlacement> {
+    child.component.as_styled().style_config().grid_column.as_ref()
+}
+fn child_grid_row(child: &ChildComponent) -> Option<&crate::schema::GridPlacement> {
+    child.component.as_styled().style_config().grid_row.as_ref()
+}
 
 /// Measure a single child component: widget measure + padding + margin.
 fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32) {
@@ -15,10 +23,15 @@ fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32
 
 /// Compute layout for a grid container's children.
 pub fn layout_grid(
-    container: &(impl GridContainer + Styled + ?Sized),
+    container: &(impl Container + Styled + ?Sized),
     constraints: &Constraints,
 ) -> LayoutNode {
-    let config = container.grid_config().clone();
+    let styled = container.style_config();
+    let config = GridConfig {
+        grid_template_columns: styled.grid_template_columns.clone(),
+        grid_template_rows: styled.grid_template_rows.clone(),
+        gap: styled.gap_or(0.0),
+    };
     layout_grid_with_config(container, &config, constraints)
 }
 
@@ -81,25 +94,19 @@ pub fn layout_grid_with_config(
     let mut auto_cursor = (0usize, 0usize);
 
     for child in children {
-        let col_start = child
-            .grid_column
-            .as_ref()
+        let gc = child_grid_column(child);
+        let gr = child_grid_row(child);
+        let col_start = gc
             .and_then(|g| g.start)
             .map(|s| (s - 1).max(0) as usize);
-        let row_start = child
-            .grid_row
-            .as_ref()
+        let row_start = gr
             .and_then(|g| g.start)
             .map(|s| (s - 1).max(0) as usize);
-        let col_span = child
-            .grid_column
-            .as_ref()
+        let col_span = gc
             .and_then(|g| g.span)
             .unwrap_or(1)
             .max(1) as usize;
-        let row_span = child
-            .grid_row
-            .as_ref()
+        let row_span = gr
             .and_then(|g| g.span)
             .unwrap_or(1)
             .max(1) as usize;
@@ -337,67 +344,52 @@ mod tests {
     use crate::components::grid::Grid as GridComponent;
     use crate::components::shape::Shape;
     use crate::components::{ChildComponent, Component};
-    use crate::schema::{GridPlacement, ShapeType, Size};
-    use crate::traits::{GridConfig, StyleConfig};
+    use crate::schema::{GridPlacement, LayerStyle, ShapeType, Size};
 
     fn shape_child(w: f32, h: f32) -> ChildComponent {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 size: Size { width: w, height: h },
-                fill: None,
-                stroke: None,
-                corner_radius: None,
                 text: None,
-                style: StyleConfig::default(),
+                style: LayerStyle::default(),
                 animation: Default::default(),
                 timing: Default::default(),
             }),
             position: None,
             x: None,
             y: None,
-            flex_grow: None,
-            flex_shrink: None,
-            flex_basis: None,
-            align_self: None,
-            grid_column: None,
-            grid_row: None,
         }
     }
 
     fn shape_child_placed(w: f32, h: f32, col: Option<i32>, row: Option<i32>) -> ChildComponent {
         let mut c = shape_child(w, h);
-        if col.is_some() {
-            c.grid_column = Some(GridPlacement {
-                start: col,
-                span: Some(1),
-            });
-        }
-        if row.is_some() {
-            c.grid_row = Some(GridPlacement {
-                start: row,
-                span: Some(1),
-            });
+        if let Component::Shape(ref mut s) = c.component {
+            if col.is_some() {
+                s.style.grid_column = Some(GridPlacement {
+                    start: col,
+                    span: Some(1),
+                });
+            }
+            if row.is_some() {
+                s.style.grid_row = Some(GridPlacement {
+                    start: row,
+                    span: Some(1),
+                });
+            }
         }
         c
     }
 
     fn make_grid(children: Vec<ChildComponent>, cols: Vec<GridTrack>) -> GridComponent {
+        let mut style = LayerStyle::default();
+        style.grid_template_columns = Some(cols);
         GridComponent {
-            layers: children,
+            children,
             size: None,
-            background: None,
-            corner_radius: 0.0,
-            border: None,
-            shadow: None,
-            grid: GridConfig {
-                grid_template_columns: Some(cols),
-                grid_template_rows: None,
-                gap: 0.0,
-            },
             animation: Default::default(),
             timing: Default::default(),
-            style: StyleConfig::default(),
+            style,
         }
     }
 
@@ -443,7 +435,7 @@ mod tests {
             vec![shape_child(50.0, 50.0), shape_child(50.0, 50.0)],
             vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
         );
-        grid.grid.gap = 20.0;
+        grid.style.gap = Some(20.0);
         let constraints = Constraints::tight(420.0, 300.0);
         let result = layout_grid(&grid, &constraints);
 

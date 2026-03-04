@@ -30,6 +30,6 @@ pub use container::{
 };
 pub use rounded::{Rounded, RoundedMut};
 pub use shadowed::{Shadow, Shadowed, ShadowedMut};
-pub use styled::{StyleConfig, Styled, StyledMut};
+pub use styled::{Styled, StyledMut};
 pub use timed::{Timed, TimingConfig};
 pub use widget::{RenderContext, Widget};

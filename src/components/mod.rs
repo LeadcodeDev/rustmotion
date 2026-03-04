@@ -16,7 +16,6 @@ pub mod video;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::schema::{CardAlign, GridPlacement};
 use crate::traits::{Animatable, Container, Styled, Timed, Widget};
 
 pub use caption::Caption;
@@ -68,20 +67,6 @@ pub struct ChildComponent {
     pub x: Option<f32>,
     #[serde(default)]
     pub y: Option<f32>,
-    // Flex per-child
-    #[serde(default)]
-    pub flex_grow: Option<f32>,
-    #[serde(default)]
-    pub flex_shrink: Option<f32>,
-    #[serde(default)]
-    pub flex_basis: Option<f32>,
-    #[serde(default)]
-    pub align_self: Option<CardAlign>,
-    // Grid per-child
-    #[serde(default)]
-    pub grid_column: Option<GridPlacement>,
-    #[serde(default)]
-    pub grid_row: Option<GridPlacement>,
 }
 
 impl ChildComponent {
@@ -228,10 +213,10 @@ impl Component {
     /// Returns a mutable reference to this component's children, if it has any.
     pub fn children_mut(&mut self) -> Option<&mut Vec<ChildComponent>> {
         match self {
-            Component::Stack(c) | Component::Group(c) => Some(&mut c.layers),
-            Component::Flex(c) => Some(&mut c.layers),
-            Component::Grid(c) => Some(&mut c.layers),
-            Component::Card(c) => Some(&mut c.layers),
+            Component::Stack(c) | Component::Group(c) => Some(&mut c.children),
+            Component::Flex(c) => Some(&mut c.children),
+            Component::Grid(c) => Some(&mut c.children),
+            Component::Card(c) => Some(&mut c.children),
             _ => None,
         }
     }

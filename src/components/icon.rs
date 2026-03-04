@@ -5,23 +5,21 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::{asset_cache, fetch_icon_svg};
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::Size;
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{LayerStyle, Size};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Icon {
     /// Iconify identifier: "prefix:name" (e.g. "lucide:home", "mdi:account")
     pub icon: String,
-    #[serde(default = "default_color")]
-    pub color: String,
     #[serde(default)]
     pub size: Option<Size>,
     #[serde(flatten)]
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Icon {
@@ -32,16 +30,17 @@ crate::impl_traits!(Icon {
 
 impl Widget for Icon {
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+        let color = self.style.color_or("#FFFFFF");
         let target_w = layout.width as u32;
         let target_h = layout.height as u32;
 
-        let cache_key = format!("icon:{}:{}:{}x{}", self.icon, self.color, target_w, target_h);
+        let cache_key = format!("icon:{}:{}:{}x{}", self.icon, color, target_w, target_h);
 
         let cache = asset_cache();
         let img = if let Some(cached) = cache.get(&cache_key) {
             cached.clone()
         } else {
-            let svg_data = fetch_icon_svg(&self.icon, &self.color, target_w, target_h)?;
+            let svg_data = fetch_icon_svg(&self.icon, color, target_w, target_h)?;
 
             let opt = usvg::Options::default();
             let tree = usvg::Tree::from_data(&svg_data, &opt)
@@ -87,5 +86,3 @@ impl Widget for Icon {
         }
     }
 }
-
-fn default_color() -> String { "#FFFFFF".to_string() }

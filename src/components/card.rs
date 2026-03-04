@@ -5,51 +5,31 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 
 use crate::engine::renderer::paint_from_hex;
 use crate::layout::{layout_flex, layout_grid_with_config, Constraints, LayoutNode};
-use crate::schema::CardDisplay;
+use crate::schema::{CardDisplay, LayerStyle};
 use crate::traits::{
     AnimationConfig, Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
     FlexContainerMut, GridConfig, RenderContext, Rounded, RoundedMut, Shadow, Shadowed,
-    ShadowedMut, StyleConfig, TimingConfig, Widget,
+    ShadowedMut, TimingConfig, Widget,
 };
 
 use super::flex::FlexSize;
 use super::ChildComponent;
 
 /// Card container — backward-compatible with v1 `"type": "card"`.
-/// Supports both flex and grid display modes via the `display` field.
+/// Supports both flex and grid display modes via the `display` style field.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Card {
     #[serde(default)]
-    pub layers: Vec<ChildComponent>,
+    pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub size: Option<FlexSize>,
-    // Visual
-    #[serde(default)]
-    pub background: Option<String>,
-    #[serde(default = "default_corner_radius")]
-    pub corner_radius: f32,
-    #[serde(default)]
-    pub border: Option<Border>,
-    #[serde(default)]
-    pub shadow: Option<Shadow>,
-    // Display mode
-    #[serde(default)]
-    pub display: CardDisplay,
-    // Flex config (used when display = Flex)
-    #[serde(flatten)]
-    pub flex: FlexConfig,
-    // Grid config (used when display = Grid)
-    #[serde(default)]
-    pub grid_template_columns: Option<Vec<crate::schema::GridTrack>>,
-    #[serde(default)]
-    pub grid_template_rows: Option<Vec<crate::schema::GridTrack>>,
     // Behaviors
     #[serde(flatten)]
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Card {
@@ -60,78 +40,73 @@ crate::impl_traits!(Card {
 
 impl Container for Card {
     fn children(&self) -> &[ChildComponent] {
-        &self.layers
+        &self.children
     }
 }
 
 impl FlexContainer for Card {
     fn flex_config(&self) -> &FlexConfig {
-        &self.flex
+        unreachable!("Use style directly for flex config")
     }
 }
 
 impl FlexContainerMut for Card {
     fn flex_config_mut(&mut self) -> &mut FlexConfig {
-        &mut self.flex
+        unreachable!("Use style directly for flex config")
     }
 }
 
 impl Card {
-    /// Build a GridConfig from the card's grid-specific fields.
     fn grid_config_owned(&self) -> GridConfig {
         GridConfig {
-            grid_template_columns: self.grid_template_columns.clone(),
-            grid_template_rows: self.grid_template_rows.clone(),
-            gap: self.flex.gap, // gap is shared between flex and grid
+            grid_template_columns: self.style.grid_template_columns.clone(),
+            grid_template_rows: self.style.grid_template_rows.clone(),
+            gap: self.style.gap_or(0.0),
         }
     }
 }
 
 impl Bordered for Card {
     fn border(&self) -> Option<&Border> {
-        self.border.as_ref()
+        None // Handled directly in render via self.style.border
     }
 }
 
 impl BorderedMut for Card {
-    fn set_border(&mut self, border: Option<Border>) {
-        self.border = border;
-    }
+    fn set_border(&mut self, _border: Option<Border>) {}
 }
 
 impl Rounded for Card {
     fn corner_radius(&self) -> f32 {
-        self.corner_radius
+        self.style.border_radius_or(12.0)
     }
 }
 
 impl RoundedMut for Card {
     fn set_corner_radius(&mut self, radius: f32) {
-        self.corner_radius = radius;
+        self.style.border_radius = Some(radius);
     }
 }
 
 impl Shadowed for Card {
     fn shadow(&self) -> Option<&Shadow> {
-        self.shadow.as_ref()
+        None // Handled directly in render via self.style.box_shadow
     }
 }
 
 impl ShadowedMut for Card {
-    fn set_shadow(&mut self, shadow: Option<Shadow>) {
-        self.shadow = shadow;
-    }
+    fn set_shadow(&mut self, _shadow: Option<Shadow>) {}
 }
 
 impl crate::traits::Backgrounded for Card {
     fn background(&self) -> Option<&str> {
-        self.background.as_deref()
+        self.style.background.as_deref()
     }
 }
 
 impl crate::traits::BackgroundedMut for Card {
     fn set_background(&mut self, bg: Option<String>) {
-        self.background = bg;
+        self.style.background = bg;
     }
 }
 
@@ -143,17 +118,18 @@ impl crate::traits::Clipped for Card {
 
 impl Widget for Card {
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+        let corner_radius = self.style.border_radius_or(12.0);
         let rect = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-        let rrect = skia_safe::RRect::new_rect_xy(rect, self.corner_radius, self.corner_radius);
+        let rrect = skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius);
 
         // 1. Shadow
-        if let Some(ref shadow) = self.shadow {
+        if let Some(ref shadow) = self.style.box_shadow {
             let shadow_rect = Rect::from_xywh(
                 shadow.offset_x, shadow.offset_y,
                 layout.width, layout.height,
             );
             let shadow_rrect = skia_safe::RRect::new_rect_xy(
-                shadow_rect, self.corner_radius, self.corner_radius,
+                shadow_rect, corner_radius, corner_radius,
             );
             let mut shadow_paint = paint_from_hex(&shadow.color);
             if shadow.blur > 0.0 {
@@ -167,7 +143,7 @@ impl Widget for Card {
         }
 
         // 2. Background
-        if let Some(ref bg) = self.background {
+        if let Some(ref bg) = self.style.background {
             let bg_paint = paint_from_hex(bg);
             canvas.draw_rrect(rrect, &bg_paint);
         }
@@ -177,12 +153,12 @@ impl Widget for Card {
         canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
 
         // 4. Render children with animation support
-        crate::engine::render_v2::render_children(canvas, &self.layers, layout, ctx)?;
+        crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
 
-        canvas.restore(); // undo clip
+        canvas.restore();
 
-        // 5. Border (on top of children)
-        if let Some(ref border) = self.border {
+        // 5. Border
+        if let Some(ref border) = self.style.border {
             let mut border_paint = paint_from_hex(&border.color);
             border_paint.set_style(PaintStyle::Stroke);
             border_paint.set_stroke_width(border.width);
@@ -199,17 +175,14 @@ impl Widget for Card {
 
     fn layout(&self, constraints: &Constraints) -> LayoutNode {
         let c = super::flex::resolve_size_constraints(&self.size, constraints);
-        match self.display {
+        match self.style.display_or(CardDisplay::Flex) {
             CardDisplay::Flex => layout_flex(self, &c),
             CardDisplay::Grid => layout_grid_for_card(self, &c),
         }
     }
 }
 
-/// Layout a Card in grid mode by constructing the grid config on the fly.
 fn layout_grid_for_card(card: &Card, constraints: &Constraints) -> LayoutNode {
     let grid_config = card.grid_config_owned();
     layout_grid_with_config(card, &grid_config, constraints)
 }
-
-fn default_corner_radius() -> f32 { 12.0 }

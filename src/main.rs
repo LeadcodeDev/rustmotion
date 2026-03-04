@@ -382,19 +382,19 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
             errors.push(format!("scenes[{}].duration must be > 0", i));
         }
 
-        for (j, layer) in scene.layers.iter().enumerate() {
+        for (j, layer) in scene.children.iter().enumerate() {
             match layer {
                 schema::Layer::Image(img) => {
                     if !std::path::Path::new(&img.src).exists() {
                         errors.push(format!(
-                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            "scenes[{}].children[{}].src: file not found '{}'",
                             i, j, img.src
                         ));
                     }
                     if let (Some(start), Some(end)) = (img.start_at, img.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -404,7 +404,7 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (t.start_at, t.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -414,7 +414,7 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (s.start_at, s.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -423,14 +423,14 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                 schema::Layer::Svg(svg) => {
                     if svg.src.is_none() && svg.data.is_none() {
                         errors.push(format!(
-                            "scenes[{}].layers[{}]: SVG layer must have 'src' or 'data'",
+                            "scenes[{}].children[{}]: SVG layer must have 'src' or 'data'",
                             i, j
                         ));
                     }
                     if let Some(ref src) = svg.src {
                         if !std::path::Path::new(src).exists() {
                             errors.push(format!(
-                                "scenes[{}].layers[{}].src: file not found '{}'",
+                                "scenes[{}].children[{}].src: file not found '{}'",
                                 i, j, src
                             ));
                         }
@@ -438,7 +438,7 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (svg.start_at, svg.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -447,14 +447,14 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                 schema::Layer::Gif(g) => {
                     if !std::path::Path::new(&g.src).exists() {
                         errors.push(format!(
-                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            "scenes[{}].children[{}].src: file not found '{}'",
                             i, j, g.src
                         ));
                     }
                     if let (Some(start), Some(end)) = (g.start_at, g.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -464,7 +464,7 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (cb.start_at, cb.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -473,14 +473,14 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                 schema::Layer::Video(v) => {
                     if !std::path::Path::new(&v.src).exists() {
                         errors.push(format!(
-                            "scenes[{}].layers[{}].src: file not found '{}'",
+                            "scenes[{}].children[{}].src: file not found '{}'",
                             i, j, v.src
                         ));
                     }
                     if let (Some(start), Some(end)) = (v.start_at, v.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -490,7 +490,7 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (ct.start_at, ct.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -500,56 +500,37 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     if let (Some(start), Some(end)) = (card.start_at, card.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
                     }
                     // Grid validation
-                    if matches!(card.display, schema::CardDisplay::Grid) && card.grid_template_columns.is_none() {
+                    if matches!(card.style.display, Some(schema::CardDisplay::Grid)) && card.style.grid_template_columns.is_none() {
                         errors.push(format!(
-                            "scenes[{}].layers[{}]: grid display without grid_template_columns",
+                            "scenes[{}].children[{}]: grid display without grid-template-columns",
                             i, j
                         ));
-                    }
-                    // Per-child validation
-                    for (k, child) in card.layers.iter().enumerate() {
-                        if let Some(grow) = child.flex_grow {
-                            if grow < 0.0 {
-                                errors.push(format!(
-                                    "scenes[{}].layers[{}].layers[{}]: flex_grow must be >= 0",
-                                    i, j, k
-                                ));
-                            }
-                        }
-                        if let Some(shrink) = child.flex_shrink {
-                            if shrink < 0.0 {
-                                errors.push(format!(
-                                    "scenes[{}].layers[{}].layers[{}]: flex_shrink must be >= 0",
-                                    i, j, k
-                                ));
-                            }
-                        }
                     }
                 }
                 schema::Layer::Icon(icon) => {
                     if let Some((prefix, name)) = icon.icon.split_once(':') {
                         if prefix.is_empty() || name.is_empty() {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: icon '{}' has empty prefix or name (expected 'prefix:name')",
+                                "scenes[{}].children[{}]: icon '{}' has empty prefix or name (expected 'prefix:name')",
                                 i, j, icon.icon
                             ));
                         }
                     } else {
                         errors.push(format!(
-                            "scenes[{}].layers[{}]: invalid icon format '{}' (expected 'prefix:name', e.g. 'lucide:home')",
+                            "scenes[{}].children[{}]: invalid icon format '{}' (expected 'prefix:name', e.g. 'lucide:home')",
                             i, j, icon.icon
                         ));
                     }
                     if let (Some(start), Some(end)) = (icon.start_at, icon.end_at) {
                         if start >= end {
                             errors.push(format!(
-                                "scenes[{}].layers[{}]: start_at ({}) must be < end_at ({})",
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
                                 i, j, start, end
                             ));
                         }
@@ -596,7 +577,7 @@ fn cmd_info(input: &PathBuf) -> Result<()> {
         .map(|s| (s.duration * fps as f64).round() as u32)
         .sum();
 
-    let total_layers: usize = scenario.scenes.iter().map(|s| s.layers.len()).sum();
+    let total_layers: usize = scenario.scenes.iter().map(|s| s.children.len()).sum();
 
     println!("File: {}", input.display());
     println!("Resolution: {}x{}", scenario.video.width, scenario.video.height);
@@ -613,7 +594,7 @@ fn cmd_info(input: &PathBuf) -> Result<()> {
             i + 1,
             scene.duration,
             scene_frames,
-            scene.layers.len(),
+            scene.children.len(),
             scene
                 .transition
                 .as_ref()

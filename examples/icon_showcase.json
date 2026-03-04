@@ -9,17 +9,19 @@
   "scenes": [
     {
       "duration": 4.0,
-      "layers": [
+      "children": [
         {
           "type": "shape",
           "shape": "rect",
           "position": { "x": 0, "y": 0 },
           "size": { "width": 1920, "height": 1080 },
-          "fill": {
-            "type": "linear",
-            "colors": ["#0f0f17", "#1a1030"],
-            "stops": [0.0, 1.0],
-            "angle": 135
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#0f0f17", "#1a1030"],
+              "stops": [0.0, 1.0],
+              "angle": 135
+            }
           }
         },
 
@@ -27,10 +29,12 @@
           "type": "text",
           "content": "Iconify Icons",
           "position": { "x": 960, "y": 200 },
-          "font_size": 72,
-          "color": "#FFFFFF",
-          "font_weight": "bold",
-          "align": "center",
+          "style": {
+            "font-size": 72,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.8 }
         },
@@ -39,180 +43,220 @@
           "type": "text",
           "content": "200,000+ icons from 150+ collections",
           "position": { "x": 960, "y": 290 },
-          "font_size": 28,
-          "color": "#94a3b8",
-          "align": "center",
+          "style": {
+            "font-size": 28,
+            "color": "#94a3b8",
+            "text-align": "center"
+          },
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.8, "delay": 0.2 }
         },
 
         {
-          "type": "card",
+          "type": "flex",
           "position": { "x": 160, "y": 400 },
           "size": { "width": 480, "height": 260 },
-          "background": "#1e1e2e",
-          "corner_radius": 16,
-          "padding": 32,
-          "direction": "column",
-          "gap": 20,
-          "align": "center",
-          "justify": "center",
+          "style": {
+            "background": "#1e1e2e",
+            "border-radius": 16,
+            "padding": 32,
+            "flex-direction": "column",
+            "gap": 20,
+            "align-items": "center",
+            "justify-content": "center"
+          },
           "start_at": 0.5,
           "preset": "scale_in",
           "preset_config": { "duration": 0.6 },
-          "layers": [
+          "children": [
             {
               "type": "icon",
               "icon": "lucide:home",
-              "color": "#38bdf8",
-              "size": { "width": 48, "height": 48 }
+              "size": { "width": 48, "height": 48 },
+              "style": {
+                "color": "#38bdf8"
+              }
             },
             {
               "type": "text",
               "content": "lucide:home",
-              "font_size": 22,
-              "color": "#e2e8f0",
-              "font_family": "JetBrains Mono",
-              "align": "center"
+              "style": {
+                "font-size": 22,
+                "color": "#e2e8f0",
+                "font-family": "JetBrains Mono",
+                "text-align": "center"
+              }
             },
             {
               "type": "text",
               "content": "Lucide Icons",
-              "font_size": 16,
-              "color": "#64748b",
-              "align": "center"
+              "style": {
+                "font-size": 16,
+                "color": "#64748b",
+                "text-align": "center"
+              }
             }
           ]
         },
 
         {
-          "type": "card",
+          "type": "flex",
           "position": { "x": 720, "y": 400 },
           "size": { "width": 480, "height": 260 },
-          "background": "#1e1e2e",
-          "corner_radius": 16,
-          "padding": 32,
-          "direction": "column",
-          "gap": 20,
-          "align": "center",
-          "justify": "center",
+          "style": {
+            "background": "#1e1e2e",
+            "border-radius": 16,
+            "padding": 32,
+            "flex-direction": "column",
+            "gap": 20,
+            "align-items": "center",
+            "justify-content": "center"
+          },
           "start_at": 0.8,
           "preset": "scale_in",
           "preset_config": { "duration": 0.6 },
-          "layers": [
+          "children": [
             {
               "type": "icon",
               "icon": "mdi:account-circle",
-              "color": "#a78bfa",
-              "size": { "width": 48, "height": 48 }
+              "size": { "width": 48, "height": 48 },
+              "style": {
+                "color": "#a78bfa"
+              }
             },
             {
               "type": "text",
               "content": "mdi:account-circle",
-              "font_size": 22,
-              "color": "#e2e8f0",
-              "font_family": "JetBrains Mono",
-              "align": "center"
+              "style": {
+                "font-size": 22,
+                "color": "#e2e8f0",
+                "font-family": "JetBrains Mono",
+                "text-align": "center"
+              }
             },
             {
               "type": "text",
               "content": "Material Design Icons",
-              "font_size": 16,
-              "color": "#64748b",
-              "align": "center"
+              "style": {
+                "font-size": 16,
+                "color": "#64748b",
+                "text-align": "center"
+              }
             }
           ]
         },
 
         {
-          "type": "card",
+          "type": "flex",
           "position": { "x": 1280, "y": 400 },
           "size": { "width": 480, "height": 260 },
-          "background": "#1e1e2e",
-          "corner_radius": 16,
-          "padding": 32,
-          "direction": "column",
-          "gap": 20,
-          "align": "center",
-          "justify": "center",
+          "style": {
+            "background": "#1e1e2e",
+            "border-radius": 16,
+            "padding": 32,
+            "flex-direction": "column",
+            "gap": 20,
+            "align-items": "center",
+            "justify-content": "center"
+          },
           "start_at": 1.1,
           "preset": "scale_in",
           "preset_config": { "duration": 0.6 },
-          "layers": [
+          "children": [
             {
               "type": "icon",
               "icon": "ph:lightning-fill",
-              "color": "#fbbf24",
-              "size": { "width": 48, "height": 48 }
+              "size": { "width": 48, "height": 48 },
+              "style": {
+                "color": "#fbbf24"
+              }
             },
             {
               "type": "text",
               "content": "ph:lightning-fill",
-              "font_size": 22,
-              "color": "#e2e8f0",
-              "font_family": "JetBrains Mono",
-              "align": "center"
+              "style": {
+                "font-size": 22,
+                "color": "#e2e8f0",
+                "font-family": "JetBrains Mono",
+                "text-align": "center"
+              }
             },
             {
               "type": "text",
               "content": "Phosphor Icons",
-              "font_size": 16,
-              "color": "#64748b",
-              "align": "center"
+              "style": {
+                "font-size": 16,
+                "color": "#64748b",
+                "text-align": "center"
+              }
             }
           ]
         },
 
         {
-          "type": "card",
+          "type": "flex",
           "position": { "x": 460, "y": 720 },
           "size": { "width": 1000, "height": 180 },
-          "background": "#161622",
-          "corner_radius": 12,
-          "padding": { "top": 24, "right": 48, "bottom": 24, "left": 48 },
-          "direction": "row",
-          "gap": 48,
-          "align": "center",
-          "justify": "space_evenly",
+          "style": {
+            "background": "#161622",
+            "border-radius": 12,
+            "padding": { "top": 24, "right": 48, "bottom": 24, "left": 48 },
+            "flex-direction": "row",
+            "gap": 48,
+            "align-items": "center",
+            "justify-content": "space_evenly"
+          },
           "start_at": 1.5,
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.8 },
-          "layers": [
+          "children": [
             {
               "type": "icon",
               "icon": "devicon:rust",
-              "color": "#FFFFFF",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#FFFFFF"
+              }
             },
             {
               "type": "icon",
               "icon": "devicon:typescript",
-              "color": "#3178c6",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#3178c6"
+              }
             },
             {
               "type": "icon",
               "icon": "devicon:react",
-              "color": "#61dafb",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#61dafb"
+              }
             },
             {
               "type": "icon",
               "icon": "devicon:python",
-              "color": "#3776ab",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#3776ab"
+              }
             },
             {
               "type": "icon",
               "icon": "devicon:docker",
-              "color": "#2496ed",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#2496ed"
+              }
             },
             {
               "type": "icon",
               "icon": "devicon:github",
-              "color": "#FFFFFF",
-              "size": { "width": 56, "height": 56 }
+              "size": { "width": 56, "height": 56 },
+              "style": {
+                "color": "#FFFFFF"
+              }
             }
           ]
         }
@@ -222,26 +266,30 @@
     {
       "duration": 3.0,
       "transition": { "type": "fade", "duration": 0.5 },
-      "layers": [
+      "children": [
         {
           "type": "shape",
           "shape": "rect",
           "position": { "x": 0, "y": 0 },
           "size": { "width": 1920, "height": 1080 },
-          "fill": {
-            "type": "linear",
-            "colors": ["#0c1220", "#0f172a"],
-            "stops": [0.0, 1.0],
-            "angle": 180
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#0c1220", "#0f172a"],
+              "stops": [0.0, 1.0],
+              "angle": 180
+            }
           }
         },
 
         {
           "type": "icon",
           "icon": "lucide:code-2",
-          "color": "#38bdf8",
           "position": { "x": 910, "y": 300 },
           "size": { "width": 100, "height": 100 },
+          "style": {
+            "color": "#38bdf8"
+          },
           "preset": "scale_in",
           "preset_config": { "duration": 0.6 }
         },
@@ -250,10 +298,12 @@
           "type": "text",
           "content": "Just use \"prefix:name\"",
           "position": { "x": 960, "y": 460 },
-          "font_size": 48,
-          "color": "#FFFFFF",
-          "font_weight": "bold",
-          "align": "center",
+          "style": {
+            "font-size": 48,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.6, "delay": 0.3 }
         },
@@ -262,68 +312,84 @@
           "type": "text",
           "content": "No SVG files needed. Fetched from Iconify API.",
           "position": { "x": 960, "y": 540 },
-          "font_size": 24,
-          "color": "#64748b",
-          "align": "center",
+          "style": {
+            "font-size": 24,
+            "color": "#64748b",
+            "text-align": "center"
+          },
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.6, "delay": 0.5 }
         },
 
         {
-          "type": "card",
+          "type": "flex",
           "position": { "x": 510, "y": 620 },
           "size": { "width": 900, "height": 220 },
-          "background": "#1e293b",
-          "corner_radius": 12,
-          "padding": 32,
-          "direction": "column",
-          "gap": 12,
-          "justify": "center",
+          "style": {
+            "background": "#1e293b",
+            "border-radius": 12,
+            "padding": 32,
+            "flex-direction": "column",
+            "gap": 12,
+            "justify-content": "center"
+          },
           "start_at": 1.0,
           "preset": "fade_in_up",
           "preset_config": { "duration": 0.6 },
-          "layers": [
+          "children": [
             {
               "type": "text",
               "content": "{",
-              "font_size": 20,
-              "color": "#64748b",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#64748b",
+                "font-family": "JetBrains Mono"
+              }
             },
             {
               "type": "text",
               "content": "  \"type\": \"icon\",",
-              "font_size": 20,
-              "color": "#38bdf8",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#38bdf8",
+                "font-family": "JetBrains Mono"
+              }
             },
             {
               "type": "text",
               "content": "  \"icon\": \"lucide:rocket\",",
-              "font_size": 20,
-              "color": "#fbbf24",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#fbbf24",
+                "font-family": "JetBrains Mono"
+              }
             },
             {
               "type": "text",
               "content": "  \"color\": \"#38bdf8\",",
-              "font_size": 20,
-              "color": "#a78bfa",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#a78bfa",
+                "font-family": "JetBrains Mono"
+              }
             },
             {
               "type": "text",
               "content": "  \"size\": { \"width\": 64, \"height\": 64 }",
-              "font_size": 20,
-              "color": "#34d399",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#34d399",
+                "font-family": "JetBrains Mono"
+              }
             },
             {
               "type": "text",
               "content": "}",
-              "font_size": 20,
-              "color": "#64748b",
-              "font_family": "JetBrains Mono"
+              "style": {
+                "font-size": 20,
+                "color": "#64748b",
+                "font-family": "JetBrains Mono"
+              }
             }
           ]
         }

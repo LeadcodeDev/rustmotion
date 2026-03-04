@@ -8,14 +8,16 @@
   "scenes": [
     {
       "duration": 30.0,
-      "layers": [
+      "children": [
         {
           "type": "text",
           "content": "Building a Rust HTTP Server",
           "position": { "x": 960, "y": 60 },
-          "font_size": 36,
-          "color": "#c3cee3",
-          "align": "center",
+          "style": {
+            "font-size": 36,
+            "color": "#c3cee3",
+            "text-align": "center"
+          },
           "preset": "fade_in",
           "preset_config": { "delay": 0, "duration": 0.6 }
         },
@@ -25,12 +27,14 @@
           "language": "rust",
           "theme": "catppuccin-frappe",
           "position": { "x": 160, "y": 120 },
-          "font_size": 18,
-          "line_height": 1.6,
+          "style": {
+            "font-size": 18,
+            "line-height": 1.6,
+            "border-radius": 12,
+            "padding": { "top": 20, "right": 24, "bottom": 20, "left": 16 }
+          },
           "show_line_numbers": true,
-          "corner_radius": 12,
           "chrome": { "enabled": true, "title": "src/main.rs" },
-          "padding": { "top": 20, "right": 24, "bottom": 20, "left": 16 },
           "reveal": {
             "mode": "line_by_line",
             "start": 0.5,

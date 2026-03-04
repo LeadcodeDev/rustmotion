@@ -1,7 +1,21 @@
 use crate::components::ChildComponent;
-use crate::traits::{Align, Direction, FlexContainer, Justify, Styled};
+use crate::traits::{Align, Container, Direction, Justify, Styled};
 
 use super::{Constraints, LayoutNode};
+
+/// Helper to get per-child flex props from the child's component style.
+fn child_flex_basis(child: &ChildComponent) -> Option<f32> {
+    child.component.as_styled().style_config().flex_basis
+}
+fn child_flex_grow(child: &ChildComponent) -> Option<f32> {
+    child.component.as_styled().style_config().flex_grow
+}
+fn child_flex_shrink(child: &ChildComponent) -> Option<f32> {
+    child.component.as_styled().style_config().flex_shrink
+}
+fn child_align_self(child: &ChildComponent) -> Option<Align> {
+    child.component.as_styled().style_config().align_self.clone()
+}
 
 /// Measure a single child component: widget measure + padding + margin.
 fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32) {
@@ -42,7 +56,7 @@ pub(crate) fn enrich_child_layouts(parent: LayoutNode, children: &[ChildComponen
 /// Compute layout for a flex container's children.
 /// Returns a `LayoutNode` for the container with children positioned.
 pub fn layout_flex(
-    container: &(impl FlexContainer + Styled + ?Sized),
+    container: &(impl Container + Styled + ?Sized),
     constraints: &Constraints,
 ) -> LayoutNode {
     let children = container.children();
@@ -51,7 +65,6 @@ pub fn layout_flex(
         return LayoutNode::new(0.0, 0.0, w, h);
     }
 
-    let config = container.flex_config();
     let styled = container.style_config();
     let (pt, pr, pb, pl) = styled
         .padding
@@ -59,9 +72,15 @@ pub fn layout_flex(
         .map(|p| p.resolve())
         .unwrap_or_default();
 
-    let is_row = matches!(config.direction, Direction::Row | Direction::RowReverse);
+    let direction = styled.flex_direction_or(Direction::Column);
+    let justify = styled.justify_content_or(Justify::Start);
+    let align = styled.align_items_or(Align::Start);
+    let gap = styled.gap_or(0.0);
+    let wrap = styled.flex_wrap_or(false);
+
+    let is_row = matches!(direction, Direction::Row | Direction::RowReverse);
     let is_reverse = matches!(
-        config.direction,
+        direction,
         Direction::RowReverse | Direction::ColumnReverse
     );
 
@@ -92,7 +111,7 @@ pub fn layout_flex(
         .map(|c| measure_child(c, &child_constraints))
         .collect();
 
-    if !config.wrap {
+    if !wrap {
         // Single-line flex
         let flow_sizes: Vec<(f32, f32)> = flow_indices.iter().map(|&i| child_sizes[i]).collect();
         let line_results = layout_single_line(
@@ -100,15 +119,15 @@ pub fn layout_flex(
             &flow_indices,
             &flow_sizes,
             is_row,
-            &config.justify,
-            &config.align,
-            config.gap,
+            &justify,
+            &align,
+            gap,
             content_max_w,
             content_max_h,
         );
 
         // Compute content size
-        let (content_w, content_h) = compute_content_size(&flow_sizes, is_row, config.gap);
+        let (content_w, content_h) = compute_content_size(&flow_sizes, is_row, gap);
         let container_w = if constraints.has_bounded_width() {
             constraints.max_width
         } else {
@@ -152,7 +171,7 @@ pub fn layout_flex(
         let needed = if lines.last().unwrap().is_empty() {
             child_main
         } else {
-            current_main + config.gap + child_main
+            current_main + gap + child_main
         };
 
         if needed > main_limit && !lines.last().unwrap().is_empty() {
@@ -180,28 +199,26 @@ pub fn layout_flex(
             line,
             &line_sizes,
             is_row,
-            &config.justify,
-            &config.align,
-            config.gap,
+            &justify,
+            &align,
+            gap,
             content_max_w,
             content_max_h,
         );
 
         for (j, &idx) in line.iter().enumerate() {
             let mut node = line_results[j].clone();
-            let child_align = children[idx]
-                .align_self
-                .as_ref()
-                .unwrap_or(&config.align);
+            let child_as = child_align_self(&children[idx]);
+            let child_align_ref = child_as.as_ref().unwrap_or(&align);
 
             if is_row {
-                let (cross_pos, stretch_h) = align_item(line_sizes[j].1, line_cross, child_align);
+                let (cross_pos, stretch_h) = align_item(line_sizes[j].1, line_cross, child_align_ref);
                 node.y = cross_offset + cross_pos;
                 if let Some(h) = stretch_h {
                     node.height = h;
                 }
             } else {
-                let (cross_pos, stretch_w) = align_item(line_sizes[j].0, line_cross, child_align);
+                let (cross_pos, stretch_w) = align_item(line_sizes[j].0, line_cross, child_align_ref);
                 node.x = cross_offset + cross_pos;
                 if let Some(w) = stretch_w {
                     node.width = w;
@@ -214,7 +231,7 @@ pub fn layout_flex(
             child_nodes[idx] = Some(node);
         }
 
-        cross_offset += line_cross + config.gap;
+        cross_offset += line_cross + gap;
     }
 
     // Handle absolute children
@@ -239,7 +256,7 @@ pub fn layout_flex(
             .iter()
             .map(|line| {
                 let sizes: Vec<(f32, f32)> = line.iter().map(|&i| child_sizes[i]).collect();
-                compute_content_size(&sizes, is_row, config.gap).0
+                compute_content_size(&sizes, is_row, gap).0
             })
             .fold(0.0f32, f32::max);
         max_w + pl + pr
@@ -247,7 +264,7 @@ pub fn layout_flex(
     let container_h = if constraints.has_bounded_height() {
         constraints.max_height
     } else {
-        cross_offset - config.gap + pt + pb
+        cross_offset - gap + pt + pb
     };
 
     let flat = LayoutNode::new(0.0, 0.0, container_w, container_h).with_children(final_nodes);
@@ -305,7 +322,7 @@ fn layout_single_line(
     let mut main_sizes: Vec<f32> = Vec::with_capacity(n);
     for (j, &idx) in indices.iter().enumerate() {
         let natural = if is_row { sizes[j].0 } else { sizes[j].1 };
-        let basis = all_children[idx].flex_basis.unwrap_or(natural);
+        let basis = child_flex_basis(&all_children[idx]).unwrap_or(natural);
         main_sizes.push(basis);
     }
     let cross_sizes: Vec<f32> = sizes
@@ -320,11 +337,11 @@ fn layout_single_line(
     if remaining > 0.0 {
         let total_grow: f32 = indices
             .iter()
-            .map(|&idx| all_children[idx].flex_grow.unwrap_or(0.0))
+            .map(|&idx| child_flex_grow(&all_children[idx]).unwrap_or(0.0))
             .sum();
         if total_grow > 0.0 {
             for (j, &idx) in indices.iter().enumerate() {
-                let grow = all_children[idx].flex_grow.unwrap_or(0.0);
+                let grow = child_flex_grow(&all_children[idx]).unwrap_or(0.0);
                 if grow > 0.0 {
                     main_sizes[j] += remaining * (grow / total_grow);
                 }
@@ -336,13 +353,13 @@ fn layout_single_line(
             .iter()
             .enumerate()
             .map(|(j, &idx)| {
-                let shrink = all_children[idx].flex_shrink.unwrap_or(1.0);
+                let shrink = child_flex_shrink(&all_children[idx]).unwrap_or(1.0);
                 main_sizes[j] * shrink
             })
             .sum();
         if weighted_total > 0.0 {
             for (j, &idx) in indices.iter().enumerate() {
-                let shrink = all_children[idx].flex_shrink.unwrap_or(1.0);
+                let shrink = child_flex_shrink(&all_children[idx]).unwrap_or(1.0);
                 let weight = main_sizes[j] * shrink;
                 main_sizes[j] = (main_sizes[j] - overflow * weight / weighted_total).max(0.0);
             }
@@ -384,8 +401,9 @@ fn layout_single_line(
 
     let mut result = Vec::with_capacity(n);
     for (j, &idx) in indices.iter().enumerate() {
-        let child_align = all_children[idx].align_self.as_ref().unwrap_or(align);
-        let (cross_pos, stretch_size) = align_item(cross_sizes[j], container_cross, child_align);
+        let child_as = child_align_self(&all_children[idx]);
+        let child_align_val = child_as.as_ref().unwrap_or(align);
+        let (cross_pos, stretch_size) = align_item(cross_sizes[j], container_cross, child_align_val);
 
         let (x, y) = if is_row {
             (main_pos, cross_pos)
@@ -490,8 +508,7 @@ mod tests {
     use crate::components::flex::{Flex, FlexSize};
     use crate::components::shape::Shape;
     use crate::components::{ChildComponent, Component, PositionMode};
-    use crate::schema::{CardAlign, ShapeType, Size, SizeDimension};
-    use crate::traits::{Direction, FlexConfig, StyleConfig};
+    use crate::schema::{ShapeType, Size, SizeDimension, LayerStyle};
 
     /// Helper to create a shape child with given size.
     fn shape_child(w: f32, h: f32) -> ChildComponent {
@@ -499,29 +516,22 @@ mod tests {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 size: Size { width: w, height: h },
-                fill: None,
-                stroke: None,
-                corner_radius: None,
                 text: None,
-                style: StyleConfig::default(),
+                style: LayerStyle::default(),
                 animation: Default::default(),
                 timing: Default::default(),
             }),
             position: None,
             x: None,
             y: None,
-            flex_grow: None,
-            flex_shrink: None,
-            flex_basis: None,
-            align_self: None,
-            grid_column: None,
-            grid_row: None,
         }
     }
 
     fn shape_child_grow(w: f32, h: f32, grow: f32) -> ChildComponent {
         let mut c = shape_child(w, h);
-        c.flex_grow = Some(grow);
+        if let Component::Shape(ref mut s) = c.component {
+            s.style.flex_grow = Some(grow);
+        }
         c
     }
 
@@ -532,26 +542,17 @@ mod tests {
     }
 
     fn make_flex(direction: Direction, children: Vec<ChildComponent>) -> Flex {
+        let mut style = LayerStyle::default();
+        style.flex_direction = Some(direction);
         Flex {
-            layers: children,
+            children,
             size: Some(FlexSize {
                 width: SizeDimension::Fixed(400.0),
                 height: SizeDimension::Fixed(300.0),
             }),
-            background: None,
-            corner_radius: 0.0,
-            border: None,
-            shadow: None,
-            flex: FlexConfig {
-                direction,
-                justify: Justify::Start,
-                align: Align::Start,
-                gap: 0.0,
-                wrap: false,
-            },
             animation: Default::default(),
             timing: Default::default(),
-            style: StyleConfig::default(),
+            style,
         }
     }
 
@@ -593,7 +594,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(100.0, 50.0), shape_child(80.0, 60.0), shape_child(120.0, 40.0)],
         );
-        flex.flex.gap = 10.0;
+        flex.style.gap = Some(10.0);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -608,7 +609,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(100.0, 50.0)],
         );
-        flex.flex.justify = Justify::Center;
+        flex.style.justify_content = Some(Justify::Center);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -621,7 +622,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(50.0, 50.0), shape_child(50.0, 50.0), shape_child(50.0, 50.0)],
         );
-        flex.flex.justify = Justify::SpaceBetween;
+        flex.style.justify_content = Some(Justify::SpaceBetween);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -637,7 +638,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(50.0, 50.0), shape_child(50.0, 50.0)],
         );
-        flex.flex.justify = Justify::SpaceEvenly;
+        flex.style.justify_content = Some(Justify::SpaceEvenly);
         let constraints = Constraints::tight(300.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -653,7 +654,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(100.0, 50.0)],
         );
-        flex.flex.align = Align::Center;
+        flex.style.align_items = Some(Align::Center);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -666,7 +667,7 @@ mod tests {
             Direction::Row,
             vec![shape_child(100.0, 50.0)],
         );
-        flex.flex.align = Align::Stretch;
+        flex.style.align_items = Some(Align::Stretch);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -720,7 +721,7 @@ mod tests {
                 shape_child(200.0, 50.0),
             ],
         );
-        flex.flex.wrap = true;
+        flex.style.flex_wrap = Some(true);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
 
@@ -734,23 +735,14 @@ mod tests {
     #[test]
     fn test_nested_flex() {
         // Outer flex (column) containing inner flex (row) containing shapes
+        let mut inner_style = LayerStyle::default();
+        inner_style.flex_direction = Some(Direction::Row);
         let inner = Flex {
-            layers: vec![shape_child(50.0, 30.0), shape_child(50.0, 30.0)],
+            children: vec![shape_child(50.0, 30.0), shape_child(50.0, 30.0)],
             size: None,
-            background: None,
-            corner_radius: 0.0,
-            border: None,
-            shadow: None,
-            flex: FlexConfig {
-                direction: Direction::Row,
-                justify: Justify::Start,
-                align: Align::Start,
-                gap: 0.0,
-                wrap: false,
-            },
             animation: Default::default(),
             timing: Default::default(),
-            style: StyleConfig::default(),
+            style: inner_style,
         };
 
         let outer_children = vec![
@@ -759,12 +751,6 @@ mod tests {
                 position: None,
                 x: None,
                 y: None,
-                flex_grow: None,
-                flex_shrink: None,
-                flex_basis: None,
-                align_self: None,
-                grid_column: None,
-                grid_row: None,
             },
             shape_child(100.0, 40.0),
         ];

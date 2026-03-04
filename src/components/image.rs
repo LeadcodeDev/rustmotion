@@ -5,8 +5,8 @@ use skia_safe::{Canvas, Paint, Rect};
 
 use crate::engine::renderer::asset_cache;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{ImageFit, Size};
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{ImageFit, LayerStyle, Size};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Image {
@@ -19,8 +19,8 @@ pub struct Image {
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Image {

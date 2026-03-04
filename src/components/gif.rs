@@ -7,8 +7,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::gif_cache;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{ImageFit, Size};
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{ImageFit, LayerStyle, Size};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 fn default_loop_true() -> bool { true }
 
@@ -25,8 +25,8 @@ pub struct Gif {
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Gif {

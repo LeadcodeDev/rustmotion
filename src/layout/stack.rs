@@ -76,42 +76,32 @@ mod tests {
     use crate::components::shape::Shape;
     use crate::components::stack::Stack;
     use crate::components::{ChildComponent, Component, PositionMode};
-    use crate::schema::{ShapeType, Size};
-    use crate::traits::StyleConfig;
+    use crate::schema::{LayerStyle, ShapeType, Size};
 
     fn shape_child_at(w: f32, h: f32, x: f32, y: f32) -> ChildComponent {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 size: Size { width: w, height: h },
-                fill: None,
-                stroke: None,
-                corner_radius: None,
                 text: None,
-                style: StyleConfig::default(),
+                style: LayerStyle::default(),
                 animation: Default::default(),
                 timing: Default::default(),
             }),
             position: Some(PositionMode::Absolute { x, y }),
             x: None,
             y: None,
-            flex_grow: None,
-            flex_shrink: None,
-            flex_basis: None,
-            align_self: None,
-            grid_column: None,
-            grid_row: None,
         }
     }
 
     #[test]
     fn test_stack_2_children() {
         let stack = Stack {
-            layers: vec![
+            children: vec![
                 shape_child_at(100.0, 100.0, 0.0, 0.0),
                 shape_child_at(50.0, 50.0, 200.0, 150.0),
             ],
-            style: StyleConfig::default(),
+            style: LayerStyle::default(),
         };
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_stack(&stack, &constraints);

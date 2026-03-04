@@ -5,8 +5,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::{extract_video_frame, find_closest_frame, video_frame_cache};
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{ImageFit, Size};
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::schema::{ImageFit, LayerStyle, Size};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 fn default_volume() -> f32 { 1.0 }
 
@@ -30,8 +30,8 @@ pub struct Video {
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Video {

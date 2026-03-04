@@ -5,10 +5,10 @@ use skia_safe::Canvas;
 
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{
-    CodeblockChrome, CodeblockHighlight, CodeblockPadding, CodeblockReveal,
-    CodeblockState, Size,
+    CodeblockChrome, CodeblockHighlight, CodeblockReveal,
+    CodeblockState, LayerStyle, Size,
 };
-use crate::traits::{AnimationConfig, RenderContext, StyleConfig, TimingConfig, Widget};
+use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Codeblock {
@@ -19,24 +19,10 @@ pub struct Codeblock {
     pub theme: String,
     #[serde(default)]
     pub size: Option<Size>,
-    #[serde(default = "default_font_family")]
-    pub font_family: String,
-    #[serde(default = "default_font_size")]
-    pub font_size: f32,
-    #[serde(default = "default_font_weight")]
-    pub font_weight: u16,
-    #[serde(default = "default_line_height")]
-    pub line_height: f32,
-    #[serde(default)]
-    pub background: Option<String>,
     #[serde(default)]
     pub show_line_numbers: bool,
     #[serde(default)]
     pub chrome: Option<CodeblockChrome>,
-    #[serde(default)]
-    pub padding: Option<CodeblockPadding>,
-    #[serde(default = "default_corner_radius")]
-    pub corner_radius: f32,
     #[serde(default)]
     pub highlights: Vec<CodeblockHighlight>,
     #[serde(default)]
@@ -48,8 +34,8 @@ pub struct Codeblock {
     pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(flatten)]
-    pub style: StyleConfig,
+    #[serde(default)]
+    pub style: LayerStyle,
 }
 
 crate::impl_traits!(Codeblock {
@@ -73,8 +59,3 @@ impl Widget for Codeblock {
 
 fn default_language() -> String { "plain".to_string() }
 fn default_theme() -> String { "base16-ocean.dark".to_string() }
-fn default_font_family() -> String { "JetBrains Mono".to_string() }
-fn default_font_size() -> f32 { 16.0 }
-fn default_font_weight() -> u16 { 400 }
-fn default_line_height() -> f32 { 1.5 }
-fn default_corner_radius() -> f32 { 12.0 }
