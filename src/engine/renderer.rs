@@ -27,7 +27,7 @@ pub(crate) fn font_mgr() -> FontMgr {
 /// Global asset cache for decoded images (keyed by file path)
 static ASSET_CACHE: OnceLock<Arc<DashMap<String, skia_safe::Image>>> = OnceLock::new();
 
-fn asset_cache() -> &'static Arc<DashMap<String, skia_safe::Image>> {
+pub(crate) fn asset_cache() -> &'static Arc<DashMap<String, skia_safe::Image>> {
     ASSET_CACHE.get_or_init(|| Arc::new(DashMap::new()))
 }
 
@@ -42,7 +42,7 @@ pub fn clear_asset_cache() {
 /// (frames_rgba, cumulative_times, total_duration) keyed by file path
 static GIF_CACHE: OnceLock<Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>>> = OnceLock::new();
 
-fn gif_cache() -> &'static Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>> {
+pub(crate) fn gif_cache() -> &'static Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>> {
     GIF_CACHE.get_or_init(|| Arc::new(DashMap::new()))
 }
 
@@ -140,6 +140,14 @@ pub fn render_frame(
 // accessed through layer.props()
 
 fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64) -> Result<()> {
+    render_layer_in_container(canvas, layer, config, time, scene_duration, f32::INFINITY, f32::INFINITY)
+}
+
+/// Render a layer with container width constraints for text.
+/// - `wrap_width`: constrains word wrapping for text children.
+/// - `align_width`: overrides text alignment to be within this width (like a block element).
+///   Use f32::INFINITY to keep legacy alignment behavior.
+fn render_layer_in_container(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, wrap_width: f32, align_width: f32) -> Result<()> {
     let lp = layer.props();
 
     // Check start_at / end_at timing
@@ -182,10 +190,10 @@ fn render_layer(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64,
         }
     }
 
-    render_layer_inner(canvas, layer, config, time, scene_duration, &props)
+    render_layer_inner(canvas, layer, config, time, scene_duration, &props, wrap_width, align_width)
 }
 
-fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, props: &AnimatedProperties) -> Result<()> {
+fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, props: &AnimatedProperties, wrap_width: f32, align_width: f32) -> Result<()> {
     // Apply animated transforms
     canvas.save();
 
@@ -240,8 +248,12 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         }
     }
 
+    // Convert f32::INFINITY to None for optional params
+    let ww = if wrap_width.is_finite() { Some(wrap_width) } else { None };
+    let aw = if align_width.is_finite() { Some(align_width) } else { None };
+
     match layer {
-        Layer::Text(text) => render_text(canvas, text, config, props)?,
+        Layer::Text(text) => render_text_constrained(canvas, text, config, props, ww, aw)?,
         Layer::Shape(shape) => render_shape(canvas, shape, props)?,
         Layer::Image(image) => render_image(canvas, image)?,
         Layer::Group(group) => render_group(canvas, group, config, time, scene_duration)?,
@@ -302,7 +314,7 @@ fn render_layer_with_motion_blur(canvas: &Canvas, layer: &Layer, config: &VideoC
         }
         props.opacity /= num_samples as f32;
 
-        render_layer_inner(temp_surface.canvas(), layer, config, sample_time, scene_duration, &props)?;
+        render_layer_inner(temp_surface.canvas(), layer, config, sample_time, scene_duration, &props, f32::INFINITY, f32::INFINITY)?;
     }
 
     // Draw the composited result onto the main canvas
@@ -426,7 +438,7 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
     }
 }
 
-fn format_counter_value(
+pub(crate) fn format_counter_value(
     value: f64,
     decimals: u8,
     separator: &Option<String>,
@@ -551,6 +563,21 @@ fn render_text(
     _config: &VideoConfig,
     props: &AnimatedProperties,
 ) -> Result<()> {
+    render_text_constrained(canvas, text, _config, props, None, None)
+}
+
+/// Render text with optional container constraints.
+/// - `wrap_width`: if Some, constrains word wrapping (combined with text.max_width).
+/// - `align_width`: if Some, text alignment (left/center/right) is relative to this
+///   width (like CSS text-align in a block). When None, uses legacy alignment.
+fn render_text_constrained(
+    canvas: &Canvas,
+    text: &crate::schema::TextLayer,
+    _config: &VideoConfig,
+    props: &AnimatedProperties,
+    wrap_width: Option<f32>,
+    align_width: Option<f32>,
+) -> Result<()> {
     use crate::schema::FontStyleType;
 
     let font_mgr = font_mgr();
@@ -599,7 +626,14 @@ fn render_text(
         text.content.clone()
     };
 
-    let lines = wrap_text(&content, &font, text.max_width);
+    // Effective max_width: use the most restrictive of text.max_width and wrap_width
+    let effective_max_width = match (text.max_width, wrap_width) {
+        (Some(tw), Some(ww)) => Some(tw.min(ww)),
+        (Some(tw), None) => Some(tw),
+        (None, Some(ww)) => Some(ww),
+        (None, None) => None,
+    };
+    let lines = wrap_text(&content, &font, effective_max_width);
     let line_height = text.line_height.unwrap_or(text.font_size * 1.3);
     let letter_spacing = text.letter_spacing.unwrap_or(0.0);
 
@@ -641,10 +675,24 @@ fn render_text(
             let blob_bounds = blob.bounds();
             let line_width = blob_bounds.width();
 
-            let x = match text.align {
-                TextAlign::Left => text.position.x,
-                TextAlign::Center => text.position.x - line_width / 2.0,
-                TextAlign::Right => text.position.x - line_width,
+            // For alignment within a container, use advance width (font.measure_str)
+            // to match the measurement used by measure_layer / flex layout.
+            // blob.bounds().width() is the tight bounding box which differs slightly.
+            let x = if let Some(aw) = align_width {
+                let (advance_width, _) = font.measure_str(line, None);
+                let advance_width = advance_width + letter_spacing * (line.chars().count() as f32 - 1.0).max(0.0);
+                match text.align {
+                    TextAlign::Left => text.position.x,
+                    TextAlign::Center => text.position.x + (aw - advance_width) / 2.0,
+                    TextAlign::Right => text.position.x + aw - advance_width,
+                }
+            } else {
+                // Standalone text: align relative to position using bbox width
+                match text.align {
+                    TextAlign::Left => text.position.x,
+                    TextAlign::Center => text.position.x - line_width / 2.0,
+                    TextAlign::Right => text.position.x - line_width,
+                }
             };
             let y = text.position.y + i as f32 * line_height;
 
@@ -683,7 +731,7 @@ fn render_text(
     Ok(())
 }
 
-fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String> {
     let explicit_lines: Vec<&str> = text.split('\n').collect();
 
     let max_w = match max_width {
@@ -722,7 +770,7 @@ fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String> {
     result
 }
 
-fn make_text_blob_with_spacing(text: &str, font: &Font, spacing: f32) -> Option<TextBlob> {
+pub(crate) fn make_text_blob_with_spacing(text: &str, font: &Font, spacing: f32) -> Option<TextBlob> {
     let glyphs = font.str_to_glyphs_vec(text);
     if glyphs.is_empty() {
         return None;
@@ -914,7 +962,7 @@ fn render_shape_text(
     Ok(())
 }
 
-fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, corner_radius: Option<f32>, paint: &Paint) {
+pub(crate) fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, corner_radius: Option<f32>, paint: &Paint) {
     let rect = Rect::from_xywh(x, y, w, h);
     match shape_type {
         ShapeType::Rect => { canvas.draw_rect(rect, paint); }
@@ -1165,6 +1213,10 @@ struct LayoutResult {
     y: f32,
     width: Option<f32>,
     height: Option<f32>,
+    /// The child's natural (measured) width, always set.
+    /// Used to pass as align_width so text alignment works correctly
+    /// even when the flex layout already positioned the child.
+    natural_width: f32,
 }
 
 fn get_layer_position(layer: &Layer) -> &Position {
@@ -1267,7 +1319,7 @@ fn compute_flex_layout(card: &CardLayer) -> Vec<LayoutResult> {
 
     // Layout each line and stack them on the cross axis
     let mut results: Vec<LayoutResult> = (0..child_sizes.len())
-        .map(|_| LayoutResult { x: 0.0, y: 0.0, width: None, height: None })
+        .map(|i| LayoutResult { x: 0.0, y: 0.0, width: None, height: None, natural_width: child_sizes[i].0 })
         .collect();
     let mut cross_offset = 0.0f32;
 
@@ -1287,6 +1339,7 @@ fn compute_flex_layout(card: &CardLayer) -> Vec<LayoutResult> {
                 y: line_results[j].y,
                 width: line_results[j].width,
                 height: line_results[j].height,
+                natural_width: line_results[j].natural_width,
             };
             let child_align = card.layers[idx].align_self.as_ref().unwrap_or(&card.align);
             if is_row {
@@ -1514,6 +1567,7 @@ fn compute_grid_layout(card: &CardLayer) -> Vec<LayoutResult> {
             y: y + cy,
             width: Some(w.max(0.0)),
             height: Some(h.max(0.0)),
+            natural_width: cw,
         });
     }
 
@@ -1675,10 +1729,11 @@ fn layout_single_line_flex(
         let child_align = child.align_self.as_ref().unwrap_or(align);
         let (cross_pos, stretch_size) = align_item_flex(cross_sizes[i], container_cross, child_align);
 
+        let natural_w = sizes[i].0;
         let mut lr = if is_row {
-            LayoutResult { x: main_pos, y: cross_pos, width: None, height: None }
+            LayoutResult { x: main_pos, y: cross_pos, width: None, height: None, natural_width: natural_w }
         } else {
-            LayoutResult { x: cross_pos, y: main_pos, width: None, height: None }
+            LayoutResult { x: cross_pos, y: main_pos, width: None, height: None, natural_width: natural_w }
         };
 
         // Apply stretch on cross axis
@@ -1777,13 +1832,29 @@ fn render_card(
         canvas.save();
         canvas.translate((result.x - child_pos.x + ml, result.y - child_pos.y + mt));
 
+        // Container width for child rendering:
+        // wrap_width: constrains word wrapping (card content width or forced width)
+        // align_width: controls text alignment scope
+        //   - forced width (stretch/grow): align within the cell
+        //   - natural width: align within the child's own measured width
+        //     (so center-align becomes a no-op, since flex already positioned the child)
+        let (child_wrap_width, child_align_width) = if let Some(w) = result.width {
+            let (child_pl, child_pr) = (child.props().padding().3, child.props().padding().1);
+            let cw = (w - child_pl - child_pr).max(0.0);
+            (cw, cw)
+        } else {
+            let wrap = (card_w - pl - pr).max(0.0);
+            let align = result.natural_width;
+            (wrap, align)
+        };
+
         // Clip to cell bounds if grid/stretch provides forced size
         if let (Some(w), Some(h)) = (result.width, result.height) {
             let clip_rect = Rect::from_xywh(child_pos.x, child_pos.y, w, h);
             canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, false);
         }
 
-        render_layer(canvas, child, config, time, scene_duration)?;
+        render_layer_in_container(canvas, child, config, time, scene_duration, child_wrap_width, child_align_width)?;
         canvas.restore();
     }
 
@@ -1828,7 +1899,7 @@ fn render_group(
     Ok(())
 }
 
-fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+pub(crate) fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     let (prefix, name) = icon
         .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("Invalid icon format: '{}' (expected 'prefix:name')", icon))?;
@@ -2071,7 +2142,7 @@ fn render_svg(canvas: &Canvas, svg: &crate::schema::SvgLayer) -> Result<()> {
 /// Video frame cache: stores decoded RGBA pixels + dimensions instead of raw PNG bytes
 static VIDEO_FRAME_CACHE: OnceLock<Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>>> = OnceLock::new();
 
-fn video_frame_cache() -> &'static Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>> {
+pub(crate) fn video_frame_cache() -> &'static Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>> {
     VIDEO_FRAME_CACHE.get_or_init(|| Arc::new(DashMap::new()))
 }
 
@@ -2201,7 +2272,7 @@ fn render_video(canvas: &Canvas, video: &crate::schema::VideoLayer, time: f64) -
     Ok(())
 }
 
-fn find_closest_frame(frames: &[(f64, Vec<u8>, u32, u32)], target_time: f64) -> Option<(&[u8], u32, u32)> {
+pub(crate) fn find_closest_frame(frames: &[(f64, Vec<u8>, u32, u32)], target_time: f64) -> Option<(&[u8], u32, u32)> {
     if frames.is_empty() {
         return None;
     }
@@ -2223,7 +2294,7 @@ fn find_closest_frame(frames: &[(f64, Vec<u8>, u32, u32)], target_time: f64) -> 
     Some((rgba, w, h))
 }
 
-fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
+pub(crate) fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
     let output = std::process::Command::new("ffmpeg")
         .args([
             "-ss", &format!("{:.3}", time),

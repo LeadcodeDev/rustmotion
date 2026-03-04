@@ -877,7 +877,7 @@ pub struct CodeblockLayer {
     pub margin: Option<Spacing>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodeblockChrome {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -910,7 +910,7 @@ impl Default for CodeblockPadding {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodeblockHighlight {
     pub lines: Vec<u32>,
     #[serde(default = "default_highlight_color")]
@@ -921,7 +921,7 @@ pub struct CodeblockHighlight {
     pub end: Option<f64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodeblockReveal {
     pub mode: RevealMode,
     #[serde(default)]
@@ -932,14 +932,14 @@ pub struct CodeblockReveal {
     pub easing: EasingType,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RevealMode {
     Typewriter,
     LineByLine,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodeblockState {
     pub code: String,
     pub at: f64,

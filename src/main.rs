@@ -3,6 +3,13 @@ mod engine;
 mod schema;
 mod tui;
 
+// v2 architecture (M1: Foundation)
+#[macro_use]
+mod macros;
+mod components;
+mod layout;
+mod traits;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -299,7 +306,10 @@ fn render_single_frame(scenario: &schema::Scenario, frame_num: u32, output: &Pat
         let scene_frames = (scene.duration * fps as f64).round() as u32;
         if frame_num < frame_offset + scene_frames {
             let local_frame = frame_num - frame_offset;
-            let rgba = engine::render_frame(config, scene, local_frame, scene_frames)?;
+
+            let rgba = engine::render_v2::render_scene_frame(
+                config, scene, local_frame, scene_frames,
+            )?;
 
             // Save as PNG using the image crate
             let img = image::RgbaImage::from_raw(config.width, config.height, rgba)

@@ -9,7 +9,7 @@ use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
-use crate::engine::{render_frame, rgba_to_yuv420, preextract_video_frames, prefetch_icons};
+use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
 use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
@@ -136,12 +136,14 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
 }
 
 fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -> Result<Vec<u8>> {
+    use crate::engine::render_v2::render_scene_frame;
+
     match task {
         FrameTask::Normal {
             scene_idx,
             frame_in_scene,
             scene_total_frames,
-        } => render_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames),
+        } => render_scene_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames),
         FrameTask::Transition {
             scene_a_idx,
             scene_b_idx,
@@ -152,13 +154,13 @@ fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -
             transition_type,
             transition_duration,
         } => {
-            let frame_a = render_frame(
+            let frame_a = render_scene_frame(
                 config,
                 &scenes[*scene_a_idx],
                 scene_a_frame_offset + frame_in_transition,
                 *scene_a_total_frames,
             )?;
-            let frame_b = render_frame(
+            let frame_b = render_scene_frame(
                 config,
                 &scenes[*scene_b_idx],
                 *frame_in_transition,

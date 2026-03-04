@@ -396,6 +396,57 @@ pub fn render_codeblock(
     Ok(())
 }
 
+/// V2 entry point: render a Codeblock component at the current canvas origin.
+/// Constructs a temporary CodeblockLayer and delegates to the existing renderer.
+pub fn render_codeblock_v2(
+    canvas: &Canvas,
+    cb: &crate::components::Codeblock,
+    time: f64,
+) -> Result<()> {
+    use crate::schema::{Position, CodeblockLayer};
+    use crate::engine::animator::AnimatedProperties;
+
+    let layer = CodeblockLayer {
+        code: cb.code.clone(),
+        language: cb.language.clone(),
+        theme: cb.theme.clone(),
+        position: Position { x: 0.0, y: 0.0 },
+        size: cb.size.clone(),
+        font_family: cb.font_family.clone(),
+        font_size: cb.font_size,
+        font_weight: cb.font_weight,
+        line_height: cb.line_height,
+        background: cb.background.clone(),
+        opacity: 1.0,
+        show_line_numbers: cb.show_line_numbers,
+        chrome: cb.chrome.clone(),
+        padding: cb.padding.clone(),
+        corner_radius: cb.corner_radius,
+        highlights: cb.highlights.clone(),
+        reveal: cb.reveal.clone(),
+        states: cb.states.clone(),
+        animations: vec![],
+        preset: None,
+        preset_config: None,
+        start_at: None,
+        end_at: None,
+        wiggle: None,
+        motion_blur: None,
+        margin: None,
+    };
+
+    let dummy_config = crate::schema::VideoConfig {
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        background: "#000000".to_string(),
+        codec: None,
+        crf: None,
+    };
+
+    render_codeblock(canvas, &layer, &dummy_config, time, &AnimatedProperties::default())
+}
+
 // ─── Dimension computation ───────────────────────────────────────────────────
 
 fn compute_code_dimensions(
