@@ -65,3 +65,6 @@ rubato = "0.16"
 
 # File watching
 notify = "7"
+
+# HTTP client (blocking, for Iconify API)
+ureq = "3"

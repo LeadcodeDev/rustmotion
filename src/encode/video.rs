@@ -9,7 +9,7 @@ use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
-use crate::engine::{render_frame, rgba_to_yuv420, preextract_video_frames};
+use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
 use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
@@ -42,6 +42,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     // Pre-extract video frames in bulk (if any VideoLayer present)
     preextract_video_frames(&scenario.scenes, fps);
 
+    // Pre-fetch icon SVGs from Iconify API before parallel rendering
+    prefetch_icons(&scenario.scenes);
+
     // Build a flat list of frame tasks
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -62,9 +65,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
 
     let api = OpenH264API::from_source();
     let pixels = (width * height) as u32;
-    let target_bitrate = (pixels as f64 * fps as f64 * 0.3) as u32;
+    let target_bitrate = (pixels as f64 * fps as f64 * 0.1) as u32;
     let encoder_config = EncoderConfig::new()
-        .set_bitrate_bps(target_bitrate.max(10_000_000))
+        .set_bitrate_bps(target_bitrate.max(3_000_000))
         .max_frame_rate(fps as f32);
     let mut encoder = Encoder::with_api_config(api, encoder_config)?;
     let mut h264_data: Vec<u8> = Vec::new();
@@ -133,12 +136,14 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
 }
 
 fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -> Result<Vec<u8>> {
+    use crate::engine::render_v2::render_scene_frame;
+
     match task {
         FrameTask::Normal {
             scene_idx,
             frame_in_scene,
             scene_total_frames,
-        } => render_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames),
+        } => render_scene_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames),
         FrameTask::Transition {
             scene_a_idx,
             scene_b_idx,
@@ -149,13 +154,13 @@ fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -
             transition_type,
             transition_duration,
         } => {
-            let frame_a = render_frame(
+            let frame_a = render_scene_frame(
                 config,
                 &scenes[*scene_a_idx],
                 scene_a_frame_offset + frame_in_transition,
                 *scene_a_total_frames,
             )?;
-            let frame_b = render_frame(
+            let frame_b = render_scene_frame(
                 config,
                 &scenes[*scene_b_idx],
                 *frame_in_transition,
@@ -239,6 +244,8 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
     let width = config.width;
     let height = config.height;
 
+    prefetch_icons(&scenario.scenes);
+
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
 
@@ -294,6 +301,8 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
     let width = config.width;
     let height = config.height;
     let fps = config.fps;
+
+    prefetch_icons(&scenario.scenes);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -367,6 +376,8 @@ pub fn encode_with_ffmpeg(
     let width = config.width;
     let height = config.height;
     let fps = config.fps;
+
+    prefetch_icons(&scenario.scenes);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;

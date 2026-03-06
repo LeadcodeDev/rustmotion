@@ -18,15 +18,17 @@
   "scenes": [
     {
       "duration": 2.0,
-      "layers": [
+      "children": [
         {
           "type": "text",
           "content": "Audio Test",
           "position": { "x": 540, "y": 900 },
-          "font_size": 72,
-          "color": "#FFFFFF",
-          "font_weight": "bold",
-          "align": "center",
+          "style": {
+            "font-size": 72,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
           "preset": "fade_in_up"
         }
       ]
@@ -35,14 +37,16 @@
       "duration": 2.0,
       "background": "#1e3a5f",
       "transition": { "type": "fade", "duration": 0.5 },
-      "layers": [
+      "children": [
         {
           "type": "text",
           "content": "With 440Hz Tone",
           "position": { "x": 540, "y": 900 },
-          "font_size": 56,
-          "color": "#22c55e",
-          "align": "center"
+          "style": {
+            "font-size": 56,
+            "color": "#22c55e",
+            "text-align": "center"
+          }
         }
       ]
     }

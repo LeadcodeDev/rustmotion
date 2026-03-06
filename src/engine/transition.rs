@@ -39,13 +39,14 @@ pub fn apply_transition(
 }
 
 fn blend_fade(frame_a: &[u8], frame_b: &[u8], progress: f32) -> Vec<u8> {
+    let inv = 1.0 - progress;
     frame_a
         .iter()
         .zip(frame_b.iter())
         .map(|(&a, &b)| {
-            let va = a as f32 * (1.0 - progress);
+            let va = a as f32 * inv;
             let vb = b as f32 * progress;
-            (va + vb).clamp(0.0, 255.0) as u8
+            (va + vb + 0.5) as u8
         })
         .collect()
 }
@@ -332,20 +333,7 @@ fn slide_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, pro
     surface_to_pixels(surface, width, height)
 }
 
-fn dissolve_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32) -> Vec<u8> {
-    let w = width as usize;
-    let h = height as usize;
-    let mut result = vec![0u8; w * h * 4];
-
-    for row in 0..h {
-        for col in 0..w {
-            let idx = (row * w + col) * 4;
-            // Simple hash-based noise for dissolve
-            let hash = ((row * 7919 + col * 6271 + 1013) % 10000) as f32 / 10000.0;
-            let src = if hash < progress { frame_b } else { frame_a };
-            result[idx..idx + 4].copy_from_slice(&src[idx..idx + 4]);
-        }
-    }
-
-    result
+fn dissolve_transition(frame_a: &[u8], frame_b: &[u8], _width: u32, _height: u32, progress: f32) -> Vec<u8> {
+    // Dissolve is a smooth cross-dissolve (same as fade in standard video editing)
+    blend_fade(frame_a, frame_b, progress)
 }

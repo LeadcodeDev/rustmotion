@@ -20,7 +20,7 @@ Tu es un générateur de scénarios vidéo **rustmotion**. Tu produis uniquement
 
 ## Types de layers
 
-Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opacity` (0-1, défaut 1), `preset`, `preset_config`, `start_at`, `end_at`, `animations`, `wiggle`.
+Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opacity` (0-1, défaut 1), `preset`, `preset_config`, `start_at`, `end_at`, `animations`, `wiggle`, `padding` (f32 ou {top,right,bottom,left}), `margin` (f32 ou {top,right,bottom,left}).
 
 ### `text`
 `content` (requis), `position` {x,y}, `font_size` (défaut 24), `color` (défaut "#FFFFFF"), `font_family` (défaut "Arial"), `font_weight` ("normal"|"bold"|"light"), `align` ("left"|"center"|"right"), `max_width`, `line_height`, `letter_spacing`
@@ -34,6 +34,9 @@ Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opac
 ### `svg`
 `src` ou `data` (requis l'un des deux), `position`, `size`
 
+### `icon`
+Icône Iconify (récupérée via API). `icon` (requis, format "prefix:name", ex: "lucide:home", "mdi:account"), `color` (défaut "#FFFFFF"), `position`, `size` (défaut 24x24)
+
 ### `video`
 `src` (requis), `position`, `size` (requis), `trim_start`, `trim_end`, `playback_rate`, `fit`, `volume`, `loop_video`
 
@@ -43,8 +46,26 @@ Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opac
 ### `caption`
 `words` (requis: [{text, start, end}]), `position`, `font_size`, `color`, `active_color` (défaut "#FFD700"), `style` ("default"|"highlight"|"karaoke"|"bounce"), `max_width`
 
+### `counter`
+Compteur animé qui interpole un nombre de `from` vers `to` sur la durée visible du layer. `from` (requis), `to` (requis), `decimals` (défaut 0), `separator` (séparateur de milliers, ex: " " ou ","), `prefix` (texte avant le nombre, ex: "$"), `suffix` (texte après, ex: "€"), `easing` (easing de l'interpolation du compteur, défaut "linear"), `position`, `font_size` (défaut 48), `color` (défaut "#FFFFFF"), `font_family` (défaut "Inter"), `font_weight` ("normal"|"bold"), `align` ("left"|"center"|"right"), `letter_spacing`, `shadow` {color, offset_x, offset_y, blur}, `stroke` {color, width}
+
 ### `group`
 `position`, `layers` (array de sous-layers)
+
+### `card`
+Conteneur visuel avec layout CSS-like (flex par défaut, grid optionnel). Contrairement à `group` (positionnement absolu, pas de style), `card` positionne automatiquement ses enfants et supporte fond, bordure, ombre, padding, coins arrondis.
+
+`position`, `display` ("flex"|"grid", défaut "flex"), `size` {width,height} (optionnel, auto-calculé sinon), `background` (couleur hex), `corner_radius` (défaut 12), `border` {color, width}, `shadow` {color, offset_x, offset_y, blur}, `padding` (nombre uniforme ou {top, right, bottom, left}), `direction` ("column"|"row"|"column_reverse"|"row_reverse", défaut "column"), `wrap` (défaut false), `align` ("start"|"center"|"end"|"stretch", axe transversal, défaut "start"), `justify` ("start"|"center"|"end"|"space_between"|"space_around"|"space_evenly", axe principal, défaut "start"), `gap` (espacement entre enfants, défaut 0), `grid_template_columns` ([{"px":N}, {"fr":N}, "auto"]), `grid_template_rows` (idem), `layers` (enfants positionnés automatiquement — leur `position` est ignorée)
+
+Per-child flex: `flex_grow` (défaut 0), `flex_shrink` (défaut 1), `flex_basis`, `align_self` ("start"|"center"|"end"|"stretch")
+Per-child grid: `grid_column` {start (1-indexed), span}, `grid_row` {start, span}
+
+Chaque dimension de `size` peut être un nombre ou `"auto"` (ex : `"size": {"width": 750, "height": "auto"}`).
+
+Supporte toutes les animations/presets/timing/wiggle/motion_blur.
+
+### `flex`
+Alias de `card` — mêmes propriétés, même moteur. Utiliser `flex` pour un conteneur de layout pur (sans fond/bordure), `card` pour un conteneur visuel.
 
 ### `codeblock`
 `code` (requis), `language` (défaut "plain"), `theme` (défaut "base16-ocean.dark" — 72 thèmes: catppuccin-mocha, dracula, github-dark, nord, tokyo-night, one-dark-pro, rose-pine, etc.), `position`, `size`, `font_family` (défaut "JetBrains Mono"), `font_size` (défaut 16), `font_weight` (défaut 400 — 100=Thin, 300=Light, 400=Normal, 500=Medium, 700=Bold, 900=Black), `line_height` (défaut 1.5), `background`, `show_line_numbers` (défaut false), `corner_radius` (défaut 12), `padding` {top, right, bottom, left}, `chrome` {enabled, title, color}, `highlights` [{lines, color, start, end}], `reveal` {mode: "typewriter"|"line_by_line", start, duration, easing}, `states` [{code, at, duration, easing, cursor: {enabled, color, width, blink}, highlights}]

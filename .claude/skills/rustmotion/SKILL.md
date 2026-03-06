@@ -52,7 +52,7 @@ A scenario is a JSON object with:
 | ------------ | ------ | -------- | ---------------------------------------------- |
 | `duration`   | f64    | required | Scene duration in seconds (must be > 0)        |
 | `background` | string | `null`   | Override video background for this scene       |
-| `layers`     | array  | `[]`     | Layers rendered in order (first = back)        |
+| `children`   | array  | `[]`     | Components rendered in order (first = back)    |
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
 
@@ -68,22 +68,49 @@ Default transition duration: `0.5` seconds.
 
 ---
 
-## Layer Types
+## Component Types
 
-All layers are discriminated by the `"type"` field. Layers are rendered in array order (first = bottom).
+All components are discriminated by the `"type"` field. Components are rendered in array order (first = bottom).
 
-### Common optional fields (on most layers)
+### Style object
+
+All visual/typographic properties go inside a nested `"style"` object using CSS kebab-case naming:
+
+```json
+{
+  "type": "text",
+  "content": "Hello",
+  "position": { "x": 100, "y": 100 },
+  "style": {
+    "font-size": 48,
+    "color": "#FFFFFF",
+    "font-weight": "bold",
+    "text-align": "center"
+  }
+}
+```
+
+### Common optional fields (on most components)
+
+These stay at the root level (NOT inside `style`):
 
 | Field           | Type   | Default | Description                                      |
 | --------------- | ------ | ------- | ------------------------------------------------ |
-| `opacity`       | f32    | `1.0`   | 0.0 to 1.0                                       |
 | `animations`    | array  | `[]`    | Custom keyframe animations                       |
 | `preset`        | string | `null`  | Animation preset name                            |
 | `preset_config` | object | `null`  | `{ "delay": 0, "duration": 0.8, "loop": false }` |
-| `start_at`      | f64    | `null`  | Show layer starting at this time (seconds)       |
-| `end_at`        | f64    | `null`  | Hide layer after this time (seconds)             |
+| `start_at`      | f64    | `null`  | Show component starting at this time (seconds)   |
+| `end_at`        | f64    | `null`  | Hide component after this time (seconds)         |
 | `wiggle`        | array  | `null`  | Procedural noise-based animation                 |
 | `motion_blur`   | f32    | `null`  | Motion blur intensity                            |
+
+These go inside `"style"`:
+
+| Style field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `opacity` | f32 | `1.0` | 0.0 to 1.0 |
+| `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
+| `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
 
 ### 1. `text`
 
@@ -92,29 +119,36 @@ All layers are discriminated by the `"type"` field. Layers are rendered in array
   "type": "text",
   "content": "Hello World",
   "position": { "x": 100, "y": 100 },
-  "font_size": 48,
-  "color": "#FFFFFF",
-  "font_family": "Arial",
-  "font_weight": "bold",
-  "align": "center",
   "max_width": 800,
-  "line_height": 1.2,
-  "letter_spacing": 2.0
+  "style": {
+    "font-size": 48,
+    "color": "#FFFFFF",
+    "font-family": "Arial",
+    "font-weight": "bold",
+    "text-align": "center",
+    "line-height": 1.2,
+    "letter-spacing": 2.0
+  }
 }
 ```
 
-| Field            | Type     | Default                                               |
-| ---------------- | -------- | ----------------------------------------------------- |
-| `content`        | string   | required                                              |
-| `position`       | `{x, y}` | `{0, 0}`                                              |
-| `font_size`      | f32      | `24.0`                                                |
-| `color`          | string   | `"#FFFFFF"`                                           |
-| `font_family`    | string   | `"Arial"`                                             |
-| `font_weight`    | enum     | `"normal"` — options: `"normal"`, `"bold"`, `"light"` |
-| `align`          | enum     | `"left"` — options: `"left"`, `"center"`, `"right"`   |
-| `max_width`      | f32      | `null`                                                |
-| `line_height`    | f32      | `null`                                                |
-| `letter_spacing` | f32      | `null`                                                |
+**Root fields:** `content` (required), `position`, `max_width`
+
+**Style fields:**
+
+| Style field       | Type     | Default    |
+| ----------------- | -------- | ---------- |
+| `font-size`       | f32      | `48.0`     |
+| `color`           | string   | `"#FFFFFF"` |
+| `font-family`     | string   | `"Inter"`  |
+| `font-weight`     | enum     | `"normal"` — `"normal"`, `"bold"` |
+| `font-style`      | enum     | `"normal"` — `"normal"`, `"italic"`, `"oblique"` |
+| `text-align`      | enum     | `"left"` — `"left"`, `"center"`, `"right"` |
+| `line-height`     | f32      | `null`     |
+| `letter-spacing`  | f32      | `null`     |
+| `text-shadow`     | object   | `null` — `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
+| `stroke`          | object   | `null` — `{ "color": "#000", "width": 2 }` |
+| `text-background` | object   | `null` — `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
 
 ### 2. `shape`
 
@@ -124,21 +158,23 @@ All layers are discriminated by the `"type"` field. Layers are rendered in array
   "shape": "rounded_rect",
   "position": { "x": 50, "y": 50 },
   "size": { "width": 200, "height": 100 },
-  "fill": "#FF5733",
-  "corner_radius": 16,
-  "stroke": { "color": "#FFFFFF", "width": 2 }
+  "style": {
+    "fill": "#FF5733",
+    "border-radius": 16,
+    "stroke": { "color": "#FFFFFF", "width": 2 }
+  }
 }
 ```
 
-| Field           | Type               | Default                            |
-| --------------- | ------------------ | ---------------------------------- |
-| `shape`         | enum               | required                           |
-| `position`      | `{x, y}`           | `{0, 0}`                           |
-| `size`          | `{width, height}`  | `{100, 100}`                       |
-| `fill`          | string or gradient | `null`                             |
-| `stroke`        | `{color, width}`   | `null`                             |
-| `corner_radius` | f32                | `null` (for `rounded_rect`)        |
-| `text`          | object             | `null` — embedded text (see below) |
+**Root fields:** `shape` (required), `position`, `size`, `text`
+
+**Style fields:**
+
+| Style field     | Type               | Default     |
+| --------------- | ------------------ | ----------- |
+| `fill`          | string or gradient | `null`      |
+| `stroke`        | `{color, width}`   | `null`      |
+| `border-radius` | f32                | `null`      |
 
 **Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
 
@@ -212,7 +248,31 @@ Gradient types: `linear`, `radial`.
 | `position` | `{x, y}`          | `{0, 0}`                                                    |
 | `size`     | `{width, height}` | `null`                                                      |
 
-### 5. `video`
+### 5. `icon`
+
+Renders an icon from the Iconify library (fetched via API).
+
+```json
+{
+  "type": "icon",
+  "icon": "lucide:home",
+  "position": { "x": 540, "y": 400 },
+  "size": { "width": 64, "height": 64 },
+  "style": {
+    "color": "#38bdf8"
+  }
+}
+```
+
+| Field      | Type              | Default                                                  |
+| ---------- | ----------------- | -------------------------------------------------------- |
+| `icon`     | string            | required — Iconify id `"prefix:name"` (e.g. `"lucide:home"`) |
+| `position` | `{x, y}`          | `{0, 0}`                                                 |
+| `size`     | `{width, height}` | `{24, 24}`                                               |
+
+**Style:** `color` (default `"#FFFFFF"`)
+
+### 6. `video`
 
 ```json
 {
@@ -237,7 +297,7 @@ Gradient types: `linear`, `radial`.
 | `volume`        | f32               | `1.0`     |
 | `loop_video`    | bool              | `null`    |
 
-### 6. `gif`
+### 7. `gif`
 
 ```json
 {
@@ -256,7 +316,7 @@ Gradient types: `linear`, `radial`.
 | `fit`      | enum              | `"cover"` |
 | `loop_gif` | bool              | `true`    |
 
-### 7. `caption`
+### 8. `caption`
 
 Timed word-by-word captions with active word highlighting.
 
@@ -268,45 +328,157 @@ Timed word-by-word captions with active word highlighting.
     { "text": "World", "start": 0.5, "end": 1.0 }
   ],
   "position": { "x": 540, "y": 1600 },
-  "font_size": 48,
-  "color": "#FFFFFF",
-  "active_color": "#FFD700",
-  "style": "highlight",
-  "max_width": 900
+  "mode": "highlight",
+  "max_width": 900,
+  "style": {
+    "font-size": 48,
+    "color": "#FFFFFF"
+  }
 }
 ```
+
+**Root fields:** `words` (required), `position`, `mode`, `max_width`, `active_color`
 
 | Field          | Type     | Default                                                                    |
 | -------------- | -------- | -------------------------------------------------------------------------- |
 | `words`        | array    | required — `[{ "text", "start", "end" }]`                                  |
 | `position`     | `{x, y}` | `{0, 0}`                                                                   |
-| `font_size`    | f32      | `24.0`                                                                     |
-| `font_family`  | string   | `null`                                                                     |
-| `color`        | string   | `"#FFFFFF"`                                                                |
+| `mode`         | enum     | `"default"` — options: `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
 | `active_color` | string   | `"#FFD700"`                                                                |
-| `background`   | string   | `null`                                                                     |
-| `style`        | enum     | `"default"` — options: `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
 | `max_width`    | f32      | `null`                                                                     |
 
-### 8. `group`
+**Style fields:** `font-size` (default `48.0`), `font-family`, `color` (default `"#FFFFFF"`), `background`
 
-Groups multiple layers with shared position and animations.
+### 9. `counter`
+
+Animated number counter that interpolates from a start value to an end value.
+
+```json
+{
+  "type": "counter",
+  "from": 0,
+  "to": 1250,
+  "decimals": 0,
+  "separator": " ",
+  "suffix": "€",
+  "easing": "ease_out",
+  "position": { "x": 540, "y": 960 },
+  "start_at": 0.5,
+  "end_at": 2.5,
+  "preset": "fade_in_up",
+  "style": {
+    "font-size": 72,
+    "color": "#FFFFFF",
+    "font-weight": "bold",
+    "text-align": "center"
+  }
+}
+```
+
+**Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`, `position`
+
+**Style fields:** `font-size` (default `48.0`), `color` (default `"#FFFFFF"`), `font-family` (default `"Inter"`), `font-weight`, `font-style`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
+
+The counter animates over the component's visible duration (`start_at` to `end_at`, or full scene). The `easing` controls the number interpolation curve, independent from visual animation presets.
+
+### 10. `group`
+
+Groups multiple components with shared position and animations.
 
 ```json
 {
   "type": "group",
   "position": { "x": 100, "y": 100 },
-  "layers": [ ... ],
+  "children": [ ... ],
   "preset": "fade_in"
 }
 ```
 
-| Field      | Type     | Default              |
-| ---------- | -------- | -------------------- |
-| `position` | `{x, y}` | `{0, 0}`             |
-| `layers`   | array    | `[]` — nested layers |
+| Field      | Type     | Default                  |
+| ---------- | -------- | ------------------------ |
+| `position` | `{x, y}` | `{0, 0}`                 |
+| `children` | array    | `[]` — nested components |
 
-### 9. `codeblock`
+### 11. `card`
+
+Visual container with CSS-like flex & grid layout. Unlike `group` (absolute positioning, no style), `card` auto-positions children and supports background, border, shadow, padding, corner radius.
+
+Each dimension of `size` can be a number or `"auto"` (e.g. `"size": { "width": 750, "height": "auto" }`) to auto-size from children.
+
+### 12. `flex`
+
+Alias for `card` — same properties, same engine. Use `flex` for pure layout (no background/border), `card` for visual containers.
+
+**Flex example** (with `flex-grow`):
+```json
+{
+  "type": "card",
+  "size": { "width": 800, "height": 100 },
+  "style": {
+    "flex-direction": "row",
+    "gap": 16
+  },
+  "children": [
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#FF0000" } },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#00FF00", "flex-grow": 1 } },
+    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#0000FF" } }
+  ]
+}
+```
+
+**Grid example** (2x2):
+```json
+{
+  "type": "card",
+  "size": { "width": 600, "height": 400 },
+  "style": {
+    "display": "grid",
+    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
+    "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+    "gap": 16,
+    "padding": 24,
+    "background": "#1a1a2e"
+  },
+  "children": [
+    { "type": "text", "content": "Cell 1", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 2", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 3", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 4", "style": { "color": "#FFFFFF" } }
+  ]
+}
+```
+
+**Root fields:** `position`, `size`, `children`
+
+**Style fields:**
+
+| Style field              | Type        | Default    |
+| ------------------------ | ----------- | ---------- |
+| `display`                | enum        | `"flex"` — `"flex"` or `"grid"` |
+| `background`             | string      | `null` — hex background color |
+| `border-radius`          | f32         | `12.0`     |
+| `border`                 | object      | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
+| `box-shadow`             | object      | `null` — `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
+| `padding`                | f32 or obj  | `null` — uniform `24` or `{ "top": 24, "right": 24, "bottom": 24, "left": 24 }` |
+| `flex-direction`         | enum        | `"column"` — `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
+| `flex-wrap`              | bool        | `false` — wrap children to next line |
+| `align-items`            | enum        | `"start"` — cross-axis: `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `justify-content`        | enum        | `"start"` — main-axis: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
+| `gap`                    | f32         | `0` — spacing between children in pixels |
+| `grid-template-columns`  | array       | `null` — grid column defs: `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid-template-rows`     | array       | `null` — grid row defs (defaults to `[{"fr": 1}]`) |
+
+**Per-child layout properties** (in child's `"style"` object):
+- `flex-grow` (f32) — how much the child grows to fill remaining space (default 0)
+- `flex-shrink` (f32) — how much the child shrinks when space is insufficient (default 1)
+- `flex-basis` (f32) — base size before grow/shrink (defaults to natural size)
+- `align-self` (enum) — per-child cross-axis override: `"start"`, `"center"`, `"end"`, `"stretch"`
+- `grid-column` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid column placement
+- `grid-row` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid row placement
+
+Children `position` is ignored — the card computes layout from style properties. Supports all common fields (animations, presets, timing, wiggle, motion_blur).
+
+### 13. `codeblock`
 
 Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
 
@@ -317,10 +489,14 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
   "language": "rust",
   "theme": "base16-ocean.dark",
   "position": { "x": 200, "y": 150 },
-  "font_size": 18,
   "show_line_numbers": true,
   "chrome": { "enabled": true, "title": "main.rs" },
   "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
+  "style": {
+    "font-size": 18,
+    "border-radius": 12,
+    "padding": 16
+  },
   "states": [
     {
       "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
@@ -332,42 +508,19 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
 }
 ```
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `code` | string | required |
-| `language` | string | `"plain"` — e.g. `"rust"`, `"javascript"`, `"python"`, `"go"`, `"typescript"` |
-| `theme` | string | `"base16-ocean.dark"` — 72 themes available (see below) |
-| `position` | `{x, y}` | `{0, 0}` |
-| `size` | `{width, height}` | `null` (auto-calculated) |
-| `font_family` | string | `"JetBrains Mono"` |
-| `font_size` | f32 | `16.0` |
-| `font_weight` | u16 | `400` — 100=Thin, 300=Light, 400=Normal, 500=Medium, 600=SemiBold, 700=Bold, 900=Black |
-| `line_height` | f32 | `1.5` (multiplier) |
-| `background` | string | `null` (uses theme bg) |
-| `show_line_numbers` | bool | `false` |
-| `corner_radius` | f32 | `12.0` |
-| `padding` | `{top, right, bottom, left}` | `{16, 16, 16, 16}` |
-| `chrome` | object | `null` — `{ "enabled": true, "title": "file.rs", "color": "#343d46" }` |
-| `highlights` | array | `[]` — `[{ "lines": [2], "color": "#FFFF0033", "start": 1.0, "end": 3.0 }]` |
-| `reveal` | object | `null` — `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` |
-| `states` | array | `[]` — code mutations with diff transitions |
+**Root fields:** `code` (required), `language`, `theme`, `position`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
 
-**States (diff transitions):**
+**Style fields:**
 
-```json
-{
-  "states": [{
-    "code": "new code...",
-    "at": 5.0,
-    "duration": 0.6,
-    "easing": "ease_in_out",
-    "cursor": { "enabled": true, "color": "#FFFFFF", "width": 2.0, "blink": true },
-    "highlights": [{ "lines": [1], "color": "#FFFF0022" }]
-  }]
-}
-```
-
-Unchanged lines slide to new positions, deleted lines fade out, inserted lines fade in, modified lines show a cursor editing effect (backspace then type new text).
+| Style field     | Type   | Default              |
+| --------------- | ------ | -------------------- |
+| `font-family`   | string | `"JetBrains Mono"`   |
+| `font-size`     | f32    | `14.0`               |
+| `font-weight`   | enum   | `"normal"`           |
+| `line-height`   | f32    | `1.5` (multiplier)   |
+| `background`    | string | `null` (uses theme)  |
+| `border-radius` | f32    | `12.0`               |
+| `padding`       | f32 or obj | `16`             |
 
 **Available themes (72):** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`, `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
 
@@ -415,7 +568,8 @@ Use `"preset"` instead of manual keyframes:
   "content": "Hello",
   "position": { "x": 540, "y": 500 },
   "preset": "fade_in_up",
-  "preset_config": { "delay": 0.2, "duration": 0.8, "loop": false }
+  "preset_config": { "delay": 0.2, "duration": 0.8, "loop": false },
+  "style": { "font-size": 48, "color": "#FFFFFF" }
 }
 ```
 
@@ -453,45 +607,51 @@ Use `"preset"` instead of manual keyframes:
   "scenes": [
     {
       "duration": 3.0,
-      "layers": [
+      "children": [
         {
           "type": "shape",
           "shape": "rounded_rect",
           "position": { "x": 140, "y": 760 },
           "size": { "width": 800, "height": 400 },
-          "fill": {
-            "type": "linear",
-            "colors": ["#6366f1", "#8b5cf6"],
-            "angle": 135
-          },
-          "corner_radius": 24,
-          "preset": "scale_in"
+          "preset": "scale_in",
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#6366f1", "#8b5cf6"],
+              "angle": 135
+            },
+            "border-radius": 24
+          }
         },
         {
           "type": "text",
           "content": "Hello rustmotion!",
           "position": { "x": 540, "y": 940 },
-          "font_size": 56,
-          "color": "#FFFFFF",
-          "font_weight": "bold",
-          "align": "center",
           "preset": "fade_in_up",
-          "preset_config": { "delay": 0.3, "duration": 0.8 }
+          "preset_config": { "delay": 0.3, "duration": 0.8 },
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
         }
       ]
     },
     {
       "duration": 2.0,
       "transition": { "type": "fade", "duration": 0.5 },
-      "layers": [
+      "children": [
         {
           "type": "text",
           "content": "Powered by Rust + Skia",
           "position": { "x": 540, "y": 960 },
-          "font_size": 36,
-          "color": "#94a3b8",
-          "align": "center",
-          "preset": "fade_in"
+          "preset": "fade_in",
+          "style": {
+            "font-size": 36,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
         }
       ]
     }
@@ -555,10 +715,11 @@ rustmotion render scenario.json -o output.mp4 --output-format json
 1. **Even dimensions**: `width` and `height` must be even numbers for H.264 encoding
 2. **Common resolutions**: 1080x1920 (portrait 9:16), 1920x1080 (landscape 16:9), 1080x1080 (square)
 3. **Timing**: `start_at` must be < `end_at` when both are specified
-4. **Layer order**: Layers render bottom-to-top (first layer in array = behind)
+4. **Component order**: Components render bottom-to-top (first in array = behind)
 5. **File paths**: Image, video, GIF, SVG `src` paths are relative to the working directory
-6. **SVG layers**: Must have either `src` or `data`, not both empty
-7. **At least one scene** is required, each with `duration > 0`
-8. **Colors**: Use hex format `#RRGGBB` or `#RRGGBBAA`
-9. **Presets vs animations**: `preset` is a shorthand; explicit `animations` override preset animations on the same property
-10. **Continuous presets** (`pulse`, `float`, `shake`, `spin`) should use `"loop": true` in `preset_config`
+6. **SVG components**: Must have either `src` or `data`, not both empty
+7. **Icon components**: `icon` must be in `"prefix:name"` format (e.g. `"lucide:home"`). Requires internet access to fetch from the Iconify API.
+8. **At least one scene** is required, each with `duration > 0`
+9. **Colors**: Use hex format `#RRGGBB` or `#RRGGBBAA`
+10. **Presets vs animations**: `preset` is a shorthand; explicit `animations` override preset animations on the same property
+11. **Continuous presets** (`pulse`, `float`, `shake`, `spin`) should use `"loop": true` in `preset_config`
