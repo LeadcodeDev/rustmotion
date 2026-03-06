@@ -1,0 +1,29 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG_VERSION=${GITHUB_REF#refs/tags/}
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Publish rustmotion
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

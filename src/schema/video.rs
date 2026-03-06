@@ -5,12 +5,22 @@ use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig};
 
 /// Common trait for layer types that support animation, timing, wiggle, and motion blur
 pub trait LayerProps {
-    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>);
+    fn animations(
+        &self,
+    ) -> (
+        &[Animation],
+        Option<&AnimationPreset>,
+        Option<&PresetConfig>,
+    );
     fn timing(&self) -> (Option<f64>, Option<f64>);
     fn wiggle(&self) -> Option<&[WiggleConfig]>;
     fn motion_blur(&self) -> Option<f32>;
-    fn padding(&self) -> (f32, f32, f32, f32) { (0.0, 0.0, 0.0, 0.0) }
-    fn margin(&self) -> (f32, f32, f32, f32) { (0.0, 0.0, 0.0, 0.0) }
+    fn padding(&self) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 0.0, 0.0)
+    }
+    fn margin(&self) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 0.0, 0.0)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -221,7 +231,12 @@ impl Spacing {
     pub fn resolve(&self) -> (f32, f32, f32, f32) {
         match self {
             Spacing::Uniform(v) => (*v, *v, *v, *v),
-            Spacing::Sides { top, right, bottom, left } => (*top, *right, *bottom, *left),
+            Spacing::Sides {
+                top,
+                right,
+                bottom,
+                left,
+            } => (*top, *right, *bottom, *left),
         }
     }
 }
@@ -352,19 +367,44 @@ impl Default for LayerStyle {
     fn default() -> Self {
         Self {
             opacity: 1.0,
-            padding: None, margin: None, background: None,
-            border_radius: None, border: None, box_shadow: None, text_shadow: None,
-            font_size: None, color: None, font_family: None, font_weight: None,
-            font_style: None, text_align: None, letter_spacing: None, line_height: None,
-            stroke: None, fill: None,
-            flex_direction: None, gap: None, align_items: None, justify_content: None,
-            flex_wrap: None, display: None,
-            grid_template_columns: None, grid_template_rows: None,
-            flex_grow: None, flex_shrink: None, flex_basis: None, align_self: None,
-            grid_column: None, grid_row: None,
+            padding: None,
+            margin: None,
+            background: None,
+            border_radius: None,
+            border: None,
+            box_shadow: None,
+            text_shadow: None,
+            font_size: None,
+            color: None,
+            font_family: None,
+            font_weight: None,
+            font_style: None,
+            text_align: None,
+            letter_spacing: None,
+            line_height: None,
+            stroke: None,
+            fill: None,
+            flex_direction: None,
+            gap: None,
+            align_items: None,
+            justify_content: None,
+            flex_wrap: None,
+            display: None,
+            grid_template_columns: None,
+            grid_template_rows: None,
+            flex_grow: None,
+            flex_shrink: None,
+            flex_basis: None,
+            align_self: None,
+            grid_column: None,
+            grid_row: None,
             text_background: None,
-            filter: None, drop_shadow: None, blend_mode: None,
-            clip_path: None, aspect_ratio: None, text_gradient: None,
+            filter: None,
+            drop_shadow: None,
+            blend_mode: None,
+            clip_path: None,
+            aspect_ratio: None,
+            text_gradient: None,
         }
     }
 }
@@ -410,10 +450,16 @@ impl LayerStyle {
         self.display.clone().unwrap_or(default)
     }
     pub fn padding_resolved(&self) -> (f32, f32, f32, f32) {
-        self.padding.as_ref().map(|p| p.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.padding
+            .as_ref()
+            .map(|p| p.resolve())
+            .unwrap_or((0.0, 0.0, 0.0, 0.0))
     }
     pub fn margin_resolved(&self) -> (f32, f32, f32, f32) {
-        self.margin.as_ref().map(|m| m.resolve()).unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.margin
+            .as_ref()
+            .map(|m| m.resolve())
+            .unwrap_or((0.0, 0.0, 0.0, 0.0))
     }
 }
 
@@ -633,11 +679,15 @@ impl<'de> Deserialize<'de> for SizeDimension {
                 if v == "auto" {
                     Ok(SizeDimension::Auto)
                 } else if let Some(pct) = v.strip_suffix('%') {
-                    pct.trim().parse::<f32>()
+                    pct.trim()
+                        .parse::<f32>()
                         .map(SizeDimension::Percent)
                         .map_err(|_| E::custom(format!("invalid percentage: {}", v)))
                 } else {
-                    Err(E::custom(format!("expected number, \"auto\", or \"N%\", got: {}", v)))
+                    Err(E::custom(format!(
+                        "expected number, \"auto\", or \"N%\", got: {}",
+                        v
+                    )))
                 }
             }
         }
@@ -1247,6 +1297,7 @@ impl Default for FontWeight {
     }
 }
 
+#[allow(dead_code)]
 impl FontWeight {
     pub fn to_skia_weight(&self) -> i32 {
         match self {
@@ -1372,14 +1423,34 @@ pub struct TextGradient {
 macro_rules! impl_layer_props_standard {
     ($type:ty) => {
         impl LayerProps for $type {
-            fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
-                (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+            fn animations(
+                &self,
+            ) -> (
+                &[Animation],
+                Option<&AnimationPreset>,
+                Option<&PresetConfig>,
+            ) {
+                (
+                    &self.animations,
+                    self.preset.as_ref(),
+                    self.preset_config.as_ref(),
+                )
             }
-            fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, self.end_at) }
-            fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
-            fn motion_blur(&self) -> Option<f32> { self.motion_blur }
-            fn padding(&self) -> (f32, f32, f32, f32) { self.style.padding_resolved() }
-            fn margin(&self) -> (f32, f32, f32, f32) { self.style.margin_resolved() }
+            fn timing(&self) -> (Option<f64>, Option<f64>) {
+                (self.start_at, self.end_at)
+            }
+            fn wiggle(&self) -> Option<&[WiggleConfig]> {
+                self.wiggle.as_deref()
+            }
+            fn motion_blur(&self) -> Option<f32> {
+                self.motion_blur
+            }
+            fn padding(&self) -> (f32, f32, f32, f32) {
+                self.style.padding_resolved()
+            }
+            fn margin(&self) -> (f32, f32, f32, f32) {
+                self.style.margin_resolved()
+            }
         }
     };
 }
@@ -1397,36 +1468,92 @@ impl_layer_props_standard!(ProgressBarLayer);
 impl_layer_props_standard!(QrCodeLayer);
 
 impl LayerProps for CaptionLayer {
-    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
-        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    fn animations(
+        &self,
+    ) -> (
+        &[Animation],
+        Option<&AnimationPreset>,
+        Option<&PresetConfig>,
+    ) {
+        (
+            &self.animations,
+            self.preset.as_ref(),
+            self.preset_config.as_ref(),
+        )
     }
-    fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
-    fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
-    fn motion_blur(&self) -> Option<f32> { None }
-    fn padding(&self) -> (f32, f32, f32, f32) { self.style.padding_resolved() }
-    fn margin(&self) -> (f32, f32, f32, f32) { self.style.margin_resolved() }
+    fn timing(&self) -> (Option<f64>, Option<f64>) {
+        (None, None)
+    }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> {
+        None
+    }
+    fn motion_blur(&self) -> Option<f32> {
+        None
+    }
+    fn padding(&self) -> (f32, f32, f32, f32) {
+        self.style.padding_resolved()
+    }
+    fn margin(&self) -> (f32, f32, f32, f32) {
+        self.style.margin_resolved()
+    }
 }
 
 impl LayerProps for CounterLayer {
-    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
-        (&self.animations, self.preset.as_ref(), self.preset_config.as_ref())
+    fn animations(
+        &self,
+    ) -> (
+        &[Animation],
+        Option<&AnimationPreset>,
+        Option<&PresetConfig>,
+    ) {
+        (
+            &self.animations,
+            self.preset.as_ref(),
+            self.preset_config.as_ref(),
+        )
     }
-    fn timing(&self) -> (Option<f64>, Option<f64>) { (self.start_at, None) }
-    fn wiggle(&self) -> Option<&[WiggleConfig]> { self.wiggle.as_deref() }
-    fn motion_blur(&self) -> Option<f32> { self.motion_blur }
-    fn padding(&self) -> (f32, f32, f32, f32) { self.style.padding_resolved() }
-    fn margin(&self) -> (f32, f32, f32, f32) { self.style.margin_resolved() }
+    fn timing(&self) -> (Option<f64>, Option<f64>) {
+        (self.start_at, None)
+    }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> {
+        self.wiggle.as_deref()
+    }
+    fn motion_blur(&self) -> Option<f32> {
+        self.motion_blur
+    }
+    fn padding(&self) -> (f32, f32, f32, f32) {
+        self.style.padding_resolved()
+    }
+    fn margin(&self) -> (f32, f32, f32, f32) {
+        self.style.margin_resolved()
+    }
 }
 
 impl LayerProps for GroupLayer {
-    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+    fn animations(
+        &self,
+    ) -> (
+        &[Animation],
+        Option<&AnimationPreset>,
+        Option<&PresetConfig>,
+    ) {
         (&[], None, None)
     }
-    fn timing(&self) -> (Option<f64>, Option<f64>) { (None, None) }
-    fn wiggle(&self) -> Option<&[WiggleConfig]> { None }
-    fn motion_blur(&self) -> Option<f32> { None }
-    fn padding(&self) -> (f32, f32, f32, f32) { self.style.padding_resolved() }
-    fn margin(&self) -> (f32, f32, f32, f32) { self.style.margin_resolved() }
+    fn timing(&self) -> (Option<f64>, Option<f64>) {
+        (None, None)
+    }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> {
+        None
+    }
+    fn motion_blur(&self) -> Option<f32> {
+        None
+    }
+    fn padding(&self) -> (f32, f32, f32, f32) {
+        self.style.padding_resolved()
+    }
+    fn margin(&self) -> (f32, f32, f32, f32) {
+        self.style.margin_resolved()
+    }
 }
 
 impl Layer {
@@ -1523,15 +1650,31 @@ fn default_loop_true() -> bool {
     true
 }
 
-fn default_progress() -> f64 { 0.5 }
-fn default_progress_width() -> f32 { 300.0 }
-fn default_progress_height() -> f32 { 20.0 }
-fn default_progress_bg() -> String { "#333333".to_string() }
-fn default_progress_fill() -> String { "#4CAF50".to_string() }
+fn default_progress() -> f64 {
+    0.5
+}
+fn default_progress_width() -> f32 {
+    300.0
+}
+fn default_progress_height() -> f32 {
+    20.0
+}
+fn default_progress_bg() -> String {
+    "#333333".to_string()
+}
+fn default_progress_fill() -> String {
+    "#4CAF50".to_string()
+}
 
-fn default_qr_size() -> f32 { 200.0 }
-fn default_qr_fg() -> String { "#000000".to_string() }
-fn default_qr_bg() -> String { "#FFFFFF".to_string() }
+fn default_qr_size() -> f32 {
+    200.0
+}
+fn default_qr_fg() -> String {
+    "#000000".to_string()
+}
+fn default_qr_bg() -> String {
+    "#FFFFFF".to_string()
+}
 
 fn default_active_color() -> String {
     "#FFFF00".to_string()
@@ -1544,7 +1687,6 @@ fn default_codeblock_language() -> String {
 fn default_codeblock_theme() -> String {
     "base16-ocean.dark".to_string()
 }
-
 
 fn default_highlight_color() -> String {
     "#FFFF0033".to_string()
@@ -1589,7 +1731,6 @@ fn default_shadow_blur() -> f32 {
 fn default_text_bg_padding() -> f32 {
     8.0
 }
-
 
 fn default_card_border_width() -> f32 {
     1.0
