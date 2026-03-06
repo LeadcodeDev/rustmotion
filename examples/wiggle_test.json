@@ -1,0 +1,185 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0a0a14"
+  },
+  "scenes": [
+    {
+      "duration": 5.0,
+      "children": [
+        {
+          "type": "text",
+          "content": "Wiggle Test",
+          "position": { "x": 960, "y": 100 },
+          "style": {
+            "font-size": 64,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 250, "y": 350 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#5C39EE",
+            "border-radius": 24
+          },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 12.0,
+              "frequency": 3.0,
+              "seed": 42
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Rotation",
+          "position": { "x": 390, "y": 680 },
+          "style": {
+            "font-size": 22,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 680, "y": 350 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#f43f5e",
+            "border-radius": 24
+          },
+          "wiggle": [
+            {
+              "property": "position.y",
+              "amplitude": 20.0,
+              "frequency": 2.0,
+              "seed": 10
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Float Y",
+          "position": { "x": 820, "y": 680 },
+          "style": {
+            "font-size": 22,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1110, "y": 350 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#fbbf24",
+            "border-radius": 24
+          },
+          "wiggle": [
+            {
+              "property": "scale",
+              "amplitude": 0.15,
+              "frequency": 2.5,
+              "seed": 7
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Scale",
+          "position": { "x": 1250, "y": 680 },
+          "style": {
+            "font-size": 22,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1540, "y": 350 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#34d399",
+            "border-radius": 24
+          },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 20.0,
+              "frequency": 4.0,
+              "seed": 13,
+              "decay": 0.6
+            },
+            {
+              "property": "position.x",
+              "amplitude": 10.0,
+              "frequency": 3.0,
+              "seed": 55
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Multi + Decay",
+          "position": { "x": 1680, "y": 680 },
+          "style": {
+            "font-size": 22,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 810, "y": 780 },
+          "size": { "width": 300, "height": 200 },
+          "style": {
+            "fill": "#f97316",
+            "border-radius": 24
+          },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 8.0,
+              "frequency": 20.0,
+              "seed": 1
+            },
+            {
+              "property": "position.x",
+              "amplitude": 3.0,
+              "frequency": 25.0,
+              "seed": 2
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Alarm",
+          "position": { "x": 960, "y": 1000 },
+          "style": {
+            "font-size": 22,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        }
+      ]
+    }
+  ]
+}

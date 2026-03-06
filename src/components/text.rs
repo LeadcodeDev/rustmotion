@@ -29,7 +29,7 @@ crate::impl_traits!(Text {
 });
 
 impl Widget for Text {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let font_size = self.style.font_size_or(48.0);
         let color = self.style.color_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
@@ -80,7 +80,20 @@ impl Widget for Text {
             self.max_width
         };
 
-        let lines = wrap_text(&self.content, &font, wrap_width);
+        // Apply typewriter effect: limit visible characters based on animation progress
+        let content = if props.visible_chars_progress >= 0.0 {
+            let chars: Vec<char> = self.content.chars().collect();
+            let visible = (props.visible_chars_progress * chars.len() as f32).round() as usize;
+            let visible = visible.min(chars.len());
+            if visible == 0 {
+                return Ok(());
+            }
+            chars[..visible].iter().collect::<String>()
+        } else {
+            self.content.clone()
+        };
+
+        let lines = wrap_text(&content, &font, wrap_width);
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
         let descent = metrics.descent;

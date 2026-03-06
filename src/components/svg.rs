@@ -31,7 +31,7 @@ crate::impl_traits!(Svg {
 });
 
 impl Widget for Svg {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let (target_w_opt, target_h_opt) = match &self.size {
             Some(size) => (Some(size.width as u32), Some(size.height as u32)),
             None => (None, None),

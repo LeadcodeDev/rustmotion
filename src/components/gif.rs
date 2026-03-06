@@ -36,7 +36,7 @@ crate::impl_traits!(Gif {
 });
 
 impl Widget for Gif {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let gcache = gif_cache();
 
         let cached = if let Some(cached) = gcache.get(&self.src) {

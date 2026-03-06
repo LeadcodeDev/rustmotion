@@ -30,7 +30,7 @@ impl Container for Stack {
 }
 
 impl Widget for Stack {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
         Ok(())
     }

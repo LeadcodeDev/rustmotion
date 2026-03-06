@@ -30,7 +30,7 @@ crate::impl_traits!(Caption {
 });
 
 impl Widget for Caption {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let font_size = self.style.font_size_or(48.0);
         let color = self.style.color_or("#FFFFFF");
         let font_family = self.style.font_family.as_deref().unwrap_or("Inter");

@@ -41,7 +41,7 @@ crate::impl_traits!(Video {
 });
 
 impl Widget for Video {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let rate = self.playback_rate.unwrap_or(1.0);
         let trim_start = self.trim_start.unwrap_or(0.0);
         let source_time = trim_start + ctx.time * rate;

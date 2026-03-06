@@ -442,22 +442,53 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
     let ww = if wrap_width.is_finite() { Some(wrap_width) } else { None };
     let aw = if align_width.is_finite() { Some(align_width) } else { None };
 
-    match layer {
-        Layer::Text(text) => render_text_constrained(canvas, text, config, props, ww, aw)?,
-        Layer::Shape(shape) => render_shape(canvas, shape, props)?,
-        Layer::Image(image) => render_image(canvas, image)?,
-        Layer::Group(group) => render_group(canvas, group, config, time, scene_duration)?,
-        Layer::Svg(svg) => render_svg(canvas, svg)?,
-        Layer::Icon(icon) => render_icon(canvas, icon)?,
-        Layer::Video(video) => render_video(canvas, video, time)?,
-        Layer::Gif(gif) => render_gif(canvas, gif, time)?,
-        Layer::Caption(caption) => render_caption(canvas, caption, config, time)?,
-        Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
-        Layer::Counter(counter) => render_counter(canvas, counter, config, time, scene_duration, props)?,
-        Layer::Card(card) | Layer::Flex(card) => render_card(canvas, card, config, time, scene_duration)?,
-        Layer::ProgressBar(pb) => crate::components::progress::render_progress_bar(canvas, pb)?,
-        Layer::QrCode(qr) => crate::components::qrcode::render_qr_code(canvas, qr)?,
+    // Macro to render content (avoids code duplication for glow pre-pass)
+    macro_rules! render_content {
+        ($c:expr) => {
+            match layer {
+                Layer::Text(text) => render_text_constrained($c, text, config, props, ww, aw)?,
+                Layer::Shape(shape) => render_shape($c, shape, props)?,
+                Layer::Image(image) => render_image($c, image)?,
+                Layer::Group(group) => render_group($c, group, config, time, scene_duration)?,
+                Layer::Svg(svg) => render_svg($c, svg)?,
+                Layer::Icon(icon) => render_icon($c, icon)?,
+                Layer::Video(video) => render_video($c, video, time)?,
+                Layer::Gif(gif) => render_gif($c, gif, time)?,
+                Layer::Caption(caption) => render_caption($c, caption, config, time)?,
+                Layer::Codeblock(cb) => codeblock::render_codeblock($c, cb, config, time, props)?,
+                Layer::Counter(counter) => render_counter($c, counter, config, time, scene_duration, props)?,
+                Layer::Card(card) | Layer::Flex(card) => render_card($c, card, config, time, scene_duration)?,
+                Layer::ProgressBar(pb) => crate::components::progress::render_progress_bar($c, pb)?,
+                Layer::QrCode(qr) => crate::components::qrcode::render_qr_code($c, qr)?,
+            }
+        };
     }
+
+    // Glow pre-pass: render only the blurred halo, then content renders on top
+    if let Some(ref glow) = layer_style.glow {
+        let radius = if props.glow_radius >= 0.0 { props.glow_radius } else { glow.radius };
+        let intensity = if props.glow_intensity >= 0.0 { props.glow_intensity } else { glow.intensity };
+        let mut glow_color = color4f_from_hex(&glow.color);
+        glow_color.a = (glow_color.a * intensity).min(1.0);
+        let glow_filter = image_filters::drop_shadow_only(
+            (0.0, 0.0),
+            (radius, radius),
+            glow_color,
+            None,
+            None,
+            None,
+        );
+        if let Some(glow_f) = glow_filter {
+            let mut glow_paint = Paint::default();
+            glow_paint.set_image_filter(glow_f);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&glow_paint));
+            render_content!(canvas);
+            canvas.restore();
+        }
+    }
+
+    // Render content normally on top
+    render_content!(canvas);
 
     if needs_layer {
         canvas.restore(); // layer

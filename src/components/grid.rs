@@ -106,7 +106,7 @@ impl crate::traits::Clipped for Grid {
 }
 
 impl Widget for Grid {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let corner_radius = self.style.border_radius_or(12.0);
         let rect = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let rrect = skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius);

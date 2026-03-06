@@ -140,29 +140,55 @@ fn render_component_inner(
         canvas.translate((pad_l, pad_t));
     }
 
+    // Build image filter chain (blur only)
+    let layer_style = styled.style_config();
+    let mut image_filter: Option<skia_safe::ImageFilter> = None;
+
+    if props.blur > 0.01 {
+        image_filter = skia_safe::image_filters::blur(
+            (props.blur, props.blur),
+            skia_safe::TileMode::Clamp,
+            None,
+            None,
+        );
+    }
+
     // Apply opacity/blur via save_layer
-    let needs_layer = props.opacity < 1.0 || props.blur > 0.01;
+    let needs_layer = props.opacity < 1.0 || image_filter.is_some();
     if needs_layer {
-        if props.blur > 0.01 {
-            let filter = skia_safe::image_filters::blur(
-                (props.blur, props.blur),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            );
-            let mut layer_paint = Paint::default();
-            layer_paint.set_alpha_f(props.opacity);
-            if let Some(filter) = filter {
-                layer_paint.set_image_filter(filter);
-            }
-            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
-        } else {
-            canvas.save_layer_alpha(None, (props.opacity * 255.0) as u32);
+        let mut layer_paint = Paint::default();
+        layer_paint.set_alpha_f(props.opacity);
+        if let Some(filter) = image_filter {
+            layer_paint.set_image_filter(filter);
+        }
+        canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
+    }
+
+    // Glow pre-pass: render only the blurred halo, content renders on top
+    if let Some(ref glow) = layer_style.glow {
+        let radius = if props.glow_radius >= 0.0 { props.glow_radius } else { glow.radius };
+        let intensity = if props.glow_intensity >= 0.0 { props.glow_intensity } else { glow.intensity };
+        let mut glow_color = color4f_from_hex(&glow.color);
+        glow_color.a = (glow_color.a * intensity).min(1.0);
+        let glow_filter = skia_safe::image_filters::drop_shadow_only(
+            (0.0, 0.0),
+            (radius, radius),
+            glow_color,
+            None,
+            None,
+            None,
+        );
+        if let Some(glow_f) = glow_filter {
+            let mut glow_paint = Paint::default();
+            glow_paint.set_image_filter(glow_f);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&glow_paint));
+            component.as_widget().render(canvas, layout, ctx, props)?;
+            canvas.restore();
         }
     }
 
-    // Render the component
-    component.as_widget().render(canvas, layout, ctx)?;
+    // Render the component on top
+    component.as_widget().render(canvas, layout, ctx, props)?;
 
     if needs_layer {
         canvas.restore();

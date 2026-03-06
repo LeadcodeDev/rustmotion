@@ -353,6 +353,8 @@ pub struct LayerStyle {
     pub filter: Option<FilterConfig>,
     #[serde(default, rename = "drop-shadow")]
     pub drop_shadow: Option<DropShadow>,
+    #[serde(default)]
+    pub glow: Option<GlowConfig>,
     #[serde(default, rename = "blend-mode")]
     pub blend_mode: Option<BlendMode>,
     #[serde(default, rename = "clip-path")]
@@ -401,6 +403,7 @@ impl Default for LayerStyle {
             text_background: None,
             filter: None,
             drop_shadow: None,
+            glow: None,
             blend_mode: None,
             clip_path: None,
             aspect_ratio: None,
@@ -1156,6 +1159,18 @@ pub struct WiggleConfig {
     pub frequency: f64,
     #[serde(default)]
     pub seed: u64,
+    /// Number of noise octaves (higher = more detail, default 3)
+    #[serde(default)]
+    pub octaves: Option<u32>,
+    /// Phase offset in seconds
+    #[serde(default)]
+    pub phase: Option<f64>,
+    /// Exponential decay rate (amplitude diminishes over time)
+    #[serde(default)]
+    pub decay: Option<f64>,
+    /// Easing function to reshape the noise curve
+    #[serde(default)]
+    pub easing: Option<EasingType>,
 }
 
 // --- Video Config additions ---
@@ -1385,6 +1400,32 @@ fn default_drop_shadow_blur() -> f32 {
 
 fn default_drop_shadow_color() -> String {
     "#00000080".to_string()
+}
+
+/// Glow effect (colored luminous halo around the element)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GlowConfig {
+    /// Glow color (hex string, e.g. "#5C39EE")
+    #[serde(default = "default_glow_color")]
+    pub color: String,
+    /// Blur radius of the glow
+    #[serde(default = "default_glow_radius")]
+    pub radius: f32,
+    /// Intensity multiplier (higher = brighter glow, default 1.0)
+    #[serde(default = "default_glow_intensity")]
+    pub intensity: f32,
+}
+
+fn default_glow_color() -> String {
+    "#FFFFFF80".to_string()
+}
+
+fn default_glow_radius() -> f32 {
+    10.0
+}
+
+fn default_glow_intensity() -> f32 {
+    1.0
 }
 
 /// Blend mode for layer compositing

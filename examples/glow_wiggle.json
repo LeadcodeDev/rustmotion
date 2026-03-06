@@ -1,0 +1,248 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0a0a14"
+  },
+  "scenes": [
+    {
+      "duration": 5.0,
+      "children": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#0a0a14", "#111128"],
+              "stops": [0.0, 1.0],
+              "angle": 135
+            }
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Glow Effect",
+          "position": { "x": 960, "y": 80 },
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.8 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 160, "y": 220 },
+          "size": { "width": 320, "height": 220 },
+          "style": {
+            "fill": "#5C39EE",
+            "border-radius": 24,
+            "glow": {
+              "color": "#5C39EE",
+              "radius": 20,
+              "intensity": 2.0
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5, "delay": 0.3 }
+        },
+        {
+          "type": "text",
+          "content": "Purple",
+          "position": { "x": 320, "y": 470 },
+          "style": {
+            "font-size": 20,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "circle",
+          "position": { "x": 720, "y": 240 },
+          "size": { "width": 180, "height": 180 },
+          "style": {
+            "fill": "#f43f5e",
+            "glow": {
+              "color": "#f43f5e",
+              "radius": 25,
+              "intensity": 2.0
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5, "delay": 0.5 }
+        },
+        {
+          "type": "text",
+          "content": "Red",
+          "position": { "x": 810, "y": 470 },
+          "style": {
+            "font-size": 20,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1080, "y": 240 },
+          "size": { "width": 180, "height": 180 },
+          "style": {
+            "fill": "#38bdf8",
+            "border-radius": 90,
+            "glow": {
+              "color": "#38bdf8",
+              "radius": 30,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5, "delay": 0.7 }
+        },
+        {
+          "type": "text",
+          "content": "Cyan",
+          "position": { "x": 1170, "y": 470 },
+          "style": {
+            "font-size": 20,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1440, "y": 220 },
+          "size": { "width": 320, "height": 220 },
+          "style": {
+            "fill": "#34d399",
+            "border-radius": 24,
+            "glow": {
+              "color": "#34d399",
+              "radius": 15,
+              "intensity": 2.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.5, "delay": 0.9 }
+        },
+        {
+          "type": "text",
+          "content": "Green",
+          "position": { "x": 1600, "y": 470 },
+          "style": {
+            "font-size": 20,
+            "color": "#94a3b8",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Text Glow",
+          "position": { "x": 960, "y": 560 },
+          "style": {
+            "font-size": 44,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.6, "delay": 1.2 }
+        },
+
+        {
+          "type": "text",
+          "content": "NEON",
+          "position": { "x": 350, "y": 700 },
+          "style": {
+            "font-size": 72,
+            "color": "#ff00ff",
+            "font-weight": "bold",
+            "text-align": "center",
+            "glow": {
+              "color": "#ff00ff",
+              "radius": 20,
+              "intensity": 2.5
+            }
+          },
+          "start_at": 1.5,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "Electric",
+          "position": { "x": 960, "y": 700 },
+          "style": {
+            "font-size": 72,
+            "color": "#38bdf8",
+            "font-weight": "bold",
+            "text-align": "center",
+            "glow": {
+              "color": "#38bdf8",
+              "radius": 15,
+              "intensity": 2.0
+            }
+          },
+          "start_at": 1.8,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "FIRE",
+          "position": { "x": 1550, "y": 700 },
+          "style": {
+            "font-size": 72,
+            "color": "#fb923c",
+            "font-weight": "bold",
+            "text-align": "center",
+            "glow": {
+              "color": "#fb923c",
+              "radius": 25,
+              "intensity": 2.0
+            }
+          },
+          "start_at": 2.1,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "Subtle glow on regular text",
+          "position": { "x": 960, "y": 880 },
+          "style": {
+            "font-size": 32,
+            "color": "#e2e8f0",
+            "text-align": "center",
+            "glow": {
+              "color": "#e2e8f080",
+              "radius": 8,
+              "intensity": 1.5
+            }
+          },
+          "start_at": 2.5,
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.6 }
+        }
+      ]
+    }
+  ]
+}

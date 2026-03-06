@@ -29,7 +29,7 @@ crate::impl_traits!(Icon {
 });
 
 impl Widget for Icon {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let color = self.style.color_or("#FFFFFF");
         let target_w = layout.width as u32;
         let target_h = layout.height as u32;

@@ -30,7 +30,7 @@ crate::impl_traits!(Shape {
 });
 
 impl Widget for Shape {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let w = layout.width;
         let h = layout.height;
         let corner_radius = self.style.border_radius;

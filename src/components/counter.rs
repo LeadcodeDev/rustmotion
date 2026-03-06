@@ -38,7 +38,7 @@ crate::impl_traits!(Counter {
 });
 
 impl Widget for Counter {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         use crate::engine::animator::ease;
 
         let font_size = self.style.font_size_or(48.0);

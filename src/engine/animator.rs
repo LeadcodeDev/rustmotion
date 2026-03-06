@@ -195,6 +195,8 @@ pub struct AnimatedProperties {
     pub padding: f32,
     pub stroke_width: f32,
     pub shadow_blur: f32,
+    pub glow_radius: f32,
+    pub glow_intensity: f32,
 }
 
 impl Default for AnimatedProperties {
@@ -218,6 +220,8 @@ impl Default for AnimatedProperties {
             padding: -1.0,
             stroke_width: -1.0,
             shadow_blur: -1.0,
+            glow_radius: -1.0,
+            glow_intensity: -1.0,
         }
     }
 }
@@ -402,6 +406,8 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "padding" => props.padding = value as f32,
         "stroke_width" => props.stroke_width = value as f32,
         "shadow_blur" => props.shadow_blur = value as f32,
+        "glow_radius" => props.glow_radius = value as f32,
+        "glow_intensity" => props.glow_intensity = value as f32,
         _ => {} // Unknown property, ignore
     }
 }
@@ -417,11 +423,55 @@ fn simplex_noise_1d(x: f64, seed: u64) -> f64 {
     v / 0.875 // normalize to roughly -1..1
 }
 
+/// Parameterized noise function with configurable octaves
+fn simplex_noise_1d_ext(x: f64, seed: u64, octaves: u32) -> f64 {
+    let s = seed as f64;
+    let mut value = 0.0;
+    let mut amplitude = 0.5;
+    let mut total_amplitude = 0.0;
+    for i in 0..octaves {
+        let freq = 1.0 + i as f64 * 1.3;
+        let phase_offset = s * (0.1234 + i as f64 * 0.4444);
+        value += (x * freq + phase_offset).sin() * amplitude;
+        total_amplitude += amplitude;
+        amplitude *= 0.5;
+    }
+    if total_amplitude > 0.0 { value / total_amplitude } else { 0.0 }
+}
+
 /// Apply wiggle offsets additively to animated properties
 pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], time: f64) {
     for wiggle in wiggles {
-        let noise_val = simplex_noise_1d(time * wiggle.frequency, wiggle.seed);
-        let offset = wiggle.amplitude * noise_val;
+        let has_extras = wiggle.octaves.is_some()
+            || wiggle.phase.is_some()
+            || wiggle.decay.is_some()
+            || wiggle.easing.is_some();
+
+        let phase = wiggle.phase.unwrap_or(0.0);
+        let input = time * wiggle.frequency + phase;
+
+        let mut noise_val = if has_extras {
+            let octaves = wiggle.octaves.unwrap_or(3);
+            simplex_noise_1d_ext(input, wiggle.seed, octaves)
+        } else {
+            simplex_noise_1d(input, wiggle.seed)
+        };
+
+        // Apply easing: normalize [-1,1] → [0,1], ease, remap to [-1,1]
+        if let Some(ref easing) = wiggle.easing {
+            let normalized = (noise_val + 1.0) * 0.5;
+            let eased = ease(normalized, easing);
+            noise_val = eased * 2.0 - 1.0;
+        }
+
+        let mut amp = wiggle.amplitude;
+
+        // Apply exponential decay
+        if let Some(decay) = wiggle.decay {
+            amp *= (-decay * time).exp();
+        }
+
+        let offset = amp * noise_val;
         apply_property(props, &wiggle.property, get_property_value(props, &wiggle.property) + offset);
     }
 }
@@ -444,6 +494,8 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "padding" => props.padding as f64,
         "stroke_width" => props.stroke_width as f64,
         "shadow_blur" => props.shadow_blur as f64,
+        "glow_radius" => props.glow_radius as f64,
+        "glow_intensity" => props.glow_intensity as f64,
         _ => 0.0,
     }
 }

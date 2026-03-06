@@ -1,0 +1,139 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f0f17"
+  },
+  "scenes": [
+    {
+      "duration": 6.0,
+      "children": [
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 0, "y": 0 },
+          "size": { "width": 1920, "height": 1080 },
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#0f0f17", "#1a1030"],
+              "stops": [0.0, 1.0],
+              "angle": 135
+            }
+          }
+        },
+
+        {
+          "type": "text",
+          "content": "Hello, World!",
+          "position": { "x": 960, "y": 200 },
+          "style": {
+            "font-size": 72,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
+          "preset": "typewriter",
+          "preset_config": { "duration": 2.0 }
+        },
+
+        {
+          "type": "text",
+          "content": "const message = \"Rustmotion is awesome\";",
+          "position": { "x": 960, "y": 400 },
+          "style": {
+            "font-size": 36,
+            "color": "#38bdf8",
+            "font-family": "JetBrains Mono",
+            "text-align": "center",
+            "glow": {
+              "color": "#38bdf880",
+              "radius": 10,
+              "intensity": 1.5
+            }
+          },
+          "start_at": 1.5,
+          "preset": "typewriter",
+          "preset_config": { "duration": 2.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "fn main() {",
+          "position": { "x": 600, "y": 580 },
+          "style": {
+            "font-size": 28,
+            "color": "#a78bfa",
+            "font-family": "JetBrains Mono"
+          },
+          "start_at": 2.5,
+          "preset": "typewriter",
+          "preset_config": { "duration": 1.0 }
+        },
+
+        {
+          "type": "text",
+          "content": "    println!(\"typewriter effect\");",
+          "position": { "x": 600, "y": 630 },
+          "style": {
+            "font-size": 28,
+            "color": "#34d399",
+            "font-family": "JetBrains Mono"
+          },
+          "start_at": 3.2,
+          "preset": "typewriter",
+          "preset_config": { "duration": 2.0 }
+        },
+
+        {
+          "type": "text",
+          "content": "}",
+          "position": { "x": 600, "y": 680 },
+          "style": {
+            "font-size": 28,
+            "color": "#a78bfa",
+            "font-family": "JetBrains Mono"
+          },
+          "start_at": 4.8,
+          "preset": "typewriter",
+          "preset_config": { "duration": 0.3 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 660, "y": 830 },
+          "size": { "width": 600, "height": 6 },
+          "style": {
+            "fill": "#5C39EE",
+            "border-radius": 3,
+            "glow": {
+              "color": "#5C39EE",
+              "radius": 8,
+              "intensity": 2.0
+            }
+          },
+          "start_at": 4.5,
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "Character by character",
+          "position": { "x": 960, "y": 900 },
+          "style": {
+            "font-size": 24,
+            "color": "#64748b",
+            "text-align": "center"
+          },
+          "start_at": 4.5,
+          "preset": "typewriter",
+          "preset_config": { "duration": 1.2 }
+        }
+      ]
+    }
+  ]
+}

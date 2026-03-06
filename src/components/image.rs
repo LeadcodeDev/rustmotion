@@ -30,7 +30,7 @@ crate::impl_traits!(Image {
 });
 
 impl Widget for Image {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let cache = asset_cache();
         let img = if let Some(cached) = cache.get(&self.src) {
             cached.clone()

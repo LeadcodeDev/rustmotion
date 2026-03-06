@@ -1,6 +1,7 @@
 use anyhow::Result;
 use skia_safe::Canvas;
 
+use crate::engine::animator::AnimatedProperties;
 use crate::layout::{Constraints, LayoutNode};
 
 /// Context passed to every component during the render pass.
@@ -24,7 +25,7 @@ pub struct RenderContext {
 pub trait Widget {
     /// Render this component onto the Skia canvas.
     /// The canvas is already translated/transformed by the layout engine.
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext) -> Result<()>;
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, props: &AnimatedProperties) -> Result<()>;
 
     /// Measure this component given parent constraints.
     /// Returns (width, height) — the desired size within the constraints.

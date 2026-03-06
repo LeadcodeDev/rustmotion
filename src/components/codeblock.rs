@@ -45,7 +45,7 @@ crate::impl_traits!(Codeblock {
 });
 
 impl Widget for Codeblock {
-    fn render(&self, canvas: &Canvas, _layout: &LayoutNode, ctx: &RenderContext) -> Result<()> {
+    fn render(&self, canvas: &Canvas, _layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         crate::engine::codeblock::render_codeblock_v2(canvas, self, ctx.time)
     }
 
