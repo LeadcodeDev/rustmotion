@@ -2185,6 +2185,8 @@ pub(crate) fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -
         .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("Invalid icon format: '{}' (expected 'prefix:name')", icon))?;
     let hex_color = color.trim_start_matches('#');
+    let width = width.max(1);
+    let height = height.max(1);
     let url = format!(
         "https://api.iconify.design/{}/{}.svg?color=%23{}&width={}&height={}",
         prefix, name, hex_color, width, height

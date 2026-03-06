@@ -1,6 +1,6 @@
 [package]
 name = "rustmotion"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary."
 license = "MIT"
