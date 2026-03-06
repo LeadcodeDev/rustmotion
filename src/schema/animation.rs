@@ -50,6 +50,12 @@ pub enum EasingType {
     EaseOutCubic,
     EaseInExpo,
     EaseOutExpo,
+    EaseInOutQuad,
+    EaseInOutExpo,
+    EaseInBack,
+    EaseOutBack,
+    EaseOutElastic,
+    Bounce,
     Spring,
     /// Custom cubic-bezier easing curve: cubic_bezier(x1, y1, x2, y2)
     CubicBezier {

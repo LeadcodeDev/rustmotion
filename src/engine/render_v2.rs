@@ -348,6 +348,7 @@ fn compute_text_baseline_offset(text: &crate::components::text::Text) -> f32 {
     let weight = match font_weight {
         crate::schema::FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
         crate::schema::FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+        crate::schema::FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
     };
     let slant = match font_style_type {
         crate::schema::FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
@@ -377,6 +378,7 @@ fn compute_counter_baseline_offset(counter: &crate::components::counter::Counter
     let font_style = match font_weight {
         crate::schema::FontWeight::Bold => FontStyle::bold(),
         crate::schema::FontWeight::Normal => FontStyle::normal(),
+        crate::schema::FontWeight::Weight(w) => FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
     };
     let typeface = fm
         .match_family_style(font_family, font_style)

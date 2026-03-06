@@ -9,7 +9,7 @@ use symphonia::core::probe::Hint;
 
 use crate::schema::AudioTrack;
 
-const TARGET_SAMPLE_RATE: u32 = 44100;
+const TARGET_SAMPLE_RATE: u32 = 48000;
 const TARGET_CHANNELS: u32 = 2;
 
 /// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
@@ -122,10 +122,16 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
                 break;
             }
 
-            let mut sample = resampled[i] * track.volume;
+            let frame = i / TARGET_CHANNELS as usize;
+            let current_time = track.start + (frame as f64 / TARGET_SAMPLE_RATE as f64);
+            let vol = if !track.volume_keyframes.is_empty() {
+                interpolate_volume_keyframes(&track.volume_keyframes, current_time)
+            } else {
+                track.volume
+            };
+            let mut sample = resampled[i] * vol;
 
             // Apply fade in
-            let frame = i / TARGET_CHANNELS as usize;
             if fade_in_samples > 0.0 && (frame as f64) < fade_in_samples {
                 sample *= frame as f32 / fade_in_samples as f32;
             }
@@ -150,6 +156,33 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
     }
 
     Ok(Some(pcm_bytes))
+}
+
+/// Interpolate volume at a given time using volume keyframes with easing
+fn interpolate_volume_keyframes(keyframes: &[crate::schema::VolumeKeyframe], time: f64) -> f32 {
+    if keyframes.is_empty() {
+        return 1.0;
+    }
+    if time <= keyframes[0].time {
+        return keyframes[0].volume;
+    }
+    if time >= keyframes.last().unwrap().time {
+        return keyframes.last().unwrap().volume;
+    }
+    for i in 0..keyframes.len() - 1 {
+        let kf0 = &keyframes[i];
+        let kf1 = &keyframes[i + 1];
+        if time >= kf0.time && time <= kf1.time {
+            let duration = kf1.time - kf0.time;
+            if duration < 1e-9 {
+                return kf1.volume;
+            }
+            let t = (time - kf0.time) / duration;
+            let progress = crate::engine::animator::ease(t, &kf0.easing);
+            return kf0.volume + (kf1.volume - kf0.volume) * progress as f32;
+        }
+    }
+    keyframes.last().unwrap().volume
 }
 
 fn to_stereo(samples: &[f32], channels: u32) -> Vec<f32> {

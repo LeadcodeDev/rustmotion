@@ -7,6 +7,8 @@ pub mod gif;
 pub mod grid;
 pub mod icon;
 pub mod image;
+pub mod progress;
+pub mod qrcode;
 pub mod shape;
 pub mod stack;
 pub mod svg;

@@ -48,6 +48,7 @@ impl Widget for Text {
         let weight = match font_weight {
             FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
             FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
         };
         let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
@@ -194,6 +195,7 @@ impl Widget for Text {
         let weight = match font_weight {
             FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
             FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
         };
         let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
         let typeface = fm

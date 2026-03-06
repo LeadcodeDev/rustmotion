@@ -1628,6 +1628,7 @@ fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Font {
     let w: i32 = match weight {
         FontWeight::Normal => 400,
         FontWeight::Bold => 700,
+        FontWeight::Weight(w) => w as i32,
     };
     let skia_weight = skia_safe::font_style::Weight::from(w);
     let style = FontStyle::new(

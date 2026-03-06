@@ -34,7 +34,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Image encoding (for single-frame PNG export)
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # Parallelism
 rayon = "1"
@@ -68,3 +68,6 @@ notify = "7"
 
 # HTTP client (blocking, for Iconify API)
 ureq = "3"
+
+# QR code generation
+qrcode = "0.14"

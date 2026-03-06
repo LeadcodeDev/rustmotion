@@ -68,6 +68,7 @@ impl Widget for Counter {
         let weight = match font_weight {
             FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
             FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
         };
         let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
@@ -144,6 +145,7 @@ impl Widget for Counter {
         let skia_font_style = match font_weight {
             FontWeight::Bold => FontStyle::bold(),
             FontWeight::Normal => FontStyle::normal(),
+            FontWeight::Weight(w) => FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
         };
         let typeface = fm
             .match_family_style(font_family, skia_font_style)

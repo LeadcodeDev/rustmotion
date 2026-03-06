@@ -31,6 +31,36 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
                 1.0 - (2.0f64).powf(-10.0 * t)
             }
         }
+        EasingType::EaseInOutQuad => {
+            if t < 0.5 { 2.0 * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(2) / 2.0 }
+        }
+        EasingType::EaseInOutExpo => {
+            if t == 0.0 { 0.0 }
+            else if t == 1.0 { 1.0 }
+            else if t < 0.5 { (2.0f64).powf(20.0 * t - 10.0) / 2.0 }
+            else { (2.0 - (2.0f64).powf(-20.0 * t + 10.0)) / 2.0 }
+        }
+        EasingType::EaseInBack => {
+            let c1 = 1.70158;
+            let c3 = c1 + 1.0;
+            c3 * t * t * t - c1 * t * t
+        }
+        EasingType::EaseOutBack => {
+            let c1 = 1.70158;
+            let c3 = c1 + 1.0;
+            1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+        }
+        EasingType::EaseOutElastic => {
+            if t == 0.0 { 0.0 }
+            else if t == 1.0 { 1.0 }
+            else {
+                let c4 = (2.0 * std::f64::consts::PI) / 3.0;
+                (2.0f64).powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
+            }
+        }
+        EasingType::Bounce => {
+            bounce_ease_out(t)
+        }
         EasingType::Spring => t, // Spring handled separately
         EasingType::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
     }
@@ -72,6 +102,23 @@ fn find_bezier_t_for_x(x: f64, x1: f64, x2: f64) -> f64 {
         t = t.clamp(0.0, 1.0);
     }
     t
+}
+
+fn bounce_ease_out(t: f64) -> f64 {
+    let n1 = 7.5625;
+    let d1 = 2.75;
+    if t < 1.0 / d1 {
+        n1 * t * t
+    } else if t < 2.0 / d1 {
+        let t = t - 1.5 / d1;
+        n1 * t * t + 0.75
+    } else if t < 2.5 / d1 {
+        let t = t - 2.25 / d1;
+        n1 * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / d1;
+        n1 * t * t + 0.984375
+    }
 }
 
 fn ease_in_cubic(t: f64) -> f64 {
@@ -139,6 +186,15 @@ pub struct AnimatedProperties {
     pub visible_chars_progress: f32,
     /// Animated color override (hex string)
     pub color: Option<String>,
+    // Extended animatable properties
+    pub border_radius: f32,
+    pub font_size: f32,
+    pub width: f32,
+    pub height: f32,
+    pub gap: f32,
+    pub padding: f32,
+    pub stroke_width: f32,
+    pub shadow_blur: f32,
 }
 
 impl Default for AnimatedProperties {
@@ -154,6 +210,14 @@ impl Default for AnimatedProperties {
             visible_chars: -1,
             visible_chars_progress: -1.0,
             color: None,
+            border_radius: -1.0,
+            font_size: -1.0,
+            width: -1.0,
+            height: -1.0,
+            gap: -1.0,
+            padding: -1.0,
+            stroke_width: -1.0,
+            shadow_blur: -1.0,
         }
     }
 }
@@ -330,6 +394,14 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "blur" => props.blur = value as f32,
         "visible_chars" => props.visible_chars = value as i32,
         "visible_chars_progress" => props.visible_chars_progress = value as f32,
+        "border_radius" => props.border_radius = value as f32,
+        "font_size" => props.font_size = value as f32,
+        "width" => props.width = value as f32,
+        "height" => props.height = value as f32,
+        "gap" => props.gap = value as f32,
+        "padding" => props.padding = value as f32,
+        "stroke_width" => props.stroke_width = value as f32,
+        "shadow_blur" => props.shadow_blur = value as f32,
         _ => {} // Unknown property, ignore
     }
 }
@@ -364,6 +436,14 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "scale.y" => props.scale_y as f64,
         "rotation" => props.rotation as f64,
         "blur" => props.blur as f64,
+        "border_radius" => props.border_radius as f64,
+        "font_size" => props.font_size as f64,
+        "width" => props.width as f64,
+        "height" => props.height as f64,
+        "gap" => props.gap as f64,
+        "padding" => props.padding as f64,
+        "stroke_width" => props.stroke_width as f64,
+        "shadow_blur" => props.shadow_blur as f64,
         _ => 0.0,
     }
 }

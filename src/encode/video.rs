@@ -363,6 +363,40 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
     Ok(())
 }
 
+/// Stream raw RGBA pixel data to stdout for piping to external tools
+pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
+    use std::io::Write;
+
+    let config = &scenario.video;
+    let fps = config.fps;
+
+    let mut stdout = std::io::stdout().lock();
+
+    let mut frame_offset = 0u32;
+    for scene in &scenario.scenes {
+        let scene_frames = (scene.duration * fps as f64).round() as u32;
+
+        for local_frame in 0..scene_frames {
+            let rgba = crate::engine::render_v2::render_scene_frame(
+                config, scene, local_frame, scene_frames,
+            )?;
+            stdout.write_all(&rgba)?;
+
+            if !quiet {
+                let global_frame = frame_offset + local_frame;
+                eprint!("\rFrame {}", global_frame);
+            }
+        }
+        frame_offset += scene_frames;
+    }
+
+    if !quiet {
+        eprintln!("\nDone: {} frames streamed to stdout", frame_offset);
+    }
+
+    Ok(())
+}
+
 /// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency)
 pub fn encode_with_ffmpeg(
     scenario: &Scenario,

@@ -5,3 +5,4 @@ pub use video::encode_video;
 pub use video::encode_png_sequence;
 pub use video::encode_gif;
 pub use video::encode_with_ffmpeg;
+pub use video::encode_raw_stdout;

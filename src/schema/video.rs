@@ -21,7 +21,16 @@ pub struct Scenario {
     #[serde(default)]
     pub audio: Vec<AudioTrack>,
     #[serde(default)]
+    pub fonts: Vec<FontEntry>,
+    #[serde(default)]
     pub scenes: Vec<Scene>,
+}
+
+/// Font file to load at startup
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FontEntry {
+    pub path: String,
+    pub family: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -37,6 +46,17 @@ pub struct AudioTrack {
     pub fade_in: Option<f64>,
     #[serde(default)]
     pub fade_out: Option<f64>,
+    #[serde(default)]
+    pub volume_keyframes: Vec<VolumeKeyframe>,
+}
+
+/// Dynamic volume control point
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VolumeKeyframe {
+    pub time: f64,
+    pub volume: f32,
+    #[serde(default)]
+    pub easing: EasingType,
 }
 
 fn default_volume() -> f32 {
@@ -68,6 +88,24 @@ pub struct Scene {
     pub transition: Option<Transition>,
     #[serde(default)]
     pub freeze_at: Option<f64>,
+    /// Flex layout for automatic layer positioning
+    #[serde(default)]
+    pub layout: Option<SceneLayout>,
+}
+
+/// Scene-level flex layout configuration
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SceneLayout {
+    #[serde(default)]
+    pub direction: Option<CardDirection>,
+    #[serde(default)]
+    pub gap: Option<f32>,
+    #[serde(default)]
+    pub align_items: Option<CardAlign>,
+    #[serde(default)]
+    pub justify_content: Option<CardJustify>,
+    #[serde(default)]
+    pub padding: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +333,19 @@ pub struct LayerStyle {
     // Text highlight background
     #[serde(default, rename = "text-background")]
     pub text_background: Option<TextBackground>,
+    // Visual effects
+    #[serde(default)]
+    pub filter: Option<FilterConfig>,
+    #[serde(default, rename = "drop-shadow")]
+    pub drop_shadow: Option<DropShadow>,
+    #[serde(default, rename = "blend-mode")]
+    pub blend_mode: Option<BlendMode>,
+    #[serde(default, rename = "clip-path")]
+    pub clip_path: Option<String>,
+    #[serde(default, rename = "aspect-ratio")]
+    pub aspect_ratio: Option<f32>,
+    #[serde(default, rename = "text-gradient")]
+    pub text_gradient: Option<TextGradient>,
 }
 
 impl Default for LayerStyle {
@@ -312,6 +363,8 @@ impl Default for LayerStyle {
             flex_grow: None, flex_shrink: None, flex_basis: None, align_self: None,
             grid_column: None, grid_row: None,
             text_background: None,
+            filter: None, drop_shadow: None, blend_mode: None,
+            clip_path: None, aspect_ratio: None, text_gradient: None,
         }
     }
 }
@@ -382,6 +435,8 @@ pub enum Layer {
     Counter(CounterLayer),
     Card(CardLayer),
     Flex(CardLayer),
+    ProgressBar(ProgressBarLayer),
+    QrCode(QrCodeLayer),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -445,6 +500,81 @@ pub struct CounterLayer {
     pub motion_blur: Option<f32>,
 }
 
+// --- ProgressBar Layer ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProgressBarLayer {
+    pub position: Position,
+    #[serde(default)]
+    pub style: LayerStyle,
+    /// Progress value from 0.0 to 1.0
+    #[serde(default = "default_progress")]
+    pub progress: f64,
+    /// Bar width
+    #[serde(default = "default_progress_width")]
+    pub width: f32,
+    /// Bar height
+    #[serde(default = "default_progress_height")]
+    pub height: f32,
+    /// Background color
+    #[serde(default = "default_progress_bg")]
+    pub background_color: String,
+    /// Fill color
+    #[serde(default = "default_progress_fill")]
+    pub fill_color: String,
+    /// Border radius
+    #[serde(default)]
+    pub border_radius: f32,
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
+// --- QrCode Layer ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QrCodeLayer {
+    pub position: Position,
+    #[serde(default)]
+    pub style: LayerStyle,
+    /// Content to encode
+    pub content: String,
+    /// QR code size (width and height)
+    #[serde(default = "default_qr_size")]
+    pub size: f32,
+    /// Foreground color
+    #[serde(default = "default_qr_fg")]
+    pub foreground_color: String,
+    /// Background color
+    #[serde(default = "default_qr_bg")]
+    pub background_color: String,
+    #[serde(default)]
+    pub animations: Vec<Animation>,
+    #[serde(default)]
+    pub preset: Option<AnimationPreset>,
+    #[serde(default)]
+    pub preset_config: Option<PresetConfig>,
+    #[serde(default)]
+    pub start_at: Option<f64>,
+    #[serde(default)]
+    pub end_at: Option<f64>,
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
 // --- Card Child wrapper ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -455,16 +585,11 @@ pub struct CardChild {
 
 // --- Card Size (each dimension can be a number or "auto") ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
+/// Size dimension: fixed px, "auto", or "50%" (percent of parent)
+#[derive(Debug, Clone, JsonSchema)]
 pub enum SizeDimension {
     Fixed(f32),
-    Auto(AutoValue),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub enum AutoValue {
-    #[serde(rename = "auto")]
+    Percent(f32),
     Auto,
 }
 
@@ -472,8 +597,51 @@ impl SizeDimension {
     pub fn fixed(&self) -> Option<f32> {
         match self {
             SizeDimension::Fixed(v) => Some(*v),
-            SizeDimension::Auto(_) => None,
+            _ => None,
         }
+    }
+}
+
+impl Serialize for SizeDimension {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            SizeDimension::Fixed(v) => serializer.serialize_f32(*v),
+            SizeDimension::Percent(p) => serializer.serialize_str(&format!("{}%", p)),
+            SizeDimension::Auto => serializer.serialize_str("auto"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SizeDimension {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SizeDimensionVisitor;
+        impl<'de> serde::de::Visitor<'de> for SizeDimensionVisitor {
+            type Value = SizeDimension;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a number, \"auto\", or \"50%\"")
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<SizeDimension, E> {
+                Ok(SizeDimension::Fixed(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<SizeDimension, E> {
+                Ok(SizeDimension::Fixed(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<SizeDimension, E> {
+                Ok(SizeDimension::Fixed(v as f32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SizeDimension, E> {
+                if v == "auto" {
+                    Ok(SizeDimension::Auto)
+                } else if let Some(pct) = v.strip_suffix('%') {
+                    pct.trim().parse::<f32>()
+                        .map(SizeDimension::Percent)
+                        .map_err(|_| E::custom(format!("invalid percentage: {}", v)))
+                } else {
+                    Err(E::custom(format!("expected number, \"auto\", or \"N%\", got: {}", v)))
+                }
+            }
+        }
+        deserializer.deserialize_any(SizeDimensionVisitor)
     }
 }
 
@@ -509,6 +677,9 @@ pub struct CardLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
+    /// Stagger delay (seconds) between each child's animation start
+    #[serde(default)]
+    pub stagger: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1062,11 +1233,12 @@ impl Default for TextAlign {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// Font weight — named ("normal"/"bold") or numeric (100-900)
+#[derive(Debug, Clone, JsonSchema)]
 pub enum FontWeight {
     Normal,
     Bold,
+    Weight(u16),
 }
 
 impl Default for FontWeight {
@@ -1074,6 +1246,126 @@ impl Default for FontWeight {
         Self::Normal
     }
 }
+
+impl FontWeight {
+    pub fn to_skia_weight(&self) -> i32 {
+        match self {
+            FontWeight::Normal => 400,
+            FontWeight::Bold => 700,
+            FontWeight::Weight(w) => *w as i32,
+        }
+    }
+}
+
+impl Serialize for FontWeight {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            FontWeight::Normal => serializer.serialize_str("normal"),
+            FontWeight::Bold => serializer.serialize_str("bold"),
+            FontWeight::Weight(w) => serializer.serialize_u16(*w),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FontWeight {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct FontWeightVisitor;
+        impl<'de> serde::de::Visitor<'de> for FontWeightVisitor {
+            type Value = FontWeight;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "\"normal\", \"bold\", or a number 100-900")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<FontWeight, E> {
+                match v {
+                    "normal" => Ok(FontWeight::Normal),
+                    "bold" => Ok(FontWeight::Bold),
+                    _ => Err(E::custom(format!("unknown font weight: {}", v))),
+                }
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<FontWeight, E> {
+                Ok(FontWeight::Weight(v as u16))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<FontWeight, E> {
+                Ok(FontWeight::Weight(v as u16))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<FontWeight, E> {
+                Ok(FontWeight::Weight(v as u16))
+            }
+        }
+        deserializer.deserialize_any(FontWeightVisitor)
+    }
+}
+
+// --- Visual Effect Types ---
+
+/// CSS-like color filter configuration
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FilterConfig {
+    #[serde(default)]
+    pub brightness: Option<f32>,
+    #[serde(default)]
+    pub contrast: Option<f32>,
+    #[serde(default)]
+    pub grayscale: Option<f32>,
+    #[serde(default)]
+    pub hue_rotate: Option<f32>,
+    #[serde(default)]
+    pub saturate: Option<f32>,
+    #[serde(default)]
+    pub sepia: Option<f32>,
+}
+
+/// Universal drop shadow
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DropShadow {
+    #[serde(default)]
+    pub dx: f32,
+    #[serde(default)]
+    pub dy: f32,
+    #[serde(default = "default_drop_shadow_blur")]
+    pub blur: f32,
+    #[serde(default = "default_drop_shadow_color")]
+    pub color: String,
+}
+
+fn default_drop_shadow_blur() -> f32 {
+    4.0
+}
+
+fn default_drop_shadow_color() -> String {
+    "#00000080".to_string()
+}
+
+/// Blend mode for layer compositing
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendMode {
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+/// Gradient fill for text
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TextGradient {
+    pub colors: Vec<String>,
+    #[serde(default)]
+    pub angle: Option<f32>,
+}
+
+// --- SizeDimension with Percent support ---
 
 // --- LayerProps implementations ---
 
@@ -1101,6 +1393,8 @@ impl_layer_props_standard!(VideoLayer);
 impl_layer_props_standard!(GifLayer);
 impl_layer_props_standard!(CodeblockLayer);
 impl_layer_props_standard!(CardLayer);
+impl_layer_props_standard!(ProgressBarLayer);
+impl_layer_props_standard!(QrCodeLayer);
 
 impl LayerProps for CaptionLayer {
     fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
@@ -1136,6 +1430,27 @@ impl LayerProps for GroupLayer {
 }
 
 impl Layer {
+    /// Access the LayerStyle for any layer variant
+    pub fn style(&self) -> &LayerStyle {
+        match self {
+            Layer::Text(l) => &l.style,
+            Layer::Shape(l) => &l.style,
+            Layer::Image(l) => &l.style,
+            Layer::Svg(l) => &l.style,
+            Layer::Icon(l) => &l.style,
+            Layer::Video(l) => &l.style,
+            Layer::Gif(l) => &l.style,
+            Layer::Caption(l) => &l.style,
+            Layer::Codeblock(l) => &l.style,
+            Layer::Counter(l) => &l.style,
+            Layer::Group(l) => &l.style,
+            Layer::Card(l) => &l.style,
+            Layer::Flex(l) => &l.style,
+            Layer::ProgressBar(l) => &l.style,
+            Layer::QrCode(l) => &l.style,
+        }
+    }
+
     /// Access LayerProps for any layer variant
     pub fn props(&self) -> &dyn LayerProps {
         match self {
@@ -1152,6 +1467,8 @@ impl Layer {
             Layer::Group(l) => l,
             Layer::Card(l) => l,
             Layer::Flex(l) => l,
+            Layer::ProgressBar(l) => l,
+            Layer::QrCode(l) => l,
         }
     }
 }
@@ -1205,6 +1522,16 @@ fn default_polygon_sides() -> u32 {
 fn default_loop_true() -> bool {
     true
 }
+
+fn default_progress() -> f64 { 0.5 }
+fn default_progress_width() -> f32 { 300.0 }
+fn default_progress_height() -> f32 { 20.0 }
+fn default_progress_bg() -> String { "#333333".to_string() }
+fn default_progress_fill() -> String { "#4CAF50".to_string() }
+
+fn default_qr_size() -> f32 { 200.0 }
+fn default_qr_fg() -> String { "#000000".to_string() }
+fn default_qr_bg() -> String { "#FFFFFF".to_string() }
 
 fn default_active_color() -> String {
     "#FFFF00".to_string()

@@ -184,11 +184,11 @@ impl Widget for Flex {
 pub(crate) fn resolve_size_constraints(size: &Option<FlexSize>, constraints: &Constraints) -> Constraints {
     let w = size.as_ref().and_then(|s| match &s.width {
         SizeDimension::Fixed(v) => Some(*v),
-        SizeDimension::Auto(_) => None,
+        SizeDimension::Percent(_) | SizeDimension::Auto => None,
     });
     let h = size.as_ref().and_then(|s| match &s.height {
         SizeDimension::Fixed(v) => Some(*v),
-        SizeDimension::Auto(_) => None,
+        SizeDimension::Percent(_) | SizeDimension::Auto => None,
     });
     Constraints {
         min_width: w.unwrap_or(constraints.min_width),

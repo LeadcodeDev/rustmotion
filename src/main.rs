@@ -23,6 +23,10 @@ struct Cli {
     /// Suppress all output except errors
     #[arg(short, long, global = true)]
     quiet: bool,
+
+    /// Number of parallel rendering threads (defaults to all cores)
+    #[arg(long, global = true)]
+    threads: Option<usize>,
 }
 
 #[derive(Subcommand)]
@@ -69,6 +73,28 @@ enum Commands {
         watch: bool,
     },
 
+    /// Export a single frame as a still image (PNG, JPEG, WebP)
+    Still {
+        /// Path to the JSON scenario file
+        input: PathBuf,
+
+        /// Output file path
+        #[arg(short, long, default_value = "still.png")]
+        output: PathBuf,
+
+        /// Time in seconds to capture
+        #[arg(long, default_value = "0.0")]
+        time: f64,
+
+        /// Image format (png, jpeg, webp)
+        #[arg(long)]
+        format: Option<String>,
+
+        /// JPEG quality (1-100)
+        #[arg(long, default_value = "90")]
+        quality: u8,
+    },
+
     /// Validate a JSON scenario without rendering
     Validate {
         /// Path to the JSON scenario file
@@ -97,6 +123,14 @@ enum OutputFormat {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Configure rayon thread pool
+    if let Some(threads) = cli.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .ok(); // Ignore error if already initialized
+    }
+
     match cli.command {
         Commands::Render {
             input,
@@ -117,6 +151,10 @@ fn main() -> Result<()> {
                 let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
                 cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
             }
+        }
+        Commands::Still { input, output, time, format, quality } => {
+            let scenario = load_scenario(&input)?;
+            cmd_still(scenario, &output, time, format, quality)
         }
         Commands::Validate { input } => cmd_validate(&input),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
@@ -165,6 +203,11 @@ fn cmd_render(
 ) -> Result<()> {
     let start = std::time::Instant::now();
 
+    // Load custom fonts if defined
+    if !scenario.fonts.is_empty() {
+        engine::renderer::load_custom_fonts(&scenario.fonts);
+    }
+
     // Create parent directories if they don't exist
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
@@ -197,6 +240,9 @@ fn cmd_render(
             }
             "gif" => {
                 encode::encode_gif(&scenario, output.to_str().unwrap(), quiet)?;
+            }
+            "raw" => {
+                encode::encode_raw_stdout(&scenario, false)?;
             }
             _ => {
                 // Check if we need FFmpeg (for h265, vp9, prores, webm, mov)
@@ -537,6 +583,32 @@ fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
                     }
                 }
                 schema::Layer::Caption(_) | schema::Layer::Group(_) => {}
+                schema::Layer::ProgressBar(pb) => {
+                    if let (Some(start), Some(end)) = (pb.start_at, pb.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
+                schema::Layer::QrCode(qr) => {
+                    if qr.content.is_empty() {
+                        errors.push(format!(
+                            "scenes[{}].children[{}]: QR code content must not be empty",
+                            i, j
+                        ));
+                    }
+                    if let (Some(start), Some(end)) = (qr.start_at, qr.end_at) {
+                        if start >= end {
+                            errors.push(format!(
+                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
+                                i, j, start, end
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -565,6 +637,87 @@ fn cmd_schema(output: Option<&std::path::Path>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_still(
+    scenario: schema::Scenario,
+    output: &PathBuf,
+    time: f64,
+    format: Option<String>,
+    quality: u8,
+) -> Result<()> {
+    // Load custom fonts if defined
+    if !scenario.fonts.is_empty() {
+        engine::renderer::load_custom_fonts(&scenario.fonts);
+    }
+
+    let config = &scenario.video;
+    let fps = config.fps;
+
+    // Find which scene contains this time
+    let mut scene_start = 0.0f64;
+    for scene in &scenario.scenes {
+        let scene_end = scene_start + scene.duration;
+        if time < scene_end || std::ptr::eq(scene, scenario.scenes.last().unwrap()) {
+            let local_time = (time - scene_start).max(0.0);
+            let frame_index = (local_time * fps as f64).round() as u32;
+            let scene_frames = (scene.duration * fps as f64).round() as u32;
+
+            let rgba = engine::render_v2::render_scene_frame(
+                config, scene, frame_index.min(scene_frames.saturating_sub(1)), scene_frames,
+            )?;
+
+            // Create parent directories
+            if let Some(parent) = output.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+
+            let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
+                .ok_or_else(|| anyhow::anyhow!("Failed to create image from pixels"))?;
+
+            let fmt = format.as_deref().unwrap_or_else(|| {
+                output.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("png")
+            });
+
+            match fmt {
+                "jpeg" | "jpg" => {
+                    use image::ImageEncoder;
+                    let file = std::fs::File::create(output)?;
+                    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
+                    encoder.write_image(
+                        img.as_raw(),
+                        config.width,
+                        config.height,
+                        image::ExtendedColorType::Rgba8,
+                    )?;
+                }
+                "webp" => {
+                    use image::ImageEncoder;
+                    let file = std::fs::File::create(output)?;
+                    let encoder = image::codecs::webp::WebPEncoder::new_lossless(file);
+                    encoder.write_image(
+                        img.as_raw(),
+                        config.width,
+                        config.height,
+                        image::ExtendedColorType::Rgba8,
+                    )?;
+                }
+                _ => {
+                    img.save(output)?;
+                }
+            }
+
+            eprintln!("Still image saved to {}", output.display());
+            return Ok(());
+        }
+        scene_start = scene_end;
+    }
+
+    anyhow::bail!("Time {:.2}s is beyond video duration", time);
 }
 
 fn cmd_info(input: &PathBuf) -> Result<()> {

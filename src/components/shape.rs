@@ -135,6 +135,7 @@ fn render_shape_text(
     let font_style = match text.font_weight {
         FontWeight::Bold => skia_safe::FontStyle::bold(),
         FontWeight::Normal => skia_safe::FontStyle::normal(),
+        FontWeight::Weight(w) => skia_safe::FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
     };
 
     let typeface = fm

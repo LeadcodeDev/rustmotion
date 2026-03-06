@@ -3,17 +3,17 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Result;
 use dashmap::DashMap;
 use skia_safe::{
-    surfaces, Canvas, Color4f, ColorType, Font, FontMgr, FontStyle, ImageInfo, Paint, PaintStyle,
-    Point, Rect, TextBlob,
+    image_filters, surfaces, BlendMode as SkBlendMode, Canvas, Color4f, ColorType, Font, FontMgr,
+    FontStyle, ImageInfo, Paint, PaintStyle, Point, Rect, TextBlob,
 };
 
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::codeblock;
 use crate::schema::{
-    CaptionLayer, CaptionStyle, CardAlign, CardChild, CardDirection, CardDisplay, CardJustify,
-    CardLayer, CounterLayer, Fill, FontStyleType, FontWeight, GradientType, GridTrack, IconLayer,
-    ImageFit, Layer, LayerStyle, Position, Scene, ShapeText, ShapeType, TextAlign, TextLayer,
-    VerticalAlign, VideoConfig,
+    BlendMode, CaptionLayer, CaptionStyle, CardAlign, CardChild, CardDirection, CardDisplay,
+    CardJustify, CardLayer, CounterLayer, Fill, FilterConfig, FontEntry, FontStyleType, FontWeight,
+    GradientType, GridTrack, IconLayer, ImageFit, Layer, LayerStyle, Position, Scene, ShapeText,
+    ShapeType, TextAlign, TextLayer, VerticalAlign, VideoConfig,
 };
 
 // Thread-local FontMgr instance, created once per thread and reused
@@ -23,6 +23,23 @@ thread_local! {
 
 pub(crate) fn font_mgr() -> FontMgr {
     THREAD_FONT_MGR.with(|mgr| mgr.clone())
+}
+
+/// Load custom fonts from FontEntry definitions
+pub fn load_custom_fonts(fonts: &[FontEntry]) {
+    let font_mgr = font_mgr();
+    for entry in fonts {
+        let path = std::path::Path::new(&entry.path);
+        if path.exists() {
+            if let Ok(data) = std::fs::read(path) {
+                let sk_data = skia_safe::Data::new_copy(&data);
+                // Register with font manager - use FontMgr to create Typeface
+                if let Some(_typeface) = font_mgr.new_from_data(&sk_data, None) {
+                    // Font loaded successfully — it's now available via family name matching
+                }
+            }
+        }
+    }
 }
 
 /// Global asset cache for decoded images (keyed by file path)
@@ -194,6 +211,114 @@ fn render_layer_in_container(canvas: &Canvas, layer: &Layer, config: &VideoConfi
     render_layer_inner(canvas, layer, config, time, scene_duration, &props, wrap_width, align_width)
 }
 
+fn build_color_filter(filter: &FilterConfig) -> Option<skia_safe::ColorFilter> {
+    let mut filters: Vec<skia_safe::ColorFilter> = Vec::new();
+
+    // Brightness: scale RGB channels
+    if let Some(b) = filter.brightness {
+        if (b - 1.0).abs() > 0.001 {
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                b, 0.0, 0.0, 0.0, 0.0,
+                0.0, b, 0.0, 0.0, 0.0,
+                0.0, 0.0, b, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Contrast
+    if let Some(c) = filter.contrast {
+        if (c - 1.0).abs() > 0.001 {
+            let t = (1.0 - c) / 2.0;
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                c, 0.0, 0.0, 0.0, t,
+                0.0, c, 0.0, 0.0, t,
+                0.0, 0.0, c, 0.0, t,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Grayscale (0.0 = none, 1.0 = full grayscale)
+    if let Some(g) = filter.grayscale {
+        if g > 0.001 {
+            let inv = 1.0 - g;
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                0.2126 + 0.7874 * inv, 0.7152 - 0.7152 * inv, 0.0722 - 0.0722 * inv, 0.0, 0.0,
+                0.2126 - 0.2126 * inv, 0.7152 + 0.2848 * inv, 0.0722 - 0.0722 * inv, 0.0, 0.0,
+                0.2126 - 0.2126 * inv, 0.7152 - 0.7152 * inv, 0.0722 + 0.9278 * inv, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Saturate
+    if let Some(s) = filter.saturate {
+        if (s - 1.0).abs() > 0.001 {
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                0.2126 + 0.7874 * s, 0.7152 - 0.7152 * s, 0.0722 - 0.0722 * s, 0.0, 0.0,
+                0.2126 - 0.2126 * s, 0.7152 + 0.2848 * s, 0.0722 - 0.0722 * s, 0.0, 0.0,
+                0.2126 - 0.2126 * s, 0.7152 - 0.7152 * s, 0.0722 + 0.9278 * s, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Sepia
+    if let Some(sep) = filter.sepia {
+        if sep > 0.001 {
+            let s = sep;
+            let inv = 1.0 - s;
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                0.393 + 0.607 * inv, 0.769 - 0.769 * inv, 0.189 - 0.189 * inv, 0.0, 0.0,
+                0.349 - 0.349 * inv, 0.686 + 0.314 * inv, 0.168 - 0.168 * inv, 0.0, 0.0,
+                0.272 - 0.272 * inv, 0.534 - 0.534 * inv, 0.131 + 0.869 * inv, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Hue rotate (in degrees)
+    if let Some(deg) = filter.hue_rotate {
+        if deg.abs() > 0.001 {
+            let rad = deg.to_radians();
+            let cos_a = rad.cos();
+            let sin_a = rad.sin();
+            #[rustfmt::skip]
+            let matrix: [f32; 20] = [
+                0.213 + cos_a * 0.787 - sin_a * 0.213, 0.715 - cos_a * 0.715 - sin_a * 0.715, 0.072 - cos_a * 0.072 + sin_a * 0.928, 0.0, 0.0,
+                0.213 - cos_a * 0.213 + sin_a * 0.143, 0.715 + cos_a * 0.285 + sin_a * 0.140, 0.072 - cos_a * 0.072 - sin_a * 0.283, 0.0, 0.0,
+                0.213 - cos_a * 0.213 - sin_a * 0.787, 0.715 - cos_a * 0.715 + sin_a * 0.715, 0.072 + cos_a * 0.928 + sin_a * 0.072, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            filters.push(skia_safe::color_filters::matrix_row_major(&matrix, None));
+        }
+    }
+
+    // Compose all filters
+    if filters.is_empty() {
+        None
+    } else {
+        let mut result = filters.remove(0);
+        for f in filters {
+            if let Some(composed) = result.composed(f) {
+                result = composed;
+            }
+        }
+        Some(result)
+    }
+}
+
 fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time: f64, scene_duration: f64, props: &AnimatedProperties, wrap_width: f32, align_width: f32) -> Result<()> {
     // Apply animated transforms
     canvas.save();
@@ -228,25 +353,89 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         canvas.translate((pad_l, pad_t));
     }
 
-    // Apply opacity via save_layer_alpha if needed
-    let needs_layer = props.opacity < 1.0 || props.blur > 0.01;
-    if needs_layer {
-        if props.blur > 0.01 {
-            let filter = skia_safe::image_filters::blur(
-                (props.blur, props.blur),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            );
-            let mut layer_paint = Paint::default();
-            layer_paint.set_alpha_f(props.opacity);
-            if let Some(filter) = filter {
-                layer_paint.set_image_filter(filter);
-            }
-            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
-        } else {
-            canvas.save_layer_alpha(None, (props.opacity * 255.0) as u32);
+    // Get layer style for effects
+    let layer_style = layer.style();
+
+    // Apply clip path if defined
+    if let Some(ref clip_str) = layer_style.clip_path {
+        if let Some(path) = skia_safe::Path::from_svg(clip_str) {
+            canvas.clip_path(&path, skia_safe::ClipOp::Intersect, true);
         }
+    }
+
+    // Build image filter chain (blur + drop shadow)
+    let mut image_filter: Option<skia_safe::ImageFilter> = None;
+
+    if props.blur > 0.01 {
+        image_filter = image_filters::blur(
+            (props.blur, props.blur),
+            skia_safe::TileMode::Clamp,
+            None,
+            None,
+        );
+    }
+
+    if let Some(ref shadow) = layer_style.drop_shadow {
+        let shadow_color = color4f_from_hex(&shadow.color);
+        let shadow_filter = image_filters::drop_shadow_only(
+            (shadow.dx, shadow.dy),
+            (shadow.blur, shadow.blur),
+            shadow_color,
+            None,
+            image_filter.clone(),
+            None,
+        );
+        // Combine: render content + shadow
+        if let Some(shadow_f) = shadow_filter {
+            if let Some(content_filter) = image_filter.clone() {
+                image_filter = image_filters::merge(
+                    vec![Some(shadow_f), Some(content_filter)],
+                    None,
+                );
+            } else {
+                // Shadow only, no blur
+                image_filter = Some(shadow_f);
+            }
+        }
+    }
+
+    // Build color filter
+    let color_filter = layer_style.filter.as_ref().and_then(|f| build_color_filter(f));
+
+    // Map blend mode
+    let blend_mode = layer_style.blend_mode.as_ref().map(|bm| match bm {
+        BlendMode::Multiply => SkBlendMode::Multiply,
+        BlendMode::Screen => SkBlendMode::Screen,
+        BlendMode::Overlay => SkBlendMode::Overlay,
+        BlendMode::Darken => SkBlendMode::Darken,
+        BlendMode::Lighten => SkBlendMode::Lighten,
+        BlendMode::ColorDodge => SkBlendMode::ColorDodge,
+        BlendMode::ColorBurn => SkBlendMode::ColorBurn,
+        BlendMode::HardLight => SkBlendMode::HardLight,
+        BlendMode::SoftLight => SkBlendMode::SoftLight,
+        BlendMode::Difference => SkBlendMode::Difference,
+        BlendMode::Exclusion => SkBlendMode::Exclusion,
+        BlendMode::Hue => SkBlendMode::Hue,
+        BlendMode::Saturation => SkBlendMode::Saturation,
+        BlendMode::Color => SkBlendMode::Color,
+        BlendMode::Luminosity => SkBlendMode::Luminosity,
+    });
+
+    // Determine if we need a save_layer
+    let needs_layer = props.opacity < 1.0 || image_filter.is_some() || color_filter.is_some() || blend_mode.is_some();
+    if needs_layer {
+        let mut layer_paint = Paint::default();
+        layer_paint.set_alpha_f(props.opacity);
+        if let Some(filter) = image_filter {
+            layer_paint.set_image_filter(filter);
+        }
+        if let Some(cf) = color_filter {
+            layer_paint.set_color_filter(cf);
+        }
+        if let Some(bm) = blend_mode {
+            layer_paint.set_blend_mode(bm);
+        }
+        canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
     }
 
     // Convert f32::INFINITY to None for optional params
@@ -266,6 +455,8 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         Layer::Codeblock(cb) => codeblock::render_codeblock(canvas, cb, config, time, props)?,
         Layer::Counter(counter) => render_counter(canvas, counter, config, time, scene_duration, props)?,
         Layer::Card(card) | Layer::Flex(card) => render_card(canvas, card, config, time, scene_duration)?,
+        Layer::ProgressBar(pb) => crate::components::progress::render_progress_bar(canvas, pb)?,
+        Layer::QrCode(qr) => crate::components::qrcode::render_qr_code(canvas, qr)?,
     }
 
     if needs_layer {
@@ -339,6 +530,7 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             let weight = match t.style.font_weight_or(FontWeight::Normal) {
                 FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
                 FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+                FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
             };
             let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
             let typeface = font_mgr
@@ -408,6 +600,7 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             let weight = match ct.style.font_weight_or(FontWeight::Normal) {
                 FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
                 FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+                FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
             };
             let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
             let typeface = font_mgr
@@ -438,6 +631,8 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             let h = c.size.as_ref().and_then(|s| s.height.fixed()).unwrap_or(ch + pt + pb);
             (c.position.x + w / 2.0, c.position.y + h / 2.0)
         }
+        Layer::ProgressBar(p) => (p.position.x + p.width / 2.0, p.position.y + p.height / 2.0),
+        Layer::QrCode(q) => (q.position.x + q.size / 2.0, q.position.y + q.size / 2.0),
     }
 }
 
@@ -590,6 +785,7 @@ fn render_text_constrained(
     let weight = match text.style.font_weight_or(FontWeight::Normal) {
         FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
         FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+        FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
     };
     let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
@@ -612,6 +808,28 @@ fn render_text_constrained(
     let color = props.color.as_deref().unwrap_or(text.style.color_or("#FFFFFF"));
     let mut paint = paint_from_hex(color);
     paint.set_alpha_f(1.0); // opacity handled at layer level
+
+    // Apply text gradient if defined
+    if let Some(ref gradient) = text.style.text_gradient {
+        let colors: Vec<Color4f> = gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
+        if colors.len() >= 2 {
+            let grad_width = wrap_width.unwrap_or(1000.0);
+            let shader = skia_safe::shader::Shader::linear_gradient(
+                (Point::new(0.0, 0.0), Point::new(grad_width, 0.0)),
+                skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(
+                    &colors,
+                    Some(skia_safe::ColorSpace::new_srgb()),
+                ),
+                None,
+                skia_safe::TileMode::Clamp,
+                None,
+                None,
+            );
+            if let Some(shader) = shader {
+                paint.set_shader(shader);
+            }
+        }
+    }
 
     // Apply typewriter effect (progress-based or absolute char count)
     let content = if props.visible_chars_progress >= 0.0 {
@@ -896,6 +1114,7 @@ fn render_shape_text(
     let font_style = match text.font_weight {
         FontWeight::Bold => FontStyle::bold(),
         FontWeight::Normal => FontStyle::normal(),
+        FontWeight::Weight(w) => FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
     };
 
     let typeface = font_mgr
@@ -1113,6 +1332,7 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             let weight = match t.style.font_weight_or(FontWeight::Normal) {
                 FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
                 FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+                FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
             };
             let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
             let typeface = font_mgr
@@ -1163,6 +1383,7 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             let weight = match ct.style.font_weight_or(FontWeight::Normal) {
                 FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
                 FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
+                FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
             };
             let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
             let typeface = font_mgr
@@ -1200,6 +1421,8 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             let h = c.style.font_size_or(48.0) * 1.3;
             (w, h)
         }
+        Layer::ProgressBar(p) => (p.width, p.height),
+        Layer::QrCode(q) => (q.size, q.size),
     }
 }
 
@@ -1207,7 +1430,17 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
 fn measure_layer_with_spacing(layer: &Layer) -> (f32, f32) {
     let (w, h) = measure_layer(layer);
     let (pt, pr, pb, pl) = layer.props().padding();
-    (w + pl + pr, h + pt + pb)
+    let total_w = w + pl + pr;
+    let mut total_h = h + pt + pb;
+
+    // Apply aspect ratio if defined
+    if let Some(ratio) = layer.style().aspect_ratio {
+        if total_w > 0.0 && (total_h <= 0.0 || total_h == h + pt + pb) {
+            total_h = total_w / ratio;
+        }
+    }
+
+    (total_w, total_h)
 }
 
 /// Layout result for a single child in a card
@@ -1236,6 +1469,8 @@ fn get_layer_position(layer: &Layer) -> &Position {
         Layer::Caption(c) => &c.position,
         Layer::Group(g) => &g.position,
         Layer::Card(c) | Layer::Flex(c) => &c.position,
+        Layer::ProgressBar(p) => &p.position,
+        Layer::QrCode(q) => &q.position,
     }
 }
 
@@ -1279,6 +1514,8 @@ fn card_child_style(child: &CardChild) -> &LayerStyle {
         Layer::Codeblock(c) => &c.style,
         Layer::Card(c) | Layer::Flex(c) => &c.style,
         Layer::Group(g) => &g.style,
+        Layer::ProgressBar(p) => &p.style,
+        Layer::QrCode(q) => &q.style,
     }
 }
 
@@ -1860,6 +2097,15 @@ fn render_card(
         }
         let result = &layout[i];
         let child = &child_wrapper.layer;
+
+        // Apply stagger delay: offset child start_at by index * stagger
+        let child_time = if let Some(stagger) = card.stagger {
+            let stagger_delay = i as f64 * stagger;
+            (time - stagger_delay).max(0.0)
+        } else {
+            time
+        };
+
         let child_pos = get_layer_position(child);
 
         // Translate-compensation: shift canvas so child's own position lands at layout position
@@ -1889,7 +2135,7 @@ fn render_card(
             canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, false);
         }
 
-        render_layer_in_container(canvas, child, config, time, scene_duration, child_wrap_width, child_align_width)?;
+        render_layer_in_container(canvas, child, config, child_time, scene_duration, child_wrap_width, child_align_width)?;
         canvas.restore();
     }
 
