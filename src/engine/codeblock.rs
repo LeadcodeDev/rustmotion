@@ -950,14 +950,28 @@ fn draw_highlights(
                 continue;
             }
         }
-        let hl_paint = paint_from_hex(&hl.color);
-        for &line_num in &hl.lines {
-            if line_num == 0 {
-                continue;
+        let mut hl_paint = paint_from_hex(&hl.color);
+        hl_paint.set_anti_alias(false);
+
+        // Sort line numbers and merge consecutive runs into single rects
+        // to avoid sub-pixel seams between adjacent highlight lines.
+        let mut sorted_lines: Vec<u32> = hl.lines.iter().copied().filter(|&n| n > 0).collect();
+        sorted_lines.sort_unstable();
+        sorted_lines.dedup();
+
+        let mut i = 0;
+        while i < sorted_lines.len() {
+            let run_start = sorted_lines[i] - 1; // 0-based
+            let mut run_end = run_start;
+            while i + 1 < sorted_lines.len() && sorted_lines[i + 1] == sorted_lines[i] + 1 {
+                i += 1;
+                run_end = sorted_lines[i] - 1;
             }
-            let line_idx = line_num - 1;
-            let hl_rect = Rect::from_xywh(x, y + line_idx as f32 * line_height, width, line_height);
+            let ry = (y + run_start as f32 * line_height).floor();
+            let ry_end = (y + (run_end + 1) as f32 * line_height).ceil();
+            let hl_rect = Rect::from_ltrb(x.floor(), ry, (x + width).ceil(), ry_end);
             canvas.draw_rect(hl_rect, &hl_paint);
+            i += 1;
         }
     }
 }
