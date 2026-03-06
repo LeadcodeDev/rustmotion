@@ -987,7 +987,7 @@ Wiggle adds procedural noise-based motion to any animatable property. Unlike key
   "content": "Wobbly",
   "wiggle": [
     { "property": "position.x", "amplitude": 5.0, "frequency": 3.0, "seed": 42 },
-    { "property": "rotation", "amplitude": 2.0, "frequency": 2.0, "seed": 99 }
+    { "property": "rotation", "amplitude": 2.0, "frequency": 2.0, "seed": 99, "decay": 0.5 }
   ]
 }
 ```
@@ -998,6 +998,10 @@ Wiggle adds procedural noise-based motion to any animatable property. Unlike key
 | `amplitude` | `f64` | (required) | Maximum deviation (pixels for position, degrees for rotation, etc.) |
 | `frequency` | `f64` | (required) | Oscillations per second |
 | `seed` | `u64` | `0` | Random seed for reproducible results |
+| `octaves` | `u32` | `3` | Noise complexity (more octaves = more organic detail) |
+| `phase` | `f64` | `0.0` | Phase offset (shifts the noise pattern in time) |
+| `decay` | `f64` | | Exponential decay rate (amplitude diminishes over time) |
+| `easing` | `string` | | Remap noise output through an easing curve |
 
 Wiggle offsets are applied **additively** on top of keyframe animations and presets.
 
@@ -1044,6 +1048,36 @@ Adds physically-correct motion blur by rendering multiple sub-frames and composi
 | `1.0` | Full frame-duration blur |
 
 The renderer samples 5 sub-frames around the current time, each with proportional opacity.
+
+---
+
+## Glow Effect
+
+Adds a soft luminous halo around any component (text, shapes, icons, etc.). The glow renders as a pre-pass behind the component, keeping the content crisp and readable.
+
+```json
+{
+  "type": "text",
+  "content": "NEON",
+  "position": { "x": 540, "y": 400 },
+  "font_size": 72,
+  "color": "#ff00ff",
+  "font_weight": "bold",
+  "glow": {
+    "color": "#ff00ff",
+    "radius": 20,
+    "intensity": 2.5
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `glow.color` | `string` | `"#FFFFFF"` | Glow color (hex `#RRGGBB` or `#RRGGBBAA`) |
+| `glow.radius` | `f32` | `10.0` | Blur radius of the glow |
+| `glow.intensity` | `f32` | `1.0` | Brightness multiplier (higher = brighter, more visible glow) |
+
+Works on all component types: `text`, `shape`, `icon`, `image`, `svg`, `card`, etc.
 
 ---
 

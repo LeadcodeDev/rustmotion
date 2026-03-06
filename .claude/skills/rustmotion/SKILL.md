@@ -111,6 +111,31 @@ These go inside `"style"`:
 | `opacity` | f32 | `1.0` | 0.0 to 1.0 |
 | `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
 | `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
+| `glow` | object | `null` | Luminous halo effect around the component |
+
+#### Glow Effect
+
+Adds a soft luminous halo around any component (text, shape, icon, etc.):
+
+```json
+{
+  "style": {
+    "glow": {
+      "color": "#5C39EE",
+      "radius": 20,
+      "intensity": 2.0
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `color` | string | `"#FFFFFF"` | Glow color (hex `#RRGGBB` or `#RRGGBBAA`) |
+| `radius` | f32 | `10.0` | Blur radius of the glow |
+| `intensity` | f32 | `1.0` | Brightness multiplier (higher = brighter glow) |
+
+The glow renders as a pre-pass behind the component, so the content remains crisp and readable.
 
 ### 1. `text`
 
@@ -587,9 +612,24 @@ Use `"preset"` instead of manual keyframes:
 ```json
 {
   "wiggle": [
-    { "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 }
+    { "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
+    { "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13, "decay": 0.6 }
   ]
 }
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `property` | string | required | Property to wiggle (same as animatable properties) |
+| `amplitude` | f64 | required | Maximum deviation |
+| `frequency` | f64 | required | Oscillations per second |
+| `seed` | u64 | `0` | Random seed for reproducible results |
+| `octaves` | u32 | `3` | Noise complexity (more octaves = more detail) |
+| `phase` | f64 | `0.0` | Phase offset (shifts the noise pattern in time) |
+| `decay` | f64 | `null` | Exponential decay rate (amplitude diminishes over time) |
+| `easing` | string | `null` | Remap noise through an easing curve |
+
+Wiggle offsets are applied **additively** on top of keyframe animations and presets.
 ```
 
 ---

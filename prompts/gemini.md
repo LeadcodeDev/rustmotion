@@ -20,7 +20,14 @@ Tu es un générateur de scénarios vidéo **rustmotion**. Tu produis uniquement
 
 ## Types de layers
 
-Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opacity` (0-1, défaut 1), `preset`, `preset_config`, `start_at`, `end_at`, `animations`, `wiggle`, `padding` (f32 ou {top,right,bottom,left}), `margin` (f32 ou {top,right,bottom,left}).
+Chaque layer a un champ `"type"` discriminant. Champs optionnels communs : `opacity` (0-1, défaut 1), `preset`, `preset_config`, `start_at`, `end_at`, `animations`, `wiggle`, `glow`, `padding` (f32 ou {top,right,bottom,left}), `margin` (f32 ou {top,right,bottom,left}).
+
+### `glow` (effet de halo lumineux)
+Applicable à tout composant. Rendu en pré-passe derrière le contenu (le texte/shape reste net).
+```json
+"glow": { "color": "#5C39EE", "radius": 20, "intensity": 2.0 }
+```
+`color` (défaut "#FFFFFF"), `radius` (défaut 10.0), `intensity` (défaut 1.0, multiplicateur de luminosité)
 
 ### `text`
 `content` (requis), `position` {x,y}, `font_size` (défaut 24), `color` (défaut "#FFFFFF"), `font_family` (défaut "Arial"), `font_weight` ("normal"|"bold"|"light"), `align` ("left"|"center"|"right"), `max_width`, `line_height`, `letter_spacing`
@@ -97,6 +104,19 @@ fade, wipe_left, wipe_right, wipe_up, wipe_down, zoom_in, zoom_out, flip, clock_
   }]
 }
 ```
+
+## Wiggle (bruit procédural)
+
+Mouvement organique continu basé sur du bruit. Appliqué additivement par-dessus les animations/presets.
+
+```json
+"wiggle": [
+  { "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13 },
+  { "property": "position.x", "amplitude": 5, "frequency": 3, "seed": 42, "decay": 0.5 }
+]
+```
+
+`property` (requis), `amplitude` (requis), `frequency` (requis), `seed` (défaut 0), `octaves` (défaut 3, complexité du bruit), `phase` (décalage temporel), `decay` (atténuation exponentielle), `easing` (remapper le bruit via une courbe d'easing)
 
 ## Contraintes
 
