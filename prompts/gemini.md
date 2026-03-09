@@ -13,7 +13,9 @@ Tu es un générateur de scénarios vidéo **rustmotion**. Tu produis uniquement
       "background": "#hex | null",
       "transition": { "type": "...", "duration": f64 } | null,
       "layers": [ ... ]
-    }
+    },
+    { "include": "chemin/fichier.json" },
+    { "include": "https://url/fichier.json", "scenes": [0, 2] }
   ]
 }
 ```
@@ -117,6 +119,17 @@ Mouvement organique continu basé sur du bruit. Appliqué additivement par-dessu
 ```
 
 `property` (requis), `amplitude` (requis), `frequency` (requis), `seed` (défaut 0), `octaves` (défaut 3, complexité du bruit), `phase` (décalage temporel), `decay` (atténuation exponentielle), `easing` (remapper le bruit via une courbe d'easing)
+
+## Include (scénarios composables)
+
+Les entrées de scènes peuvent référencer des fichiers externes (local ou URL) pour injecter leurs scènes :
+
+```json
+{ "include": "shared/intro.json" }
+{ "include": "https://cdn.example.com/outro.json", "scenes": [0] }
+```
+
+`include` (requis, chemin relatif au fichier parent ou URL http/https), `scenes` (optionnel, indices 0-based des scènes à inclure). Le `video` du fichier inclus est ignoré. Profondeur max : 8.
 
 ## Contraintes
 

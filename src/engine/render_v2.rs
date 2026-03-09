@@ -448,6 +448,11 @@ pub fn compute_root_layout(
                 y -= baseline_offset;
             }
             crate::components::Component::Counter(ref counter) => {
+                match counter.style.text_align_or(crate::schema::TextAlign::Left) {
+                    crate::schema::TextAlign::Center => x -= node.width / 2.0,
+                    crate::schema::TextAlign::Right => x -= node.width,
+                    crate::schema::TextAlign::Left => {}
+                }
                 let baseline_offset = compute_counter_baseline_offset(counter);
                 y -= baseline_offset;
             }

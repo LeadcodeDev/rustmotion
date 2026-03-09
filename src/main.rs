@@ -1,5 +1,6 @@
 mod encode;
 mod engine;
+mod include;
 mod schema;
 mod tui;
 
@@ -162,18 +163,18 @@ fn main() -> Result<()> {
     }
 }
 
-fn load_scenario(input: &PathBuf) -> Result<schema::Scenario> {
+fn load_scenario(input: &PathBuf) -> Result<schema::ResolvedScenario> {
     let json_str = std::fs::read_to_string(input)
         .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.display(), e))?;
     let scenario: schema::Scenario = serde_json::from_str(&json_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
-    Ok(scenario)
+    include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }
 
 fn load_scenario_from_source(
     input: Option<&PathBuf>,
     json: Option<&str>,
-) -> Result<schema::Scenario> {
+) -> Result<schema::ResolvedScenario> {
     match (input, json) {
         (Some(_), Some(_)) => {
             anyhow::bail!("Cannot use both input file and --json")
@@ -182,7 +183,7 @@ fn load_scenario_from_source(
         (None, Some(json_str)) => {
             let scenario: schema::Scenario = serde_json::from_str(json_str)
                 .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
-            Ok(scenario)
+            include::resolve_includes(scenario, &include::IncludeSource::Inline)
         }
         (None, None) => {
             anyhow::bail!("Provide either an input file or --json")
@@ -191,7 +192,7 @@ fn load_scenario_from_source(
 }
 
 fn cmd_render(
-    scenario: schema::Scenario,
+    scenario: schema::ResolvedScenario,
     output: &PathBuf,
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
@@ -342,7 +343,7 @@ fn cmd_watch(
     }
 }
 
-fn render_single_frame(scenario: &schema::Scenario, frame_num: u32, output: &PathBuf) -> Result<()> {
+fn render_single_frame(scenario: &schema::ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
     let config = &scenario.video;
     let fps = config.fps;
 
@@ -382,22 +383,35 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
 
     match scenario {
         Ok(scenario) => {
-            // Semantic validation
-            let errors = validate_scenario(&scenario);
-            if errors.is_empty() {
-                eprintln!("Valid scenario: {} scene(s)", scenario.scenes.len());
-                let total_duration: f64 = scenario.scenes.iter().map(|s| s.duration).sum();
-                eprintln!(
-                    "  Resolution: {}x{} @ {}fps",
-                    scenario.video.width, scenario.video.height, scenario.video.fps
-                );
-                eprintln!("  Duration: {:.1}s", total_duration);
-                Ok(())
-            } else {
-                for err in &errors {
-                    eprintln!("Error: {}", err);
+            // Resolve includes before validating
+            let resolved = include::resolve_includes(
+                scenario,
+                &include::IncludeSource::File(input.clone()),
+            );
+            match resolved {
+                Ok(resolved) => {
+                    let errors = validate_scenario(&resolved);
+                    if errors.is_empty() {
+                        eprintln!("Valid scenario: {} scene(s)", resolved.scenes.len());
+                        let total_duration: f64 =
+                            resolved.scenes.iter().map(|s| s.duration).sum();
+                        eprintln!(
+                            "  Resolution: {}x{} @ {}fps",
+                            resolved.video.width, resolved.video.height, resolved.video.fps
+                        );
+                        eprintln!("  Duration: {:.1}s", total_duration);
+                        Ok(())
+                    } else {
+                        for err in &errors {
+                            eprintln!("Error: {}", err);
+                        }
+                        std::process::exit(1);
+                    }
                 }
-                std::process::exit(1);
+                Err(e) => {
+                    eprintln!("Include resolution error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         Err(e) => {
@@ -407,7 +421,7 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
     }
 }
 
-fn validate_scenario(scenario: &schema::Scenario) -> Vec<String> {
+fn validate_scenario(scenario: &schema::ResolvedScenario) -> Vec<String> {
     let mut errors = Vec::new();
 
     if scenario.video.width == 0 || scenario.video.height == 0 {
@@ -640,7 +654,7 @@ fn cmd_schema(output: Option<&std::path::Path>) -> Result<()> {
 }
 
 fn cmd_still(
-    scenario: schema::Scenario,
+    scenario: schema::ResolvedScenario,
     output: &PathBuf,
     time: f64,
     format: Option<String>,

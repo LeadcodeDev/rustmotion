@@ -56,6 +56,31 @@ A scenario is a JSON object with:
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
 
+### Include (Composable Scenarios)
+
+Scene entries can reference external scenario files (local or remote) to inject their scenes inline. This enables reusable intros, outros, and shared sequences.
+
+```json
+{
+  "scenes": [
+    { "include": "shared/intro.json" },
+    { "duration": 5.0, "children": [...] },
+    { "include": "https://cdn.example.com/outro.json" },
+    { "include": "shared/credits.json", "scenes": [0, 2] }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `include` | string | required | Path (relative to parent file) or URL (`http(s)://`) to a scenario JSON file |
+| `scenes` | array of usize | `null` | Only include scenes at these 0-based indices. When absent, all scenes are included |
+
+- The included file's `video` config is ignored — the parent's config is used
+- Audio tracks from included files are merged into the parent
+- Includes can be nested (max depth: 8)
+- Local paths are resolved relative to the parent scenario file
+
 ### Transitions
 
 ```json
@@ -234,7 +259,7 @@ Gradient types: `linear`, `radial`.
 }
 ```
 
-`vertical_align`: `"top"`, `"center"`, `"bottom"` (default: `"center"`).
+`vertical_align`: `"top"`, `"middle"`, `"bottom"` (default: `"middle"`).
 
 ### 3. `image`
 

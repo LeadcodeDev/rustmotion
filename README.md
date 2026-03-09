@@ -125,7 +125,7 @@ rustmotion info scenario.json
 
 ## Scenes
 
-Each scene has a duration, optional background, layers rendered in order, and an optional transition to the next scene.
+Each scene has a duration, optional background, layers rendered in order, and an optional transition to the next scene. Scene entries can also be **include directives** that inject scenes from external files (see [Include](#include-composable-scenarios) below).
 
 ```json
 {
@@ -187,6 +187,38 @@ Transitions blend between two consecutive scenes. Set on the **second** scene.
 |---|---|---|---|
 | `type` | `string` | (required) | One of the transition types above |
 | `duration` | `f64` | `0.5` | Transition duration in seconds |
+
+---
+
+## Include (Composable Scenarios)
+
+Scene entries can reference external scenario files to inject their scenes inline. This enables reusable intros, outros, and shared sequences.
+
+```json
+{
+  "scenes": [
+    { "include": "shared/intro.json" },
+    {
+      "duration": 5.0,
+      "layers": [
+        { "type": "text", "content": "Main content", "position": { "x": 540, "y": 960 } }
+      ]
+    },
+    { "include": "shared/outro.json" }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `include` | `string` | (required) | Path (relative to parent file) or URL (`http://`/`https://`) to a scenario JSON |
+| `scenes` | `usize[]` | | Only include scenes at these 0-based indices (e.g. `[0, 2]`). Omit to include all |
+
+- The included file's `video` config is ignored — the parent's config is used
+- Audio tracks from included files are merged into the parent
+- Includes can be nested recursively (max depth: 8)
+- Local paths are resolved relative to the parent scenario file
+- Remote URLs (`http://`/`https://`) are fetched at load time
 
 ---
 

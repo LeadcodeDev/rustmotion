@@ -33,7 +33,37 @@ pub struct Scenario {
     #[serde(default)]
     pub fonts: Vec<FontEntry>,
     #[serde(default)]
+    pub scenes: Vec<SceneEntry>,
+}
+
+/// A scenario with all includes expanded — safe to pass to the rendering pipeline.
+#[derive(Debug)]
+pub struct ResolvedScenario {
+    pub version: String,
+    pub video: VideoConfig,
+    pub audio: Vec<AudioTrack>,
+    pub fonts: Vec<FontEntry>,
     pub scenes: Vec<Scene>,
+}
+
+/// An entry in the `scenes` array: either a concrete scene or an include directive.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SceneEntry {
+    /// A regular scene defined inline.
+    Scene(Scene),
+    /// A reference to an external scenario file whose scenes will be injected here.
+    Include(IncludeDirective),
+}
+
+/// Directive to inject scenes from an external scenario file.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IncludeDirective {
+    /// Path (relative to parent file) or URL (http/https) to a scenario JSON file.
+    pub include: String,
+    /// Only include scenes at these 0-based indices. When absent, all scenes are included.
+    #[serde(default)]
+    pub scenes: Option<Vec<usize>>,
 }
 
 /// Font file to load at startup

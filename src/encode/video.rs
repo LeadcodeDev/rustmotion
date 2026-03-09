@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
 use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
-use crate::schema::{Scene, Scenario, TransitionType, VideoConfig};
+use crate::schema::{Scene, ResolvedScenario as Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
 /// Description of what to render for a specific frame
