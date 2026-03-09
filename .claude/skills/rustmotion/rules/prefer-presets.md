@@ -1,23 +1,26 @@
 # Rule: Prefer Presets Over Manual Keyframes
 
-Presets are simpler, less error-prone, and produce consistent motion design. Only use manual `animations` keyframes for custom behavior not covered by the 31 built-in presets.
+Presets are simpler, less error-prone, and produce consistent motion design. Only use `keyframes` animation effects for custom behavior not covered by the 31 built-in presets.
 
 **GOOD:**
 ```json
-{ "preset": "fade_in_up", "preset_config": { "delay": 0.3, "duration": 0.8 } }
+{ "style": { "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.8 }] } }
 ```
 
 **BAD** (over-engineering a simple fade-in):
 ```json
 {
-  "animations": [
-    { "property": "opacity", "keyframes": [{ "time": 0.3, "value": 0.0 }, { "time": 1.1, "value": 1.0 }], "easing": "ease_out" },
-    { "property": "translate_y", "keyframes": [{ "time": 0.3, "value": 30.0 }, { "time": 1.1, "value": 0.0 }], "easing": "ease_out" }
-  ]
+  "style": {
+    "animation": [{
+      "name": "keyframes",
+      "keyframes": [
+        { "property": "opacity", "keyframes": [{ "time": 0.3, "value": 0.0 }, { "time": 1.1, "value": 1.0 }], "easing": "ease_out" },
+        { "property": "translate_y", "keyframes": [{ "time": 0.3, "value": 30.0 }, { "time": 1.1, "value": 0.0 }], "easing": "ease_out" }
+      ]
+    }]
+  }
 }
 ```
-
-Note: explicit `animations` override preset animations on the same property.
 
 ## 31 Available Presets
 

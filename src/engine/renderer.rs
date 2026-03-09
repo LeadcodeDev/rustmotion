@@ -954,9 +954,9 @@ fn render_text_constrained(
                 let bg_paint = paint_from_hex(&bg.color);
                 let bg_rect = Rect::from_xywh(
                     x - bg.padding + blob_bounds.left,
-                    y - font_size + blob_bounds.top.min(0.0) - bg.padding / 2.0,
+                    y + blob_bounds.top - bg.padding / 2.0,
                     line_width + bg.padding * 2.0,
-                    line_height + bg.padding,
+                    -blob_bounds.top + blob_bounds.bottom + bg.padding,
                 );
                 if bg.corner_radius > 0.0 {
                     let rrect = skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);

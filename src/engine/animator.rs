@@ -514,15 +514,17 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
 
 /// Simple noise function based on sine waves with seed for pseudo-random behavior
 fn simplex_noise_1d(x: f64, seed: u64) -> f64 {
+    use std::f64::consts::TAU;
     let s = seed as f64;
-    let v = (x * 1.0 + s * 0.1234).sin() * 0.5
-        + (x * 2.3 + s * 0.5678).sin() * 0.25
-        + (x * 4.7 + s * 0.9012).sin() * 0.125;
-    v / 0.875 // normalize to roughly -1..1
+    let v = (x * TAU + s * 0.1234).sin() * 0.6
+        + (x * TAU * 1.7 + s * 0.5678).sin() * 0.3
+        + (x * TAU * 2.9 + s * 0.9012).sin() * 0.1;
+    v // roughly -1..1
 }
 
 /// Parameterized noise function with configurable octaves
 fn simplex_noise_1d_ext(x: f64, seed: u64, octaves: u32) -> f64 {
+    use std::f64::consts::TAU;
     let s = seed as f64;
     let mut value = 0.0;
     let mut amplitude = 0.5;
@@ -530,7 +532,7 @@ fn simplex_noise_1d_ext(x: f64, seed: u64, octaves: u32) -> f64 {
     for i in 0..octaves {
         let freq = 1.0 + i as f64 * 1.3;
         let phase_offset = s * (0.1234 + i as f64 * 0.4444);
-        value += (x * freq + phase_offset).sin() * amplitude;
+        value += (x * TAU * freq + phase_offset).sin() * amplitude;
         total_amplitude += amplitude;
         amplitude *= 0.5;
     }

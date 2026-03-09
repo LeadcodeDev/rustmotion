@@ -54,6 +54,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/prefer-presets.md](rules/prefer-presets.md) - Prefer presets over manual keyframes (31 built-in presets)
 - [rules/hex-colors.md](rules/hex-colors.md) - Colors in hex format only (#RRGGBB or #RRGGBBAA)
 - [rules/easing-guidelines.md](rules/easing-guidelines.md) - Easing guidelines for motion design
+- [rules/text-background.md](rules/text-background.md) - text-background renders a colored rectangle behind text
 
 ---
 
@@ -80,7 +81,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
               "angle": 135
             },
             "border-radius": 32,
-            "animation": { "name": "scale_in", "duration": 0.6 }
+            "animation": [{ "name": "scale_in", "duration": 0.6 }]
           }
         },
         {
@@ -89,7 +90,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "size": { "width": 80, "height": 80 },
           "style": {
             "color": "#FFFFFF",
-            "animation": { "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }
+            "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
           }
         },
         {
@@ -100,7 +101,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             "color": "#FFFFFF",
             "font-weight": "bold",
             "text-align": "center",
-            "animation": { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }]
           }
         },
         {
@@ -112,7 +113,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             "color": "#CBD5E1",
             "text-align": "center",
             "line-height": 1.5,
-            "animation": { "name": "fade_in_up", "delay": 0.7, "duration": 0.6 }
+            "animation": [{ "name": "fade_in_up", "delay": 0.7, "duration": 0.6 }]
           }
         }
       ]
@@ -139,7 +140,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             "color": "#7AA2F7",
             "font-weight": "bold",
             "text-align": "center",
-            "animation": { "name": "fade_in", "duration": 0.5 }
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
           }
         },
         {
@@ -169,7 +170,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             "font-size": 28,
             "color": "#9ECE6A",
             "text-align": "center",
-            "animation": { "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }
+            "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }]
           }
         }
       ]
@@ -191,12 +192,12 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "2024 Results",
-          "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": { "name": "fade_in_up" } }
+          "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": [{ "name": "fade_in_up" }] }
         },
         {
           "type": "text",
           "content": "Year in Review",
-          "style": { "font-size": 36, "color": "#94A3B8", "text-align": "center", "animation": { "name": "fade_in_up", "delay": 0.3, "duration": 0.6 } }
+          "style": { "font-size": 36, "color": "#94A3B8", "text-align": "center", "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }] }
         }
       ]
     },
@@ -217,7 +218,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "Users Reached",
-          "style": { "font-size": 36, "color": "#CBD5E1", "text-align": "center", "animation": { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 } }
+          "style": { "font-size": 36, "color": "#CBD5E1", "text-align": "center", "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }] }
         },
         {
           "type": "card",
@@ -228,7 +229,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             "padding": 24,
             "background": "#1E293B",
             "border-radius": 20,
-            "animation": { "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }
+            "animation": [{ "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }]
           },
           "children": [
             {
@@ -255,13 +256,10 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "content": "Thank You",
           "style": {
             "font-size": 80, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center",
-            "animation": {
-              "name": "scale_in",
-              "duration": 0.8,
-              "wiggle": [
-                { "property": "translate_y", "amplitude": 4, "frequency": 1.5, "seed": 7 }
-              ]
-            }
+            "animation": [
+              { "name": "scale_in", "duration": 0.8 },
+              { "name": "wiggle", "property": "translate_y", "amplitude": 4, "frequency": 1.5, "seed": 7 }
+            ]
           }
         },
         {
@@ -270,13 +268,10 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "size": { "width": 64, "height": 64 },
           "style": {
             "color": "#F43F5E",
-            "animation": {
-              "name": "fade_in",
-              "delay": 0.5,
-              "wiggle": [
-                { "property": "scale", "amplitude": 0.1, "frequency": 2, "seed": 42 }
-              ]
-            }
+            "animation": [
+              { "name": "fade_in", "delay": 0.5 },
+              { "name": "wiggle", "property": "scale", "amplitude": 0.1, "frequency": 2, "seed": 42 }
+            ]
           }
         }
       ]
@@ -390,52 +385,43 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 | `opacity` | f32 | `1.0` | 0.0 to 1.0 |
 | `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
 | `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
-| `glow` | object | `null` | Luminous halo effect |
-| `animation` | object | `null` | Animation config (see Animation section) |
+| `animation` | array or object | `[]` | Animation effects array (see below) |
 
 #### Animation Style (inside `"style"`)
 
-All animation configuration lives under `style.animation`:
+`style.animation` is a **typed array** of animation effects, each discriminated by `"name"`. A single effect (without array) is also accepted.
 
 ```json
 {
   "style": {
-    "animation": {
-      "name": "fade_in_up",
-      "delay": 0.2,
-      "duration": 0.8,
-      "loop": false,
-      "keyframes": [],
-      "wiggle": [],
-      "motion_blur": null
-    }
+    "animation": [
+      { "name": "fade_in_up", "delay": 0.2, "duration": 0.8 },
+      { "name": "glow", "color": "#6366F1", "radius": 20, "intensity": 2.0 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 0.8, "seed": 42 }
+    ]
   }
 }
 ```
+
+**Effect types:**
+
+| Effect name | Fields | Description |
+| --- | --- | --- |
+| *preset name* | `delay`, `duration`, `loop` | Any of the 31 presets (e.g. `fade_in_up`, `scale_in`) |
+| `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
+| `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
+| `keyframes` | `keyframes`, `delay`, `duration` | Custom keyframe animations |
+| `motion_blur` | `intensity` | Motion blur effect |
+
+**Preset fields:**
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `name` | string | `null` | Animation preset name (e.g. `"fade_in_up"`) |
 | `delay` | f64 | `0` | Delay before animation starts (seconds) |
 | `duration` | f64 | `0.8` | Animation duration (seconds) |
 | `loop` | bool | `false` | Loop the animation continuously |
-| `keyframes` | array | `[]` | Custom keyframe animations |
-| `wiggle` | array | `null` | Procedural noise-based animation |
-| `motion_blur` | f32 | `null` | Motion blur intensity |
 
-#### Glow Effect
-
-```json
-{
-  "style": {
-    "glow": {
-      "color": "#5C39EE",
-      "radius": 20,
-      "intensity": 2.0
-    }
-  }
-}
-```
+**Glow fields:**
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -819,18 +805,21 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 ```json
 {
   "style": {
-    "animation": {
-      "keyframes": [
-        {
-          "property": "opacity",
-          "keyframes": [
-            { "time": 0.0, "value": 0.0 },
-            { "time": 0.5, "value": 1.0 }
-          ],
-          "easing": "ease_out"
-        }
-      ]
-    }
+    "animation": [
+      {
+        "name": "keyframes",
+        "keyframes": [
+          {
+            "property": "opacity",
+            "keyframes": [
+              { "time": 0.0, "value": 0.0 },
+              { "time": 0.5, "value": 1.0 }
+            ],
+            "easing": "ease_out"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -854,7 +843,7 @@ See Rule 13 for usage guidance.
 ```json
 {
   "style": {
-    "animation": { "name": "fade_in_up", "delay": 0.2, "duration": 0.8, "loop": false }
+    "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8, "loop": false }]
   }
 }
 ```
@@ -870,17 +859,15 @@ See Rule 13 for usage guidance.
 
 #### Wiggle (Procedural Noise)
 
-See Rule 12 for combining with presets.
+See Rule 12 for combining with presets. Wiggle is an animation effect with `"name": "wiggle"` in the `style.animation` array.
 
 ```json
 {
   "style": {
-    "animation": {
-      "wiggle": [
-        { "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
-        { "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13, "decay": 0.6 }
-      ]
-    }
+    "animation": [
+      { "name": "wiggle", "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
+      { "name": "wiggle", "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13, "decay": 0.6 }
+    ]
   }
 }
 ```
@@ -888,10 +875,11 @@ See Rule 12 for combining with presets.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `property` | string | required | Property to wiggle (same as animatable properties) |
-| `amplitude` | f64 | required | Maximum deviation |
-| `frequency` | f64 | required | Oscillations per second |
-| `seed` | u64 | `0` | Random seed for reproducible results |
-| `octaves` | u32 | `3` | Noise complexity |
+| `amplitude` | f64 | required | Maximum deviation (pixels for translate, degrees for rotation) |
+| `frequency` | f64 | required | Cycles per second (Hz). 0.8 = gentle float, 3 = wobble, 90 = vibration |
+| `mode` | string | `"noise"` | `"noise"` (layered simplex) or `"sine"` (pure sine wave) |
+| `seed` | u64 | `0` | Random seed for reproducible results (noise mode only) |
+| `octaves` | u32 | `3` | Noise complexity (noise mode only) |
 | `phase` | f64 | `0.0` | Phase offset |
 | `decay` | f64 | `null` | Exponential decay rate |
 | `easing` | string | `null` | Remap noise through an easing curve |

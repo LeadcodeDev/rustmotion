@@ -74,10 +74,7 @@
           "style": {
             "fill": {
               "type": "linear",
-              "colors": [
-                "#6366F1",
-                "#EC4899"
-              ],
+              "colors": ["#6366F1", "#EC4899"],
               "angle": 90
             },
             "border-radius": 2,
@@ -273,10 +270,7 @@
               "style": {
                 "fill": {
                   "type": "linear",
-                  "colors": [
-                    "#6366F1",
-                    "#8B5CF6"
-                  ],
+                  "colors": ["#6366F1", "#8B5CF6"],
                   "angle": 135
                 },
                 "border-radius": 32,
@@ -299,10 +293,7 @@
               "style": {
                 "fill": {
                   "type": "radial",
-                  "colors": [
-                    "#EC4899",
-                    "#F43F5E"
-                  ]
+                  "colors": ["#EC4899", "#F43F5E"]
                 },
                 "animation": [
                   {
@@ -360,10 +351,7 @@
               "style": {
                 "fill": {
                   "type": "linear",
-                  "colors": [
-                    "#22C55E",
-                    "#10B981"
-                  ],
+                  "colors": ["#22C55E", "#10B981"],
                   "angle": 180
                 },
                 "animation": [
@@ -385,10 +373,7 @@
               "style": {
                 "fill": {
                   "type": "linear",
-                  "colors": [
-                    "#38BDF8",
-                    "#0EA5E9"
-                  ],
+                  "colors": ["#38BDF8", "#0EA5E9"],
                   "angle": 0
                 },
                 "animation": [
@@ -420,10 +405,7 @@
           "style": {
             "fill": {
               "type": "linear",
-              "colors": [
-                "#6366F1",
-                "#EC4899"
-              ],
+              "colors": ["#6366F1", "#EC4899"],
               "angle": 90
             },
             "border-radius": 40,
@@ -2100,10 +2082,7 @@
           "style": {
             "fill": {
               "type": "linear",
-              "colors": [
-                "#6366F1",
-                "#EC4899"
-              ],
+              "colors": ["#6366F1", "#EC4899"],
               "angle": 135
             },
             "border-radius": 32
@@ -2365,7 +2344,7 @@
             },
             {
               "type": "text",
-              "content": "github.com/rustmotion",
+              "content": "github.com/LeadcodeDev/rustmotion",
               "style": {
                 "font-size": 22,
                 "color": "#CBD5E1"

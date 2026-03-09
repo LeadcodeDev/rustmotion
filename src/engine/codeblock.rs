@@ -556,12 +556,31 @@ pub fn render_codeblock(
     let chrome_enabled = layer.chrome.as_ref().map_or(false, |c| c.enabled);
     let chrome_height = if chrome_enabled { 36.0 } else { 0.0 };
 
+    // Pre-compute the max gutter width across all states so line numbers
+    // never cause a sudden horizontal shift when a transition starts.
+    let max_gutter_width = if layer.show_line_numbers && !layer.states.is_empty() {
+        let max_lines = std::iter::once(layer.code.lines().count())
+            .chain(layer.states.iter().map(|s| s.code.lines().count()))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let digits = format!("{}", max_lines).len();
+        let digit_width = font.measure_str("0", None).0;
+        (digits as f32 * digit_width) + 24.0
+    } else {
+        0.0 // will be computed per-code below
+    };
+
     // Compute dimensions — interpolate during transitions
     let (total_width, total_height, gutter_width) = if let Some(ref trans) = transition {
         let dims_a = compute_code_dimensions(&trans.code_a, &font, &padding, chrome_height, layer);
         let dims_b = compute_code_dimensions(&trans.code_b, &font, &padding, chrome_height, layer);
         let p = trans.progress as f32;
-        let gutter = f32::max(dims_a.gutter_width, dims_b.gutter_width);
+        let gutter = if max_gutter_width > 0.0 {
+            max_gutter_width
+        } else {
+            f32::max(dims_a.gutter_width, dims_b.gutter_width)
+        };
         match &layer.size {
             Some(s) => (s.width, s.height, gutter),
             None => (
@@ -572,9 +591,14 @@ pub fn render_codeblock(
         }
     } else {
         let dims = compute_code_dimensions(&current_code, &font, &padding, chrome_height, layer);
+        let gutter = if max_gutter_width > 0.0 {
+            max_gutter_width
+        } else {
+            dims.gutter_width
+        };
         match &layer.size {
-            Some(s) => (s.width, s.height, dims.gutter_width),
-            None => (dims.total_width, dims.total_height, dims.gutter_width),
+            Some(s) => (s.width, s.height, gutter),
+            None => (dims.total_width, dims.total_height, gutter),
         }
     };
 
