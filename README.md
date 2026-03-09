@@ -3,7 +3,7 @@
 A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary.
 
 [![Crates.io](https://img.shields.io/crates/v/rustmotion.svg)](https://crates.io/crates/rustmotion)
-[![docs.rs](https://docs.rs/rustmotion/badge.svg)](https://docs.rs/sqlx-gen)
+[![docs.rs](https://docs.rs/rustmotion/badge.svg)](https://docs.rs/rustmotion)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Install
@@ -125,7 +125,7 @@ rustmotion info scenario.json
 
 ## Scenes
 
-Each scene has a duration, optional background, layers rendered in order, and an optional transition to the next scene. Scene entries can also be **include directives** that inject scenes from external files (see [Include](#include-composable-scenarios) below).
+Each scene is an **implicit flex container** at video dimensions (default direction: `column`). Children participate in flex flow automatically. Use `positioned` container for absolute positioning.
 
 ```json
 {
@@ -133,8 +133,13 @@ Each scene has a duration, optional background, layers rendered in order, and an
     {
       "duration": 3.0,
       "background": "#1a1a2e",
-      "freeze_at": 2.5,
-      "layers": [ ... ],
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 24
+      },
+      "children": [ ... ],
       "transition": {
         "type": "fade",
         "duration": 0.5
@@ -148,9 +153,12 @@ Each scene has a duration, optional background, layers rendered in order, and an
 |---|---|---|---|
 | `duration` | `f64` | (required) | Scene duration in seconds |
 | `background` | `string` | | Scene background (overrides `video.background`) |
-| `freeze_at` | `f64` | | Freeze the scene at this time (seconds). All frames after this point render the frozen state |
-| `layers` | `Layer[]` | `[]` | Layers rendered bottom-to-top |
-| `transition` | `Transition` | | Transition effect to the next scene |
+| `freeze_at` | `f64` | | Freeze the scene at this time (seconds) |
+| `children` | `Component[]` | `[]` | Components rendered bottom-to-top |
+| `layout` | `object` | | Scene-level flex layout options |
+| `transition` | `Transition` | | Transition effect from the previous scene |
+
+**`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
 
 ---
 
@@ -176,11 +184,11 @@ Transitions blend between two consecutive scenes. Set on the **second** scene.
 | `wipe_down` | Vertical wipe revealing scene B from the bottom |
 | `zoom_in` | Scene A zooms in and fades out, revealing scene B |
 | `zoom_out` | Scene B zooms out from larger to normal size |
-| `flip` | 3D Y-axis flip simulation (scene A folds away, scene B unfolds) |
+| `flip` | 3D Y-axis flip simulation |
 | `clock_wipe` | Circular clockwise sweep from 12 o'clock |
 | `iris` | Expanding circle from the center reveals scene B |
 | `slide` | Scene B pushes scene A to the left |
-| `dissolve` | Per-pixel noise dissolve (each pixel switches independently) |
+| `dissolve` | Per-pixel noise dissolve |
 | `none` | Hard cut at the midpoint |
 
 | Field | Type | Default | Description |
@@ -192,184 +200,166 @@ Transitions blend between two consecutive scenes. Set on the **second** scene.
 
 ## Include (Composable Scenarios)
 
-Scene entries can reference external scenario files to inject their scenes inline. This enables reusable intros, outros, and shared sequences.
+Scene entries can reference external scenario files to inject their scenes inline:
 
 ```json
 {
   "scenes": [
     { "include": "shared/intro.json" },
-    {
-      "duration": 5.0,
-      "layers": [
-        { "type": "text", "content": "Main content", "position": { "x": 540, "y": 960 } }
-      ]
-    },
-    { "include": "shared/outro.json" }
+    { "duration": 5.0, "children": [ ... ] },
+    { "include": "shared/outro.json", "scenes": [0, 2] }
   ]
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `include` | `string` | (required) | Path (relative to parent file) or URL (`http://`/`https://`) to a scenario JSON |
-| `scenes` | `usize[]` | | Only include scenes at these 0-based indices (e.g. `[0, 2]`). Omit to include all |
+| `include` | `string` | (required) | Path (relative to parent file) or URL to a scenario JSON |
+| `scenes` | `usize[]` | | Only include scenes at these 0-based indices. Omit to include all |
 
-- The included file's `video` config is ignored — the parent's config is used
-- Audio tracks from included files are merged into the parent
-- Includes can be nested recursively (max depth: 8)
-- Local paths are resolved relative to the parent scenario file
-- Remote URLs (`http://`/`https://`) are fetched at load time
+- The included file's `video` config is ignored
+- Audio tracks from included files are merged
+- Includes can be nested (max depth: 8)
 
 ---
 
-## Layers
+## Components
 
-All layers share a common set of fields for animation, timing, and effects, plus type-specific fields. Layers are rendered in array order (first = bottom, last = top).
+All components are discriminated by `"type"`. Rendered in array order (first = bottom, last = top).
 
 ### Common Fields
 
-These fields are available on all layer types (except `group` and `caption` where noted):
+Available on all component types:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `position` | `{x, y}` | `{x: 0, y: 0}` | Position in pixels |
-| `opacity` | `f32` | `1.0` | Layer opacity (0.0 - 1.0) |
-| `animations` | `Animation[]` | `[]` | Custom keyframe animations |
-| `preset` | `string` | | Preset animation name (see [Animation Presets](#animation-presets)) |
-| `preset_config` | `PresetConfig` | | Preset timing configuration |
-| `start_at` | `f64` | | Layer appears at this time (seconds within scene) |
-| `end_at` | `f64` | | Layer disappears after this time (seconds within scene) |
-| `wiggle` | `WiggleConfig[]` | | Procedural noise-based animation (see [Wiggle](#wiggle)) |
-| `motion_blur` | `f32` | | Motion blur intensity (0.0 - 1.0). Uses temporal multi-sampling |
-| `padding` | `f32 \| {top, right, bottom, left}` | `null` | Inner spacing — enlarges the bounding box and insets the content |
-| `margin` | `f32 \| {top, right, bottom, left}` | `null` | Outer spacing — offsets the layer and affects card layout |
+| `start_at` | `f64` | | Component appears at this time (seconds within scene) |
+| `end_at` | `f64` | | Component disappears after this time |
 
-Padding and margin accept either a uniform number (`"padding": 16`) or per-side values (`"margin": {"top": 32, "right": 16, "bottom": 32, "left": 16}`). In card layouts, margin adds space around the child; padding insets the content within the child. For standalone layers, margin offsets the rendered position, and padding offsets the content.
+### Common Style Fields
 
-> **Note:** `CardLayer` and `CodeblockLayer` manage their own internal padding. The global `padding` field does not apply to them — only `margin` is used.
+All visual properties are inside a `"style"` object:
+
+| Style field | Type | Default | Description |
+|---|---|---|---|
+| `opacity` | `f32` | `1.0` | 0.0 to 1.0 |
+| `padding` | `f32 \| {top, right, bottom, left}` | | Inner spacing |
+| `margin` | `f32 \| {top, right, bottom, left}` | | Outer spacing |
+| `animation` | `array \| object` | `[]` | Animation effects (see [Animations](#animations)) |
 
 ---
 
-### Text Layer
+### Text
 
 ```json
 {
   "type": "text",
   "content": "Hello World",
-  "position": { "x": 540, "y": 960 },
-  "font_size": 64,
-  "color": "#FFFFFF",
-  "font_family": "Inter",
-  "font_weight": "bold",
-  "align": "center",
   "max_width": 800,
-  "line_height": 80,
-  "letter_spacing": 2.0,
-  "preset": "fade_in_up"
+  "style": {
+    "font-size": 48,
+    "color": "#FFFFFF",
+    "font-family": "Inter",
+    "font-weight": "bold",
+    "text-align": "center",
+    "line-height": 1.2,
+    "letter-spacing": 2.0,
+    "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
+  }
 }
 ```
 
-| Field | Type | Default | Description |
+**Root fields:** `content` (required), `max_width`
+
+| Style field | Type | Default | Description |
 |---|---|---|---|
-| `content` | `string` | (required) | Text to display. Supports `\n` for line breaks |
-| `font_size` | `f32` | `48.0` | Font size in pixels |
-| `color` | `string` | `"#FFFFFF"` | Text color (hex). Can be animated via `"color"` property |
-| `font_family` | `string` | `"Inter"` | Font family name (uses system fonts) |
-| `font_weight` | `string` | `"normal"` | `"normal"` or `"bold"` |
-| `align` | `string` | `"left"` | `"left"`, `"center"`, or `"right"` |
-| `max_width` | `f32` | | Maximum text width before word-wrapping |
-| `line_height` | `f32` | `font_size * 1.3` | Line height in pixels |
-| `letter_spacing` | `f32` | `0.0` | Additional spacing between characters |
+| `font-size` | `f32` | `48.0` | Font size in pixels |
+| `color` | `string` | `"#FFFFFF"` | Text color (hex) |
+| `font-family` | `string` | `"Inter"` | Font family name |
+| `font-weight` | `enum` | `"normal"` | `"normal"` or `"bold"` |
+| `font-style` | `enum` | `"normal"` | `"normal"`, `"italic"`, `"oblique"` |
+| `text-align` | `enum` | `"left"` | `"left"`, `"center"`, `"right"` |
+| `line-height` | `f32` | | Line height multiplier |
+| `letter-spacing` | `f32` | | Additional spacing between characters |
+| `text-shadow` | `object` | | `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
+| `stroke` | `object` | | `{ "color": "#000", "width": 2 }` |
+| `text-background` | `object` | | `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
 
 ---
 
-### Shape Layer
+### Shape
 
 ```json
 {
   "type": "shape",
   "shape": "rounded_rect",
-  "position": { "x": 100, "y": 200 },
   "size": { "width": 300, "height": 200 },
-  "corner_radius": 16,
-  "fill": "#3b82f6",
-  "stroke": { "color": "#ffffff", "width": 2 },
-  "preset": "scale_in"
+  "style": {
+    "fill": "#3b82f6",
+    "border-radius": 16,
+    "stroke": { "color": "#ffffff", "width": 2 },
+    "animation": [{ "name": "scale_in", "duration": 0.6 }]
+  }
 }
 ```
 
-| Field | Type | Default | Description |
+**Root fields:** `shape` (required), `size`, `text`
+
+| Style field | Type | Default | Description |
 |---|---|---|---|
-| `shape` | `ShapeType` | (required) | Shape type (see below) |
-| `size` | `{width, height}` | `{width: 100, height: 100}` | Shape dimensions |
-| `fill` | `string \| Gradient` | | Fill color (hex string) or gradient object |
-| `stroke` | `Stroke` | | Stroke outline |
-| `corner_radius` | `f32` | `8.0` | Corner radius (for `rounded_rect`) |
+| `fill` | `string \| gradient` | | Fill color (hex) or gradient object |
+| `stroke` | `{color, width}` | | Stroke outline |
+| `border-radius` | `f32` | | Corner radius (for `rounded_rect`) |
 
-#### Shape Types
+**Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
 
-| Type | Description | Extra Fields |
-|---|---|---|
-| `"rect"` | Rectangle | |
-| `"circle"` | Circle (fits inside size rect) | |
-| `"rounded_rect"` | Rectangle with rounded corners | `corner_radius` |
-| `"ellipse"` | Ellipse (fits inside size rect) | |
-| `"triangle"` | Equilateral triangle pointing up | |
-| `"star"` | Star polygon | `points` (default: `5`) |
-| `"polygon"` | Regular polygon | `sides` (default: `6`) |
-| `"path"` | SVG path | `data` (SVG path string, required) |
-
-**Star and polygon examples:**
-
+**Gradient fill:**
 ```json
-{ "shape": { "star": { "points": 6 } } }
-{ "shape": { "polygon": { "sides": 8 } } }
-{ "shape": { "path": { "data": "M 10 80 C 40 10, 65 10, 95 80 S 150 150, 180 80" } } }
-```
-
-#### Fill
-
-Fill accepts either a solid hex color string or a gradient object:
-
-```json
-"fill": "#ff6b6b"
-```
-
-```json
-"fill": {
-  "type": "linear",
-  "colors": ["#667eea", "#764ba2"],
-  "angle": 135,
-  "stops": [0.0, 1.0]
+{
+  "fill": {
+    "type": "linear",
+    "colors": ["#667eea", "#764ba2"],
+    "angle": 135,
+    "stops": [0.0, 1.0]
+  }
 }
 ```
 
-| Gradient Field | Type | Default | Description |
-|---|---|---|---|
-| `type` | `string` | (required) | `"linear"` or `"radial"` |
-| `colors` | `string[]` | (required) | Array of hex colors |
-| `stops` | `f32[]` | | Color stop positions (0.0 - 1.0) |
-| `angle` | `f32` | `0.0` | Angle in degrees (linear gradients only) |
+Types: `linear`, `radial`.
 
-#### Stroke
+**Embedded text in shapes (`text` field):**
+```json
+{
+  "type": "shape",
+  "shape": "circle",
+  "size": { "width": 56, "height": 56 },
+  "style": { "fill": "#2A74FF" },
+  "text": {
+    "content": "1",
+    "font_size": 22,
+    "color": "#FFFFFF",
+    "font_weight": "bold",
+    "align": "center",
+    "vertical_align": "middle"
+  }
+}
+```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `color` | `string` | (required) | Stroke color (hex) |
-| `width` | `f32` | `2.0` | Stroke width in pixels |
+`vertical_align`: `"top"`, `"middle"`, `"bottom"` (default: `"middle"`).
 
 ---
 
-### Image Layer
+### Image
 
 ```json
 {
   "type": "image",
   "src": "photo.png",
-  "position": { "x": 0, "y": 0 },
   "size": { "width": 1080, "height": 1080 },
   "fit": "cover",
-  "preset": "fade_in"
+  "style": {
+    "animation": [{ "name": "fade_in", "duration": 0.5 }]
+  }
 }
 ```
 
@@ -377,17 +367,16 @@ Fill accepts either a solid hex color string or a gradient object:
 |---|---|---|---|
 | `src` | `string` | (required) | Path to image file (PNG, JPEG, WebP) |
 | `size` | `{width, height}` | | Target size (uses native image size if omitted) |
-| `fit` | `string` | `"contain"` | `"cover"`, `"contain"`, or `"fill"` |
+| `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"`, `"none"` |
 
 ---
 
-### SVG Layer
+### SVG
 
 ```json
 {
   "type": "svg",
-  "src": "icon.svg",
-  "position": { "x": 100, "y": 100 },
+  "src": "logo.svg",
   "size": { "width": 200, "height": 200 }
 }
 ```
@@ -397,8 +386,7 @@ Or with inline SVG:
 ```json
 {
   "type": "svg",
-  "data": "<svg viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='red'/></svg>",
-  "position": { "x": 100, "y": 100 }
+  "data": "<svg viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='red'/></svg>"
 }
 ```
 
@@ -412,39 +400,50 @@ One of `src` or `data` is required.
 
 ---
 
-### Icon Layer
+### Icon
 
-Renders an icon from the [Iconify](https://iconify.design/) library. The icon SVG is fetched automatically from the Iconify API.
+Renders an icon from the [Iconify](https://iconify.design/) open-source framework (200,000+ icons from 150+ sets). Icons are fetched from the Iconify API at render time.
+
+Browse all available icons at [icon-sets.iconify.design](https://icon-sets.iconify.design/).
 
 ```json
 {
   "type": "icon",
   "icon": "lucide:home",
-  "color": "#38bdf8",
-  "position": { "x": 540, "y": 400 },
-  "size": { "width": 64, "height": 64 }
+  "size": { "width": 64, "height": 64 },
+  "style": { "color": "#38bdf8" }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `icon` | `string` | (required) | Iconify identifier `"prefix:name"` (e.g. `"lucide:home"`, `"mdi:account"`) |
-| `color` | `string` | `"#FFFFFF"` | Icon color (replaces `currentColor`) |
 | `size` | `{width, height}` | `24x24` | Icon size in pixels |
 
-Browse available icons at [icon-sets.iconify.design](https://icon-sets.iconify.design/).
+Style: `color` (default `"#FFFFFF"`)
+
+**Common icon sets:**
+
+| Prefix | Name | Best for |
+|---|---|---|
+| `lucide` | Lucide | Clean UI icons (default choice) |
+| `mdi` | Material Design Icons | Material UI, Android |
+| `heroicons` | Heroicons | Tailwind projects |
+| `ph` | Phosphor | Modern UI |
+| `tabler` | Tabler Icons | Dashboards |
+| `simple-icons` | Simple Icons | Brand/company logos |
+| `devicon` | Devicon | Programming language logos |
 
 ---
 
-### Video Layer
+### Video
 
-Embeds a video clip as a layer. Requires `ffmpeg` on PATH.
+Embeds a video clip as a component. Requires `ffmpeg` on PATH.
 
 ```json
 {
   "type": "video",
   "src": "clip.mp4",
-  "position": { "x": 0, "y": 0 },
   "size": { "width": 1080, "height": 1920 },
   "trim_start": 2.0,
   "trim_end": 8.0,
@@ -461,13 +460,13 @@ Embeds a video clip as a layer. Requires `ffmpeg` on PATH.
 | `trim_start` | `f64` | `0.0` | Start offset in the source clip (seconds) |
 | `trim_end` | `f64` | | End offset in the source clip (seconds) |
 | `playback_rate` | `f64` | `1.0` | Playback speed (0.5 = half speed, 2.0 = double) |
-| `fit` | `string` | `"contain"` | `"cover"`, `"contain"`, or `"fill"` |
+| `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"` |
 | `volume` | `f32` | `1.0` | Audio volume (0.0 = mute) |
 | `loop_video` | `bool` | | Loop the clip |
 
 ---
 
-### GIF Layer
+### GIF
 
 Displays an animated GIF, synced to the scene timeline.
 
@@ -475,10 +474,8 @@ Displays an animated GIF, synced to the scene timeline.
 {
   "type": "gif",
   "src": "animation.gif",
-  "position": { "x": 100, "y": 100 },
   "size": { "width": 300, "height": 300 },
-  "loop_gif": true,
-  "fit": "contain"
+  "fit": "cover"
 }
 ```
 
@@ -486,14 +483,14 @@ Displays an animated GIF, synced to the scene timeline.
 |---|---|---|---|
 | `src` | `string` | (required) | Path to `.gif` file |
 | `size` | `{width, height}` | | Display size (uses GIF native size if omitted) |
-| `fit` | `string` | `"contain"` | `"cover"`, `"contain"`, or `"fill"` |
+| `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"` |
 | `loop_gif` | `bool` | `true` | Loop the GIF animation |
 
 ---
 
-### Caption Layer
+### Caption
 
-TikTok-style word-by-word subtitles with active word highlighting.
+Timed word-by-word captions with active word highlighting.
 
 ```json
 {
@@ -502,48 +499,156 @@ TikTok-style word-by-word subtitles with active word highlighting.
     { "text": "Hello", "start": 0.0, "end": 0.5 },
     { "text": "world!", "start": 0.5, "end": 1.0 }
   ],
-  "position": { "x": 540, "y": 1600 },
-  "font_size": 56,
-  "color": "#FFFFFF",
-  "active_color": "#FFFF00",
-  "background": "#00000088",
-  "style": "highlight",
-  "max_width": 900
+  "mode": "highlight",
+  "active_color": "#FFD700",
+  "max_width": 900,
+  "style": { "font-size": 48, "color": "#FFFFFF" }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `words` | `CaptionWord[]` | (required) | Array of timed words |
-| `font_size` | `f32` | `48.0` | Font size |
-| `font_family` | `string` | `"Inter"` | Font family |
-| `color` | `string` | `"#FFFFFF"` | Default (inactive) word color |
-| `active_color` | `string` | `"#FFFF00"` | Active word color |
-| `background` | `string` | | Background pill color (hex with alpha, e.g. `"#00000088"`) |
-| `style` | `string` | `"highlight"` | Caption style (see below) |
+| `words` | `array` | (required) | `[{ "text", "start", "end" }]` |
+| `mode` | `enum` | `"default"` | `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
+| `active_color` | `string` | `"#FFD700"` | Active word color |
 | `max_width` | `f32` | | Maximum width before word-wrapping |
 
-#### CaptionWord
-
-| Field | Type | Description |
-|---|---|---|
-| `text` | `string` | The word text |
-| `start` | `f64` | Start timestamp (seconds, within scene) |
-| `end` | `f64` | End timestamp (seconds, within scene) |
-
-#### Caption Styles
-
-| Style | Description |
-|---|---|
-| `"highlight"` | All words visible, active word changes color |
-| `"karaoke"` | All words visible, active word highlighted (same rendering as highlight) |
-| `"word_by_word"` | Only the active word is shown at a time |
+Style: `font-size` (48.0), `font-family`, `color` (#FFFFFF)
 
 ---
 
-### Codeblock Layer
+### Counter
 
-Renders code with syntax highlighting (powered by Syntect), carbon.now.sh-style chrome (title bar with dots), reveal animations, and animated diff transitions between code states.
+Animated number counter. Must be used standalone (not inside a card).
+
+```json
+{
+  "type": "counter",
+  "from": 0,
+  "to": 1250,
+  "decimals": 0,
+  "separator": " ",
+  "suffix": "€",
+  "easing": "ease_out",
+  "start_at": 0.5,
+  "end_at": 2.5,
+  "style": {
+    "font-size": 72,
+    "color": "#FFFFFF",
+    "font-weight": "bold",
+    "text-align": "center"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `from` | `f64` | (required) | Start value |
+| `to` | `f64` | (required) | End value |
+| `decimals` | `u8` | `0` | Number of decimal places |
+| `separator` | `string` | | Thousands separator (e.g. `" "`, `","`) |
+| `prefix` | `string` | | Text before the number (e.g. `"$"`) |
+| `suffix` | `string` | | Text after the number (e.g. `"%"`, `"€"`) |
+| `easing` | `string` | `"linear"` | Easing for the counter interpolation |
+
+Style: `font-size`, `color`, `font-family`, `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
+
+---
+
+### Positioned
+
+Container that places children at fixed absolute coordinates (like Flutter's `Stack`/`Positioned`). Each child uses `position: {x, y}` relative to the container's top-left.
+
+```json
+{
+  "type": "positioned",
+  "children": [
+    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "size": { "width": 400, "height": 300 }, "style": { "fill": "#1E293B", "border-radius": 16 } },
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "size": { "width": 64, "height": 64 }, "style": { "color": "#FFFFFF" } }
+  ]
+}
+```
+
+---
+
+### Card / Flex
+
+Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. Each dimension of `size` can be a number or `"auto"`.
+
+**Flex example:**
+```json
+{
+  "type": "card",
+  "size": { "width": 800, "height": "auto" },
+  "style": {
+    "flex-direction": "row",
+    "align-items": "center",
+    "gap": 16,
+    "padding": 24,
+    "background": "#1E293B",
+    "border-radius": 16,
+    "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
+  },
+  "children": [
+    { "type": "icon", "icon": "lucide:check-circle", "size": { "width": 48, "height": 48 }, "style": { "color": "#22C55E" } },
+    { "type": "text", "content": "Feature enabled", "style": { "font-size": 32, "color": "#FFFFFF" } }
+  ]
+}
+```
+
+**Grid example (2x2):** Grid containers need an explicit `height` (not `"auto"`) to prevent rows from stretching.
+```json
+{
+  "type": "card",
+  "size": { "width": 600, "height": 400 },
+  "style": {
+    "display": "grid",
+    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
+    "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+    "gap": 16,
+    "padding": 24,
+    "background": "#1a1a2e"
+  },
+  "children": [
+    { "type": "text", "content": "Cell 1", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 2", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 3", "style": { "color": "#FFFFFF" } },
+    { "type": "text", "content": "Cell 4", "style": { "color": "#FFFFFF" } }
+  ]
+}
+```
+
+**Style fields:**
+
+| Style field | Type | Default | Description |
+|---|---|---|---|
+| `display` | `enum` | `"flex"` | `"flex"` or `"grid"` |
+| `background` | `string` | | Background color (hex) |
+| `border-radius` | `f32` | `12.0` | Corner radius |
+| `border` | `object` | | `{ "color": "#E5E7EB", "width": 1 }` |
+| `box-shadow` | `object` | | `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
+| `padding` | `f32 \| object` | | Inner spacing |
+| `flex-direction` | `enum` | `"column"` | `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
+| `flex-wrap` | `bool` | `false` | Wrap children to next line |
+| `align-items` | `enum` | `"start"` | `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `justify-content` | `enum` | `"start"` | `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
+| `gap` | `f32` | `0` | Spacing between children |
+| `grid-template-columns` | `array` | | `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid-template-rows` | `array` | | Same format as columns |
+
+**Per-child layout properties** (in child `"style"`):
+- `flex-grow` (f32) — default 0
+- `flex-shrink` (f32) — default 1
+- `flex-basis` (f32) — defaults to natural size
+- `align-self` (enum) — `"start"`, `"center"`, `"end"`, `"stretch"`
+- `grid-column` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
+- `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
+
+---
+
+### Codeblock
+
+Code block with syntax highlighting, chrome, reveal animations, and animated diff transitions.
 
 ```json
 {
@@ -551,85 +656,65 @@ Renders code with syntax highlighting (powered by Syntect), carbon.now.sh-style 
   "code": "fn main() {\n    println!(\"Hello\");\n}",
   "language": "rust",
   "theme": "base16-ocean.dark",
-  "position": { "x": 200, "y": 150 },
-  "font_size": 18,
   "show_line_numbers": true,
   "chrome": { "enabled": true, "title": "main.rs" },
   "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
-  "highlights": [{ "lines": [2], "color": "#FFFF0022", "start": 3.0, "end": 4.5 }],
+  "style": { "font-size": 18, "border-radius": 12, "padding": 16 },
   "states": [
     {
       "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
       "at": 5.0,
       "duration": 2.0,
-      "easing": "ease_in_out",
-      "cursor": { "enabled": true, "color": "#E0E0E0", "blink": true }
+      "cursor": { "enabled": true, "blink": true }
     }
   ]
 }
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `code` | `string` | (required) | Initial code content |
-| `language` | `string` | `"plain"` | Language for syntax highlighting (e.g. `"rust"`, `"javascript"`, `"python"`) |
-| `theme` | `string` | `"base16-ocean.dark"` | Theme name (see available themes below) |
-| `font_family` | `string` | `"JetBrains Mono"` | Monospace font family |
-| `font_size` | `f32` | `16.0` | Font size in pixels |
-| `font_weight` | `u16` | `400` | Font weight (100=Thin, 300=Light, 400=Normal, 500=Medium, 600=SemiBold, 700=Bold, 900=Black) |
-| `line_height` | `f32` | `1.5` | Line height multiplier |
-| `background` | `string` | | Background color (uses theme default if omitted) |
-| `show_line_numbers` | `bool` | `false` | Show line numbers in the gutter |
-| `corner_radius` | `f32` | `12.0` | Background corner radius |
-| `padding` | `CodeblockPadding` | | Padding around the code area |
+**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
+
+| Style field | Type | Default |
+|---|---|---|
+| `font-family` | `string` | `"JetBrains Mono"` |
+| `font-size` | `f32` | `14.0` |
+| `font-weight` | `enum` | `"normal"` |
+| `line-height` | `f32` | `1.5` (multiplier) |
+| `background` | `string` | (uses theme) |
+| `border-radius` | `f32` | `12.0` |
+| `padding` | `f32 \| object` | `16` |
 
 #### Chrome (Title Bar)
-
-Carbon.now.sh-style title bar with colored dots.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `chrome.enabled` | `bool` | `true` | Show the title bar |
 | `chrome.title` | `string` | | Title text (e.g. filename) |
-| `chrome.color` | `string` | `"#343d46"` | Title bar background color |
 
 #### Line Highlights
 
-Highlight specific lines with a colored background, optionally timed.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `highlights[].lines` | `u32[]` | (required) | Line numbers to highlight (1-indexed) |
-| `highlights[].color` | `string` | `"#FFFF0033"` | Highlight color (hex with alpha) |
-| `highlights[].start` | `f64` | | Start time (always visible if omitted) |
-| `highlights[].end` | `f64` | | End time |
+```json
+{ "highlights": [{ "lines": [2], "color": "#FFFF0022", "start": 3.0, "end": 4.5 }] }
+```
 
 #### Reveal Animation
 
-Animate the initial code appearance.
-
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `reveal.mode` | `string` | (required) | `"typewriter"` (char by char) or `"line_by_line"` |
+| `reveal.mode` | `string` | (required) | `"typewriter"` or `"line_by_line"` |
 | `reveal.start` | `f64` | `0.0` | Start time (seconds) |
 | `reveal.duration` | `f64` | `1.0` | Duration (seconds) |
-| `reveal.easing` | `string` | `"linear"` | Easing function |
 
 #### Code States (Diff Transitions)
 
-Animate between code versions with automatic diff detection. Unchanged lines slide smoothly, deleted lines fade out, inserted lines fade in, and modified lines show a cursor editing effect.
+Animate between code versions with automatic diff detection.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `states[].code` | `string` | (required) | New code content |
-| `states[].at` | `f64` | (required) | Transition start time (seconds) |
+| `states[].at` | `f64` | (required) | Transition start time |
 | `states[].duration` | `f64` | `0.6` | Transition duration |
-| `states[].easing` | `string` | `"ease_in_out"` | Easing function |
-| `states[].cursor.enabled` | `bool` | `true` | Show editing cursor on modified lines |
-| `states[].cursor.color` | `string` | `"#FFFFFF"` | Cursor color |
-| `states[].cursor.width` | `f32` | `2.0` | Cursor width in pixels |
-| `states[].cursor.blink` | `bool` | `true` | Blink the cursor (~530ms) |
-| `states[].highlights` | `CodeblockHighlight[]` | | Override highlights for this state |
+| `states[].cursor.enabled` | `bool` | `true` | Show editing cursor |
+| `states[].cursor.blink` | `bool` | `true` | Blink the cursor |
 
 #### Available Themes (72)
 
@@ -641,311 +726,41 @@ Animate between code versions with automatic diff detection. Unchanged lines sli
 
 ---
 
-### Counter Layer
-
-Animated number counter that interpolates from a start value to an end value over the layer's visible duration. Uses text rendering internally.
-
-```json
-{
-  "type": "counter",
-  "from": 0,
-  "to": 1250,
-  "decimals": 0,
-  "separator": " ",
-  "prefix": "+",
-  "suffix": "€",
-  "easing": "ease_out",
-  "position": { "x": 540, "y": 960 },
-  "font_size": 72,
-  "color": "#FFFFFF",
-  "font_family": "Inter",
-  "font_weight": "bold",
-  "align": "center",
-  "start_at": 0.5,
-  "end_at": 2.5,
-  "preset": "fade_in_up"
-}
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `from` | `f64` | (required) | Start value |
-| `to` | `f64` | (required) | End value |
-| `decimals` | `u8` | `0` | Number of decimal places |
-| `separator` | `string` | | Thousands separator (e.g. `" "`, `","`) |
-| `prefix` | `string` | | Text before the number (e.g. `"$"`, `"+"`) |
-| `suffix` | `string` | | Text after the number (e.g. `"%"`, `"€"`) |
-| `easing` | `string` | `"linear"` | Easing for the counter interpolation (see [Easing Functions](#easing-functions)) |
-| `font_size` | `f32` | `48.0` | Font size in pixels |
-| `color` | `string` | `"#FFFFFF"` | Text color (hex) |
-| `font_family` | `string` | `"Inter"` | Font family name |
-| `font_weight` | `string` | `"normal"` | `"normal"` or `"bold"` |
-| `align` | `string` | `"left"` | `"left"`, `"center"`, or `"right"` |
-| `letter_spacing` | `f32` | | Additional spacing between characters |
-| `shadow` | `TextShadow` | | Drop shadow behind text |
-| `stroke` | `Stroke` | | Text outline/stroke |
-
-The counter animates over the layer's visible duration (`start_at` to `end_at`, or the full scene duration if omitted). The `easing` field controls the interpolation curve of the number, independently from any visual animation presets applied to the layer.
-
----
-
-### Flex Layer (Layout Container)
-
-A pure layout container that automatically positions its children using flex or grid layout. It has no visual styling (no background, border, or shadow by default) — use it to stack or arrange layers without adding visual chrome.
-
-`flex` is an alias for `card` — they share the same properties. Use `flex` when you only need layout, and `card` when you need visual styling.
-
-```json
-{
-  "type": "flex",
-  "position": { "x": 100, "y": 200 },
-  "size": { "width": 750, "height": "auto" },
-  "direction": "column",
-  "gap": 20,
-  "layers": [
-    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... },
-    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... },
-    { "type": "card", "size": { "width": 750, "height": "auto" }, "background": "#1a1a2e", ... }
-  ]
-}
-```
-
-See [Card Layer](#card-layer-flex--grid-container) for all available properties (`direction`, `align`, `justify`, `gap`, `wrap`, `padding`, grid properties, etc.).
-
----
-
-### Card Layer (Flex & Grid Container)
-
-A visual container with CSS-like layout (flex by default, grid optional) for its children. Unlike `group` (which uses absolute positioning with no visual style), `card` automatically positions children and supports background, border, shadow, corner radius, and padding.
-
-#### Flex Layout Example
-
-```json
-{
-  "type": "card",
-  "direction": "row",
-  "size": { "width": 800, "height": 100 },
-  "gap": 16,
-  "layers": [
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#FF0000" },
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#00FF00", "flex_grow": 1 },
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "fill": "#0000FF" }
-  ]
-}
-```
-
-#### Grid Layout Example
-
-```json
-{
-  "type": "card",
-  "display": "grid",
-  "size": { "width": 600, "height": 400 },
-  "grid_template_columns": [{ "fr": 1 }, { "fr": 1 }],
-  "grid_template_rows": [{ "fr": 1 }, { "fr": 1 }],
-  "gap": 16,
-  "padding": 24,
-  "background": "#1a1a2e",
-  "corner_radius": 16,
-  "layers": [
-    { "type": "text", "content": "Cell 1", "color": "#FFFFFF" },
-    { "type": "text", "content": "Cell 2", "color": "#FFFFFF" },
-    { "type": "text", "content": "Cell 3", "color": "#FFFFFF" },
-    { "type": "text", "content": "Cell 4", "color": "#FFFFFF" }
-  ]
-}
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `display` | `string` | `"flex"` | Layout mode: `"flex"` or `"grid"` |
-| `size` | `{width, height}` | | Container size. Each dimension can be a number or `"auto"`. Auto-calculated from children if omitted |
-| `background` | `string` | | Background color (hex) |
-| `corner_radius` | `f32` | `12.0` | Corner radius for rounded corners |
-| `border` | `CardBorder` | | Border stroke |
-| `shadow` | `CardShadow` | | Drop shadow |
-| `padding` | `f32 \| {top, right, bottom, left}` | | Padding inside the card (uniform number or per-side) |
-| `direction` | `string` | `"column"` | `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
-| `wrap` | `bool` | `false` | Wrap children to next line when they exceed available space |
-| `align` | `string` | `"start"` | Cross-axis alignment: `"start"`, `"center"`, `"end"`, `"stretch"` |
-| `justify` | `string` | `"start"` | Main-axis justification: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
-| `gap` | `f32` | `0.0` | Spacing between children (pixels) |
-| `grid_template_columns` | `GridTrack[]` | | Grid column definitions (required for grid display) |
-| `grid_template_rows` | `GridTrack[]` | | Grid row definitions (defaults to `[{"fr": 1}]`) |
-| `layers` | `CardChild[]` | `[]` | Child layers (positioned automatically; their `position` field is ignored) |
-
-#### Per-child Layout Properties
-
-These properties are set directly on child layers within `layers`:
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `flex_grow` | `f32` | `0` | How much the child grows to fill remaining space (flex only) |
-| `flex_shrink` | `f32` | `1` | How much the child shrinks when space is insufficient (flex only) |
-| `flex_basis` | `f32` | | Base size before grow/shrink (defaults to natural size) |
-| `align_self` | `string` | | Per-child cross-axis alignment override: `"start"`, `"center"`, `"end"`, `"stretch"` |
-| `grid_column` | `GridPlacement` | | Grid column placement (grid only) |
-| `grid_row` | `GridPlacement` | | Grid row placement (grid only) |
-
-#### GridTrack
-
-| Format | Description |
-|---|---|
-| `{"px": N}` | Fixed size in pixels |
-| `{"fr": N}` | Fractional unit (distributes remaining space) |
-| `"auto"` | Sized to fit content |
-
-#### GridPlacement
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `start` | `i32` | | 1-indexed grid line (1 = first column/row) |
-| `span` | `u32` | `1` | Number of tracks to span |
-
-#### CardBorder
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `color` | `string` | (required) | Border color (hex) |
-| `width` | `f32` | `1.0` | Border width in pixels |
-
-#### CardShadow
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `color` | `string` | (required) | Shadow color (hex with alpha, e.g. `"#00000040"`) |
-| `offset_x` | `f32` | `0.0` | Horizontal shadow offset |
-| `offset_y` | `f32` | `0.0` | Vertical shadow offset |
-| `blur` | `f32` | `0.0` | Shadow blur radius |
-
----
-
-### Group Layer
-
-Groups nested layers with a shared position and opacity.
-
-```json
-{
-  "type": "group",
-  "position": { "x": 100, "y": 100 },
-  "opacity": 0.8,
-  "layers": [
-    { "type": "shape", "shape": "rect", "size": { "width": 400, "height": 300 }, "fill": "#1a1a2e" },
-    { "type": "text", "content": "Inside group", "position": { "x": 50, "y": 150 } }
-  ]
-}
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `layers` | `Layer[]` | `[]` | Nested layers (positions relative to group) |
-| `position` | `{x, y}` | `{x: 0, y: 0}` | Group offset |
-| `opacity` | `f32` | `1.0` | Group opacity (applied to all children) |
-
----
-
 ## Animations
 
-### Custom Keyframe Animations
-
-Animate any property over time with keyframes:
+All animation effects are defined inside `style.animation` as a **typed array**, each discriminated by `"name"`. A single effect (without array) is also accepted.
 
 ```json
 {
-  "animations": [
-    {
-      "property": "opacity",
-      "keyframes": [
-        { "time": 0.0, "value": 0.0 },
-        { "time": 0.5, "value": 1.0 }
-      ],
-      "easing": "ease_out"
-    },
-    {
-      "property": "color",
-      "keyframes": [
-        { "time": 0.0, "value": "#FF0000" },
-        { "time": 1.0, "value": "#0000FF" }
-      ],
-      "easing": "linear"
-    }
-  ]
-}
-```
-
-#### Animatable Properties
-
-| Property | Type | Description |
-|---|---|---|
-| `opacity` | number | Layer opacity (0.0 - 1.0) |
-| `position.x` | number | Horizontal offset in pixels |
-| `position.y` | number | Vertical offset in pixels |
-| `scale` | number | Uniform scale (1.0 = 100%) |
-| `scale.x` | number | Horizontal scale |
-| `scale.y` | number | Vertical scale |
-| `rotation` | number | Rotation in degrees |
-| `blur` | number | Gaussian blur radius |
-| `visible_chars` | number | Number of visible characters (for text) |
-| `visible_chars_progress` | number | Character reveal progress 0.0 - 1.0 (for text) |
-| `color` | color | Color interpolation (hex strings, e.g. `"#FF0000"`) |
-
-#### Easing Functions
-
-| Easing | Description |
-|---|---|
-| `linear` | Constant speed |
-| `ease_in` | Cubic ease in (slow start) |
-| `ease_out` | Cubic ease out (slow end) — **default** |
-| `ease_in_out` | Cubic ease in and out |
-| `ease_in_quad` | Quadratic ease in |
-| `ease_out_quad` | Quadratic ease out |
-| `ease_in_cubic` | Cubic ease in |
-| `ease_out_cubic` | Cubic ease out |
-| `ease_in_expo` | Exponential ease in |
-| `ease_out_expo` | Exponential ease out |
-| `spring` | Spring physics (uses `spring` config) |
-
-#### Spring Config
-
-When using `"easing": "spring"`, provide a `spring` object:
-
-```json
-{
-  "easing": "spring",
-  "spring": {
-    "damping": 12.0,
-    "stiffness": 100.0,
-    "mass": 1.0
+  "style": {
+    "animation": [
+      { "name": "fade_in_up", "delay": 0.2, "duration": 0.8 },
+      { "name": "glow", "color": "#6366F1", "radius": 20, "intensity": 2.0 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 0.8, "seed": 42 }
+    ]
   }
 }
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `damping` | `f64` | `15.0` | Damping coefficient (higher = less oscillation) |
-| `stiffness` | `f64` | `100.0` | Spring stiffness (higher = faster) |
-| `mass` | `f64` | `1.0` | Mass (higher = slower, more inertia) |
+### Effect Types
 
----
+| Effect name | Fields | Description |
+|---|---|---|
+| *preset name* | `delay`, `duration`, `loop` | Any of the 31 presets (e.g. `fade_in_up`, `scale_in`) |
+| `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
+| `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
+| `keyframes` | `keyframes` | Custom keyframe animations |
+| `motion_blur` | `intensity` | Motion blur effect |
 
 ### Animation Presets
 
-Presets are ready-to-use animations. Set `preset` on any layer:
-
 ```json
 {
-  "type": "text",
-  "content": "Animated!",
-  "preset": "bounce_in",
-  "preset_config": {
-    "delay": 0.2,
-    "duration": 0.8,
-    "loop": false
+  "style": {
+    "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8, "loop": false }]
   }
 }
 ```
-
-#### Preset Config
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -990,11 +805,11 @@ Presets are ready-to-use animations. Set `preset` on any layer:
 
 #### Continuous Presets
 
-These presets loop automatically when `"loop": true` is set in `preset_config`:
+Use `"loop": true` for continuous animation:
 
 | Preset | Description |
 |---|---|
-| `pulse` | Gentle scale oscillation (1.0 - 1.05) |
+| `pulse` | Gentle scale oscillation |
 | `float` | Vertical floating motion |
 | `shake` | Horizontal shake |
 | `spin` | 360-degree continuous rotation |
@@ -1003,129 +818,104 @@ These presets loop automatically when `"loop": true` is set in `preset_config`:
 
 | Preset | Description |
 |---|---|
-| `typewriter` | Progressive character reveal (left to right) |
+| `typewriter` | Progressive character reveal |
 | `wipe_left` | Slide in from left with fade |
 | `wipe_right` | Slide in from right with fade |
 
----
-
-## Wiggle
-
-Wiggle adds procedural noise-based motion to any animatable property. Unlike keyframe animations, wiggle produces continuous organic movement.
+### Custom Keyframe Animations
 
 ```json
 {
-  "type": "text",
-  "content": "Wobbly",
-  "wiggle": [
-    { "property": "position.x", "amplitude": 5.0, "frequency": 3.0, "seed": 42 },
-    { "property": "rotation", "amplitude": 2.0, "frequency": 2.0, "seed": 99, "decay": 0.5 }
-  ]
+  "style": {
+    "animation": [
+      {
+        "name": "keyframes",
+        "keyframes": [
+          {
+            "property": "opacity",
+            "keyframes": [
+              { "time": 0.0, "value": 0.0 },
+              { "time": 0.5, "value": 1.0 }
+            ],
+            "easing": "ease_out"
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `property` | `string` | (required) | Property to wiggle (same as animatable properties) |
-| `amplitude` | `f64` | (required) | Maximum deviation (pixels for position, degrees for rotation, etc.) |
-| `frequency` | `f64` | (required) | Oscillations per second |
-| `seed` | `u64` | `0` | Random seed for reproducible results |
-| `octaves` | `u32` | `3` | Noise complexity (more octaves = more organic detail) |
-| `phase` | `f64` | `0.0` | Phase offset (shifts the noise pattern in time) |
-| `decay` | `f64` | | Exponential decay rate (amplitude diminishes over time) |
-| `easing` | `string` | | Remap noise output through an easing curve |
+**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`
 
-Wiggle offsets are applied **additively** on top of keyframe animations and presets.
+**11 easing functions:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 
----
-
-## Layer Timing
-
-Control when layers appear and disappear within a scene using `start_at` and `end_at`:
-
+**Spring physics** (when easing is `spring`):
 ```json
 {
-  "type": "text",
-  "content": "Appears at 1s, gone at 3s",
-  "start_at": 1.0,
-  "end_at": 3.0,
-  "preset": "fade_in"
+  "easing": "spring",
+  "spring": { "damping": 15, "stiffness": 100, "mass": 1 }
 }
 ```
 
-- `start_at`: the layer is invisible before this time. Animation time is offset so `t=0` in keyframes corresponds to `start_at`
-- `end_at`: the layer is invisible after this time
-- Both are optional and independent
-- `start_at` must be less than `end_at` when both are set
-
----
-
-## Motion Blur
-
-Adds physically-correct motion blur by rendering multiple sub-frames and compositing them:
+### Glow
 
 ```json
 {
-  "type": "shape",
-  "shape": "circle",
-  "motion_blur": 0.8,
-  "preset": "slide_in_left"
-}
-```
-
-| Value | Effect |
-|---|---|
-| `0.0` | No blur |
-| `0.5` | Moderate blur |
-| `1.0` | Full frame-duration blur |
-
-The renderer samples 5 sub-frames around the current time, each with proportional opacity.
-
----
-
-## Glow Effect
-
-Adds a soft luminous halo around any component (text, shapes, icons, etc.). The glow renders as a pre-pass behind the component, keeping the content crisp and readable.
-
-```json
-{
-  "type": "text",
-  "content": "NEON",
-  "position": { "x": 540, "y": 400 },
-  "font_size": 72,
-  "color": "#ff00ff",
-  "font_weight": "bold",
-  "glow": {
-    "color": "#ff00ff",
-    "radius": 20,
-    "intensity": 2.5
+  "style": {
+    "animation": [
+      { "name": "glow", "color": "#ff00ff", "radius": 20, "intensity": 2.5 }
+    ]
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `glow.color` | `string` | `"#FFFFFF"` | Glow color (hex `#RRGGBB` or `#RRGGBBAA`) |
-| `glow.radius` | `f32` | `10.0` | Blur radius of the glow |
-| `glow.intensity` | `f32` | `1.0` | Brightness multiplier (higher = brighter, more visible glow) |
+| `color` | `string` | `"#FFFFFF"` | Glow color (hex) |
+| `radius` | `f32` | `10.0` | Blur radius |
+| `intensity` | `f32` | `1.0` | Brightness multiplier |
 
-Works on all component types: `text`, `shape`, `icon`, `image`, `svg`, `card`, etc.
+### Wiggle (Procedural Noise)
 
----
-
-## Freeze Frame
-
-Freeze a scene at a specific point in time. All frames after `freeze_at` render the frozen state (animations stop, layers stay in place):
+Wiggle adds continuous organic movement. Offsets are applied **additively** on top of presets and keyframes.
 
 ```json
 {
-  "duration": 5.0,
-  "freeze_at": 2.0,
-  "layers": [ ... ]
+  "style": {
+    "animation": [
+      { "name": "wiggle", "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
+      { "name": "wiggle", "property": "rotation", "amplitude": 2, "frequency": 2, "seed": 99, "decay": 0.5 }
+    ]
+  }
 }
 ```
 
-The scene continues for its full duration but the visual output is frozen from `freeze_at` onward.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `property` | `string` | (required) | Property to wiggle (same as animatable properties) |
+| `amplitude` | `f64` | (required) | Maximum deviation (pixels for translate, degrees for rotation) |
+| `frequency` | `f64` | (required) | Cycles per second (Hz) |
+| `mode` | `string` | `"noise"` | `"noise"` (layered simplex) or `"sine"` (pure sine wave) |
+| `seed` | `u64` | `0` | Random seed for reproducible results (noise mode only) |
+| `octaves` | `u32` | `3` | Noise complexity (noise mode only) |
+| `phase` | `f64` | `0.0` | Phase offset |
+| `decay` | `f64` | | Exponential decay rate |
+| `easing` | `string` | | Remap noise through an easing curve |
+
+### Motion Blur
+
+```json
+{
+  "style": {
+    "animation": [
+      { "name": "motion_blur", "intensity": 0.8 }
+    ]
+  }
+}
+```
+
+Renders multiple sub-frames and composites them for physically-correct motion blur.
 
 ---
 
@@ -1149,85 +939,81 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
 
 ```json
 {
+  "version": "1.0",
   "video": {
     "width": 1080,
     "height": 1920,
     "fps": 30,
     "background": "#0f172a"
   },
-  "audio": [
-    { "src": "bgm.mp3", "volume": 0.3, "fade_in": 1.0, "fade_out": 2.0 }
-  ],
   "scenes": [
     {
       "duration": 4.0,
-      "layers": [
+      "layout": { "align_items": "center", "justify_content": "center", "gap": 32 },
+      "children": [
         {
           "type": "shape",
-          "shape": { "star": { "points": 5 } },
-          "position": { "x": 390, "y": 660 },
-          "size": { "width": 300, "height": 300 },
-          "fill": {
-            "type": "radial",
-            "colors": ["#fbbf24", "#f59e0b"]
-          },
-          "preset": "scale_in",
-          "wiggle": [
-            { "property": "rotation", "amplitude": 3.0, "frequency": 1.5, "seed": 1 }
-          ]
+          "shape": "rounded_rect",
+          "size": { "width": 900, "height": 520 },
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#6366f1", "#8b5cf6"],
+              "angle": 135
+            },
+            "border-radius": 32,
+            "animation": [{ "name": "scale_in", "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:rocket",
+          "size": { "width": 80, "height": 80 },
+          "style": {
+            "color": "#FFFFFF",
+            "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
+          }
         },
         {
           "type": "text",
-          "content": "rustmotion",
-          "position": { "x": 540, "y": 1100 },
-          "font_size": 72,
-          "color": "#FFFFFF",
-          "align": "center",
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.5 },
-          "animations": [
-            {
-              "property": "color",
-              "keyframes": [
-                { "time": 1.5, "value": "#FFFFFF" },
-                { "time": 3.0, "value": "#fbbf24" }
-              ],
-              "easing": "ease_in_out"
-            }
-          ]
+          "content": "Ship Faster",
+          "style": {
+            "font-size": 64,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }]
+          }
         },
         {
-          "type": "caption",
-          "words": [
-            { "text": "Motion", "start": 1.0, "end": 1.5 },
-            { "text": "design", "start": 1.5, "end": 2.0 },
-            { "text": "from", "start": 2.0, "end": 2.3 },
-            { "text": "JSON", "start": 2.3, "end": 3.0 }
-          ],
-          "position": { "x": 540, "y": 1400 },
-          "font_size": 48,
-          "color": "#94a3b8",
-          "active_color": "#FFFFFF",
-          "background": "#1e293b",
-          "style": "highlight",
-          "max_width": 800
+          "type": "text",
+          "content": "Build motion videos in Rust.\nNo browser needed.",
+          "max_width": 700,
+          "style": {
+            "font-size": 32,
+            "color": "#CBD5E1",
+            "text-align": "center",
+            "line-height": 1.5,
+            "animation": [{ "name": "fade_in_up", "delay": 0.7, "duration": 0.6 }]
+          }
         }
-      ],
-      "transition": { "type": "iris", "duration": 0.8 }
+      ]
     },
     {
       "duration": 3.0,
       "background": "#1e293b",
-      "layers": [
+      "transition": { "type": "iris", "duration": 0.8 },
+      "layout": { "align_items": "center", "justify_content": "center" },
+      "children": [
         {
           "type": "text",
           "content": "No browser needed.",
-          "position": { "x": 540, "y": 960 },
-          "font_size": 56,
-          "color": "#e2e8f0",
-          "align": "center",
-          "preset": "typewriter",
-          "preset_config": { "duration": 1.5 }
+          "style": {
+            "font-size": 56,
+            "color": "#e2e8f0",
+            "text-align": "center",
+            "animation": [{ "name": "typewriter", "duration": 1.5 }]
+          }
         }
       ]
     }
@@ -1241,6 +1027,7 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
 - **Video encoding:** openh264 (Cisco BSD, compiled from source) + ffmpeg (optional, for H.265/VP9/ProRes)
 - **Audio encoding:** AAC via minimp4
 - **SVG rendering:** resvg + usvg
+- **Icon rendering:** Iconify API (200k+ icons)
 - **GIF decoding/encoding:** gif crate
 - **MP4 muxing:** minimp4
 - **JSON Schema:** schemars (auto-generated from Rust types)

@@ -1,10 +1,10 @@
 [package]
 name = "rustmotion"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary."
 license = "MIT"
-repository = "https://github.com/music-soul1-1/rustmotion"
+repository = "https://github.com/LeadcodeDev/rustmotion"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
