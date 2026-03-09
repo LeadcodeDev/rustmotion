@@ -1,6 +1,30 @@
-# Rule: Use card/flex for Layout, Not group
+# Rule: Use card/flex for Layout
 
 `card` and `flex` (alias for `card`) use a CSS flexbox engine that auto-positions children. Use `card` for visual containers (background, border, shadow) and `flex` for pure layout.
+
+## Scene = Implicit Flex Container
+
+Every scene acts as an implicit full-screen flex container (`direction: column` by default). Children without `position` participate in flex flow automatically. Children with `position` are absolutely positioned.
+
+You can customize the scene layout:
+```json
+{
+  "duration": 5.0,
+  "layout": {
+    "direction": "column",
+    "align_items": "center",
+    "justify_content": "center",
+    "gap": 24,
+    "padding": 40
+  },
+  "children": [
+    { "type": "text", "content": "Centered title", "style": { "font-size": 64, "color": "#FFFFFF" } },
+    { "type": "text", "content": "Subtitle below", "style": { "font-size": 32, "color": "#94A3B8" } }
+  ]
+}
+```
+
+## Card/Flex Patterns
 
 Key patterns:
 - **Horizontal row:** `"flex-direction": "row"` + `"gap"`

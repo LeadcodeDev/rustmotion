@@ -596,7 +596,7 @@ fn validate_scenario(scenario: &schema::ResolvedScenario) -> Vec<String> {
                         }
                     }
                 }
-                schema::Layer::Caption(_) | schema::Layer::Group(_) => {}
+                schema::Layer::Caption(_) => {}
                 schema::Layer::ProgressBar(pb) => {
                     if let (Some(start), Some(end)) = (pb.start_at, pb.end_at) {
                         if start >= end {

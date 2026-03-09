@@ -449,7 +449,6 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
                 Layer::Text(text) => render_text_constrained($c, text, config, props, ww, aw)?,
                 Layer::Shape(shape) => render_shape($c, shape, props)?,
                 Layer::Image(image) => render_image($c, image)?,
-                Layer::Group(group) => render_group($c, group, config, time, scene_duration)?,
                 Layer::Svg(svg) => render_svg($c, svg)?,
                 Layer::Icon(icon) => render_icon($c, icon)?,
                 Layer::Video(video) => render_video($c, video, time)?,
@@ -654,7 +653,6 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
             (cx, cy)
         }
         Layer::Caption(c) => (c.position.x, c.position.y),
-        Layer::Group(g) => (g.position.x, g.position.y),
         Layer::Card(c) | Layer::Flex(c) => {
             let (cw, ch) = measure_card_content(c);
             let (pt, pr, pb, pl) = c.style.padding_resolved();
@@ -1428,18 +1426,6 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
             let line_height = font_size * 1.3;
             (text_width, line_height)
         }
-        Layer::Group(g) => {
-            // Bounding box of children
-            let mut max_x: f32 = 0.0;
-            let mut max_y: f32 = 0.0;
-            for child in &g.children {
-                let (cw, ch) = measure_layer(child);
-                let pos = get_layer_position(child);
-                max_x = max_x.max(pos.x + cw);
-                max_y = max_y.max(pos.y + ch);
-            }
-            (max_x, max_y)
-        }
         Layer::Card(c) | Layer::Flex(c) => {
             let (cw, ch) = measure_card_content(c);
             let (pt, pr, pb, pl) = c.style.padding_resolved();
@@ -1498,7 +1484,6 @@ fn get_layer_position(layer: &Layer) -> &Position {
         Layer::Codeblock(cb) => &cb.position,
         Layer::Counter(ct) => &ct.position,
         Layer::Caption(c) => &c.position,
-        Layer::Group(g) => &g.position,
         Layer::Card(c) | Layer::Flex(c) => &c.position,
         Layer::ProgressBar(p) => &p.position,
         Layer::QrCode(q) => &q.position,
@@ -1544,7 +1529,6 @@ fn card_child_style(child: &CardChild) -> &LayerStyle {
         Layer::Caption(c) => &c.style,
         Layer::Codeblock(c) => &c.style,
         Layer::Card(c) | Layer::Flex(c) => &c.style,
-        Layer::Group(g) => &g.style,
         Layer::ProgressBar(p) => &p.style,
         Layer::QrCode(q) => &q.style,
     }
@@ -2185,32 +2169,6 @@ fn render_card(
     Ok(())
 }
 
-fn render_group(
-    canvas: &Canvas,
-    group: &crate::schema::GroupLayer,
-    config: &VideoConfig,
-    time: f64,
-    scene_duration: f64,
-) -> Result<()> {
-    canvas.save();
-    canvas.translate((group.position.x, group.position.y));
-
-    if group.style.opacity < 1.0 {
-        canvas.save_layer_alpha(None, (group.style.opacity * 255.0) as u32);
-    }
-
-    for layer in &group.children {
-        render_layer(canvas, layer, config, time, scene_duration)?;
-    }
-
-    if group.style.opacity < 1.0 {
-        canvas.restore();
-    }
-    canvas.restore();
-
-    Ok(())
-}
-
 pub(crate) fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     let (prefix, name) = icon
         .split_once(':')
@@ -2311,11 +2269,6 @@ pub fn prefetch_icons(scenes: &[crate::schema::Scene]) {
                     None => (24, 24),
                 };
                 seen.insert((icon.icon.clone(), icon.style.color_or("#FFFFFF").to_string(), w, h));
-            }
-            Layer::Group(g) => {
-                for child in &g.children {
-                    collect_from_layer(child, seen);
-                }
             }
             Layer::Card(c) | Layer::Flex(c) => {
                 for child in &c.children {

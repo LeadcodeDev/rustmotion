@@ -112,8 +112,6 @@ pub enum Component {
     Grid(Grid),
     /// Backward-compatible card container (supports both flex and grid display modes).
     Card(Card),
-    /// Backward-compatible group container (alias for Stack with absolute positioning).
-    Group(Stack),
 }
 
 // --- Dispatch helpers ---
@@ -132,7 +130,7 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
-            Component::Stack(c) | Component::Group(c) => c,
+            Component::Stack(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
@@ -155,8 +153,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
-            // Stack/Group has no animation support
-            Component::Stack(_) | Component::Group(_) => None,
+            Component::Stack(_) => None,
         }
     }
 
@@ -175,8 +172,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
-            // Caption and Stack/Group have no timed visibility
-            Component::Caption(_) | Component::Stack(_) | Component::Group(_) => None,
+            Component::Caption(_) | Component::Stack(_) => None,
         }
     }
 
@@ -193,7 +189,7 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
-            Component::Stack(c) | Component::Group(c) => c,
+            Component::Stack(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
@@ -204,7 +200,7 @@ impl Component {
     #[allow(dead_code)]
     pub fn as_container(&self) -> Option<&dyn Container> {
         match self {
-            Component::Stack(c) | Component::Group(c) => Some(c),
+            Component::Stack(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -215,7 +211,7 @@ impl Component {
     /// Returns a mutable reference to this component's children, if it has any.
     pub fn children_mut(&mut self) -> Option<&mut Vec<ChildComponent>> {
         match self {
-            Component::Stack(c) | Component::Group(c) => Some(&mut c.children),
+            Component::Stack(c) => Some(&mut c.children),
             Component::Flex(c) => Some(&mut c.children),
             Component::Grid(c) => Some(&mut c.children),
             Component::Card(c) => Some(&mut c.children),

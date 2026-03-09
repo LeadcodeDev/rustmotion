@@ -5,8 +5,8 @@ use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
 use super::renderer::{color4f_from_hex, font_mgr};
 use crate::components::ChildComponent;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{Layer, Scene, VideoConfig};
-use crate::traits::RenderContext;
+use crate::schema::{Layer, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
 ///
@@ -419,53 +419,103 @@ fn compute_counter_baseline_offset(counter: &crate::components::counter::Counter
     (line_height + ascent - descent) / 2.0
 }
 
+/// Adapter that wraps root-level children as a flex container.
+/// This lets us reuse `layout_flex` for scene-level layout.
+struct RootContainer<'a> {
+    children: &'a [ChildComponent],
+    style: LayerStyle,
+}
+
+impl<'a> Container for RootContainer<'a> {
+    fn children(&self) -> &[ChildComponent] {
+        self.children
+    }
+}
+
+impl<'a> Styled for RootContainer<'a> {
+    fn style_config(&self) -> &LayerStyle {
+        &self.style
+    }
+}
+
+impl<'a> RootContainer<'a> {
+    fn new(children: &'a [ChildComponent], scene_layout: Option<&SceneLayout>) -> Self {
+        let mut style = LayerStyle::default();
+        if let Some(layout) = scene_layout {
+            style.flex_direction = layout.direction.clone();
+            style.gap = layout.gap;
+            style.align_items = layout.align_items.clone();
+            style.justify_content = layout.justify_content.clone();
+            if let Some(p) = layout.padding {
+                style.padding = Some(crate::schema::Spacing::Uniform(p));
+            }
+        }
+        // Default direction is column (like a web page)
+        if style.flex_direction.is_none() {
+            style.flex_direction = Some(crate::schema::CardDirection::Column);
+        }
+        Self { children, style }
+    }
+}
+
 /// Compute the layout tree for a set of root-level ChildComponents.
-/// Each root child is laid out with absolute positioning based on its position field.
-/// For v1 backward-compatibility, standalone text uses position.x as the alignment
-/// anchor (center point for center-aligned, right edge for right-aligned).
+/// Uses an implicit flex container at video dimensions (like a full-screen web page).
+/// Children without `position` participate in flex flow; children with `position` are absolute.
+/// For v1 backward-compatibility, standalone text with `position` uses position.x as the
+/// alignment anchor (center point for center-aligned, right edge for right-aligned).
 pub fn compute_root_layout(
     children: &[ChildComponent],
     config: &VideoConfig,
+    scene_layout: Option<&SceneLayout>,
 ) -> LayoutNode {
     let constraints = Constraints::tight(config.width as f32, config.height as f32);
+    let root = RootContainer::new(children, scene_layout);
 
-    let mut child_nodes = Vec::with_capacity(children.len());
-    for child in children {
-        let (mut x, mut y) = child.absolute_position().unwrap_or((0.0, 0.0));
-        let mut node = child.component.as_widget().layout(&constraints);
+    // Use flex layout — absolute children are handled by layout_flex,
+    // flow children participate in flex.
+    let mut layout = crate::layout::flex::layout_flex(&root, &constraints);
 
-        // v1 compatibility: for standalone text/counter, position.y is the baseline
-        // coordinate, but render() now adds the ascent offset to draw from the top of
-        // the box. Subtract the ascent so standalone text baseline stays at position.y.
+    // v1 compatibility: apply baseline corrections for absolute text/counter children
+    for (i, child) in children.iter().enumerate() {
+        if i >= layout.children.len() {
+            break;
+        }
+        // Only correct absolute-positioned children (flow children are managed by flex)
+        if child.absolute_position().is_none() {
+            continue;
+        }
         match &child.component {
             crate::components::Component::Text(ref text) => {
                 match text.style.text_align_or(crate::schema::TextAlign::Left) {
-                    crate::schema::TextAlign::Center => x -= node.width / 2.0,
-                    crate::schema::TextAlign::Right => x -= node.width,
+                    crate::schema::TextAlign::Center => {
+                        layout.children[i].x -= layout.children[i].width / 2.0;
+                    }
+                    crate::schema::TextAlign::Right => {
+                        layout.children[i].x -= layout.children[i].width;
+                    }
                     crate::schema::TextAlign::Left => {}
                 }
                 let baseline_offset = compute_text_baseline_offset(text);
-                y -= baseline_offset;
+                layout.children[i].y -= baseline_offset;
             }
             crate::components::Component::Counter(ref counter) => {
                 match counter.style.text_align_or(crate::schema::TextAlign::Left) {
-                    crate::schema::TextAlign::Center => x -= node.width / 2.0,
-                    crate::schema::TextAlign::Right => x -= node.width,
+                    crate::schema::TextAlign::Center => {
+                        layout.children[i].x -= layout.children[i].width / 2.0;
+                    }
+                    crate::schema::TextAlign::Right => {
+                        layout.children[i].x -= layout.children[i].width;
+                    }
                     crate::schema::TextAlign::Left => {}
                 }
                 let baseline_offset = compute_counter_baseline_offset(counter);
-                y -= baseline_offset;
+                layout.children[i].y -= baseline_offset;
             }
             _ => {}
         }
-
-        node.x = x;
-        node.y = y;
-        child_nodes.push(node);
     }
 
-    LayoutNode::new(0.0, 0.0, config.width as f32, config.height as f32)
-        .with_children(child_nodes)
+    layout
 }
 
 /// Convert v1 layers to v2 ChildComponents using serde round-trip.
@@ -504,7 +554,7 @@ pub fn prepare_scene(
     config: &VideoConfig,
 ) -> Result<(Vec<ChildComponent>, LayoutNode)> {
     let children = convert_layers_to_components(&scene.children)?;
-    let layout = compute_root_layout(&children, config);
+    let layout = compute_root_layout(&children, config, scene.layout.as_ref());
     Ok((children, layout))
 }
 

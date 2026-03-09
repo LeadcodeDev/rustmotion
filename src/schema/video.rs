@@ -504,7 +504,6 @@ pub enum Layer {
     Text(TextLayer),
     Shape(ShapeLayer),
     Image(ImageLayer),
-    Group(GroupLayer),
     Svg(SvgLayer),
     Icon(IconLayer),
     Video(VideoLayer),
@@ -852,16 +851,6 @@ pub struct ImageLayer {
     pub wiggle: Option<Vec<WiggleConfig>>,
     #[serde(default)]
     pub motion_blur: Option<f32>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GroupLayer {
-    #[serde(default)]
-    pub children: Vec<Layer>,
-    #[serde(default)]
-    pub position: Position,
-    #[serde(default)]
-    pub style: LayerStyle,
 }
 
 // --- Icon Layer (Iconify) ---
@@ -1603,33 +1592,6 @@ impl LayerProps for CounterLayer {
     }
 }
 
-impl LayerProps for GroupLayer {
-    fn animations(
-        &self,
-    ) -> (
-        &[Animation],
-        Option<&AnimationPreset>,
-        Option<&PresetConfig>,
-    ) {
-        (&[], None, None)
-    }
-    fn timing(&self) -> (Option<f64>, Option<f64>) {
-        (None, None)
-    }
-    fn wiggle(&self) -> Option<&[WiggleConfig]> {
-        None
-    }
-    fn motion_blur(&self) -> Option<f32> {
-        None
-    }
-    fn padding(&self) -> (f32, f32, f32, f32) {
-        self.style.padding_resolved()
-    }
-    fn margin(&self) -> (f32, f32, f32, f32) {
-        self.style.margin_resolved()
-    }
-}
-
 impl Layer {
     /// Access the LayerStyle for any layer variant
     pub fn style(&self) -> &LayerStyle {
@@ -1644,7 +1606,6 @@ impl Layer {
             Layer::Caption(l) => &l.style,
             Layer::Codeblock(l) => &l.style,
             Layer::Counter(l) => &l.style,
-            Layer::Group(l) => &l.style,
             Layer::Card(l) => &l.style,
             Layer::Flex(l) => &l.style,
             Layer::ProgressBar(l) => &l.style,
@@ -1665,7 +1626,6 @@ impl Layer {
             Layer::Caption(l) => l,
             Layer::Codeblock(l) => l,
             Layer::Counter(l) => l,
-            Layer::Group(l) => l,
             Layer::Card(l) => l,
             Layer::Flex(l) => l,
             Layer::ProgressBar(l) => l,

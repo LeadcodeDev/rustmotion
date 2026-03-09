@@ -42,12 +42,11 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
-- [rules/no-group-stack.md](rules/no-group-stack.md) - Never use group/stack (known bug: children don't render)
 - [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing preset_config.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
-- [rules/card-flex-layout.md](rules/card-flex-layout.md) - Use card/flex for layout with flexbox/grid patterns
+- [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
 - [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
 - [rules/icon-format.md](rules/icon-format.md) - Icon format must be "prefix:name" (e.g. "lucide:home")
@@ -346,8 +345,13 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 | `duration`   | f64    | required | Scene duration in seconds (must be > 0)        |
 | `background` | string | `null`   | Override video background for this scene       |
 | `children`   | array  | `[]`     | Components rendered in order (first = back)    |
+| `layout`     | object | `null`   | Scene-level flex layout (see below)            |
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
+
+Each scene is an **implicit flex container** at video dimensions (like a full-screen web page). Children without `position` participate in flex flow; children with `position` are absolutely positioned. Default direction: `column`.
+
+**`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
 
 #### Include (Composable Scenarios)
 
@@ -681,11 +685,7 @@ Animated number counter. See Rule 4: must be standalone.
 
 Style: `font-size` (48.0), `color` (#FFFFFF), `font-family` (Inter), `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
 
-### 10. `group`
-
-> **WARNING:** group/stack children do not render due to a known bug. Use card/flex or standalone elements instead. See Rule 3.
-
-### 11. `card` / `flex`
+### 10. `card` / `flex`
 
 Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. See Rule 8.
 
