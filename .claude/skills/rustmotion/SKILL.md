@@ -44,7 +44,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
 - [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
-- [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing preset_config.delay
+- [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
 - [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
@@ -72,53 +72,47 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "shape",
           "shape": "rounded_rect",
-          "position": { "x": 90, "y": 700 },
           "size": { "width": 900, "height": 520 },
-          "preset": "scale_in",
-          "preset_config": { "duration": 0.6 },
           "style": {
             "fill": {
               "type": "linear",
               "colors": ["#6366f1", "#8b5cf6"],
               "angle": 135
             },
-            "border-radius": 32
+            "border-radius": 32,
+            "animation": { "name": "scale_in", "duration": 0.6 }
           }
         },
         {
           "type": "icon",
           "icon": "lucide:rocket",
-          "position": { "x": 490, "y": 800 },
           "size": { "width": 80, "height": 80 },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.3, "duration": 0.6 },
-          "style": { "color": "#FFFFFF" }
+          "style": {
+            "color": "#FFFFFF",
+            "animation": { "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }
+          }
         },
         {
           "type": "text",
           "content": "Ship Faster",
-          "position": { "x": 540, "y": 940 },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.5, "duration": 0.6 },
           "style": {
             "font-size": 64,
             "color": "#FFFFFF",
             "font-weight": "bold",
-            "text-align": "center"
+            "text-align": "center",
+            "animation": { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
           }
         },
         {
           "type": "text",
           "content": "Build motion videos in Rust.\nNo browser needed.",
-          "position": { "x": 540, "y": 1060 },
           "max_width": 700,
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.7, "duration": 0.6 },
           "style": {
             "font-size": 32,
             "color": "#CBD5E1",
             "text-align": "center",
-            "line-height": 1.5
+            "line-height": 1.5,
+            "animation": { "name": "fade_in_up", "delay": 0.7, "duration": 0.6 }
           }
         }
       ]
@@ -140,14 +134,12 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "Getting Started with Rust",
-          "position": { "x": 960, "y": 80 },
-          "preset": "fade_in",
-          "preset_config": { "duration": 0.5 },
           "style": {
             "font-size": 40,
             "color": "#7AA2F7",
             "font-weight": "bold",
-            "text-align": "center"
+            "text-align": "center",
+            "animation": { "name": "fade_in", "duration": 0.5 }
           }
         },
         {
@@ -155,7 +147,6 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
           "language": "rust",
           "theme": "tokyo-night",
-          "position": { "x": 260, "y": 160 },
           "size": { "width": 1400, "height": 400 },
           "show_line_numbers": true,
           "chrome": { "enabled": true, "title": "src/main.rs" },
@@ -173,14 +164,12 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "Variables are immutable by default",
-          "position": { "x": 960, "y": 650 },
           "start_at": 5.0,
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.0, "duration": 0.6 },
           "style": {
             "font-size": 28,
             "color": "#9ECE6A",
-            "text-align": "center"
+            "text-align": "center",
+            "animation": { "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }
           }
         }
       ]
@@ -202,17 +191,12 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "2024 Results",
-          "position": { "x": 540, "y": 800 },
-          "preset": "fade_in_up",
-          "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
+          "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": { "name": "fade_in_up" } }
         },
         {
           "type": "text",
           "content": "Year in Review",
-          "position": { "x": 540, "y": 900 },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.3, "duration": 0.6 },
-          "style": { "font-size": 36, "color": "#94A3B8", "text-align": "center" }
+          "style": { "font-size": 36, "color": "#94A3B8", "text-align": "center", "animation": { "name": "fade_in_up", "delay": 0.3, "duration": 0.6 } }
         }
       ]
     },
@@ -226,7 +210,6 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "to": 12500,
           "separator": ",",
           "easing": "ease_out",
-          "position": { "x": 540, "y": 750 },
           "start_at": 0.3,
           "end_at": 3.5,
           "style": { "font-size": 96, "color": "#38BDF8", "font-weight": "bold", "text-align": "center" }
@@ -234,23 +217,18 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "Users Reached",
-          "position": { "x": 540, "y": 880 },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.5, "duration": 0.6 },
-          "style": { "font-size": 36, "color": "#CBD5E1", "text-align": "center" }
+          "style": { "font-size": 36, "color": "#CBD5E1", "text-align": "center", "animation": { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 } }
         },
         {
           "type": "card",
-          "position": { "x": 90, "y": 1050 },
           "size": { "width": 900, "height": "auto" },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.8, "duration": 0.6 },
           "style": {
             "flex-direction": "row",
             "gap": 16,
             "padding": 24,
             "background": "#1E293B",
-            "border-radius": 20
+            "border-radius": 20,
+            "animation": { "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }
           },
           "children": [
             {
@@ -275,25 +253,31 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "text",
           "content": "Thank You",
-          "position": { "x": 540, "y": 900 },
-          "preset": "scale_in",
-          "preset_config": { "duration": 0.8 },
-          "wiggle": [
-            { "property": "translate_y", "amplitude": 4, "frequency": 1.5, "seed": 7 }
-          ],
-          "style": { "font-size": 80, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
+          "style": {
+            "font-size": 80, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center",
+            "animation": {
+              "name": "scale_in",
+              "duration": 0.8,
+              "wiggle": [
+                { "property": "translate_y", "amplitude": 4, "frequency": 1.5, "seed": 7 }
+              ]
+            }
+          }
         },
         {
           "type": "icon",
           "icon": "lucide:heart",
-          "position": { "x": 508, "y": 1020 },
           "size": { "width": 64, "height": 64 },
-          "preset": "fade_in",
-          "preset_config": { "delay": 0.5, "loop": false },
-          "wiggle": [
-            { "property": "scale", "amplitude": 0.1, "frequency": 2, "seed": 42 }
-          ],
-          "style": { "color": "#F43F5E" }
+          "style": {
+            "color": "#F43F5E",
+            "animation": {
+              "name": "fade_in",
+              "delay": 0.5,
+              "wiggle": [
+                { "property": "scale", "amplitude": 0.1, "frequency": 2, "seed": 42 }
+              ]
+            }
+          }
         }
       ]
     }
@@ -349,7 +333,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
 
-Each scene is an **implicit flex container** at video dimensions (like a full-screen web page). Children without `position` participate in flex flow; children with `position` are absolutely positioned. Default direction: `column`.
+Each scene is an **implicit flex container** at video dimensions. All children participate in flex flow. Use `positioned` container for absolute positioning. Default direction: `column`.
 
 **`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
 
@@ -394,15 +378,10 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 
 #### Common Optional Fields (root level)
 
-| Field           | Type   | Default | Description                                      |
-| --------------- | ------ | ------- | ------------------------------------------------ |
-| `animations`    | array  | `[]`    | Custom keyframe animations                       |
-| `preset`        | string | `null`  | Animation preset name                            |
-| `preset_config` | object | `null`  | `{ "delay": 0, "duration": 0.8, "loop": false }` |
-| `start_at`      | f64    | `null`  | Show component starting at this time (seconds)   |
-| `end_at`        | f64    | `null`  | Hide component after this time (seconds)         |
-| `wiggle`        | array  | `null`  | Procedural noise-based animation                 |
-| `motion_blur`   | f32    | `null`  | Motion blur intensity                            |
+| Field      | Type | Default | Description                                    |
+| ---------- | ---- | ------- | ---------------------------------------------- |
+| `start_at` | f64  | `null`  | Show component starting at this time (seconds) |
+| `end_at`   | f64  | `null`  | Hide component after this time (seconds)       |
 
 #### Common Style Fields (inside `"style"`)
 
@@ -412,6 +391,37 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 | `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
 | `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
 | `glow` | object | `null` | Luminous halo effect |
+| `animation` | object | `null` | Animation config (see Animation section) |
+
+#### Animation Style (inside `"style"`)
+
+All animation configuration lives under `style.animation`:
+
+```json
+{
+  "style": {
+    "animation": {
+      "name": "fade_in_up",
+      "delay": 0.2,
+      "duration": 0.8,
+      "loop": false,
+      "keyframes": [],
+      "wiggle": [],
+      "motion_blur": null
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | `null` | Animation preset name (e.g. `"fade_in_up"`) |
+| `delay` | f64 | `0` | Delay before animation starts (seconds) |
+| `duration` | f64 | `0.8` | Animation duration (seconds) |
+| `loop` | bool | `false` | Loop the animation continuously |
+| `keyframes` | array | `[]` | Custom keyframe animations |
+| `wiggle` | array | `null` | Procedural noise-based animation |
+| `motion_blur` | f32 | `null` | Motion blur intensity |
 
 #### Glow Effect
 
@@ -441,7 +451,6 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 {
   "type": "text",
   "content": "Hello World",
-  "position": { "x": 100, "y": 100 },
   "max_width": 800,
   "style": {
     "font-size": 48,
@@ -455,7 +464,7 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 }
 ```
 
-**Root fields:** `content` (required), `position`, `max_width`
+**Root fields:** `content` (required), `max_width`
 
 | Style field       | Type     | Default    |
 | ----------------- | -------- | ---------- |
@@ -477,7 +486,6 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 {
   "type": "shape",
   "shape": "rounded_rect",
-  "position": { "x": 50, "y": 50 },
   "size": { "width": 200, "height": 100 },
   "style": {
     "fill": "#FF5733",
@@ -487,7 +495,7 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 }
 ```
 
-**Root fields:** `shape` (required), `position`, `size`, `text`
+**Root fields:** `shape` (required), `size`, `text`
 
 | Style field     | Type               | Default     |
 | --------------- | ------------------ | ----------- |
@@ -534,7 +542,6 @@ Types: `linear`, `radial`.
 {
   "type": "image",
   "src": "path/to/image.png",
-  "position": { "x": 0, "y": 0 },
   "size": { "width": 400, "height": 300 },
   "fit": "cover"
 }
@@ -553,7 +560,6 @@ Types: `linear`, `radial`.
 {
   "type": "svg",
   "data": "<svg>...</svg>",
-  "position": { "x": 0, "y": 0 },
   "size": { "width": 200, "height": 200 }
 }
 ```
@@ -573,7 +579,6 @@ Renders an icon from the Iconify library. See Rule 11.
 {
   "type": "icon",
   "icon": "lucide:home",
-  "position": { "x": 540, "y": 400 },
   "size": { "width": 64, "height": 64 },
   "style": { "color": "#38bdf8" }
 }
@@ -593,7 +598,6 @@ Style: `color` (default `"#FFFFFF"`)
 {
   "type": "video",
   "src": "path/to/video.mp4",
-  "position": { "x": 0, "y": 0 },
   "size": { "width": 1920, "height": 1080 },
   "trim_start": 2.0,
   "trim_end": 10.0
@@ -618,7 +622,6 @@ Style: `color` (default `"#FFFFFF"`)
 {
   "type": "gif",
   "src": "path/to/animation.gif",
-  "position": { "x": 100, "y": 100 },
   "size": { "width": 200, "height": 200 }
 }
 ```
@@ -642,7 +645,6 @@ Timed word-by-word captions with active word highlighting.
     { "text": "Hello", "start": 0.0, "end": 0.5 },
     { "text": "World", "start": 0.5, "end": 1.0 }
   ],
-  "position": { "x": 540, "y": 1600 },
   "mode": "highlight",
   "max_width": 900,
   "style": { "font-size": 48, "color": "#FFFFFF" }
@@ -672,14 +674,13 @@ Animated number counter. See Rule 4: must be standalone.
   "separator": " ",
   "suffix": "€",
   "easing": "ease_out",
-  "position": { "x": 540, "y": 960 },
   "start_at": 0.5,
   "end_at": 2.5,
   "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
 }
 ```
 
-**Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`, `position`
+**Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`
 
 **Easing options:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 
@@ -768,7 +769,7 @@ Each dimension of `size` can be a number or `"auto"`.
 - `grid-column` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 - `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 
-Children `position` is ignored in flex flow — the card computes layout from style properties.
+`position` is only valid inside `positioned` containers. Card children are laid out using flex/grid style properties.
 
 ### 12. `codeblock`
 
@@ -780,7 +781,6 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
   "code": "fn main() {\n    println!(\"Hello\");\n}",
   "language": "rust",
   "theme": "base16-ocean.dark",
-  "position": { "x": 200, "y": 150 },
   "show_line_numbers": true,
   "chrome": { "enabled": true, "title": "main.rs" },
   "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
@@ -796,7 +796,7 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 }
 ```
 
-**Root fields:** `code` (required), `language`, `theme`, `position`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
+**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
 
 | Style field     | Type   | Default              |
 | --------------- | ------ | -------------------- |
@@ -818,16 +818,20 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 
 ```json
 {
-  "animations": [
-    {
-      "property": "opacity",
+  "style": {
+    "animation": {
       "keyframes": [
-        { "time": 0.0, "value": 0.0 },
-        { "time": 0.5, "value": 1.0 }
-      ],
-      "easing": "ease_out"
+        {
+          "property": "opacity",
+          "keyframes": [
+            { "time": 0.0, "value": 0.0 },
+            { "time": 0.5, "value": 1.0 }
+          ],
+          "easing": "ease_out"
+        }
+      ]
     }
-  ]
+  }
 }
 ```
 
@@ -849,8 +853,9 @@ See Rule 13 for usage guidance.
 
 ```json
 {
-  "preset": "fade_in_up",
-  "preset_config": { "delay": 0.2, "duration": 0.8, "loop": false }
+  "style": {
+    "animation": { "name": "fade_in_up", "delay": 0.2, "duration": 0.8, "loop": false }
+  }
 }
 ```
 
@@ -860,7 +865,7 @@ See Rule 13 for usage guidance.
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Entrances  | `fade_in`, `fade_in_up`, `fade_in_down`, `fade_in_left`, `fade_in_right`, `slide_in_left`, `slide_in_right`, `slide_in_up`, `slide_in_down`, `scale_in`, `bounce_in`, `blur_in`, `rotate_in`, `elastic_in` |
 | Exits      | `fade_out`, `fade_out_up`, `fade_out_down`, `slide_out_left`, `slide_out_right`, `slide_out_up`, `slide_out_down`, `scale_out`, `bounce_out`, `blur_out`, `rotate_out`                                     |
-| Continuous | `pulse`, `float`, `shake`, `spin` (use `"loop": true` — see Rule 9)                                                                                                                                       |
+| Continuous | `pulse`, `float`, `shake`, `spin` (use `"loop": true` in animation config — see Rule 9)                                                                                                                    |
 | Special    | `typewriter`, `wipe_left`, `wipe_right`                                                                                                                                                                    |
 
 #### Wiggle (Procedural Noise)
@@ -869,10 +874,14 @@ See Rule 12 for combining with presets.
 
 ```json
 {
-  "wiggle": [
-    { "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
-    { "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13, "decay": 0.6 }
-  ]
+  "style": {
+    "animation": {
+      "wiggle": [
+        { "property": "translate_x", "amplitude": 5, "frequency": 3, "seed": 42 },
+        { "property": "rotation", "amplitude": 8, "frequency": 4, "seed": 13, "decay": 0.6 }
+      ]
+    }
+  }
 }
 ```
 

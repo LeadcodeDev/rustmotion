@@ -3,19 +3,26 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect, TextBlob};
 
+/// Resolve `line-height`: values <= 10 are treated as a multiplier (CSS-like),
+/// values > 10 are absolute pixels.
+fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
+    match line_height {
+        Some(v) if v <= 10.0 => font_size * v,
+        Some(v) => v,
+        None => font_size * 1.3,
+    }
+}
+
 use crate::engine::renderer::{font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
-use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
+use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
     pub content: String,
     #[serde(default)]
     pub max_width: Option<f32>,
-    // Composed behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -23,7 +30,7 @@ pub struct Text {
 }
 
 crate::impl_traits!(Text {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });
@@ -36,7 +43,7 @@ impl Widget for Text {
         let font_weight = self.style.font_weight_or(FontWeight::Normal);
         let font_style_type = self.style.font_style_or(FontStyleType::Normal);
         let align = self.style.text_align_or(TextAlign::Left);
-        let line_height_val = self.style.line_height.unwrap_or(font_size * 1.3);
+        let line_height_val = resolve_line_height(self.style.line_height, font_size);
         let letter_spacing = self.style.letter_spacing.unwrap_or(0.0);
 
         let fm = font_mgr();
@@ -218,12 +225,19 @@ impl Widget for Text {
             .unwrap_or_else(|| fm.match_family_style("sans-serif", skia_font_style).unwrap());
         let font = Font::from_typeface(typeface, font_size);
         let lines = wrap_text(&self.content, &font, self.max_width);
-        let line_height_val = self.style.line_height.unwrap_or(font_size * 1.3);
-        let max_w = lines.iter().map(|l| {
+        let line_height_val = resolve_line_height(self.style.line_height, font_size);
+        let mut max_w = lines.iter().map(|l| {
             let (w, _) = font.measure_str(l, None);
             w
         }).fold(0.0f32, f32::max);
-        let h = lines.len() as f32 * line_height_val;
+        let mut h = lines.len() as f32 * line_height_val;
+
+        // Account for text-background padding in measurement
+        if let Some(ref bg) = self.style.text_background {
+            max_w += bg.padding * 2.0;
+            h += bg.padding;
+        }
+
         (max_w, h)
     }
 }

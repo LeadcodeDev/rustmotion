@@ -7,7 +7,7 @@ use crate::engine::renderer::paint_from_hex;
 use crate::layout::{layout_flex, layout_grid_with_config, Constraints, LayoutNode};
 use crate::schema::{CardDisplay, LayerStyle};
 use crate::traits::{
-    AnimationConfig, Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
+    Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
     FlexContainerMut, GridConfig, RenderContext, Rounded, RoundedMut, Shadow, Shadowed,
     ShadowedMut, TimingConfig, Widget,
 };
@@ -23,9 +23,6 @@ pub struct Card {
     pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub size: Option<FlexSize>,
-    // Behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -33,7 +30,7 @@ pub struct Card {
 }
 
 crate::impl_traits!(Card {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });
@@ -148,14 +145,19 @@ impl Widget for Card {
             canvas.draw_rrect(rrect, &bg_paint);
         }
 
-        // 3. Clip to rounded rect for children
-        canvas.save();
-        canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
+        // 3. Clip to rounded rect for children (only when card has a visible background)
+        let should_clip = self.style.background.is_some();
+        if should_clip {
+            canvas.save();
+            canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
+        }
 
         // 4. Render children with animation support
         crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
 
-        canvas.restore();
+        if should_clip {
+            canvas.restore();
+        }
 
         // 5. Border
         if let Some(ref border) = self.style.border {

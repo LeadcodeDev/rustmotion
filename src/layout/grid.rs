@@ -5,7 +5,12 @@ use super::{Constraints, LayoutNode};
 
 /// Helper to get per-child grid placement from the child's component style.
 fn child_grid_column(child: &ChildComponent) -> Option<&crate::schema::GridPlacement> {
-    child.component.as_styled().style_config().grid_column.as_ref()
+    child
+        .component
+        .as_styled()
+        .style_config()
+        .grid_column
+        .as_ref()
 }
 fn child_grid_row(child: &ChildComponent) -> Option<&crate::schema::GridPlacement> {
     child.component.as_styled().style_config().grid_row.as_ref()
@@ -16,9 +21,14 @@ fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32
     let widget = child.component.as_widget();
     let styled = child.component.as_styled();
     let (w, h) = widget.measure(constraints);
-    let (pt, pr, pb, pl) = styled.padding();
-    let (mt, mr, mb, ml) = styled.margin();
-    (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    if child.component.is_container() {
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + ml + mr, h + mt + mb)
+    } else {
+        let (pt, pr, pb, pl) = styled.padding();
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    }
 }
 
 /// Compute layout for a grid container's children.
@@ -73,10 +83,7 @@ pub fn layout_grid_with_config(
         .grid_template_columns
         .as_deref()
         .unwrap_or(&default_col);
-    let row_tracks = config
-        .grid_template_rows
-        .as_deref()
-        .unwrap_or(&default_row);
+    let row_tracks = config.grid_template_rows.as_deref().unwrap_or(&default_row);
 
     let num_cols = col_tracks.len().max(1);
     let num_rows = row_tracks.len().max(1);
@@ -96,20 +103,10 @@ pub fn layout_grid_with_config(
     for child in children {
         let gc = child_grid_column(child);
         let gr = child_grid_row(child);
-        let col_start = gc
-            .and_then(|g| g.start)
-            .map(|s| (s - 1).max(0) as usize);
-        let row_start = gr
-            .and_then(|g| g.start)
-            .map(|s| (s - 1).max(0) as usize);
-        let col_span = gc
-            .and_then(|g| g.span)
-            .unwrap_or(1)
-            .max(1) as usize;
-        let row_span = gr
-            .and_then(|g| g.span)
-            .unwrap_or(1)
-            .max(1) as usize;
+        let col_start = gc.and_then(|g| g.start).map(|s| (s - 1).max(0) as usize);
+        let row_start = gr.and_then(|g| g.start).map(|s| (s - 1).max(0) as usize);
+        let col_span = gc.and_then(|g| g.span).unwrap_or(1).max(1) as usize;
+        let row_span = gr.and_then(|g| g.span).unwrap_or(1).max(1) as usize;
 
         if let (Some(c), Some(r)) = (col_start, row_start) {
             let c = c.min(num_cols - 1);
@@ -228,15 +225,20 @@ pub fn layout_grid_with_config(
         child_nodes.push(LayoutNode::new(pl + x + cx, pt + y + cy, w, h));
     }
 
-    let total_w = if constraints.has_bounded_width() {
+    let content_w = col_offsets[num_cols] - config.gap + pl + pr;
+    let content_h = row_offsets[actual_num_rows] - config.gap + pt + pb;
+    // Use fixed size when constraints are tight (min == max), otherwise fit content.
+    // This matches layout_flex behavior and allows auto-sized grid containers
+    // to shrink-wrap their content (important for justify_content centering).
+    let total_w = if constraints.min_width == constraints.max_width {
         constraints.max_width
     } else {
-        col_offsets[num_cols] - config.gap + pl + pr
+        content_w.min(constraints.max_width)
     };
-    let total_h = if constraints.has_bounded_height() {
+    let total_h = if constraints.min_height == constraints.max_height {
         constraints.max_height
     } else {
-        row_offsets[actual_num_rows] - config.gap + pt + pb
+        content_h.min(constraints.max_height)
     };
 
     let flat = LayoutNode::new(0.0, 0.0, total_w, total_h).with_children(child_nodes);
@@ -294,7 +296,11 @@ fn resolve_tracks(
             GridTrack::Auto => {
                 let mut max_size = 0.0f32;
                 for (ci, &(col, row, col_span, row_span)) in placements.iter().enumerate() {
-                    let (track_start, span) = if is_col { (col, col_span) } else { (row, row_span) };
+                    let (track_start, span) = if is_col {
+                        (col, col_span)
+                    } else {
+                        (row, row_span)
+                    };
                     if track_start == i && span == 1 {
                         let s = if is_col {
                             child_sizes[ci].0
@@ -350,10 +356,12 @@ mod tests {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
-                size: Size { width: w, height: h },
+                size: Size {
+                    width: w,
+                    height: h,
+                },
                 text: None,
                 style: LayerStyle::default(),
-                animation: Default::default(),
                 timing: Default::default(),
             }),
             position: None,
@@ -387,7 +395,6 @@ mod tests {
         GridComponent {
             children,
             size: None,
-            animation: Default::default(),
             timing: Default::default(),
             style,
         }
@@ -396,7 +403,11 @@ mod tests {
     #[test]
     fn test_grid_2_cols_fr() {
         let grid = make_grid(
-            vec![shape_child(50.0, 50.0), shape_child(50.0, 50.0), shape_child(50.0, 50.0)],
+            vec![
+                shape_child(50.0, 50.0),
+                shape_child(50.0, 50.0),
+                shape_child(50.0, 50.0),
+            ],
             vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
         );
         let constraints = Constraints::tight(400.0, 300.0);

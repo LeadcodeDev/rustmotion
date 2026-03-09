@@ -7,7 +7,7 @@ use crate::engine::renderer::paint_from_hex;
 use crate::layout::{layout_flex, Constraints, LayoutNode};
 use crate::schema::{LayerStyle, SizeDimension};
 use crate::traits::{
-    AnimationConfig, Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
+    Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
     FlexContainerMut, RenderContext, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut,
     TimingConfig, Widget,
 };
@@ -28,9 +28,6 @@ pub struct Flex {
     pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub size: Option<FlexSize>,
-    // Behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -38,7 +35,7 @@ pub struct Flex {
 }
 
 crate::impl_traits!(Flex {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });
@@ -181,19 +178,25 @@ impl Widget for Flex {
 }
 
 /// Resolve FlexSize dimensions into constraints.
+///
+/// - `Fixed(v)` → tight (min=max=v)
+/// - `Auto` → loose (min=0, max=parent.max) — fits content
+/// - `None` / `Percent` → inherits parent constraints unchanged
 pub(crate) fn resolve_size_constraints(size: &Option<FlexSize>, constraints: &Constraints) -> Constraints {
-    let w = size.as_ref().and_then(|s| match &s.width {
-        SizeDimension::Fixed(v) => Some(*v),
-        SizeDimension::Percent(_) | SizeDimension::Auto => None,
-    });
-    let h = size.as_ref().and_then(|s| match &s.height {
-        SizeDimension::Fixed(v) => Some(*v),
-        SizeDimension::Percent(_) | SizeDimension::Auto => None,
-    });
+    let (w_min, w_max) = match size.as_ref().map(|s| &s.width) {
+        Some(SizeDimension::Fixed(v)) => (*v, *v),
+        Some(SizeDimension::Auto) => (0.0, constraints.max_width),
+        _ => (constraints.min_width, constraints.max_width),
+    };
+    let (h_min, h_max) = match size.as_ref().map(|s| &s.height) {
+        Some(SizeDimension::Fixed(v)) => (*v, *v),
+        Some(SizeDimension::Auto) => (0.0, constraints.max_height),
+        _ => (constraints.min_height, constraints.max_height),
+    };
     Constraints {
-        min_width: w.unwrap_or(constraints.min_width),
-        max_width: w.unwrap_or(constraints.max_width),
-        min_height: h.unwrap_or(constraints.min_height),
-        max_height: h.unwrap_or(constraints.max_height),
+        min_width: w_min,
+        max_width: w_max,
+        min_height: h_min,
+        max_height: h_max,
     }
 }

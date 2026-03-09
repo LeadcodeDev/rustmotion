@@ -39,7 +39,6 @@ pub struct Scenario {
 /// A scenario with all includes expanded — safe to pass to the rendering pipeline.
 #[derive(Debug)]
 pub struct ResolvedScenario {
-    pub version: String,
     pub video: VideoConfig,
     pub audio: Vec<AudioTrack>,
     pub fonts: Vec<FontEntry>,
@@ -300,6 +299,64 @@ pub struct GridPlacement {
     pub span: Option<u32>,
 }
 
+// --- Animation style (nested inside LayerStyle) ---
+
+/// Animation configuration for a component.
+/// Placed under `style.animation` in JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AnimationStyle {
+    /// Preset animation name (e.g. "fade_in_up", "scale_in").
+    #[serde(default)]
+    pub name: Option<AnimationPreset>,
+    /// Delay before animation starts (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// Animation duration (seconds).
+    #[serde(default = "default_animation_duration")]
+    pub duration: f64,
+    /// Loop the animation continuously.
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+    /// Custom keyframe animations.
+    #[serde(default)]
+    pub keyframes: Vec<Animation>,
+    /// Procedural noise-based wiggle effects.
+    #[serde(default)]
+    pub wiggle: Option<Vec<WiggleConfig>>,
+    /// Motion blur intensity.
+    #[serde(default)]
+    pub motion_blur: Option<f32>,
+}
+
+fn default_animation_duration() -> f64 {
+    0.8
+}
+
+impl Default for AnimationStyle {
+    fn default() -> Self {
+        Self {
+            name: None,
+            delay: 0.0,
+            duration: 0.8,
+            repeat: false,
+            keyframes: Vec::new(),
+            wiggle: None,
+            motion_blur: None,
+        }
+    }
+}
+
+impl AnimationStyle {
+    /// Build a PresetConfig for compatibility with resolve_animations.
+    pub fn preset_config(&self) -> PresetConfig {
+        PresetConfig {
+            delay: self.delay,
+            duration: self.duration,
+            repeat: self.repeat,
+        }
+    }
+}
+
 // --- Unified LayerStyle ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -393,6 +450,9 @@ pub struct LayerStyle {
     pub aspect_ratio: Option<f32>,
     #[serde(default, rename = "text-gradient")]
     pub text_gradient: Option<TextGradient>,
+    // Animation
+    #[serde(default)]
+    pub animation: Option<AnimationStyle>,
 }
 
 impl Default for LayerStyle {
@@ -438,6 +498,7 @@ impl Default for LayerStyle {
             clip_path: None,
             aspect_ratio: None,
             text_gradient: None,
+            animation: None,
         }
     }
 }

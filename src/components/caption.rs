@@ -6,7 +6,7 @@ use skia_safe::{Canvas, Font, FontStyle, Rect, TextBlob};
 use crate::engine::renderer::{font_mgr, paint_from_hex};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{CaptionStyle, CaptionWord, LayerStyle};
-use crate::traits::{AnimationConfig, RenderContext, Widget};
+use crate::traits::{RenderContext, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Caption {
@@ -17,15 +17,12 @@ pub struct Caption {
     pub mode: CaptionStyle,
     #[serde(default)]
     pub max_width: Option<f32>,
-    // Caption supports animation (presets) but not timed visibility
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(default)]
     pub style: LayerStyle,
 }
 
 crate::impl_traits!(Caption {
-    Animatable => animation,
+    Animatable => style,
     Styled => style,
 });
 

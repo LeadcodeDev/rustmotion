@@ -18,7 +18,6 @@
   "type": "counter",
   "from": 0,
   "to": 100,
-  "position": { "x": 540, "y": 960 },
   "start_at": 0.5,
   "end_at": 2.5,
   "easing": "ease_out",

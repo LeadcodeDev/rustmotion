@@ -6,7 +6,7 @@ use skia_safe::{Canvas, Paint, PaintStyle, Point};
 use crate::engine::renderer::{color4f_from_hex, draw_shape_path, font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
-use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
+use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Shape {
@@ -16,15 +16,13 @@ pub struct Shape {
     #[serde(default)]
     pub text: Option<ShapeText>,
     #[serde(flatten)]
-    pub animation: AnimationConfig,
-    #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: LayerStyle,
 }
 
 crate::impl_traits!(Shape {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });
@@ -155,7 +153,11 @@ fn render_shape_text(
     let font = skia_safe::Font::from_typeface(typeface, text.font_size);
     let (_strike_width, metrics) = font.metrics();
     let ascent = -metrics.ascent;
-    let line_height = text.line_height.unwrap_or(text.font_size * 1.3);
+    let line_height = match text.line_height {
+        Some(v) if v <= 10.0 => text.font_size * v,
+        Some(v) => v,
+        None => text.font_size * 1.3,
+    };
     let letter_spacing = text.letter_spacing.unwrap_or(0.0);
 
     let lines = wrap_text(&text.content, &font, Some(area_w));

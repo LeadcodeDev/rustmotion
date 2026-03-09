@@ -64,16 +64,21 @@ fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32
     let widget = child.component.as_widget();
     let styled = child.component.as_styled();
     let (w, h) = widget.measure(constraints);
-    let (pt, pr, pb, pl) = styled.padding();
-    let (mt, mr, mb, ml) = styled.margin();
-    (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    if child.component.is_container() {
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + ml + mr, h + mt + mb)
+    } else {
+        let (pt, pr, pb, pl) = styled.padding();
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::shape::Shape;
     use crate::components::positioned::Positioned;
+    use crate::components::shape::Shape;
     use crate::components::{ChildComponent, Component, PositionMode};
     use crate::schema::{LayerStyle, ShapeType, Size};
 
@@ -81,10 +86,12 @@ mod tests {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
-                size: Size { width: w, height: h },
+                size: Size {
+                    width: w,
+                    height: h,
+                },
                 text: None,
                 style: LayerStyle::default(),
-                animation: Default::default(),
                 timing: Default::default(),
             }),
             position: Some(PositionMode::Absolute { x, y }),

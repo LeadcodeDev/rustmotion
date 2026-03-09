@@ -1,19 +1,23 @@
 # Rule: Wiggle Is Additive
 
-Wiggle offsets apply additively on top of keyframe animations and presets. Combine a preset entrance with wiggle for ongoing procedural motion.
+Wiggle offsets apply additively on top of keyframe animations and presets. Combine a preset entrance with wiggle for ongoing procedural motion. Both are configured inside `style.animation`.
 
 **GOOD** (fade in, then gently float):
 ```json
 {
   "type": "text",
   "content": "Floating text",
-  "position": { "x": 540, "y": 960 },
-  "preset": "fade_in_up",
-  "preset_config": { "delay": 0.2, "duration": 0.8 },
-  "wiggle": [
-    { "property": "translate_y", "amplitude": 5, "frequency": 2, "seed": 42 }
-  ],
-  "style": { "font-size": 48, "color": "#FFFFFF" }
+  "style": {
+    "font-size": 48, "color": "#FFFFFF",
+    "animation": {
+      "name": "fade_in_up",
+      "delay": 0.2,
+      "duration": 0.8,
+      "wiggle": [
+        { "property": "translate_y", "amplitude": 5, "frequency": 2, "seed": 42 }
+      ]
+    }
+  }
 }
 ```
 
@@ -22,13 +26,16 @@ Wiggle offsets apply additively on top of keyframe animations and presets. Combi
 {
   "type": "icon",
   "icon": "lucide:phone-off",
-  "position": { "x": 540, "y": 960 },
-  "preset": "scale_in",
-  "wiggle": [
-    { "property": "translate_x", "amplitude": 12, "frequency": 90, "mode": "sine" },
-    { "property": "rotation", "amplitude": 8, "frequency": 75, "mode": "sine" }
-  ],
-  "style": { "size": 64, "color": "#FFFFFF" }
+  "style": {
+    "size": 64, "color": "#FFFFFF",
+    "animation": {
+      "name": "scale_in",
+      "wiggle": [
+        { "property": "translate_x", "amplitude": 12, "frequency": 90, "mode": "sine" },
+        { "property": "rotation", "amplitude": 8, "frequency": 75, "mode": "sine" }
+      ]
+    }
+  }
 }
 ```
 

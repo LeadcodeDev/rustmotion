@@ -20,7 +20,6 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
     let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio)?;
 
     Ok(ResolvedScenario {
-        version: scenario.version,
         video: scenario.video,
         audio,
         fonts: scenario.fonts,

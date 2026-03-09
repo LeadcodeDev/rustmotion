@@ -1,8 +1,8 @@
 use anyhow::Result;
-use skia_safe::{surfaces, Canvas, ColorType, Font, FontStyle, ImageInfo, Paint};
+use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
 
 use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
-use super::renderer::{color4f_from_hex, font_mgr};
+use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{Layer, LayerStyle, Scene, SceneLayout, VideoConfig};
@@ -41,47 +41,50 @@ pub fn render_component(
 
     // 2. Resolve animations
     let props = if let Some(animatable) = component.as_animatable() {
-        let config = animatable.animation_config();
-
-        // Adjust animation time by start_at offset
-        let anim_time = if let Some(timed) = component.as_timed() {
-            let (start_at, _) = timed.timing();
-            if let Some(start) = start_at {
-                ctx.time - start
+        if let Some(config) = animatable.animation_style() {
+            // Adjust animation time by start_at offset
+            let anim_time = if let Some(timed) = component.as_timed() {
+                let (start_at, _) = timed.timing();
+                if let Some(start) = start_at {
+                    ctx.time - start
+                } else {
+                    ctx.time
+                }
             } else {
                 ctx.time
+            };
+
+            let preset_config = config.preset_config();
+            let mut props = resolve_animations(
+                &config.keyframes,
+                config.name.as_ref(),
+                Some(&preset_config),
+                anim_time,
+                ctx.scene_duration,
+            );
+
+            // Apply wiggles additively (using original time, not adjusted time)
+            if let Some(ref wiggles) = config.wiggle {
+                apply_wiggles(&mut props, wiggles, ctx.time);
             }
+
+            // Handle motion blur
+            if let Some(blur_intensity) = config.motion_blur {
+                if blur_intensity > 0.01 {
+                    return render_component_with_motion_blur(
+                        canvas,
+                        child,
+                        layout,
+                        ctx,
+                        blur_intensity,
+                    );
+                }
+            }
+
+            props
         } else {
-            ctx.time
-        };
-
-        let mut props = resolve_animations(
-            &config.animations,
-            config.preset.as_ref(),
-            config.preset_config.as_ref(),
-            anim_time,
-            ctx.scene_duration,
-        );
-
-        // Apply wiggles additively (using original time, not adjusted time)
-        if let Some(ref wiggles) = config.wiggle {
-            apply_wiggles(&mut props, wiggles, ctx.time);
+            AnimatedProperties::default()
         }
-
-        // Handle motion blur
-        if let Some(blur_intensity) = config.motion_blur {
-            if blur_intensity > 0.01 {
-                return render_component_with_motion_blur(
-                    canvas,
-                    child,
-                    layout,
-                    ctx,
-                    blur_intensity,
-                );
-            }
-        }
-
-        props
     } else {
         AnimatedProperties::default()
     };
@@ -134,10 +137,12 @@ fn render_component_inner(
         canvas.translate((ml, mt));
     }
 
-    // Padding inset
-    let (pad_t, _pad_r, _pad_b, pad_l) = styled.padding();
-    if pad_t.abs() > 0.001 || pad_l.abs() > 0.001 {
-        canvas.translate((pad_l, pad_t));
+    // Padding inset (only for leaf widgets; containers handle padding internally)
+    if !component.is_container() {
+        let (pad_t, _pad_r, _pad_b, pad_l) = styled.padding();
+        if pad_t.abs() > 0.001 || pad_l.abs() > 0.001 {
+            canvas.translate((pad_l, pad_t));
+        }
     }
 
     // Build image filter chain (blur only)
@@ -246,18 +251,22 @@ fn render_component_with_motion_blur(
         };
 
         let mut props = if let Some(animatable) = component.as_animatable() {
-            let anim_config = animatable.animation_config();
-            let mut p = resolve_animations(
-                &anim_config.animations,
-                anim_config.preset.as_ref(),
-                anim_config.preset_config.as_ref(),
-                anim_time,
-                ctx.scene_duration,
-            );
-            if let Some(ref wiggles) = anim_config.wiggle {
-                apply_wiggles(&mut p, wiggles, sample_time);
+            if let Some(anim_config) = animatable.animation_style() {
+                let preset_config = anim_config.preset_config();
+                let mut p = resolve_animations(
+                    &anim_config.keyframes,
+                    anim_config.name.as_ref(),
+                    Some(&preset_config),
+                    anim_time,
+                    ctx.scene_duration,
+                );
+                if let Some(ref wiggles) = anim_config.wiggle {
+                    apply_wiggles(&mut p, wiggles, sample_time);
+                }
+                p
+            } else {
+                AnimatedProperties::default()
             }
-            p
         } else {
             AnimatedProperties::default()
         };
@@ -363,62 +372,6 @@ pub fn render_frame_v2(
     Ok(pixels)
 }
 
-/// Compute baseline offset for a Text component.
-/// This matches the centering logic in Text::render(): (line_height + ascent - descent) / 2.
-fn compute_text_baseline_offset(text: &crate::components::text::Text) -> f32 {
-    let fm = font_mgr();
-    let font_size = text.style.font_size_or(48.0);
-    let font_weight = text.style.font_weight_or(crate::schema::FontWeight::Normal);
-    let font_style_type = text.style.font_style_or(crate::schema::FontStyleType::Normal);
-    let font_family = text.style.font_family_or("Inter");
-    let weight = match font_weight {
-        crate::schema::FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-        crate::schema::FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-        crate::schema::FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
-    };
-    let slant = match font_style_type {
-        crate::schema::FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
-        crate::schema::FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
-        crate::schema::FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
-    };
-    let font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
-    let typeface = fm
-        .match_family_style(font_family, font_style)
-        .or_else(|| fm.match_family_style("Helvetica", font_style))
-        .or_else(|| fm.match_family_style("Arial", font_style))
-        .unwrap_or_else(|| fm.match_family_style("sans-serif", font_style).unwrap());
-    let font = Font::from_typeface(typeface, font_size);
-    let (_, metrics) = font.metrics();
-    let ascent = -metrics.ascent;
-    let descent = metrics.descent;
-    let line_height = text.style.line_height.unwrap_or(font_size * 1.3);
-    (line_height + ascent - descent) / 2.0
-}
-
-/// Compute baseline offset for a Counter component (used for v1 baseline compatibility).
-fn compute_counter_baseline_offset(counter: &crate::components::counter::Counter) -> f32 {
-    let fm = font_mgr();
-    let font_size = counter.style.font_size_or(48.0);
-    let font_weight = counter.style.font_weight_or(crate::schema::FontWeight::Normal);
-    let font_family = counter.style.font_family_or("Inter");
-    let font_style = match font_weight {
-        crate::schema::FontWeight::Bold => FontStyle::bold(),
-        crate::schema::FontWeight::Normal => FontStyle::normal(),
-        crate::schema::FontWeight::Weight(w) => FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
-    };
-    let typeface = fm
-        .match_family_style(font_family, font_style)
-        .or_else(|| fm.match_family_style("Helvetica", font_style))
-        .or_else(|| fm.match_family_style("Arial", font_style))
-        .unwrap_or_else(|| fm.match_family_style("sans-serif", font_style).unwrap());
-    let font = Font::from_typeface(typeface, font_size);
-    let (_, metrics) = font.metrics();
-    let ascent = -metrics.ascent;
-    let descent = metrics.descent;
-    let line_height = font_size * 1.3;
-    (line_height + ascent - descent) / 2.0
-}
-
 /// Adapter that wraps root-level children as a flex container.
 /// This lets us reuse `layout_flex` for scene-level layout.
 struct RootContainer<'a> {
@@ -460,9 +413,8 @@ impl<'a> RootContainer<'a> {
 
 /// Compute the layout tree for a set of root-level ChildComponents.
 /// Uses an implicit flex container at video dimensions (like a full-screen web page).
-/// Children without `position` participate in flex flow; children with `position` are absolute.
-/// For v1 backward-compatibility, standalone text with `position` uses position.x as the
-/// alignment anchor (center point for center-aligned, right edge for right-aligned).
+/// All root children participate in flex flow (position is stripped before layout).
+/// Only children inside `Positioned` containers use absolute coordinates.
 pub fn compute_root_layout(
     children: &[ChildComponent],
     config: &VideoConfig,
@@ -470,52 +422,7 @@ pub fn compute_root_layout(
 ) -> LayoutNode {
     let constraints = Constraints::tight(config.width as f32, config.height as f32);
     let root = RootContainer::new(children, scene_layout);
-
-    // Use flex layout — absolute children are handled by layout_flex,
-    // flow children participate in flex.
-    let mut layout = crate::layout::flex::layout_flex(&root, &constraints);
-
-    // v1 compatibility: apply baseline corrections for absolute text/counter children
-    for (i, child) in children.iter().enumerate() {
-        if i >= layout.children.len() {
-            break;
-        }
-        // Only correct absolute-positioned children (flow children are managed by flex)
-        if child.absolute_position().is_none() {
-            continue;
-        }
-        match &child.component {
-            crate::components::Component::Text(ref text) => {
-                match text.style.text_align_or(crate::schema::TextAlign::Left) {
-                    crate::schema::TextAlign::Center => {
-                        layout.children[i].x -= layout.children[i].width / 2.0;
-                    }
-                    crate::schema::TextAlign::Right => {
-                        layout.children[i].x -= layout.children[i].width;
-                    }
-                    crate::schema::TextAlign::Left => {}
-                }
-                let baseline_offset = compute_text_baseline_offset(text);
-                layout.children[i].y -= baseline_offset;
-            }
-            crate::components::Component::Counter(ref counter) => {
-                match counter.style.text_align_or(crate::schema::TextAlign::Left) {
-                    crate::schema::TextAlign::Center => {
-                        layout.children[i].x -= layout.children[i].width / 2.0;
-                    }
-                    crate::schema::TextAlign::Right => {
-                        layout.children[i].x -= layout.children[i].width;
-                    }
-                    crate::schema::TextAlign::Left => {}
-                }
-                let baseline_offset = compute_counter_baseline_offset(counter);
-                layout.children[i].y -= baseline_offset;
-            }
-            _ => {}
-        }
-    }
-
-    layout
+    crate::layout::flex::layout_flex(&root, &constraints)
 }
 
 /// Convert v1 layers to v2 ChildComponents using serde round-trip.
@@ -523,27 +430,38 @@ pub fn compute_root_layout(
 pub fn convert_layers_to_components(layers: &[Layer]) -> Result<Vec<ChildComponent>> {
     let json = serde_json::to_value(layers)?;
     let mut children: Vec<ChildComponent> = serde_json::from_value(json)?;
-    // v1 layers always serialize `position: {x:0, y:0}` even when default.
-    // In v2, this incorrectly makes container children absolute-positioned.
-    // Strip default positions from children of containers recursively.
+    // Strip position from all children except inside Positioned containers.
+    // Root children flow in the implicit scene flex container.
     for child in &mut children {
-        strip_default_positions_in_containers(child);
+        child.position = None;
+        child.x = None;
+        child.y = None;
+        strip_positions_except_positioned(child);
     }
     Ok(children)
 }
 
-/// Recursively strip `position: Some(Absolute{0,0})` from container children.
-/// This corrects the v1→v2 serde roundtrip: v1 default positions should become
-/// v2 flow layout (position = None), not absolute at (0,0).
-fn strip_default_positions_in_containers(child: &mut ChildComponent) {
-    if let Some(children) = child.component.children_mut() {
-        for c in children.iter_mut() {
-            if matches!(&c.position, Some(crate::components::PositionMode::Absolute { x, y }) if x.abs() < 0.001 && y.abs() < 0.001)
-            {
-                c.position = None;
+/// Recursively strip `position` from all container children,
+/// except children of `Positioned` containers (which need absolute coords).
+fn strip_positions_except_positioned(child: &mut ChildComponent) {
+    match &child.component {
+        crate::components::Component::Positioned(_) => {
+            // Positioned children keep their position — just recurse into grandchildren
+            if let Some(children) = child.component.children_mut() {
+                for c in children {
+                    strip_positions_except_positioned(c);
+                }
             }
-            // Recurse into nested containers
-            strip_default_positions_in_containers(c);
+        }
+        _ => {
+            if let Some(children) = child.component.children_mut() {
+                for c in children.iter_mut() {
+                    c.position = None;
+                    c.x = None;
+                    c.y = None;
+                    strip_positions_except_positioned(c);
+                }
+            }
         }
     }
 }

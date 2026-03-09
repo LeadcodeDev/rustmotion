@@ -8,7 +8,7 @@ use crate::schema::{
     CodeblockChrome, CodeblockHighlight, CodeblockReveal,
     CodeblockState, LayerStyle, Size,
 };
-use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
+use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Codeblock {
@@ -29,9 +29,6 @@ pub struct Codeblock {
     pub reveal: Option<CodeblockReveal>,
     #[serde(default)]
     pub states: Vec<CodeblockState>,
-    // Composed behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -39,7 +36,7 @@ pub struct Codeblock {
 }
 
 crate::impl_traits!(Codeblock {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });

@@ -33,13 +33,12 @@ Key patterns:
 - **Auto-height:** `"size": { "width": 800, "height": "auto" }`
 - **Grid:** `"display": "grid"` + `"grid-template-columns"`
 
-Children WITHOUT a `position` field participate in flex flow. Children WITH a `position` field become absolutely positioned within the card.
+Children flow in the flexbox. Use `positioned` container for absolute positioning.
 
 **GOOD** (icon + text row):
 ```json
 {
   "type": "card",
-  "position": { "x": 140, "y": 800 },
   "size": { "width": 800, "height": "auto" },
   "style": {
     "flex-direction": "row",

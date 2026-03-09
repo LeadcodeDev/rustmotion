@@ -19,7 +19,7 @@ pub mod timed;
 #[allow(dead_code)]
 pub mod widget;
 
-pub use animatable::{Animatable, AnimationConfig};
+pub use animatable::Animatable;
 pub use backgrounded::{Backgrounded, BackgroundedMut};
 pub use bordered::{Border, Bordered, BorderedMut};
 pub use clipped::Clipped;

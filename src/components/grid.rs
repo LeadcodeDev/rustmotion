@@ -7,7 +7,7 @@ use crate::engine::renderer::paint_from_hex;
 use crate::layout::{layout_grid, Constraints, LayoutNode};
 use crate::schema::LayerStyle;
 use crate::traits::{
-    AnimationConfig, Border, Bordered, BorderedMut, Container, GridConfig, GridContainer,
+    Border, Bordered, BorderedMut, Container, GridConfig, GridContainer,
     GridContainerMut, RenderContext, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut,
     TimingConfig, Widget,
 };
@@ -22,9 +22,6 @@ pub struct Grid {
     pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub size: Option<FlexSize>,
-    // Behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -32,7 +29,7 @@ pub struct Grid {
 }
 
 crate::impl_traits!(Grid {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });

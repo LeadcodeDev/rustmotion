@@ -6,7 +6,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use crate::engine::renderer::{asset_cache, fetch_icon_svg};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
-use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
+use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Icon {
@@ -15,15 +15,13 @@ pub struct Icon {
     #[serde(default)]
     pub size: Option<Size>,
     #[serde(flatten)]
-    pub animation: AnimationConfig,
-    #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: LayerStyle,
 }
 
 crate::impl_traits!(Icon {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });

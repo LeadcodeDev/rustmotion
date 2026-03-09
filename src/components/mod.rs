@@ -208,6 +208,11 @@ impl Component {
         }
     }
 
+    /// Returns true if this component is a container that handles padding internally.
+    pub fn is_container(&self) -> bool {
+        matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_))
+    }
+
     /// Returns a mutable reference to this component's children, if it has any.
     pub fn children_mut(&mut self) -> Option<&mut Vec<ChildComponent>> {
         match self {

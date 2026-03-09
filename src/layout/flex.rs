@@ -14,7 +14,12 @@ fn child_flex_shrink(child: &ChildComponent) -> Option<f32> {
     child.component.as_styled().style_config().flex_shrink
 }
 fn child_align_self(child: &ChildComponent) -> Option<Align> {
-    child.component.as_styled().style_config().align_self.clone()
+    child
+        .component
+        .as_styled()
+        .style_config()
+        .align_self
+        .clone()
 }
 
 /// Measure a single child component: widget measure + padding + margin.
@@ -22,9 +27,16 @@ fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32
     let widget = child.component.as_widget();
     let styled = child.component.as_styled();
     let (w, h) = widget.measure(constraints);
-    let (pt, pr, pb, pl) = styled.padding();
-    let (mt, mr, mb, ml) = styled.margin();
-    (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    // Containers (card, flex, grid) handle padding internally in their layout,
+    // so don't add it again here to avoid double-counting.
+    if child.component.is_container() {
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + ml + mr, h + mt + mb)
+    } else {
+        let (pt, pr, pb, pl) = styled.padding();
+        let (mt, mr, mb, ml) = styled.margin();
+        (w + pl + pr + ml + mr, h + pt + pb + mt + mb)
+    }
 }
 
 /// Recursively compute child layouts for container children.
@@ -79,10 +91,7 @@ pub fn layout_flex(
     let wrap = styled.flex_wrap_or(false);
 
     let is_row = matches!(direction, Direction::Row | Direction::RowReverse);
-    let is_reverse = matches!(
-        direction,
-        Direction::RowReverse | Direction::ColumnReverse
-    );
+    let is_reverse = matches!(direction, Direction::RowReverse | Direction::ColumnReverse);
 
     // Available content area
     let content_max_w = if constraints.has_bounded_width() {
@@ -128,15 +137,16 @@ pub fn layout_flex(
 
         // Compute content size
         let (content_w, content_h) = compute_content_size(&flow_sizes, is_row, gap);
-        let container_w = if constraints.has_bounded_width() {
+        // Use fixed size when constraints are tight (min == max), otherwise fit content
+        let container_w = if constraints.min_width == constraints.max_width {
             constraints.max_width
         } else {
-            content_w + pl + pr
+            (content_w + pl + pr).min(constraints.max_width)
         };
-        let container_h = if constraints.has_bounded_height() {
+        let container_h = if constraints.min_height == constraints.max_height {
             constraints.max_height
         } else {
-            content_h + pt + pb
+            (content_h + pt + pb).min(constraints.max_height)
         };
 
         let mut child_nodes = build_child_nodes(
@@ -212,13 +222,15 @@ pub fn layout_flex(
             let child_align_ref = child_as.as_ref().unwrap_or(&align);
 
             if is_row {
-                let (cross_pos, stretch_h) = align_item(line_sizes[j].1, line_cross, child_align_ref);
+                let (cross_pos, stretch_h) =
+                    align_item(line_sizes[j].1, line_cross, child_align_ref);
                 node.y = cross_offset + cross_pos;
                 if let Some(h) = stretch_h {
                     node.height = h;
                 }
             } else {
-                let (cross_pos, stretch_w) = align_item(line_sizes[j].0, line_cross, child_align_ref);
+                let (cross_pos, stretch_w) =
+                    align_item(line_sizes[j].0, line_cross, child_align_ref);
                 node.x = cross_offset + cross_pos;
                 if let Some(w) = stretch_w {
                     node.width = w;
@@ -248,7 +260,7 @@ pub fn layout_flex(
         .map(|n| n.unwrap_or_default())
         .collect();
 
-    let container_w = if constraints.has_bounded_width() {
+    let container_w = if constraints.min_width == constraints.max_width {
         constraints.max_width
     } else {
         // Sum up the widest line + padding
@@ -259,12 +271,12 @@ pub fn layout_flex(
                 compute_content_size(&sizes, is_row, gap).0
             })
             .fold(0.0f32, f32::max);
-        max_w + pl + pr
+        (max_w + pl + pr).min(constraints.max_width)
     };
-    let container_h = if constraints.has_bounded_height() {
+    let container_h = if constraints.min_height == constraints.max_height {
         constraints.max_height
     } else {
-        cross_offset - gap + pt + pb
+        (cross_offset - gap + pt + pb).min(constraints.max_height)
     };
 
     let flat = LayoutNode::new(0.0, 0.0, container_w, container_h).with_children(final_nodes);
@@ -403,7 +415,8 @@ fn layout_single_line(
     for (j, &idx) in indices.iter().enumerate() {
         let child_as = child_align_self(&all_children[idx]);
         let child_align_val = child_as.as_ref().unwrap_or(align);
-        let (cross_pos, stretch_size) = align_item(cross_sizes[j], container_cross, child_align_val);
+        let (cross_pos, stretch_size) =
+            align_item(cross_sizes[j], container_cross, child_align_val);
 
         let (x, y) = if is_row {
             (main_pos, cross_pos)
@@ -454,9 +467,8 @@ fn build_child_nodes(
     pad_t: f32,
     _constraints: &Constraints,
 ) -> Vec<LayoutNode> {
-    let mut child_nodes: Vec<LayoutNode> = (0..children.len())
-        .map(|_| LayoutNode::default())
-        .collect();
+    let mut child_nodes: Vec<LayoutNode> =
+        (0..children.len()).map(|_| LayoutNode::default()).collect();
 
     let ordered: Vec<(usize, usize)> = if is_reverse {
         flow_indices
@@ -466,7 +478,11 @@ fn build_child_nodes(
             .map(|(j, &i)| (j, i))
             .collect()
     } else {
-        flow_indices.iter().enumerate().map(|(j, &i)| (j, i)).collect()
+        flow_indices
+            .iter()
+            .enumerate()
+            .map(|(j, &i)| (j, i))
+            .collect()
     };
 
     for (j, idx) in ordered {
@@ -508,17 +524,19 @@ mod tests {
     use crate::components::flex::{Flex, FlexSize};
     use crate::components::shape::Shape;
     use crate::components::{ChildComponent, Component, PositionMode};
-    use crate::schema::{ShapeType, Size, SizeDimension, LayerStyle};
+    use crate::schema::{LayerStyle, ShapeType, Size, SizeDimension};
 
     /// Helper to create a shape child with given size.
     fn shape_child(w: f32, h: f32) -> ChildComponent {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
-                size: Size { width: w, height: h },
+                size: Size {
+                    width: w,
+                    height: h,
+                },
                 text: None,
                 style: LayerStyle::default(),
-                animation: Default::default(),
                 timing: Default::default(),
             }),
             position: None,
@@ -550,7 +568,6 @@ mod tests {
                 width: SizeDimension::Fixed(400.0),
                 height: SizeDimension::Fixed(300.0),
             }),
-            animation: Default::default(),
             timing: Default::default(),
             style,
         }
@@ -560,7 +577,11 @@ mod tests {
     fn test_column_3_children() {
         let flex = make_flex(
             Direction::Column,
-            vec![shape_child(100.0, 50.0), shape_child(80.0, 60.0), shape_child(120.0, 40.0)],
+            vec![
+                shape_child(100.0, 50.0),
+                shape_child(80.0, 60.0),
+                shape_child(120.0, 40.0),
+            ],
         );
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -576,7 +597,11 @@ mod tests {
     fn test_row_3_children() {
         let flex = make_flex(
             Direction::Row,
-            vec![shape_child(100.0, 50.0), shape_child(80.0, 60.0), shape_child(120.0, 40.0)],
+            vec![
+                shape_child(100.0, 50.0),
+                shape_child(80.0, 60.0),
+                shape_child(120.0, 40.0),
+            ],
         );
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -592,7 +617,11 @@ mod tests {
     fn test_row_with_gap() {
         let mut flex = make_flex(
             Direction::Row,
-            vec![shape_child(100.0, 50.0), shape_child(80.0, 60.0), shape_child(120.0, 40.0)],
+            vec![
+                shape_child(100.0, 50.0),
+                shape_child(80.0, 60.0),
+                shape_child(120.0, 40.0),
+            ],
         );
         flex.style.gap = Some(10.0);
         let constraints = Constraints::tight(400.0, 300.0);
@@ -605,10 +634,7 @@ mod tests {
 
     #[test]
     fn test_justify_center() {
-        let mut flex = make_flex(
-            Direction::Row,
-            vec![shape_child(100.0, 50.0)],
-        );
+        let mut flex = make_flex(Direction::Row, vec![shape_child(100.0, 50.0)]);
         flex.style.justify_content = Some(Justify::Center);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -620,7 +646,11 @@ mod tests {
     fn test_justify_space_between() {
         let mut flex = make_flex(
             Direction::Row,
-            vec![shape_child(50.0, 50.0), shape_child(50.0, 50.0), shape_child(50.0, 50.0)],
+            vec![
+                shape_child(50.0, 50.0),
+                shape_child(50.0, 50.0),
+                shape_child(50.0, 50.0),
+            ],
         );
         flex.style.justify_content = Some(Justify::SpaceBetween);
         let constraints = Constraints::tight(400.0, 300.0);
@@ -650,10 +680,7 @@ mod tests {
 
     #[test]
     fn test_align_center() {
-        let mut flex = make_flex(
-            Direction::Row,
-            vec![shape_child(100.0, 50.0)],
-        );
+        let mut flex = make_flex(Direction::Row, vec![shape_child(100.0, 50.0)]);
         flex.style.align_items = Some(Align::Center);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -662,11 +689,19 @@ mod tests {
     }
 
     #[test]
+    fn test_column_align_center() {
+        let mut flex = make_flex(Direction::Column, vec![shape_child(100.0, 50.0)]);
+        flex.style.align_items = Some(Align::Center);
+        let constraints = Constraints::tight(400.0, 300.0);
+        let result = layout_flex(&flex, &constraints);
+
+        assert_eq!(result.children[0].x, 150.0); // (400 - 100) / 2
+        assert_eq!(result.children[0].y, 0.0);
+    }
+
+    #[test]
     fn test_align_stretch() {
-        let mut flex = make_flex(
-            Direction::Row,
-            vec![shape_child(100.0, 50.0)],
-        );
+        let mut flex = make_flex(Direction::Row, vec![shape_child(100.0, 50.0)]);
         flex.style.align_items = Some(Align::Stretch);
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -679,7 +714,10 @@ mod tests {
     fn test_flex_grow() {
         let flex = make_flex(
             Direction::Row,
-            vec![shape_child_grow(50.0, 50.0, 1.0), shape_child_grow(50.0, 50.0, 1.0)],
+            vec![
+                shape_child_grow(50.0, 50.0, 1.0),
+                shape_child_grow(50.0, 50.0, 1.0),
+            ],
         );
         let constraints = Constraints::tight(400.0, 300.0);
         let result = layout_flex(&flex, &constraints);
@@ -740,7 +778,6 @@ mod tests {
         let inner = Flex {
             children: vec![shape_child(50.0, 30.0), shape_child(50.0, 30.0)],
             size: None,
-            animation: Default::default(),
             timing: Default::default(),
             style: inner_style,
         };

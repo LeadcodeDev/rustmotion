@@ -6,7 +6,7 @@ use skia_safe::{Canvas, Font, FontStyle, PaintStyle, TextBlob};
 use crate::engine::renderer::{font_mgr, format_counter_value, make_text_blob_with_spacing, paint_from_hex};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
-use crate::traits::{AnimationConfig, RenderContext, TimingConfig, Widget};
+use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Counter {
@@ -22,9 +22,6 @@ pub struct Counter {
     pub suffix: Option<String>,
     #[serde(default)]
     pub easing: EasingType,
-    // Composed behaviors
-    #[serde(flatten)]
-    pub animation: AnimationConfig,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -32,7 +29,7 @@ pub struct Counter {
 }
 
 crate::impl_traits!(Counter {
-    Animatable => animation,
+    Animatable => style,
     Timed => timing,
     Styled => style,
 });
