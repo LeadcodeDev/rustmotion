@@ -10,7 +10,7 @@ pub mod image;
 pub mod progress;
 pub mod qrcode;
 pub mod shape;
-pub mod stack;
+pub mod positioned;
 pub mod svg;
 pub mod text;
 pub mod video;
@@ -30,7 +30,7 @@ pub use grid::Grid;
 pub use icon::Icon;
 pub use image::Image;
 pub use shape::Shape;
-pub use stack::Stack;
+pub use positioned::Positioned;
 pub use svg::Svg;
 pub use text::Text;
 pub use video::Video;
@@ -107,7 +107,7 @@ pub enum Component {
     Caption(Caption),
     Codeblock(Codeblock),
     // Container components
-    Stack(Stack),
+    Positioned(Positioned),
     Flex(Flex),
     Grid(Grid),
     /// Backward-compatible card container (supports both flex and grid display modes).
@@ -130,7 +130,7 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
-            Component::Stack(c) => c,
+            Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
@@ -153,7 +153,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
-            Component::Stack(_) => None,
+            Component::Positioned(_) => None,
         }
     }
 
@@ -172,7 +172,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
-            Component::Caption(_) | Component::Stack(_) => None,
+            Component::Caption(_) | Component::Positioned(_) => None,
         }
     }
 
@@ -189,7 +189,7 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
-            Component::Stack(c) => c,
+            Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
@@ -200,7 +200,7 @@ impl Component {
     #[allow(dead_code)]
     pub fn as_container(&self) -> Option<&dyn Container> {
         match self {
-            Component::Stack(c) => Some(c),
+            Component::Positioned(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -211,7 +211,7 @@ impl Component {
     /// Returns a mutable reference to this component's children, if it has any.
     pub fn children_mut(&mut self) -> Option<&mut Vec<ChildComponent>> {
         match self {
-            Component::Stack(c) => Some(&mut c.children),
+            Component::Positioned(c) => Some(&mut c.children),
             Component::Flex(c) => Some(&mut c.children),
             Component::Grid(c) => Some(&mut c.children),
             Component::Card(c) => Some(&mut c.children),

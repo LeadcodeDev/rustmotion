@@ -685,7 +685,22 @@ Animated number counter. See Rule 4: must be standalone.
 
 Style: `font-size` (48.0), `color` (#FFFFFF), `font-family` (Inter), `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
 
-### 10. `card` / `flex`
+### 10. `positioned`
+
+Container that places children at fixed absolute coordinates (like Flutter's `Stack`/`Positioned`). Each child uses `position: {x, y}` relative to the container's top-left.
+
+```json
+{
+  "type": "positioned",
+  "position": { "x": 100, "y": 200 },
+  "children": [
+    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "size": { "width": 400, "height": 300 }, "style": { "fill": "#1E293B", "border-radius": 16 } },
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "size": 64, "color": "#FFFFFF" } }
+  ]
+}
+```
+
+### 11. `card` / `flex`
 
 Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. See Rule 8.
 

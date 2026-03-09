@@ -9,27 +9,31 @@ use crate::traits::{Container, RenderContext, Widget};
 
 use super::ChildComponent;
 
-/// Stack container — children are positioned absolutely (like CSS `position: absolute`).
-/// Replaces the old `Group` layer.
+/// Positioned container — children are placed at fixed absolute coordinates.
+/// Like Flutter's Stack/Positioned: each child uses its `position: {x, y}` field.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct Stack {
+pub struct Positioned {
     #[serde(default)]
     pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub style: LayerStyle,
 }
 
-crate::impl_traits!(Stack {
+crate::impl_traits!(Positioned {
     Styled => style,
 });
 
-impl Container for Stack {
+impl Container for Positioned {
     fn children(&self) -> &[ChildComponent] {
         &self.children
     }
 }
 
-impl Widget for Stack {
+impl Widget for Positioned {
+    fn layout(&self, constraints: &Constraints) -> LayoutNode {
+        crate::layout::stack::layout_stack(self, constraints)
+    }
+
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
         Ok(())

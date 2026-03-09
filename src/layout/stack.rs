@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::components::ChildComponent;
 use crate::traits::{Container, Styled};
 
@@ -74,7 +73,7 @@ fn measure_child(child: &ChildComponent, constraints: &Constraints) -> (f32, f32
 mod tests {
     use super::*;
     use crate::components::shape::Shape;
-    use crate::components::stack::Stack;
+    use crate::components::positioned::Positioned;
     use crate::components::{ChildComponent, Component, PositionMode};
     use crate::schema::{LayerStyle, ShapeType, Size};
 
@@ -96,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_stack_2_children() {
-        let stack = Stack {
+        let stack = Positioned {
             children: vec![
                 shape_child_at(100.0, 100.0, 0.0, 0.0),
                 shape_child_at(50.0, 50.0, 200.0, 150.0),
