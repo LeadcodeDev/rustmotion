@@ -35,6 +35,8 @@ Key patterns:
 
 Children flow in the flexbox. Use `positioned` container for absolute positioning.
 
+**Grid height warning:** Grid containers need an explicit `height` (not `"auto"`) to prevent rows from stretching to fill all available space. See [rules/grid-card-height.md](rules/grid-card-height.md).
+
 **GOOD** (icon + text row):
 ```json
 {

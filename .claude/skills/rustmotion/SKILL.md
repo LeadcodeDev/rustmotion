@@ -49,7 +49,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
 - [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
-- [rules/icon-format.md](rules/icon-format.md) - Icon format must be "prefix:name" (e.g. "lucide:home")
+- [rules/icon-format.md](rules/icon-format.md) - Icons use Iconify (200k+ icons), format "prefix:name" (e.g. "lucide:home")
+- [rules/grid-card-height.md](rules/grid-card-height.md) - Grid containers need explicit height (not "auto") to prevent row stretching
 - [rules/wiggle-additive.md](rules/wiggle-additive.md) - Wiggle is additive on top of presets and keyframes
 - [rules/prefer-presets.md](rules/prefer-presets.md) - Prefer presets over manual keyframes (31 built-in presets)
 - [rules/hex-colors.md](rules/hex-colors.md) - Colors in hex format only (#RRGGBB or #RRGGBBAA)
@@ -559,7 +560,7 @@ Types: `linear`, `radial`.
 
 ### 5. `icon`
 
-Renders an icon from the Iconify library. See Rule 11.
+Renders an icon from the **Iconify** open-source framework (200,000+ icons from 150+ sets). Icons are fetched from the Iconify API at render time. Browse all icons: https://icon-sets.iconify.design/
 
 ```json
 {
@@ -577,6 +578,8 @@ Renders an icon from the Iconify library. See Rule 11.
 | `size`     | `{width, height}` | `{24, 24}`                                               |
 
 Style: `color` (default `"#FFFFFF"`)
+
+Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), `tabler`, `simple-icons` (brand logos), `devicon` (dev tools)
 
 ### 6. `video`
 
@@ -707,7 +710,7 @@ Each dimension of `size` can be a number or `"auto"`.
 }
 ```
 
-**Grid example (2x2):**
+**Grid example (2x2):** Note: grid containers need explicit `height` (not `"auto"`) — see [rules/grid-card-height.md](rules/grid-card-height.md).
 ```json
 {
   "type": "card",
