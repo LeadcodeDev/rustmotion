@@ -11,9 +11,302 @@ metadata:
 
 rustmotion is a CLI tool that renders motion design videos from JSON scenario files. It uses Skia for 2D rendering and supports MP4, WebM, MOV, GIF, and PNG sequence outputs.
 
-## JSON Scenario Structure
+## Quick Reference
 
-A scenario is a JSON object with:
+**Common resolutions:** 1080x1920 (portrait 9:16), 1920x1080 (landscape 16:9), 1080x1080 (square)
+
+**Essential CLI:**
+```bash
+rustmotion validate scenario.json          # Validate without rendering
+rustmotion render scenario.json -o out.mp4 # Render to MP4
+rustmotion render scenario.json -o f.png --frame 0  # Single frame
+rustmotion schema                          # Print JSON Schema
+```
+
+**JSON skeleton:**
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1080, "height": 1920, "fps": 30, "background": "#0f172a" },
+  "scenes": [
+    { "duration": 3.0, "children": [ ... ] }
+  ]
+}
+```
+
+---
+
+## Rules
+
+Read individual rule files for detailed explanations, GOOD/BAD examples, and constraints:
+
+- [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
+- [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
+- [rules/no-group-stack.md](rules/no-group-stack.md) - Never use group/stack (known bug: children don't render)
+- [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
+- [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
+- [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing preset_config.delay
+- [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
+- [rules/card-flex-layout.md](rules/card-flex-layout.md) - Use card/flex for layout with flexbox/grid patterns
+- [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
+- [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
+- [rules/icon-format.md](rules/icon-format.md) - Icon format must be "prefix:name" (e.g. "lucide:home")
+- [rules/wiggle-additive.md](rules/wiggle-additive.md) - Wiggle is additive on top of presets and keyframes
+- [rules/prefer-presets.md](rules/prefer-presets.md) - Prefer presets over manual keyframes (31 built-in presets)
+- [rules/hex-colors.md](rules/hex-colors.md) - Colors in hex format only (#RRGGBB or #RRGGBBAA)
+- [rules/easing-guidelines.md](rules/easing-guidelines.md) - Easing guidelines for motion design
+
+---
+
+## Complete Examples
+
+### Example 1: Marketing Card (Portrait)
+
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1080, "height": 1920, "fps": 30, "background": "#0f172a" },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "children": [
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "position": { "x": 90, "y": 700 },
+          "size": { "width": 900, "height": 520 },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.6 },
+          "style": {
+            "fill": {
+              "type": "linear",
+              "colors": ["#6366f1", "#8b5cf6"],
+              "angle": 135
+            },
+            "border-radius": 32
+          }
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:rocket",
+          "position": { "x": 490, "y": 800 },
+          "size": { "width": 80, "height": 80 },
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.3, "duration": 0.6 },
+          "style": { "color": "#FFFFFF" }
+        },
+        {
+          "type": "text",
+          "content": "Ship Faster",
+          "position": { "x": 540, "y": 940 },
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.5, "duration": 0.6 },
+          "style": {
+            "font-size": 64,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
+        },
+        {
+          "type": "text",
+          "content": "Build motion videos in Rust.\nNo browser needed.",
+          "position": { "x": 540, "y": 1060 },
+          "max_width": 700,
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.7, "duration": 0.6 },
+          "style": {
+            "font-size": 32,
+            "color": "#CBD5E1",
+            "text-align": "center",
+            "line-height": 1.5
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Example 2: Code Tutorial (Landscape)
+
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#1a1b26" },
+  "scenes": [
+    {
+      "duration": 10.0,
+      "children": [
+        {
+          "type": "text",
+          "content": "Getting Started with Rust",
+          "position": { "x": 960, "y": 80 },
+          "preset": "fade_in",
+          "preset_config": { "duration": 0.5 },
+          "style": {
+            "font-size": 40,
+            "color": "#7AA2F7",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
+        },
+        {
+          "type": "codeblock",
+          "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
+          "language": "rust",
+          "theme": "tokyo-night",
+          "position": { "x": 260, "y": 160 },
+          "size": { "width": 1400, "height": 400 },
+          "show_line_numbers": true,
+          "chrome": { "enabled": true, "title": "src/main.rs" },
+          "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
+          "style": { "font-size": 22, "padding": 24, "border-radius": 16 },
+          "states": [
+            {
+              "code": "fn main() {\n    let name = \"rustmotion\";\n    println!(\"Hello, {}!\", name);\n}",
+              "at": 5.0,
+              "duration": 2.5,
+              "cursor": { "enabled": true, "blink": true }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Variables are immutable by default",
+          "position": { "x": 960, "y": 650 },
+          "start_at": 5.0,
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.0, "duration": 0.6 },
+          "style": {
+            "font-size": 28,
+            "color": "#9ECE6A",
+            "text-align": "center"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Example 3: Multi-Scene with Transitions
+
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1080, "height": 1920, "fps": 30, "background": "#0a0a14" },
+  "scenes": [
+    {
+      "duration": 3.0,
+      "children": [
+        {
+          "type": "text",
+          "content": "2024 Results",
+          "position": { "x": 540, "y": 800 },
+          "preset": "fade_in_up",
+          "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
+        },
+        {
+          "type": "text",
+          "content": "Year in Review",
+          "position": { "x": 540, "y": 900 },
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.3, "duration": 0.6 },
+          "style": { "font-size": 36, "color": "#94A3B8", "text-align": "center" }
+        }
+      ]
+    },
+    {
+      "duration": 4.0,
+      "transition": { "type": "slide", "duration": 0.6 },
+      "children": [
+        {
+          "type": "counter",
+          "from": 0,
+          "to": 12500,
+          "separator": ",",
+          "easing": "ease_out",
+          "position": { "x": 540, "y": 750 },
+          "start_at": 0.3,
+          "end_at": 3.5,
+          "style": { "font-size": 96, "color": "#38BDF8", "font-weight": "bold", "text-align": "center" }
+        },
+        {
+          "type": "text",
+          "content": "Users Reached",
+          "position": { "x": 540, "y": 880 },
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.5, "duration": 0.6 },
+          "style": { "font-size": 36, "color": "#CBD5E1", "text-align": "center" }
+        },
+        {
+          "type": "card",
+          "position": { "x": 90, "y": 1050 },
+          "size": { "width": 900, "height": "auto" },
+          "preset": "fade_in_up",
+          "preset_config": { "delay": 0.8, "duration": 0.6 },
+          "style": {
+            "flex-direction": "row",
+            "gap": 16,
+            "padding": 24,
+            "background": "#1E293B",
+            "border-radius": 20
+          },
+          "children": [
+            {
+              "type": "icon",
+              "icon": "lucide:trending-up",
+              "size": { "width": 48, "height": 48 },
+              "style": { "color": "#22C55E" }
+            },
+            {
+              "type": "text",
+              "content": "+340% growth YoY",
+              "style": { "font-size": 32, "color": "#FFFFFF", "font-weight": "bold" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 3.0,
+      "transition": { "type": "fade", "duration": 0.5 },
+      "children": [
+        {
+          "type": "text",
+          "content": "Thank You",
+          "position": { "x": 540, "y": 900 },
+          "preset": "scale_in",
+          "preset_config": { "duration": 0.8 },
+          "wiggle": [
+            { "property": "translate_y", "amplitude": 4, "frequency": 1.5, "seed": 7 }
+          ],
+          "style": { "font-size": 80, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:heart",
+          "position": { "x": 508, "y": 1020 },
+          "size": { "width": 64, "height": 64 },
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.5, "loop": false },
+          "wiggle": [
+            { "property": "scale", "amplitude": 0.1, "frequency": 2, "seed": 42 }
+          ],
+          "style": { "color": "#F43F5E" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Reference
+
+### JSON Scenario Structure
 
 ```json
 {
@@ -24,7 +317,7 @@ A scenario is a JSON object with:
 }
 ```
 
-### `video` (required)
+#### `video` (required)
 
 | Field        | Type   | Default     | Description                                             |
 | ------------ | ------ | ----------- | ------------------------------------------------------- |
@@ -35,7 +328,7 @@ A scenario is a JSON object with:
 | `codec`      | string | `null`      | `"h264"`, `"h265"`, `"vp9"`, `"prores"`                 |
 | `crf`        | u8     | `null`      | Constant Rate Factor (0-51, lower = better quality)     |
 
-### `audio` (optional array)
+#### `audio` (optional array)
 
 | Field      | Type   | Default  | Description                                   |
 | ---------- | ------ | -------- | --------------------------------------------- |
@@ -46,7 +339,7 @@ A scenario is a JSON object with:
 | `fade_in`  | f64    | `null`   | Fade in duration in seconds                   |
 | `fade_out` | f64    | `null`   | Fade out duration in seconds                  |
 
-### `scenes` (required array)
+#### `scenes` (required array)
 
 | Field        | Type   | Default  | Description                                    |
 | ------------ | ------ | -------- | ---------------------------------------------- |
@@ -56,16 +349,15 @@ A scenario is a JSON object with:
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
 
-### Include (Composable Scenarios)
+#### Include (Composable Scenarios)
 
-Scene entries can reference external scenario files (local or remote) to inject their scenes inline. This enables reusable intros, outros, and shared sequences.
+Scene entries can reference external scenario files to inject their scenes inline:
 
 ```json
 {
   "scenes": [
     { "include": "shared/intro.json" },
     { "duration": 5.0, "children": [...] },
-    { "include": "https://cdn.example.com/outro.json" },
     { "include": "shared/credits.json", "scenes": [0, 2] }
   ]
 }
@@ -73,51 +365,30 @@ Scene entries can reference external scenario files (local or remote) to inject 
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `include` | string | required | Path (relative to parent file) or URL (`http(s)://`) to a scenario JSON file |
-| `scenes` | array of usize | `null` | Only include scenes at these 0-based indices. When absent, all scenes are included |
+| `include` | string | required | Path (relative to parent) or URL to a scenario JSON file |
+| `scenes` | array of usize | `null` | Only include scenes at these 0-based indices |
 
-- The included file's `video` config is ignored — the parent's config is used
-- Audio tracks from included files are merged into the parent
+- The included file's `video` config is ignored
+- Audio tracks from included files are merged
 - Includes can be nested (max depth: 8)
-- Local paths are resolved relative to the parent scenario file
 
-### Transitions
+#### Transitions
 
 ```json
 { "type": "fade", "duration": 0.5 }
 ```
 
-**13 transition types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `none`
+**13 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `none`
 
-Default transition duration: `0.5` seconds.
+Default duration: `0.5` seconds.
 
 ---
 
-## Component Types
+### Component Types
 
-All components are discriminated by the `"type"` field. Components are rendered in array order (first = bottom).
+All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
-### Style object
-
-All visual/typographic properties go inside a nested `"style"` object using CSS kebab-case naming:
-
-```json
-{
-  "type": "text",
-  "content": "Hello",
-  "position": { "x": 100, "y": 100 },
-  "style": {
-    "font-size": 48,
-    "color": "#FFFFFF",
-    "font-weight": "bold",
-    "text-align": "center"
-  }
-}
-```
-
-### Common optional fields (on most components)
-
-These stay at the root level (NOT inside `style`):
+#### Common Optional Fields (root level)
 
 | Field           | Type   | Default | Description                                      |
 | --------------- | ------ | ------- | ------------------------------------------------ |
@@ -129,18 +400,16 @@ These stay at the root level (NOT inside `style`):
 | `wiggle`        | array  | `null`  | Procedural noise-based animation                 |
 | `motion_blur`   | f32    | `null`  | Motion blur intensity                            |
 
-These go inside `"style"`:
+#### Common Style Fields (inside `"style"`)
 
 | Style field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `opacity` | f32 | `1.0` | 0.0 to 1.0 |
 | `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
 | `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
-| `glow` | object | `null` | Luminous halo effect around the component |
+| `glow` | object | `null` | Luminous halo effect |
 
 #### Glow Effect
-
-Adds a soft luminous halo around any component (text, shape, icon, etc.):
 
 ```json
 {
@@ -156,11 +425,11 @@ Adds a soft luminous halo around any component (text, shape, icon, etc.):
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `color` | string | `"#FFFFFF"` | Glow color (hex `#RRGGBB` or `#RRGGBBAA`) |
-| `radius` | f32 | `10.0` | Blur radius of the glow |
-| `intensity` | f32 | `1.0` | Brightness multiplier (higher = brighter glow) |
+| `color` | string | `"#FFFFFF"` | Glow color (hex) |
+| `radius` | f32 | `10.0` | Blur radius |
+| `intensity` | f32 | `1.0` | Brightness multiplier |
 
-The glow renders as a pre-pass behind the component, so the content remains crisp and readable.
+---
 
 ### 1. `text`
 
@@ -183,8 +452,6 @@ The glow renders as a pre-pass behind the component, so the content remains cris
 ```
 
 **Root fields:** `content` (required), `position`, `max_width`
-
-**Style fields:**
 
 | Style field       | Type     | Default    |
 | ----------------- | -------- | ---------- |
@@ -218,8 +485,6 @@ The glow renders as a pre-pass behind the component, so the content remains cris
 
 **Root fields:** `shape` (required), `position`, `size`, `text`
 
-**Style fields:**
-
 | Style field     | Type               | Default     |
 | --------------- | ------------------ | ----------- |
 | `fill`          | string or gradient | `null`      |
@@ -228,8 +493,7 @@ The glow renders as a pre-pass behind the component, so the content remains cris
 
 **Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
 
-**Fill can be a gradient:**
-
+**Gradient fill:**
 ```json
 {
   "fill": {
@@ -241,10 +505,9 @@ The glow renders as a pre-pass behind the component, so the content remains cris
 }
 ```
 
-Gradient types: `linear`, `radial`.
+Types: `linear`, `radial`.
 
 **Embedded text in shapes (`text` field):**
-
 ```json
 {
   "text": {
@@ -254,12 +517,12 @@ Gradient types: `linear`, `radial`.
     "font_family": "Arial",
     "font_weight": "bold",
     "align": "center",
-    "vertical_align": "center"
+    "vertical_align": "middle"
   }
 }
 ```
 
-`vertical_align`: `"top"`, `"middle"`, `"bottom"` (default: `"middle"`).
+`vertical_align`: `"top"`, `"middle"`, `"bottom"` (default: `"middle"`). See Rule 5.
 
 ### 3. `image`
 
@@ -300,7 +563,7 @@ Gradient types: `linear`, `radial`.
 
 ### 5. `icon`
 
-Renders an icon from the Iconify library (fetched via API).
+Renders an icon from the Iconify library. See Rule 11.
 
 ```json
 {
@@ -308,9 +571,7 @@ Renders an icon from the Iconify library (fetched via API).
   "icon": "lucide:home",
   "position": { "x": 540, "y": 400 },
   "size": { "width": 64, "height": 64 },
-  "style": {
-    "color": "#38bdf8"
-  }
+  "style": { "color": "#38bdf8" }
 }
 ```
 
@@ -320,7 +581,7 @@ Renders an icon from the Iconify library (fetched via API).
 | `position` | `{x, y}`          | `{0, 0}`                                                 |
 | `size`     | `{width, height}` | `{24, 24}`                                               |
 
-**Style:** `color` (default `"#FFFFFF"`)
+Style: `color` (default `"#FFFFFF"`)
 
 ### 6. `video`
 
@@ -380,28 +641,23 @@ Timed word-by-word captions with active word highlighting.
   "position": { "x": 540, "y": 1600 },
   "mode": "highlight",
   "max_width": 900,
-  "style": {
-    "font-size": 48,
-    "color": "#FFFFFF"
-  }
+  "style": { "font-size": 48, "color": "#FFFFFF" }
 }
 ```
-
-**Root fields:** `words` (required), `position`, `mode`, `max_width`, `active_color`
 
 | Field          | Type     | Default                                                                    |
 | -------------- | -------- | -------------------------------------------------------------------------- |
 | `words`        | array    | required — `[{ "text", "start", "end" }]`                                  |
 | `position`     | `{x, y}` | `{0, 0}`                                                                   |
-| `mode`         | enum     | `"default"` — options: `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
+| `mode`         | enum     | `"default"` — `"default"`, `"highlight"`, `"karaoke"`, `"bounce"` |
 | `active_color` | string   | `"#FFD700"`                                                                |
 | `max_width`    | f32      | `null`                                                                     |
 
-**Style fields:** `font-size` (default `48.0`), `font-family`, `color` (default `"#FFFFFF"`), `background`
+Style: `font-size` (48.0), `font-family`, `color` (#FFFFFF), `background`
 
 ### 9. `counter`
 
-Animated number counter that interpolates from a start value to an end value.
+Animated number counter. See Rule 4: must be standalone.
 
 ```json
 {
@@ -415,59 +671,32 @@ Animated number counter that interpolates from a start value to an end value.
   "position": { "x": 540, "y": 960 },
   "start_at": 0.5,
   "end_at": 2.5,
-  "preset": "fade_in_up",
-  "style": {
-    "font-size": 72,
-    "color": "#FFFFFF",
-    "font-weight": "bold",
-    "text-align": "center"
-  }
+  "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
 }
 ```
 
 **Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`, `position`
 
-**Style fields:** `font-size` (default `48.0`), `color` (default `"#FFFFFF"`), `font-family` (default `"Inter"`), `font-weight`, `font-style`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
+**Easing options:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 
-The counter animates over the component's visible duration (`start_at` to `end_at`, or full scene). The `easing` controls the number interpolation curve, independent from visual animation presets.
+Style: `font-size` (48.0), `color` (#FFFFFF), `font-family` (Inter), `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
 
 ### 10. `group`
 
-Groups multiple components with shared position and animations.
+> **WARNING:** group/stack children do not render due to a known bug. Use card/flex or standalone elements instead. See Rule 3.
 
-```json
-{
-  "type": "group",
-  "position": { "x": 100, "y": 100 },
-  "children": [ ... ],
-  "preset": "fade_in"
-}
-```
+### 11. `card` / `flex`
 
-| Field      | Type     | Default                  |
-| ---------- | -------- | ------------------------ |
-| `position` | `{x, y}` | `{0, 0}`                 |
-| `children` | array    | `[]` — nested components |
+Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. See Rule 8.
 
-### 11. `card`
+Each dimension of `size` can be a number or `"auto"`.
 
-Visual container with CSS-like flex & grid layout. Unlike `group` (absolute positioning, no style), `card` auto-positions children and supports background, border, shadow, padding, corner radius.
-
-Each dimension of `size` can be a number or `"auto"` (e.g. `"size": { "width": 750, "height": "auto" }`) to auto-size from children.
-
-### 12. `flex`
-
-Alias for `card` — same properties, same engine. Use `flex` for pure layout (no background/border), `card` for visual containers.
-
-**Flex example** (with `flex-grow`):
+**Flex example:**
 ```json
 {
   "type": "card",
   "size": { "width": 800, "height": 100 },
-  "style": {
-    "flex-direction": "row",
-    "gap": 16
-  },
+  "style": { "flex-direction": "row", "gap": 16 },
   "children": [
     { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#FF0000" } },
     { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#00FF00", "flex-grow": 1 } },
@@ -476,7 +705,7 @@ Alias for `card` — same properties, same engine. Use `flex` for pure layout (n
 }
 ```
 
-**Grid example** (2x2):
+**Grid example (2x2):**
 ```json
 {
   "type": "card",
@@ -498,39 +727,37 @@ Alias for `card` — same properties, same engine. Use `flex` for pure layout (n
 }
 ```
 
-**Root fields:** `position`, `size`, `children`
-
 **Style fields:**
 
 | Style field              | Type        | Default    |
 | ------------------------ | ----------- | ---------- |
 | `display`                | enum        | `"flex"` — `"flex"` or `"grid"` |
-| `background`             | string      | `null` — hex background color |
+| `background`             | string      | `null`     |
 | `border-radius`          | f32         | `12.0`     |
 | `border`                 | object      | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
 | `box-shadow`             | object      | `null` — `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
-| `padding`                | f32 or obj  | `null` — uniform `24` or `{ "top": 24, "right": 24, "bottom": 24, "left": 24 }` |
+| `padding`                | f32 or obj  | `null`     |
 | `flex-direction`         | enum        | `"column"` — `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
-| `flex-wrap`              | bool        | `false` — wrap children to next line |
-| `align-items`            | enum        | `"start"` — cross-axis: `"start"`, `"center"`, `"end"`, `"stretch"` |
-| `justify-content`        | enum        | `"start"` — main-axis: `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
-| `gap`                    | f32         | `0` — spacing between children in pixels |
-| `grid-template-columns`  | array       | `null` — grid column defs: `[{"px": N}, {"fr": N}, "auto"]` |
-| `grid-template-rows`     | array       | `null` — grid row defs (defaults to `[{"fr": 1}]`) |
+| `flex-wrap`              | bool        | `false`    |
+| `align-items`            | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"stretch"` |
+| `justify-content`        | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
+| `gap`                    | f32         | `0`        |
+| `grid-template-columns`  | array       | `null` — `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid-template-rows`     | array       | `null`     |
 
-**Per-child layout properties** (in child's `"style"` object):
-- `flex-grow` (f32) — how much the child grows to fill remaining space (default 0)
-- `flex-shrink` (f32) — how much the child shrinks when space is insufficient (default 1)
-- `flex-basis` (f32) — base size before grow/shrink (defaults to natural size)
-- `align-self` (enum) — per-child cross-axis override: `"start"`, `"center"`, `"end"`, `"stretch"`
-- `grid-column` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid column placement
-- `grid-row` (object) — `{ "start": 1, "span": 2 }` — 1-indexed grid row placement
+**Per-child layout properties** (in child `"style"`):
+- `flex-grow` (f32) — default 0
+- `flex-shrink` (f32) — default 1
+- `flex-basis` (f32) — defaults to natural size
+- `align-self` (enum) — `"start"`, `"center"`, `"end"`, `"stretch"`
+- `grid-column` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
+- `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 
-Children `position` is ignored — the card computes layout from style properties. Supports all common fields (animations, presets, timing, wiggle, motion_blur).
+Children `position` is ignored in flex flow — the card computes layout from style properties.
 
-### 13. `codeblock`
+### 12. `codeblock`
 
-Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, and animated diff transitions.
+Code block with syntax highlighting, chrome, reveal animations, and animated diff transitions.
 
 ```json
 {
@@ -542,11 +769,7 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
   "show_line_numbers": true,
   "chrome": { "enabled": true, "title": "main.rs" },
   "reveal": { "mode": "typewriter", "start": 0, "duration": 2.5 },
-  "style": {
-    "font-size": 18,
-    "border-radius": 12,
-    "padding": 16
-  },
+  "style": { "font-size": 18, "border-radius": 12, "padding": 16 },
   "states": [
     {
       "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
@@ -559,8 +782,6 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
 ```
 
 **Root fields:** `code` (required), `language`, `theme`, `position`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
-
-**Style fields:**
 
 | Style field     | Type   | Default              |
 | --------------- | ------ | -------------------- |
@@ -576,9 +797,9 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
 
 ---
 
-## Animations
+### Animations
 
-### Custom Keyframe Animations
+#### Custom Keyframe Animations
 
 ```json
 {
@@ -600,7 +821,6 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
 **11 easing functions:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 
 **Spring physics** (when easing is `spring`):
-
 ```json
 {
   "easing": "spring",
@@ -608,18 +828,14 @@ Code block with syntax highlighting, carbon.now.sh chrome, reveal animations, an
 }
 ```
 
-### Animation Presets
+#### Animation Presets
 
-Use `"preset"` instead of manual keyframes:
+See Rule 13 for usage guidance.
 
 ```json
 {
-  "type": "text",
-  "content": "Hello",
-  "position": { "x": 540, "y": 500 },
   "preset": "fade_in_up",
-  "preset_config": { "delay": 0.2, "duration": 0.8, "loop": false },
-  "style": { "font-size": 48, "color": "#FFFFFF" }
+  "preset_config": { "delay": 0.2, "duration": 0.8, "loop": false }
 }
 ```
 
@@ -629,10 +845,12 @@ Use `"preset"` instead of manual keyframes:
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Entrances  | `fade_in`, `fade_in_up`, `fade_in_down`, `fade_in_left`, `fade_in_right`, `slide_in_left`, `slide_in_right`, `slide_in_up`, `slide_in_down`, `scale_in`, `bounce_in`, `blur_in`, `rotate_in`, `elastic_in` |
 | Exits      | `fade_out`, `fade_out_up`, `fade_out_down`, `slide_out_left`, `slide_out_right`, `slide_out_up`, `slide_out_down`, `scale_out`, `bounce_out`, `blur_out`, `rotate_out`                                     |
-| Continuous | `pulse`, `float`, `shake`, `spin` (use `"loop": true` in preset_config)                                                                                                                                    |
+| Continuous | `pulse`, `float`, `shake`, `spin` (use `"loop": true` — see Rule 9)                                                                                                                                       |
 | Special    | `typewriter`, `wipe_left`, `wipe_right`                                                                                                                                                                    |
 
-### Wiggle (Procedural Noise)
+#### Wiggle (Procedural Noise)
+
+See Rule 12 for combining with presets.
 
 ```json
 {
@@ -649,97 +867,16 @@ Use `"preset"` instead of manual keyframes:
 | `amplitude` | f64 | required | Maximum deviation |
 | `frequency` | f64 | required | Oscillations per second |
 | `seed` | u64 | `0` | Random seed for reproducible results |
-| `octaves` | u32 | `3` | Noise complexity (more octaves = more detail) |
-| `phase` | f64 | `0.0` | Phase offset (shifts the noise pattern in time) |
-| `decay` | f64 | `null` | Exponential decay rate (amplitude diminishes over time) |
+| `octaves` | u32 | `3` | Noise complexity |
+| `phase` | f64 | `0.0` | Phase offset |
+| `decay` | f64 | `null` | Exponential decay rate |
 | `easing` | string | `null` | Remap noise through an easing curve |
 
 Wiggle offsets are applied **additively** on top of keyframe animations and presets.
-```
 
 ---
 
-## Minimal Complete Example
-
-```json
-{
-  "video": {
-    "width": 1080,
-    "height": 1920,
-    "fps": 30,
-    "background": "#0f172a"
-  },
-  "scenes": [
-    {
-      "duration": 3.0,
-      "children": [
-        {
-          "type": "shape",
-          "shape": "rounded_rect",
-          "position": { "x": 140, "y": 760 },
-          "size": { "width": 800, "height": 400 },
-          "preset": "scale_in",
-          "style": {
-            "fill": {
-              "type": "linear",
-              "colors": ["#6366f1", "#8b5cf6"],
-              "angle": 135
-            },
-            "border-radius": 24
-          }
-        },
-        {
-          "type": "text",
-          "content": "Hello rustmotion!",
-          "position": { "x": 540, "y": 940 },
-          "preset": "fade_in_up",
-          "preset_config": { "delay": 0.3, "duration": 0.8 },
-          "style": {
-            "font-size": 56,
-            "color": "#FFFFFF",
-            "font-weight": "bold",
-            "text-align": "center"
-          }
-        }
-      ]
-    },
-    {
-      "duration": 2.0,
-      "transition": { "type": "fade", "duration": 0.5 },
-      "children": [
-        {
-          "type": "text",
-          "content": "Powered by Rust + Skia",
-          "position": { "x": 540, "y": 960 },
-          "preset": "fade_in",
-          "style": {
-            "font-size": 36,
-            "color": "#94a3b8",
-            "text-align": "center"
-          }
-        }
-      ]
-    }
-  ]
-}
-```
-
----
-
-## Validation obligatoire du JSON généré
-
-**Après chaque génération de JSON**, tu DOIS valider le scénario avant de le présenter à l'utilisateur :
-
-1. **Écrire** le JSON dans un fichier temporaire (ex: `/tmp/scenario.json`)
-2. **Exécuter** `rustmotion validate /tmp/scenario.json` pour vérifier la validité
-3. **Si la validation échoue** : corriger les erreurs et re-valider jusqu'à ce que ça passe
-4. **Si la validation réussit** : présenter le JSON à l'utilisateur
-
-Ne jamais proposer un JSON qui n'a pas été validé par `rustmotion validate`.
-
----
-
-## CLI Commands
+### CLI Commands
 
 ```bash
 # Render a scenario file to MP4
@@ -772,19 +909,3 @@ rustmotion render scenario.json -o frames/ --format png-seq
 # Machine-readable output
 rustmotion render scenario.json -o output.mp4 --output-format json
 ```
-
----
-
-## Important Constraints
-
-1. **Even dimensions**: `width` and `height` must be even numbers for H.264 encoding
-2. **Common resolutions**: 1080x1920 (portrait 9:16), 1920x1080 (landscape 16:9), 1080x1080 (square)
-3. **Timing**: `start_at` must be < `end_at` when both are specified
-4. **Component order**: Components render bottom-to-top (first in array = behind)
-5. **File paths**: Image, video, GIF, SVG `src` paths are relative to the working directory
-6. **SVG components**: Must have either `src` or `data`, not both empty
-7. **Icon components**: `icon` must be in `"prefix:name"` format (e.g. `"lucide:home"`). Requires internet access to fetch from the Iconify API.
-8. **At least one scene** is required, each with `duration > 0`
-9. **Colors**: Use hex format `#RRGGBB` or `#RRGGBBAA`
-10. **Presets vs animations**: `preset` is a shorthand; explicit `animations` override preset animations on the same property
-11. **Continuous presets** (`pulse`, `float`, `shake`, `spin`) should use `"loop": true` in `preset_config`
