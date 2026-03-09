@@ -450,7 +450,11 @@ pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], t
         let phase = wiggle.phase.unwrap_or(0.0);
         let input = time * wiggle.frequency + phase;
 
-        let mut noise_val = if has_extras {
+        let is_sine = wiggle.mode.as_deref() == Some("sine");
+
+        let mut noise_val = if is_sine {
+            input.sin()
+        } else if has_extras {
             let octaves = wiggle.octaves.unwrap_or(3);
             simplex_noise_1d_ext(input, wiggle.seed, octaves)
         } else {

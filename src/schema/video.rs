@@ -1201,6 +1201,9 @@ pub struct WiggleConfig {
     /// Easing function to reshape the noise curve
     #[serde(default)]
     pub easing: Option<EasingType>,
+    /// Oscillation mode: "noise" (default, layered simplex) or "sine" (pure sine wave)
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 // --- Video Config additions ---

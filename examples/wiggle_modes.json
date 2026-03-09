@@ -1,0 +1,310 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0a0a14"
+  },
+  "scenes": [
+    {
+      "duration": 5.0,
+      "children": [
+        {
+          "type": "text",
+          "content": "Wiggle Modes",
+          "position": { "x": 960, "y": 80 },
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center"
+          },
+          "preset": "fade_in_up",
+          "preset_config": { "duration": 0.6 }
+        },
+
+        {
+          "type": "text",
+          "content": "NOISE (default)",
+          "position": { "x": 480, "y": 180 },
+          "style": {
+            "font-size": 28,
+            "color": "#94a3b8",
+            "text-align": "center"
+          },
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.3, "duration": 0.5 }
+        },
+
+        {
+          "type": "text",
+          "content": "SINE",
+          "position": { "x": 1440, "y": 180 },
+          "style": {
+            "font-size": 28,
+            "color": "#94a3b8",
+            "text-align": "center"
+          },
+          "preset": "fade_in",
+          "preset_config": { "delay": 0.3, "duration": 0.5 }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 340, "y": 260 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#5C39EE",
+            "border-radius": 24,
+            "glow": {
+              "color": "#5C39EE",
+              "radius": 15,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.5, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 12.0,
+              "frequency": 3.0,
+              "seed": 42
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Rotation",
+          "position": { "x": 480, "y": 580 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1300, "y": 260 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#5C39EE",
+            "border-radius": 24,
+            "glow": {
+              "color": "#5C39EE",
+              "radius": 15,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.5, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "rotation",
+              "amplitude": 12.0,
+              "frequency": 3.0,
+              "mode": "sine"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Rotation",
+          "position": { "x": 1440, "y": 580 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 340, "y": 640 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#f43f5e",
+            "border-radius": 24,
+            "glow": {
+              "color": "#f43f5e",
+              "radius": 15,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.7, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "translate_y",
+              "amplitude": 20.0,
+              "frequency": 2.0,
+              "seed": 10
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Float Y",
+          "position": { "x": 480, "y": 960 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 1300, "y": 640 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#f43f5e",
+            "border-radius": 24,
+            "glow": {
+              "color": "#f43f5e",
+              "radius": 15,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.7, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "translate_y",
+              "amplitude": 20.0,
+              "frequency": 2.0,
+              "mode": "sine"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Float Y",
+          "position": { "x": 1440, "y": 960 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 820, "y": 260 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#f97316",
+            "border-radius": 140,
+            "glow": {
+              "color": "#f97316",
+              "radius": 20,
+              "intensity": 2.0
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.9, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "translate_x",
+              "amplitude": 12.0,
+              "frequency": 90.0,
+              "mode": "sine"
+            },
+            {
+              "property": "rotation",
+              "amplitude": 8.0,
+              "frequency": 75.0,
+              "mode": "sine"
+            }
+          ]
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:phone-off",
+          "position": { "x": 880, "y": 320 },
+          "style": {
+            "size": 160,
+            "color": "#FFFFFF"
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 0.9, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "translate_x",
+              "amplitude": 12.0,
+              "frequency": 90.0,
+              "mode": "sine"
+            },
+            {
+              "property": "rotation",
+              "amplitude": 8.0,
+              "frequency": 75.0,
+              "mode": "sine"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Phone Vibration",
+          "position": { "x": 960, "y": 580 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        },
+
+        {
+          "type": "shape",
+          "shape": "rect",
+          "position": { "x": 820, "y": 640 },
+          "size": { "width": 280, "height": 280 },
+          "style": {
+            "fill": "#34d399",
+            "border-radius": 24,
+            "glow": {
+              "color": "#34d399",
+              "radius": 15,
+              "intensity": 1.5
+            }
+          },
+          "preset": "scale_in",
+          "preset_config": { "delay": 1.1, "duration": 0.5 },
+          "wiggle": [
+            {
+              "property": "translate_x",
+              "amplitude": 8.0,
+              "frequency": 60.0,
+              "mode": "sine",
+              "decay": 0.8
+            },
+            {
+              "property": "rotation",
+              "amplitude": 5.0,
+              "frequency": 50.0,
+              "mode": "sine",
+              "decay": 0.8
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Sine + Decay",
+          "position": { "x": 960, "y": 960 },
+          "style": {
+            "font-size": 20,
+            "color": "#64748b",
+            "text-align": "center"
+          }
+        }
+      ]
+    }
+  ]
+}
