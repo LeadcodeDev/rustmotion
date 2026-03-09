@@ -1,7 +1,55 @@
 use crate::schema::{
-    Animation, AnimationPreset, EasingType, Keyframe, KeyframeValue, PresetConfig, SpringConfig,
-    WiggleConfig,
+    Animation, AnimationEffect, AnimationPreset, EasingType, GlowConfig, Keyframe, KeyframeValue,
+    PresetConfig, SpringConfig, WiggleConfig,
 };
+
+// ─── Effect extraction ──────────────────────────────────────────────────────
+
+/// Extracted and categorized animation effects from an AnimationEffect slice.
+pub struct ExtractedEffects<'a> {
+    pub presets: Vec<(AnimationPreset, PresetConfig)>,
+    pub keyframes: Vec<&'a Animation>,
+    pub wiggles: Vec<&'a WiggleConfig>,
+    pub glow: Option<&'a GlowConfig>,
+    pub motion_blur: Option<f32>,
+}
+
+/// Split a slice of AnimationEffect into categorized buckets for the renderer.
+pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
+    let mut result = ExtractedEffects {
+        presets: Vec::new(),
+        keyframes: Vec::new(),
+        wiggles: Vec::new(),
+        glow: None,
+        motion_blur: None,
+    };
+
+    for effect in effects {
+        if let Some((preset, timing)) = effect.as_preset() {
+            result.presets.push((preset, timing.to_preset_config()));
+        } else {
+            match effect {
+                AnimationEffect::Glow(config) => {
+                    result.glow = Some(config);
+                }
+                AnimationEffect::Wiggle(config) => {
+                    result.wiggles.push(config);
+                }
+                AnimationEffect::Keyframes(config) => {
+                    for kf in &config.keyframes {
+                        result.keyframes.push(kf);
+                    }
+                }
+                AnimationEffect::MotionBlur(config) => {
+                    result.motion_blur = Some(config.intensity);
+                }
+                _ => {} // preset variants already handled above
+            }
+        }
+    }
+
+    result
+}
 
 // ─── Easing functions ───────────────────────────────────────────────────────
 
@@ -223,6 +271,56 @@ impl Default for AnimatedProperties {
             glow_radius: -1.0,
             glow_intensity: -1.0,
         }
+    }
+}
+
+impl AnimatedProperties {
+    /// Merge another AnimatedProperties into self. Properties that have been
+    /// explicitly set in `other` (not sentinel -1.0) override values in self.
+    pub fn merge(&mut self, other: &AnimatedProperties) {
+        // opacity: default is 1.0, so only override if other explicitly animated to non-1.0
+        // For opacity we multiply (both presets contribute)
+        if (other.opacity - 1.0).abs() > 0.001 {
+            self.opacity *= other.opacity;
+        }
+        if other.translate_x.abs() > 0.001 {
+            self.translate_x += other.translate_x;
+        }
+        if other.translate_y.abs() > 0.001 {
+            self.translate_y += other.translate_y;
+        }
+        if (other.scale_x - 1.0).abs() > 0.001 {
+            self.scale_x *= other.scale_x;
+        }
+        if (other.scale_y - 1.0).abs() > 0.001 {
+            self.scale_y *= other.scale_y;
+        }
+        if other.rotation.abs() > 0.01 {
+            self.rotation += other.rotation;
+        }
+        if other.blur > 0.001 {
+            self.blur = other.blur;
+        }
+        if other.visible_chars >= 0 {
+            self.visible_chars = other.visible_chars;
+        }
+        if other.visible_chars_progress >= 0.0 {
+            self.visible_chars_progress = other.visible_chars_progress;
+        }
+        if other.color.is_some() {
+            self.color = other.color.clone();
+        }
+        // Sentinel-based fields (-1.0 = not set)
+        if other.border_radius >= 0.0 { self.border_radius = other.border_radius; }
+        if other.font_size >= 0.0 { self.font_size = other.font_size; }
+        if other.width >= 0.0 { self.width = other.width; }
+        if other.height >= 0.0 { self.height = other.height; }
+        if other.gap >= 0.0 { self.gap = other.gap; }
+        if other.padding >= 0.0 { self.padding = other.padding; }
+        if other.stroke_width >= 0.0 { self.stroke_width = other.stroke_width; }
+        if other.shadow_blur >= 0.0 { self.shadow_blur = other.shadow_blur; }
+        if other.glow_radius >= 0.0 { self.glow_radius = other.glow_radius; }
+        if other.glow_intensity >= 0.0 { self.glow_intensity = other.glow_intensity; }
     }
 }
 

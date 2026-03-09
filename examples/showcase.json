@@ -26,23 +26,25 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 8.0,
-            "glow": {
-              "color": "#6366F1",
-              "radius": 30,
-              "intensity": 2.5
-            },
-            "animation": {
-              "name": "blur_in",
-              "duration": 1.0,
-              "wiggle": [
-                {
-                  "property": "translate_y",
-                  "amplitude": 6,
-                  "frequency": 0.8,
-                  "seed": 7
-                }
-              ]
-            }
+            "animation": [
+              {
+                "duration": 1.0,
+                "name": "blur_in"
+              },
+              {
+                "property": "translate_y",
+                "amplitude": 6,
+                "frequency": 0.8,
+                "seed": 7,
+                "name": "wiggle"
+              },
+              {
+                "color": "#6366F1",
+                "radius": 30,
+                "intensity": 2.5,
+                "name": "glow"
+              }
+            ]
           }
         },
         {
@@ -53,11 +55,13 @@
             "color": "#94A3B8",
             "text-align": "center",
             "letter-spacing": 4.0,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.6,
-              "duration": 0.8
-            }
+            "animation": [
+              {
+                "delay": 0.6,
+                "duration": 0.8,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -77,11 +81,13 @@
               "angle": 90
             },
             "border-radius": 2,
-            "animation": {
-              "name": "scale_in",
-              "delay": 1.0,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 1.0,
+                "duration": 0.6,
+                "name": "scale_in"
+              }
+            ]
           }
         }
       ]
@@ -110,10 +116,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in_up",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -130,11 +138,13 @@
               "offset_y": 4,
               "blur": 20
             },
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -149,11 +159,13 @@
               "color": "#38BDF8",
               "width": 2
             },
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.4,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.4,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -168,11 +180,13 @@
               "padding": 12,
               "corner_radius": 8
             },
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.6,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.6,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -185,11 +199,13 @@
             "text-align": "center",
             "line-height": 1.8,
             "font-style": "italic",
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.8,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.8,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         }
       ]
@@ -218,10 +234,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -236,11 +254,13 @@
             "justify-content": "center",
             "gap": 48,
             "padding": 32,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -260,11 +280,13 @@
                   "angle": 135
                 },
                 "border-radius": 32,
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 0.3,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.3,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  }
+                ]
               }
             },
             {
@@ -282,11 +304,13 @@
                     "#F43F5E"
                   ]
                 },
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 0.5,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.5,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  }
+                ]
               }
             },
             {
@@ -306,19 +330,20 @@
                   "color": "#F59E0B",
                   "width": 2
                 },
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 0.7,
-                  "duration": 0.6,
-                  "wiggle": [
-                    {
-                      "property": "rotation",
-                      "amplitude": 5,
-                      "frequency": 1,
-                      "seed": 42
-                    }
-                  ]
-                }
+                "animation": [
+                  {
+                    "delay": 0.7,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  },
+                  {
+                    "property": "rotation",
+                    "amplitude": 5,
+                    "frequency": 1,
+                    "seed": 42,
+                    "name": "wiggle"
+                  }
+                ]
               }
             },
             {
@@ -341,11 +366,13 @@
                   ],
                   "angle": 180
                 },
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 0.9,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.9,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  }
+                ]
               }
             },
             {
@@ -364,11 +391,13 @@
                   ],
                   "angle": 0
                 },
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 1.1,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 1.1,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  }
+                ]
               }
             }
           ]
@@ -398,11 +427,13 @@
               "angle": 90
             },
             "border-radius": 40,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 1.3,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 1.3,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         }
       ]
@@ -431,10 +462,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -448,11 +481,13 @@
             "align-items": "center",
             "justify-content": "space_evenly",
             "padding": 40,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -464,16 +499,19 @@
               },
               "style": {
                 "color": "#6366F1",
-                "glow": {
-                  "color": "#6366F1",
-                  "radius": 20,
-                  "intensity": 2.0
-                },
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 0.3,
-                  "duration": 0.8
-                }
+                "animation": [
+                  {
+                    "delay": 0.3,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  },
+                  {
+                    "color": "#6366F1",
+                    "radius": 20,
+                    "intensity": 2.0,
+                    "name": "glow"
+                  }
+                ]
               }
             },
             {
@@ -485,16 +523,19 @@
               },
               "style": {
                 "color": "#FBBF24",
-                "glow": {
-                  "color": "#FBBF24",
-                  "radius": 20,
-                  "intensity": 2.0
-                },
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 0.5,
-                  "duration": 0.8
-                }
+                "animation": [
+                  {
+                    "delay": 0.5,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  },
+                  {
+                    "color": "#FBBF24",
+                    "radius": 20,
+                    "intensity": 2.0,
+                    "name": "glow"
+                  }
+                ]
               }
             },
             {
@@ -506,24 +547,26 @@
               },
               "style": {
                 "color": "#F43F5E",
-                "glow": {
-                  "color": "#F43F5E",
-                  "radius": 20,
-                  "intensity": 2.0
-                },
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 0.7,
-                  "duration": 0.8,
-                  "wiggle": [
-                    {
-                      "property": "scale",
-                      "amplitude": 0.08,
-                      "frequency": 2,
-                      "mode": "sine"
-                    }
-                  ]
-                }
+                "animation": [
+                  {
+                    "delay": 0.7,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  },
+                  {
+                    "property": "scale",
+                    "amplitude": 0.08,
+                    "frequency": 2,
+                    "mode": "sine",
+                    "name": "wiggle"
+                  },
+                  {
+                    "color": "#F43F5E",
+                    "radius": 20,
+                    "intensity": 2.0,
+                    "name": "glow"
+                  }
+                ]
               }
             },
             {
@@ -535,16 +578,19 @@
               },
               "style": {
                 "color": "#22C55E",
-                "glow": {
-                  "color": "#22C55E",
-                  "radius": 20,
-                  "intensity": 2.0
-                },
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 0.9,
-                  "duration": 0.8
-                }
+                "animation": [
+                  {
+                    "delay": 0.9,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  },
+                  {
+                    "color": "#22C55E",
+                    "radius": 20,
+                    "intensity": 2.0,
+                    "name": "glow"
+                  }
+                ]
               }
             },
             {
@@ -556,24 +602,26 @@
               },
               "style": {
                 "color": "#38BDF8",
-                "glow": {
-                  "color": "#38BDF8",
-                  "radius": 20,
-                  "intensity": 2.0
-                },
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 1.1,
-                  "duration": 0.8,
-                  "wiggle": [
-                    {
-                      "property": "rotation",
-                      "amplitude": 10,
-                      "frequency": 0.5,
-                      "seed": 99
-                    }
-                  ]
-                }
+                "animation": [
+                  {
+                    "delay": 1.1,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  },
+                  {
+                    "property": "rotation",
+                    "amplitude": 10,
+                    "frequency": 0.5,
+                    "seed": 99,
+                    "name": "wiggle"
+                  },
+                  {
+                    "color": "#38BDF8",
+                    "radius": 20,
+                    "intensity": 2.0,
+                    "name": "glow"
+                  }
+                ]
               }
             }
           ]
@@ -591,11 +639,13 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 8,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 1.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 1.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -734,10 +784,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -751,11 +803,13 @@
             "gap": 24,
             "align-items": "center",
             "padding": 8,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -941,11 +995,13 @@
             "padding": 16,
             "background": "#1E293B",
             "border-radius": 20,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.8,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.8,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -1048,10 +1104,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -1077,11 +1135,13 @@
             "font-size": 22,
             "padding": 24,
             "border-radius": 16,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "states": [
             {
@@ -1121,10 +1181,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -1140,11 +1202,14 @@
             "color": "#FFFFFF",
             "font-weight": "bold",
             "text-align": "center",
-            "glow": {
-              "color": "#6366F1",
-              "radius": 25,
-              "intensity": 1.5
-            }
+            "animation": [
+              {
+                "color": "#6366F1",
+                "radius": 25,
+                "intensity": 1.5,
+                "name": "glow"
+              }
+            ]
           }
         },
         {
@@ -1154,11 +1219,13 @@
             "font-size": 32,
             "color": "#94A3B8",
             "text-align": "center",
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.8,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.8,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -1174,11 +1241,13 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 8,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 1.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 1.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -1357,10 +1426,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -1390,11 +1461,13 @@
                 "padding": 20,
                 "background": "#1E293B",
                 "border-radius": 16,
-                "animation": {
-                  "name": "fade_in_up",
-                  "delay": 0.3,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.3,
+                    "duration": 0.6,
+                    "name": "fade_in_up"
+                  }
+                ]
               },
               "children": [
                 {
@@ -1432,11 +1505,13 @@
                 "padding": 20,
                 "background": "#1E293B",
                 "border-radius": 16,
-                "animation": {
-                  "name": "scale_in",
-                  "delay": 0.5,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.5,
+                    "duration": 0.6,
+                    "name": "scale_in"
+                  }
+                ]
               },
               "children": [
                 {
@@ -1474,11 +1549,13 @@
                 "padding": 20,
                 "background": "#1E293B",
                 "border-radius": 16,
-                "animation": {
-                  "name": "bounce_in",
-                  "delay": 0.7,
-                  "duration": 0.8
-                }
+                "animation": [
+                  {
+                    "delay": 0.7,
+                    "duration": 0.8,
+                    "name": "bounce_in"
+                  }
+                ]
               },
               "children": [
                 {
@@ -1516,11 +1593,13 @@
                 "padding": 20,
                 "background": "#1E293B",
                 "border-radius": 16,
-                "animation": {
-                  "name": "blur_in",
-                  "delay": 0.9,
-                  "duration": 0.6
-                }
+                "animation": [
+                  {
+                    "delay": 0.9,
+                    "duration": 0.6,
+                    "name": "blur_in"
+                  }
+                ]
               },
               "children": [
                 {
@@ -1558,11 +1637,13 @@
                 "padding": 20,
                 "background": "#1E293B",
                 "border-radius": 16,
-                "animation": {
-                  "name": "elastic_in",
-                  "delay": 1.1,
-                  "duration": 0.8
-                }
+                "animation": [
+                  {
+                    "delay": 1.1,
+                    "duration": 0.8,
+                    "name": "elastic_in"
+                  }
+                ]
               },
               "children": [
                 {
@@ -1602,11 +1683,13 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 16,
-            "animation": {
-              "name": "fade_in",
-              "delay": 0.0,
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "delay": 0.0,
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           },
           "children": [
             {
@@ -1618,9 +1701,11 @@
               },
               "style": {
                 "color": "#6366F1",
-                "animation": {
-                  "name": "spin"
-                }
+                "animation": [
+                  {
+                    "name": "spin"
+                  }
+                ]
               }
             },
             {
@@ -1632,9 +1717,11 @@
               },
               "style": {
                 "color": "#FBBF24",
-                "animation": {
-                  "name": "shake"
-                }
+                "animation": [
+                  {
+                    "name": "shake"
+                  }
+                ]
               }
             },
             {
@@ -1646,9 +1733,11 @@
               },
               "style": {
                 "color": "#38BDF8",
-                "animation": {
-                  "name": "float"
-                }
+                "animation": [
+                  {
+                    "name": "float"
+                  }
+                ]
               }
             },
             {
@@ -1660,9 +1749,11 @@
               },
               "style": {
                 "color": "#22C55E",
-                "animation": {
-                  "name": "pulse"
-                }
+                "animation": [
+                  {
+                    "name": "pulse"
+                  }
+                ]
               }
             },
             {
@@ -1701,10 +1792,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -1719,11 +1812,13 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 32,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.2,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.2,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -1761,27 +1856,28 @@
                     "font-size": 44,
                     "color": "#FFFFFF",
                     "font-weight": "bold",
-                    "glow": {
-                      "color": "#6366F1",
-                      "radius": 15,
-                      "intensity": 1.5
-                    },
-                    "animation": {
-                      "wiggle": [
-                        {
-                          "property": "translate_x",
-                          "amplitude": 8,
-                          "frequency": 2,
-                          "seed": 42
-                        },
-                        {
-                          "property": "translate_y",
-                          "amplitude": 6,
-                          "frequency": 1.5,
-                          "seed": 13
-                        }
-                      ]
-                    }
+                    "animation": [
+                      {
+                        "property": "translate_x",
+                        "amplitude": 8,
+                        "frequency": 2,
+                        "seed": 42,
+                        "name": "wiggle"
+                      },
+                      {
+                        "property": "translate_y",
+                        "amplitude": 6,
+                        "frequency": 1.5,
+                        "seed": 13,
+                        "name": "wiggle"
+                      },
+                      {
+                        "color": "#6366F1",
+                        "radius": 15,
+                        "intensity": 1.5,
+                        "name": "glow"
+                      }
+                    ]
                   }
                 },
                 {
@@ -1832,27 +1928,28 @@
                   },
                   "style": {
                     "color": "#F43F5E",
-                    "glow": {
-                      "color": "#F43F5E",
-                      "radius": 15,
-                      "intensity": 1.5
-                    },
-                    "animation": {
-                      "wiggle": [
-                        {
-                          "property": "translate_x",
-                          "amplitude": 10,
-                          "frequency": 90,
-                          "mode": "sine"
-                        },
-                        {
-                          "property": "rotation",
-                          "amplitude": 6,
-                          "frequency": 75,
-                          "mode": "sine"
-                        }
-                      ]
-                    }
+                    "animation": [
+                      {
+                        "property": "translate_x",
+                        "amplitude": 10,
+                        "frequency": 90,
+                        "mode": "sine",
+                        "name": "wiggle"
+                      },
+                      {
+                        "property": "rotation",
+                        "amplitude": 6,
+                        "frequency": 75,
+                        "mode": "sine",
+                        "name": "wiggle"
+                      },
+                      {
+                        "color": "#F43F5E",
+                        "radius": 15,
+                        "intensity": 1.5,
+                        "name": "glow"
+                      }
+                    ]
                   }
                 },
                 {
@@ -1875,27 +1972,29 @@
             "font-size": 40,
             "color": "#FBBF24",
             "font-weight": "bold",
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 1.0,
-              "duration": 0.6,
-              "wiggle": [
-                {
-                  "property": "translate_x",
-                  "amplitude": 30,
-                  "frequency": 60,
-                  "mode": "sine",
-                  "decay": 1.5
-                },
-                {
-                  "property": "rotation",
-                  "amplitude": 15,
-                  "frequency": 50,
-                  "mode": "sine",
-                  "decay": 1.5
-                }
-              ]
-            }
+            "animation": [
+              {
+                "delay": 1.0,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              },
+              {
+                "property": "translate_x",
+                "amplitude": 30,
+                "frequency": 60,
+                "mode": "sine",
+                "decay": 1.5,
+                "name": "wiggle"
+              },
+              {
+                "property": "rotation",
+                "amplitude": 15,
+                "frequency": 50,
+                "mode": "sine",
+                "decay": 1.5,
+                "name": "wiggle"
+              }
+            ]
           }
         }
       ]
@@ -1924,10 +2023,12 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 3.0,
-            "animation": {
-              "name": "fade_in",
-              "duration": 0.5
-            }
+            "animation": [
+              {
+                "duration": 0.5,
+                "name": "fade_in"
+              }
+            ]
           }
         },
         {
@@ -2064,10 +2165,12 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 12,
-            "animation": {
-              "name": "fade_in_up",
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {
@@ -2191,23 +2294,25 @@
             "font-weight": "bold",
             "text-align": "center",
             "letter-spacing": 6.0,
-            "glow": {
-              "color": "#6366F1",
-              "radius": 30,
-              "intensity": 2.0
-            },
-            "animation": {
-              "name": "scale_in",
-              "duration": 0.8,
-              "wiggle": [
-                {
-                  "property": "translate_y",
-                  "amplitude": 6,
-                  "frequency": 0.8,
-                  "seed": 7
-                }
-              ]
-            }
+            "animation": [
+              {
+                "duration": 0.8,
+                "name": "scale_in"
+              },
+              {
+                "property": "translate_y",
+                "amplitude": 6,
+                "frequency": 0.8,
+                "seed": 7,
+                "name": "wiggle"
+              },
+              {
+                "color": "#6366F1",
+                "radius": 30,
+                "intensity": 2.0,
+                "name": "glow"
+              }
+            ]
           }
         },
         {
@@ -2217,11 +2322,13 @@
             "font-size": 32,
             "color": "#94A3B8",
             "text-align": "center",
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 0.6,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 0.6,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           }
         },
         {
@@ -2236,11 +2343,13 @@
             "justify-content": "center",
             "align-items": "center",
             "padding": 16,
-            "animation": {
-              "name": "fade_in_up",
-              "delay": 1.0,
-              "duration": 0.6
-            }
+            "animation": [
+              {
+                "delay": 1.0,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
           },
           "children": [
             {

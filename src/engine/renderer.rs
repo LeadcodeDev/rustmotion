@@ -463,8 +463,11 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
         };
     }
 
-    // Glow pre-pass: render only the blurred halo, then content renders on top
-    if let Some(ref glow) = layer_style.glow {
+    // Glow pre-pass: extract glow from animation effects
+    let glow_config = layer_style.animation.iter().find_map(|e| {
+        if let crate::schema::AnimationEffect::Glow(g) = e { Some(g) } else { None }
+    });
+    if let Some(glow) = glow_config {
         let radius = if props.glow_radius >= 0.0 { props.glow_radius } else { glow.radius };
         let intensity = if props.glow_intensity >= 0.0 { props.glow_intensity } else { glow.intensity };
         let mut glow_color = color4f_from_hex(&glow.color);

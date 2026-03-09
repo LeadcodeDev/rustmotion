@@ -299,15 +299,107 @@ pub struct GridPlacement {
     pub span: Option<u32>,
 }
 
-// --- Animation style (nested inside LayerStyle) ---
+// --- Animation effects (nested inside LayerStyle as typed array) ---
 
-/// Animation configuration for a component.
-/// Placed under `style.animation` in JSON.
+/// A single animation effect. Discriminated by `"type"` in JSON.
+/// Each preset name is a valid type, plus special types: glow, wiggle, keyframes, motion_blur.
+///
+/// Examples:
+/// ```json
+/// { "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }
+/// { "name": "glow", "color": "#F68F2B", "radius": 16, "intensity": 1.2 }
+/// { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 2 }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AnimationStyle {
-    /// Preset animation name (e.g. "fade_in_up", "scale_in").
-    #[serde(default)]
-    pub name: Option<AnimationPreset>,
+#[serde(tag = "name", rename_all = "snake_case")]
+pub enum AnimationEffect {
+    // --- Entrance presets ---
+    FadeIn(AnimationTiming),
+    FadeInUp(AnimationTiming),
+    FadeInDown(AnimationTiming),
+    FadeInLeft(AnimationTiming),
+    FadeInRight(AnimationTiming),
+    SlideInLeft(AnimationTiming),
+    SlideInRight(AnimationTiming),
+    SlideInUp(AnimationTiming),
+    SlideInDown(AnimationTiming),
+    ScaleIn(AnimationTiming),
+    BounceIn(AnimationTiming),
+    BlurIn(AnimationTiming),
+    RotateIn(AnimationTiming),
+    ElasticIn(AnimationTiming),
+    // --- Exit presets ---
+    FadeOut(AnimationTiming),
+    FadeOutUp(AnimationTiming),
+    FadeOutDown(AnimationTiming),
+    SlideOutLeft(AnimationTiming),
+    SlideOutRight(AnimationTiming),
+    SlideOutUp(AnimationTiming),
+    SlideOutDown(AnimationTiming),
+    ScaleOut(AnimationTiming),
+    BounceOut(AnimationTiming),
+    BlurOut(AnimationTiming),
+    RotateOut(AnimationTiming),
+    // --- Continuous presets ---
+    Pulse(AnimationTiming),
+    Float(AnimationTiming),
+    Shake(AnimationTiming),
+    Spin(AnimationTiming),
+    // --- Special presets ---
+    Typewriter(AnimationTiming),
+    WipeLeft(AnimationTiming),
+    WipeRight(AnimationTiming),
+    // --- Non-preset effects ---
+    Glow(GlowConfig),
+    Wiggle(WiggleConfig),
+    Keyframes(KeyframesConfig),
+    MotionBlur(MotionBlurConfig),
+}
+
+impl AnimationEffect {
+    /// If this is a preset variant, return the corresponding AnimationPreset and timing.
+    pub fn as_preset(&self) -> Option<(AnimationPreset, &AnimationTiming)> {
+        match self {
+            Self::FadeIn(t) => Some((AnimationPreset::FadeIn, t)),
+            Self::FadeInUp(t) => Some((AnimationPreset::FadeInUp, t)),
+            Self::FadeInDown(t) => Some((AnimationPreset::FadeInDown, t)),
+            Self::FadeInLeft(t) => Some((AnimationPreset::FadeInLeft, t)),
+            Self::FadeInRight(t) => Some((AnimationPreset::FadeInRight, t)),
+            Self::SlideInLeft(t) => Some((AnimationPreset::SlideInLeft, t)),
+            Self::SlideInRight(t) => Some((AnimationPreset::SlideInRight, t)),
+            Self::SlideInUp(t) => Some((AnimationPreset::SlideInUp, t)),
+            Self::SlideInDown(t) => Some((AnimationPreset::SlideInDown, t)),
+            Self::ScaleIn(t) => Some((AnimationPreset::ScaleIn, t)),
+            Self::BounceIn(t) => Some((AnimationPreset::BounceIn, t)),
+            Self::BlurIn(t) => Some((AnimationPreset::BlurIn, t)),
+            Self::RotateIn(t) => Some((AnimationPreset::RotateIn, t)),
+            Self::ElasticIn(t) => Some((AnimationPreset::ElasticIn, t)),
+            Self::FadeOut(t) => Some((AnimationPreset::FadeOut, t)),
+            Self::FadeOutUp(t) => Some((AnimationPreset::FadeOutUp, t)),
+            Self::FadeOutDown(t) => Some((AnimationPreset::FadeOutDown, t)),
+            Self::SlideOutLeft(t) => Some((AnimationPreset::SlideOutLeft, t)),
+            Self::SlideOutRight(t) => Some((AnimationPreset::SlideOutRight, t)),
+            Self::SlideOutUp(t) => Some((AnimationPreset::SlideOutUp, t)),
+            Self::SlideOutDown(t) => Some((AnimationPreset::SlideOutDown, t)),
+            Self::ScaleOut(t) => Some((AnimationPreset::ScaleOut, t)),
+            Self::BounceOut(t) => Some((AnimationPreset::BounceOut, t)),
+            Self::BlurOut(t) => Some((AnimationPreset::BlurOut, t)),
+            Self::RotateOut(t) => Some((AnimationPreset::RotateOut, t)),
+            Self::Pulse(t) => Some((AnimationPreset::Pulse, t)),
+            Self::Float(t) => Some((AnimationPreset::Float, t)),
+            Self::Shake(t) => Some((AnimationPreset::Shake, t)),
+            Self::Spin(t) => Some((AnimationPreset::Spin, t)),
+            Self::Typewriter(t) => Some((AnimationPreset::Typewriter, t)),
+            Self::WipeLeft(t) => Some((AnimationPreset::WipeLeft, t)),
+            Self::WipeRight(t) => Some((AnimationPreset::WipeRight, t)),
+            _ => None,
+        }
+    }
+}
+
+/// Timing configuration for preset animations.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
     pub delay: f64,
@@ -317,44 +409,86 @@ pub struct AnimationStyle {
     /// Loop the animation continuously.
     #[serde(default, rename = "loop")]
     pub repeat: bool,
-    /// Custom keyframe animations.
-    #[serde(default)]
-    pub keyframes: Vec<Animation>,
-    /// Procedural noise-based wiggle effects.
-    #[serde(default)]
-    pub wiggle: Option<Vec<WiggleConfig>>,
-    /// Motion blur intensity.
-    #[serde(default)]
-    pub motion_blur: Option<f32>,
 }
 
 fn default_animation_duration() -> f64 {
     0.8
 }
 
-impl Default for AnimationStyle {
+impl Default for AnimationTiming {
     fn default() -> Self {
         Self {
-            name: None,
             delay: 0.0,
             duration: 0.8,
             repeat: false,
-            keyframes: Vec::new(),
-            wiggle: None,
-            motion_blur: None,
         }
     }
 }
 
-impl AnimationStyle {
-    /// Build a PresetConfig for compatibility with resolve_animations.
-    pub fn preset_config(&self) -> PresetConfig {
+impl AnimationTiming {
+    /// Convert to PresetConfig for compatibility with resolve_animations.
+    pub fn to_preset_config(&self) -> PresetConfig {
         PresetConfig {
             delay: self.delay,
             duration: self.duration,
             repeat: self.repeat,
         }
     }
+}
+
+/// Custom keyframe animations configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KeyframesConfig {
+    pub keyframes: Vec<Animation>,
+    #[serde(default)]
+    pub delay: f64,
+    #[serde(default = "default_animation_duration")]
+    pub duration: f64,
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+}
+
+/// Motion blur configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MotionBlurConfig {
+    #[serde(default)]
+    pub intensity: f32,
+}
+
+/// Deserialize `animation` as either a single AnimationEffect or a Vec.
+fn deserialize_animation_effects<'de, D>(deserializer: D) -> Result<Vec<AnimationEffect>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct OneOrMany;
+
+    impl<'de> de::Visitor<'de> for OneOrMany {
+        type Value = Vec<AnimationEffect>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a single animation effect or an array of animation effects")
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            Vec::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+        where
+            M: de::MapAccess<'de>,
+        {
+            let effect =
+                AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            Ok(vec![effect])
+        }
+    }
+
+    deserializer.deserialize_any(OneOrMany)
 }
 
 // --- Unified LayerStyle ---
@@ -440,8 +574,6 @@ pub struct LayerStyle {
     pub filter: Option<FilterConfig>,
     #[serde(default, rename = "drop-shadow")]
     pub drop_shadow: Option<DropShadow>,
-    #[serde(default)]
-    pub glow: Option<GlowConfig>,
     #[serde(default, rename = "blend-mode")]
     pub blend_mode: Option<BlendMode>,
     #[serde(default, rename = "clip-path")]
@@ -450,9 +582,9 @@ pub struct LayerStyle {
     pub aspect_ratio: Option<f32>,
     #[serde(default, rename = "text-gradient")]
     pub text_gradient: Option<TextGradient>,
-    // Animation
-    #[serde(default)]
-    pub animation: Option<AnimationStyle>,
+    // Animation effects (accepts single object or array)
+    #[serde(default, deserialize_with = "deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
 }
 
 impl Default for LayerStyle {
@@ -493,12 +625,11 @@ impl Default for LayerStyle {
             text_background: None,
             filter: None,
             drop_shadow: None,
-            glow: None,
             blend_mode: None,
             clip_path: None,
             aspect_ratio: None,
             text_gradient: None,
-            animation: None,
+            animation: Vec::new(),
         }
     }
 }

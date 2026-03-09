@@ -21,8 +21,8 @@ macro_rules! impl_traits {
 
     (@single $type:ty, Animatable, $field:ident) => {
         impl $crate::traits::Animatable for $type {
-            fn animation_style(&self) -> Option<&$crate::schema::AnimationStyle> {
-                self.$field.animation.as_ref()
+            fn animation_effects(&self) -> &[$crate::schema::AnimationEffect] {
+                &self.$field.animation
             }
         }
     };

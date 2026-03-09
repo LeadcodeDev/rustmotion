@@ -1,7 +1,7 @@
 use anyhow::Result;
 use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
 
-use super::animator::{apply_wiggles, resolve_animations, AnimatedProperties};
+use super::animator::{apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
 use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
 use crate::layout::{Constraints, LayoutNode};
@@ -41,7 +41,10 @@ pub fn render_component(
 
     // 2. Resolve animations
     let props = if let Some(animatable) = component.as_animatable() {
-        if let Some(config) = animatable.animation_style() {
+        let effects = animatable.animation_effects();
+        if !effects.is_empty() {
+            let extracted = extract_effects(effects);
+
             // Adjust animation time by start_at offset
             let anim_time = if let Some(timed) = component.as_timed() {
                 let (start_at, _) = timed.timing();
@@ -54,22 +57,40 @@ pub fn render_component(
                 ctx.time
             };
 
-            let preset_config = config.preset_config();
-            let mut props = resolve_animations(
-                &config.keyframes,
-                config.name.as_ref(),
-                Some(&preset_config),
-                anim_time,
-                ctx.scene_duration,
-            );
+            // Resolve all presets + keyframes
+            let mut props = AnimatedProperties::default();
+            for (preset, preset_config) in &extracted.presets {
+                let p = resolve_animations(
+                    &[],
+                    Some(preset),
+                    Some(preset_config),
+                    anim_time,
+                    ctx.scene_duration,
+                );
+                props.merge(&p);
+            }
 
-            // Apply wiggles additively (using original time, not adjusted time)
-            if let Some(ref wiggles) = config.wiggle {
-                apply_wiggles(&mut props, wiggles, ctx.time);
+            // Apply explicit keyframes on top
+            if !extracted.keyframes.is_empty() {
+                let kf_animations: Vec<_> = extracted.keyframes.into_iter().cloned().collect();
+                let kf_props = resolve_animations(
+                    &kf_animations,
+                    None,
+                    None,
+                    anim_time,
+                    ctx.scene_duration,
+                );
+                props.merge(&kf_props);
+            }
+
+            // Apply wiggles additively
+            if !extracted.wiggles.is_empty() {
+                let wiggles: Vec<_> = extracted.wiggles.into_iter().cloned().collect();
+                apply_wiggles(&mut props, &wiggles, ctx.time);
             }
 
             // Handle motion blur
-            if let Some(blur_intensity) = config.motion_blur {
+            if let Some(blur_intensity) = extracted.motion_blur {
                 if blur_intensity > 0.01 {
                     return render_component_with_motion_blur(
                         canvas,
@@ -146,7 +167,6 @@ fn render_component_inner(
     }
 
     // Build image filter chain (blur only)
-    let layer_style = styled.style_config();
     let mut image_filter: Option<skia_safe::ImageFilter> = None;
 
     if props.blur > 0.01 {
@@ -170,7 +190,13 @@ fn render_component_inner(
     }
 
     // Glow pre-pass: render only the blurred halo, content renders on top
-    if let Some(ref glow) = layer_style.glow {
+    // Extract glow from animation effects
+    let glow_config = if let Some(animatable) = component.as_animatable() {
+        extract_effects(animatable.animation_effects()).glow.cloned()
+    } else {
+        None
+    };
+    if let Some(ref glow) = glow_config {
         let radius = if props.glow_radius >= 0.0 { props.glow_radius } else { glow.radius };
         let intensity = if props.glow_intensity >= 0.0 { props.glow_intensity } else { glow.intensity };
         let mut glow_color = color4f_from_hex(&glow.color);
@@ -251,17 +277,22 @@ fn render_component_with_motion_blur(
         };
 
         let mut props = if let Some(animatable) = component.as_animatable() {
-            if let Some(anim_config) = animatable.animation_style() {
-                let preset_config = anim_config.preset_config();
-                let mut p = resolve_animations(
-                    &anim_config.keyframes,
-                    anim_config.name.as_ref(),
-                    Some(&preset_config),
-                    anim_time,
-                    ctx.scene_duration,
-                );
-                if let Some(ref wiggles) = anim_config.wiggle {
-                    apply_wiggles(&mut p, wiggles, sample_time);
+            let effects = animatable.animation_effects();
+            if !effects.is_empty() {
+                let extracted = extract_effects(effects);
+                let mut p = AnimatedProperties::default();
+                for (preset, preset_config) in &extracted.presets {
+                    let pp = resolve_animations(&[], Some(preset), Some(preset_config), anim_time, ctx.scene_duration);
+                    p.merge(&pp);
+                }
+                if !extracted.keyframes.is_empty() {
+                    let kf: Vec<_> = extracted.keyframes.into_iter().cloned().collect();
+                    let kp = resolve_animations(&kf, None, None, anim_time, ctx.scene_duration);
+                    p.merge(&kp);
+                }
+                if !extracted.wiggles.is_empty() {
+                    let wiggles: Vec<_> = extracted.wiggles.into_iter().cloned().collect();
+                    apply_wiggles(&mut p, &wiggles, sample_time);
                 }
                 p
             } else {

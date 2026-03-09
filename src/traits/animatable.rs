@@ -1,6 +1,6 @@
-use crate::schema::AnimationStyle;
+use crate::schema::AnimationEffect;
 
 /// Trait for components that support animation.
 pub trait Animatable {
-    fn animation_style(&self) -> Option<&AnimationStyle>;
+    fn animation_effects(&self) -> &[AnimationEffect];
 }
