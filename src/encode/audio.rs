@@ -7,6 +7,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+use crate::error::RustmotionError;
 use crate::schema::AudioTrack;
 
 const TARGET_SAMPLE_RATE: u32 = 48000;
@@ -15,7 +16,7 @@ const TARGET_CHANNELS: u32 = 2;
 /// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
 fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
     let file = File::open(path)
-        .map_err(|e| anyhow::anyhow!("Failed to open audio file '{}': {}", path, e))?;
+        .map_err(|e| RustmotionError::AudioOpen { path: path.to_string(), reason: e.to_string() })?;
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -26,13 +27,13 @@ fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
 
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| anyhow::anyhow!("Failed to probe audio format for '{}': {}", path, e))?;
+        .map_err(|e| RustmotionError::AudioProbe { path: path.to_string(), reason: e.to_string() })?;
 
     let mut format = probed.format;
 
     let track = format
         .default_track()
-        .ok_or_else(|| anyhow::anyhow!("No audio track found in '{}'", path))?;
+        .ok_or_else(|| RustmotionError::AudioNoTrack { path: path.to_string() })?;
 
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
@@ -40,7 +41,7 @@ fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| anyhow::anyhow!("Failed to create decoder for '{}': {}", path, e))?;
+        .map_err(|e| RustmotionError::AudioDecoder { path: path.to_string(), reason: e.to_string() })?;
 
     let mut all_samples: Vec<f32> = Vec::new();
 

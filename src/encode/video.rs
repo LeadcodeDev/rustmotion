@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::engine::transition::apply_transition;
 use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
+use crate::error::RustmotionError;
 use crate::schema::{Scene, ResolvedScenario as Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
@@ -50,7 +51,7 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        anyhow::bail!("No frames to render (total duration is 0)");
+        return Err(RustmotionError::NoFrames.into());
     }
 
     let mut tui = if !quiet {
@@ -250,7 +251,7 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        anyhow::bail!("No frames to render");
+        return Err(RustmotionError::NoFrames.into());
     }
 
     // Create output directory
@@ -283,7 +284,7 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
             let (frame_num, rgba) = result?;
             let path = format!("{}/frame_{:05}.png", output_dir, frame_num);
             let img = image::RgbaImage::from_raw(width, height, rgba)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create image"))?;
+                .ok_or(RustmotionError::PixelImage)?;
             img.save(&path)?;
         }
     }
@@ -308,7 +309,7 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        anyhow::bail!("No frames to render");
+        return Err(RustmotionError::NoFrames.into());
     }
 
     let mut tui = if !quiet {
@@ -323,10 +324,10 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
 
     let file = File::create(output_path)?;
     let mut encoder = gif::Encoder::new(BufWriter::new(file), gif_w, gif_h, &[])
-        .map_err(|e| anyhow::anyhow!("Failed to create GIF encoder: {}", e))?;
+        .map_err(|e| RustmotionError::GifEncoder { reason: e.to_string() })?;
 
     encoder.set_repeat(gif::Repeat::Infinite)
-        .map_err(|e| anyhow::anyhow!("Failed to set GIF repeat: {}", e))?;
+        .map_err(|e| RustmotionError::GifRepeat { reason: e.to_string() })?;
 
     let delay = (100.0 / fps as f64).round() as u16; // GIF delay in 1/100 seconds
 
@@ -352,7 +353,7 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
             let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba.clone(), 10);
             frame.delay = delay;
             encoder.write_frame(&frame)
-                .map_err(|e| anyhow::anyhow!("Failed to write GIF frame: {}", e))?;
+                .map_err(|e| RustmotionError::GifFrame { reason: e.to_string() })?;
         }
     }
 
@@ -417,7 +418,7 @@ pub fn encode_with_ffmpeg(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        anyhow::bail!("No frames to render");
+        return Err(RustmotionError::NoFrames.into());
     }
 
     let mut tui = if !quiet {
@@ -505,10 +506,10 @@ pub fn encode_with_ffmpeg(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}. Is ffmpeg installed?", e))?;
+        .map_err(|e| RustmotionError::FfmpegSpawn { reason: e.to_string() })?;
 
     let mut stdin = child.stdin.take()
-        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin pipe"))?;
+        .ok_or(RustmotionError::FfmpegPipe)?;
 
     // Render frames in parallel batches, pipe RGBA sequentially to FFmpeg
     let batch_size = (rayon::current_num_threads() * 2).max(4);
@@ -539,7 +540,7 @@ pub fn encode_with_ffmpeg(
             match result {
                 Ok(rgba) => {
                     if let Err(e) = stdin.write_all(&rgba) {
-                        pipe_error = Some(anyhow::anyhow!("Failed to write to FFmpeg pipe: {}", e));
+                        pipe_error = Some(RustmotionError::FfmpegWrite { reason: e.to_string() }.into());
                         break;
                     }
                 }
@@ -555,7 +556,7 @@ pub fn encode_with_ffmpeg(
     drop(stdin);
 
     let status = child.wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait for FFmpeg: {}", e))?;
+        .map_err(|e| RustmotionError::FfmpegWait { reason: e.to_string() })?;
 
     // Cleanup audio temp directory
     if let Some(ref tmp_dir) = audio_tmp_dir {
@@ -567,7 +568,7 @@ pub fn encode_with_ffmpeg(
     }
 
     if !status.success() {
-        anyhow::bail!("FFmpeg encoding failed");
+        return Err(RustmotionError::FfmpegFailed.into());
     }
 
     if let Some(tui) = tui {

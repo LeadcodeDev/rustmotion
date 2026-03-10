@@ -4,6 +4,7 @@ use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
 use super::animator::{apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
 use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
@@ -249,7 +250,7 @@ fn render_component_with_motion_blur(
         None,
     );
     let mut temp_surface = surfaces::raster(&info, None, None)
-        .ok_or_else(|| anyhow::anyhow!("Failed to create motion blur surface"))?;
+        .ok_or(RustmotionError::MotionBlurSurface)?;
 
     temp_surface
         .canvas()
@@ -365,7 +366,7 @@ pub fn render_frame_v2(
     );
 
     let mut surface = surfaces::raster(&info, None, None)
-        .ok_or_else(|| anyhow::anyhow!("Failed to create Skia surface"))?;
+        .ok_or(RustmotionError::SurfaceCreation)?;
 
     let canvas = surface.canvas();
 
@@ -398,7 +399,7 @@ pub fn render_frame_v2(
     surface
         .read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
         .then_some(())
-        .ok_or_else(|| anyhow::anyhow!("Failed to read pixels from Skia surface"))?;
+        .ok_or(RustmotionError::PixelRead)?;
 
     Ok(pixels)
 }

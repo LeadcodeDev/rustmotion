@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 
+use crate::error::RustmotionError;
 use crate::schema::{IncludeDirective, ResolvedScenario, Scene, SceneEntry, Scenario};
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
@@ -42,11 +43,10 @@ fn resolve_entries(
             }
             SceneEntry::Include(directive) => {
                 if depth >= MAX_INCLUDE_DEPTH {
-                    bail!(
-                        "include depth limit ({}) exceeded while resolving '{}'",
-                        MAX_INCLUDE_DEPTH,
-                        directive.include
-                    );
+                    return Err(RustmotionError::IncludeDepthExceeded {
+                        limit: MAX_INCLUDE_DEPTH,
+                        path: directive.include.clone(),
+                    }.into());
                 }
                 let scenes = fetch_and_resolve(&directive, source, depth + 1, audio)?;
                 result.extend(scenes);
@@ -72,15 +72,15 @@ fn fetch_and_resolve(
         (body, child_source)
     } else {
         let path = resolve_local_path(&directive.include, parent_source)?;
-        let body = std::fs::read_to_string(&path).with_context(|| {
-            format!("include: file not found '{}'", path.display())
+        let body = std::fs::read_to_string(&path).map_err(|_| {
+            RustmotionError::IncludeFileNotFound { path: path.display().to_string() }
         })?;
         let child_source = IncludeSource::File(path);
         (body, child_source)
     };
 
     let child_scenario: Scenario = serde_json::from_str(&json_str)
-        .with_context(|| format!("include: failed to parse '{}'", directive.include))?;
+        .map_err(RustmotionError::from)?;
 
     // Merge audio tracks from the included file
     audio.extend(child_scenario.audio);
@@ -93,12 +93,11 @@ fn fetch_and_resolve(
         let total = scenes.len();
         for &idx in indices {
             if idx >= total {
-                bail!(
-                    "include: scenes[{}] is out of bounds in '{}' (file has {} scenes)",
-                    idx,
-                    directive.include,
-                    total
-                );
+                return Err(RustmotionError::IncludeSceneOutOfBounds {
+                    index: idx,
+                    path: directive.include.clone(),
+                    total,
+                }.into());
             }
         }
         let mut slots: Vec<Option<Scene>> = scenes.into_iter().map(Some).collect();
@@ -123,10 +122,9 @@ fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf>
             Ok(parent_dir.join(relative))
         }
         IncludeSource::Inline => {
-            bail!(
-                "include: cannot resolve relative path '{}' when scenario was given as --json (use a file path or URL instead)",
-                relative
-            );
+            return Err(RustmotionError::IncludeInlinePath {
+                path: relative.to_string(),
+            }.into());
         }
     }
 }
@@ -134,10 +132,10 @@ fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf>
 fn fetch_remote(url: &str) -> Result<String> {
     let response = ureq::get(url)
         .call()
-        .map_err(|e| anyhow::anyhow!("include: failed to fetch '{}': {}", url, e))?;
+        .map_err(|e| RustmotionError::IncludeRemoteFetch { url: url.to_string(), reason: e.to_string() })?;
     let body = response
         .into_body()
         .read_to_string()
-        .map_err(|e| anyhow::anyhow!("include: failed to read response for '{}': {}", url, e))?;
+        .map_err(|e| RustmotionError::IncludeRemoteFetch { url: url.to_string(), reason: e.to_string() })?;
     Ok(body)
 }

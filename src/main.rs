@@ -1,5 +1,6 @@
 mod encode;
 mod engine;
+mod error;
 mod include;
 mod schema;
 mod tui;
@@ -14,6 +15,7 @@ mod traits;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use components::{ChildComponent, Component};
+use error::RustmotionError;
 use schema::{CardDisplay, ResolvedScenario, Scenario};
 use std::path::PathBuf;
 
@@ -148,7 +150,7 @@ fn main() -> Result<()> {
             watch,
         } => {
             if watch {
-                let input_path = input.ok_or_else(|| anyhow::anyhow!("--watch requires an input file path (cannot use --json or stdin)"))?;
+                let input_path = input.ok_or(RustmotionError::WatchRequiresFile)?;
                 cmd_watch(&input_path, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
             } else {
                 let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
@@ -167,9 +169,9 @@ fn main() -> Result<()> {
 
 fn load_scenario(input: &PathBuf) -> Result<ResolvedScenario> {
     let json_str = std::fs::read_to_string(input)
-        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.display(), e))?;
+        .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
     let scenario: Scenario = serde_json::from_str(&json_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
+        .map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }
 
@@ -179,16 +181,16 @@ fn load_scenario_from_source(
 ) -> Result<ResolvedScenario> {
     match (input, json) {
         (Some(_), Some(_)) => {
-            anyhow::bail!("Cannot use both input file and --json")
+            Err(RustmotionError::ConflictingInput.into())
         }
         (Some(path), None) => load_scenario(path),
         (None, Some(json_str)) => {
             let scenario: Scenario = serde_json::from_str(json_str)
-                .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
+                .map_err(RustmotionError::from)?;
             include::resolve_includes(scenario, &include::IncludeSource::Inline)
         }
         (None, None) => {
-            anyhow::bail!("Provide either an input file or --json")
+            Err(RustmotionError::MissingInput.into())
         }
     }
 }
@@ -325,7 +327,7 @@ fn cmd_watch(
     // Debounce: wait for changes, then re-render
     loop {
         // Block until a change event
-        rx.recv().map_err(|_| anyhow::anyhow!("File watcher channel closed"))?;
+        rx.recv().map_err(|_| RustmotionError::WatcherClosed)?;
 
         // Drain any additional events (debounce)
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -362,23 +364,19 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
 
             // Save as PNG using the image crate
             let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create image from pixels"))?;
+                .ok_or(RustmotionError::PixelImage)?;
             img.save(output)?;
             return Ok(());
         }
         frame_offset += scene_frames;
     }
 
-    anyhow::bail!(
-        "Frame {} is out of range (total frames: {})",
-        frame_num,
-        frame_offset
-    );
+    Err(RustmotionError::FrameOutOfRange { frame: frame_num, total: frame_offset }.into())
 }
 
 fn cmd_validate(input: &PathBuf) -> Result<()> {
     let json_str = std::fs::read_to_string(input)
-        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.display(), e))?;
+        .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
 
     // Parse JSON
     let scenario: Result<Scenario, _> = serde_json::from_str(&json_str);
@@ -604,7 +602,7 @@ fn cmd_still(
             }
 
             let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create image from pixels"))?;
+                .ok_or(RustmotionError::PixelImage)?;
 
             let fmt = format.as_deref().unwrap_or_else(|| {
                 output.extension()
@@ -646,7 +644,7 @@ fn cmd_still(
         scene_start = scene_end;
     }
 
-    anyhow::bail!("Time {:.2}s is beyond video duration", time);
+    Err(RustmotionError::TimeOutOfRange { time }.into())
 }
 
 fn cmd_info(input: &PathBuf) -> Result<()> {

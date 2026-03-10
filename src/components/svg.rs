@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::asset_cache;
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -44,7 +45,7 @@ impl Widget for Svg {
             data.hash(&mut hasher);
             format!("svg-inline:{}:{}x{}", hasher.finish(), target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
         } else {
-            return Err(anyhow::anyhow!("SVG layer must have either 'src' or 'data'"));
+            return Err(RustmotionError::SvgMissingSrc.into());
         };
 
         let cache = asset_cache();
@@ -53,7 +54,7 @@ impl Widget for Svg {
         } else {
             let svg_data = if let Some(ref src) = self.src {
                 std::fs::read(src)
-                    .map_err(|e| anyhow::anyhow!("Failed to load SVG '{}': {}", src, e))?
+                    .map_err(|e| RustmotionError::SvgLoad { path: src.clone(), reason: e.to_string() })?
             } else if let Some(ref data) = self.data {
                 data.as_bytes().to_vec()
             } else {
@@ -62,14 +63,14 @@ impl Widget for Svg {
 
             let opt = usvg::Options::default();
             let tree = usvg::Tree::from_data(&svg_data, &opt)
-                .map_err(|e| anyhow::anyhow!("Failed to parse SVG: {}", e))?;
+                .map_err(|e| RustmotionError::SvgParse { reason: e.to_string() })?;
 
             let svg_size = tree.size();
             let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
             let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
 
             let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for SVG"))?;
+                .ok_or_else(|| RustmotionError::PixmapCreation { target: "SVG".to_string() })?;
 
             let scale_x = target_w as f32 / svg_size.width();
             let scale_y = target_h as f32 / svg_size.height();
@@ -85,7 +86,7 @@ impl Widget for Svg {
                 None,
             );
             let decoded = skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create Skia image from SVG"))?;
+                .ok_or_else(|| RustmotionError::SkiaImageCreation { target: "SVG".to_string() })?;
             cache.insert(cache_key, decoded.clone());
             decoded
         };

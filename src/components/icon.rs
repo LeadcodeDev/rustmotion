@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::{asset_cache, fetch_icon_svg};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -42,14 +43,14 @@ impl Widget for Icon {
 
             let opt = usvg::Options::default();
             let tree = usvg::Tree::from_data(&svg_data, &opt)
-                .map_err(|e| anyhow::anyhow!("Failed to parse icon SVG '{}': {}", self.icon, e))?;
+                .map_err(|e| RustmotionError::IconParse { icon: self.icon.clone(), reason: e.to_string() })?;
 
             let svg_size = tree.size();
             let render_w = target_w.max(1);
             let render_h = target_h.max(1);
 
             let mut pixmap = tiny_skia::Pixmap::new(render_w, render_h)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for icon"))?;
+                .ok_or_else(|| RustmotionError::PixmapCreation { target: "icon".to_string() })?;
 
             let scale_x = render_w as f32 / svg_size.width();
             let scale_y = render_h as f32 / svg_size.height();
@@ -65,7 +66,7 @@ impl Widget for Icon {
                 None,
             );
             let decoded = skia_safe::images::raster_from_data(&img_info, img_data, render_w as usize * 4)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create Skia image from icon"))?;
+                .ok_or_else(|| RustmotionError::SkiaImageCreation { target: "icon".to_string() })?;
             cache.insert(cache_key, decoded.clone());
             decoded
         };

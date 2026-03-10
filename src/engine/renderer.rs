@@ -8,6 +8,7 @@ use skia_safe::{
 };
 
 use crate::components::{ChildComponent, Component};
+use crate::error::RustmotionError;
 use crate::schema::{
     FontEntry, ShapeType,
 };
@@ -288,7 +289,7 @@ pub(crate) fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y
 pub(crate) fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     let (prefix, name) = icon
         .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("Invalid icon format: '{}' (expected 'prefix:name')", icon))?;
+        .ok_or_else(|| RustmotionError::InvalidIconFormat { icon: icon.to_string() })?;
     let hex_color = color.trim_start_matches('#');
     let width = width.max(1);
     let height = height.max(1);
@@ -298,11 +299,11 @@ pub(crate) fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -
     );
     let response = ureq::get(&url)
         .call()
-        .map_err(|e| anyhow::anyhow!("Failed to fetch icon '{}': {}", icon, e))?;
+        .map_err(|e| RustmotionError::IconFetch { icon: icon.to_string(), reason: e.to_string() })?;
     let body = response
         .into_body()
         .read_to_vec()
-        .map_err(|e| anyhow::anyhow!("Failed to read icon response: {}", e))?;
+        .map_err(|e| RustmotionError::IconFetch { icon: icon.to_string(), reason: e.to_string() })?;
     Ok(body)
 }
 
@@ -543,10 +544,10 @@ pub(crate) fn extract_video_frame(src: &str, time: f64, width: u32, height: u32)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg for video frame extraction: {}. Is ffmpeg installed?", e))?;
+        .map_err(|e| RustmotionError::FfmpegSpawn { reason: e.to_string() })?;
 
     if !output.status.success() {
-        anyhow::bail!("ffmpeg failed to extract frame from '{}'", src);
+        return Err(RustmotionError::FfmpegFrameExtract { src: src.to_string() }.into());
     }
 
     Ok(output.stdout)
