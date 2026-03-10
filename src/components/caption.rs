@@ -1,9 +1,9 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, Rect, TextBlob};
+use skia_safe::{Canvas, Font, FontStyle, Rect};
 
-use crate::engine::renderer::{font_mgr, paint_from_hex};
+use crate::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{CaptionStyle, CaptionWord, LayerStyle};
 use crate::traits::{RenderContext, Widget};
@@ -40,13 +40,14 @@ impl Widget for Caption {
             .unwrap_or_else(|| fm.match_family_style("sans-serif", FontStyle::bold()).unwrap());
 
         let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
 
         match self.mode {
             CaptionStyle::WordByWord => {
                 for word in &self.words {
                     if ctx.time >= word.start && ctx.time < word.end {
                         let paint = paint_from_hex(&self.active_color);
-                        let (text_width, _) = font.measure_str(&word.text, None);
+                        let text_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
 
                         let cx = layout.width / 2.0;
 
@@ -63,23 +64,21 @@ impl Widget for Caption {
                             canvas.draw_rrect(rrect, &bg_paint);
                         }
 
-                        if let Some(blob) = TextBlob::new(&word.text, &font) {
-                            let x = cx - text_width / 2.0;
-                            canvas.draw_text_blob(&blob, (x, 0.0), &paint);
-                        }
+                        let x = cx - text_width / 2.0;
+                        draw_text_with_fallback(canvas, &word.text, &font, &emoji_font, 0.0, x, 0.0, &paint);
                         break;
                     }
                 }
             }
             CaptionStyle::Highlight | CaptionStyle::Karaoke => {
                 let max_width = self.max_width.unwrap_or(f32::MAX);
-                let space_width = font.measure_str(" ", None).0;
+                let space_width = measure_text_with_fallback(" ", &font, &emoji_font, 0.0);
 
                 let mut lines: Vec<Vec<(usize, f32)>> = vec![vec![]];
                 let mut current_x = 0.0f32;
 
                 for (i, word) in self.words.iter().enumerate() {
-                    let (word_width, _) = font.measure_str(&word.text, None);
+                    let word_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
                     if current_x + word_width > max_width && !lines.last().unwrap().is_empty() {
                         lines.push(vec![]);
                         current_x = 0.0;
@@ -120,9 +119,7 @@ impl Widget for Caption {
                         let word_color = if is_active { &self.active_color } else { color };
                         let paint = paint_from_hex(word_color);
 
-                        if let Some(blob) = TextBlob::new(&word.text, &font) {
-                            canvas.draw_text_blob(&blob, (x, y), &paint);
-                        }
+                        draw_text_with_fallback(canvas, &word.text, &font, &emoji_font, 0.0, x, y, &paint);
                         x += word_width + space_width;
                     }
                 }

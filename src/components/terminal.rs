@@ -5,7 +5,7 @@ use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
 use crate::engine::animator::ease;
 use crate::error::RustmotionError;
-use crate::engine::renderer::{font_mgr, paint_from_hex};
+use crate::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -259,15 +259,15 @@ impl Widget for Terminal {
             // Title
             if let Some(title) = &self.title {
                 let font = self.make_font();
+                let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+                let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
                 let mut title_paint = paint_from_hex(self.theme.title_color());
                 title_paint.set_anti_alias(true);
-                if let Some(blob) = skia_safe::TextBlob::new(title, &font) {
-                    let blob_w = blob.bounds().width();
-                    let x = (w - blob_w) / 2.0;
-                    let (_, metrics) = font.metrics();
-                    let y = CHROME_HEIGHT / 2.0 + (-metrics.ascent) / 2.0;
-                    canvas.draw_text_blob(&blob, (x, y), &title_paint);
-                }
+                let title_w = crate::engine::renderer::measure_text_with_fallback(title, &font, &emoji_font, 0.0);
+                let x = (w - title_w) / 2.0;
+                let (_, metrics) = font.metrics();
+                let y = CHROME_HEIGHT / 2.0 + (-metrics.ascent) / 2.0;
+                draw_text_with_fallback(canvas, title, &font, &emoji_font, 0.0, x, y, &title_paint);
             }
 
             y_offset = CHROME_HEIGHT;
@@ -278,6 +278,8 @@ impl Widget for Terminal {
 
         // Lines
         let font = self.make_font();
+        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
 
@@ -329,10 +331,9 @@ impl Widget for Terminal {
                 let mut prefix_paint = paint_from_hex(prefix_color);
                 prefix_paint.set_anti_alias(true);
                 prefix_paint.set_alpha_f(opacity);
-                if let Some(blob) = skia_safe::TextBlob::new(&draw_prefix, &font) {
-                    canvas.draw_text_blob(&blob, (x, y), &prefix_paint);
-                    x += blob.bounds().width() + 2.0;
-                }
+                let prefix_w = crate::engine::renderer::measure_text_with_fallback(&draw_prefix, &font, &emoji_font, 0.0);
+                draw_text_with_fallback(canvas, &draw_prefix, &font, &emoji_font, 0.0, x, y, &prefix_paint);
+                x += prefix_w + 2.0;
             }
 
             // Draw text
@@ -340,9 +341,7 @@ impl Widget for Terminal {
                 let mut text_paint = paint_from_hex(color);
                 text_paint.set_anti_alias(true);
                 text_paint.set_alpha_f(opacity);
-                if let Some(blob) = skia_safe::TextBlob::new(&draw_text, &font) {
-                    canvas.draw_text_blob(&blob, (x, y), &text_paint);
-                }
+                draw_text_with_fallback(canvas, &draw_text, &font, &emoji_font, 0.0, x, y, &text_paint);
             }
 
             y_offset += LINE_HEIGHT;

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, PaintStyle, TextBlob};
+use skia_safe::{Canvas, Font, FontStyle, PaintStyle};
 
-use crate::engine::renderer::{font_mgr, format_counter_value, make_text_blob_with_spacing, paint_from_hex};
+use crate::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
@@ -78,58 +78,51 @@ impl Widget for Counter {
             .ok_or(RustmotionError::FontNotFound)?;
 
         let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
         let letter_spacing = self.style.letter_spacing.unwrap_or(0.0);
 
-        let blob = if letter_spacing.abs() > 0.01 {
-            make_text_blob_with_spacing(&content, &font, letter_spacing)
-        } else {
-            TextBlob::new(&content, &font)
+        let advance_width = measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
+
+        let x = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (layout.width - advance_width) / 2.0,
+            TextAlign::Right => layout.width - advance_width,
         };
+        let (_, metrics) = font.metrics();
+        let line_height = font_size * 1.3;
+        let ascent = -metrics.ascent;
+        let descent = metrics.descent;
+        let y = (line_height + ascent - descent) / 2.0;
 
-        if let Some(blob) = blob {
-            let (advance_width, _) = font.measure_str(&content, None);
-
-            let x = match align {
-                TextAlign::Left => 0.0,
-                TextAlign::Center => (layout.width - advance_width) / 2.0,
-                TextAlign::Right => layout.width - advance_width,
-            };
-            let (_, metrics) = font.metrics();
-            let line_height = font_size * 1.3;
-            let ascent = -metrics.ascent;
-            let descent = metrics.descent;
-            let y = (line_height + ascent - descent) / 2.0;
-
-            // Draw shadow
-            if let Some(ref shadow) = self.style.text_shadow {
-                let mut sp = paint_from_hex(&shadow.color);
-                if shadow.blur > 0.01 {
-                    if let Some(filter) = skia_safe::image_filters::blur(
-                        (shadow.blur, shadow.blur),
-                        skia_safe::TileMode::Clamp,
-                        None,
-                        None,
-                    ) {
-                        sp.set_image_filter(filter);
-                    }
+        // Draw shadow
+        if let Some(ref shadow) = self.style.text_shadow {
+            let mut sp = paint_from_hex(&shadow.color);
+            if shadow.blur > 0.01 {
+                if let Some(filter) = skia_safe::image_filters::blur(
+                    (shadow.blur, shadow.blur),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                ) {
+                    sp.set_image_filter(filter);
                 }
-                canvas.draw_text_blob(&blob, (x + shadow.offset_x, y + shadow.offset_y), &sp);
             }
-
-            // Draw stroke
-            if let Some(ref stroke) = self.style.stroke {
-                let mut sp = paint_from_hex(&stroke.color);
-                sp.set_style(PaintStyle::Stroke);
-                sp.set_stroke_width(stroke.width);
-                canvas.draw_text_blob(&blob, (x, y), &sp);
-            }
-
-            // Draw fill
-            canvas.draw_text_blob(&blob, (x, y), &paint);
+            draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x + shadow.offset_x, y + shadow.offset_y, &sp);
         }
+
+        // Draw stroke
+        if let Some(ref stroke) = self.style.stroke {
+            let mut sp = paint_from_hex(&stroke.color);
+            sp.set_style(PaintStyle::Stroke);
+            sp.set_stroke_width(stroke.width);
+            draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &sp);
+        }
+
+        // Draw fill
+        draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &paint);
 
         Ok(())
     }
@@ -151,8 +144,9 @@ impl Widget for Counter {
             .or_else(|| fm.match_family_style("Arial", skia_font_style))
             .unwrap_or_else(|| fm.match_family_style("sans-serif", skia_font_style).unwrap());
         let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
         let display = format_counter_value(self.to, self.decimals, &self.separator, &self.prefix, &self.suffix);
-        let (text_width, _) = font.measure_str(&display, None);
+        let text_width = measure_text_with_fallback(&display, &font, &emoji_font, 0.0);
         let line_height = font_size * 1.3;
         (text_width, line_height)
     }

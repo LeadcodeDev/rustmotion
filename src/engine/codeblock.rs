@@ -1,6 +1,7 @@
 use anyhow::Result;
 use similar::{ChangeTag, TextDiff};
 use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect, TextBlob};
+use super::renderer::{emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
@@ -885,14 +886,13 @@ fn draw_chrome(
                     .unwrap()
             });
         let title_font = Font::from_typeface(typeface, 13.0);
-        let (title_width, _) = title_font.measure_str(title, None);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, 13.0));
+        let title_width = measure_text_with_fallback(title, &title_font, &emoji_font, 0.0);
         let title_x = x + width / 2.0 - title_width / 2.0;
         let title_y = dot_y + 4.0;
         let mut title_paint = paint_from_hex("#999999");
         title_paint.set_anti_alias(true);
-        if let Some(blob) = TextBlob::new(title, &title_font) {
-            canvas.draw_text_blob(&blob, (title_x, title_y), &title_paint);
-        }
+        draw_text_with_fallback(canvas, title, &title_font, &emoji_font, 0.0, title_x, title_y, &title_paint);
     }
 }
 
@@ -1116,10 +1116,9 @@ fn draw_single_highlighted_line_partial(
             None,
         );
 
-        if let Some(blob) = TextBlob::new(&text_to_draw, font) {
-            canvas.draw_text_blob(&blob, (cursor_x, y), &paint);
-        }
-        let (w, _) = font.measure_str(&text_to_draw, None);
+        let emoji_f = emoji_typeface().map(|tf| Font::from_typeface(tf, font.size()));
+        draw_text_with_fallback(canvas, &text_to_draw, font, &emoji_f, 0.0, cursor_x, y, &paint);
+        let w = measure_text_with_fallback(&text_to_draw, font, &emoji_f, 0.0);
         cursor_x += w;
         chars_drawn += text_to_draw.len();
 
@@ -1616,10 +1615,9 @@ fn draw_single_highlighted_line(
             ),
             None,
         );
-        if let Some(blob) = TextBlob::new(&span.text, font) {
-            canvas.draw_text_blob(&blob, (cursor_x, y), &paint);
-        }
-        let (w, _) = font.measure_str(&span.text, None);
+        let emoji_f = emoji_typeface().map(|tf| Font::from_typeface(tf, font.size()));
+        draw_text_with_fallback(canvas, &span.text, font, &emoji_f, 0.0, cursor_x, y, &paint);
+        let w = measure_text_with_fallback(&span.text, font, &emoji_f, 0.0);
         cursor_x += w;
     }
 }

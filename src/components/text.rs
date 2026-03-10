@@ -1,7 +1,7 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect, TextBlob};
+use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};
 
 use crate::error::RustmotionError;
 
@@ -15,7 +15,7 @@ fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
     }
 }
 
-use crate::engine::renderer::{font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
+use crate::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -76,6 +76,7 @@ impl Widget for Text {
             .ok_or(RustmotionError::FontNotFound)?;
 
         let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
@@ -102,7 +103,7 @@ impl Widget for Text {
             self.content.clone()
         };
 
-        let lines = wrap_text(&content, &font, wrap_width);
+        let lines = wrap_text_with_fallback(&content, &font, &emoji_font, wrap_width);
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
         let descent = metrics.descent;
@@ -137,7 +138,7 @@ impl Widget for Text {
         } else {
             let mut max_w = 0.0f32;
             for line in &lines {
-                let (w, _) = font.measure_str(line, None);
+                let w = measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
                 max_w = max_w.max(w);
             }
             max_w
@@ -148,55 +149,45 @@ impl Widget for Text {
                 continue;
             }
 
-            let blob = if letter_spacing.abs() > 0.01 {
-                make_text_blob_with_spacing(line, &font, letter_spacing)
-            } else {
-                TextBlob::new(line, &font)
+            let advance_width = measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
+
+            let x = match align {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => (align_width - advance_width) / 2.0,
+                TextAlign::Right => align_width - advance_width,
             };
+            let y = i as f32 * line_height_val + baseline_offset;
 
-            if let Some(blob) = blob {
-                let (advance_width, _) = font.measure_str(line, None);
-                let advance_width = advance_width + letter_spacing * (line.chars().count() as f32 - 1.0).max(0.0);
-                let blob_bounds = blob.bounds();
-                let line_width = blob_bounds.width();
-
-                let x = match align {
-                    TextAlign::Left => 0.0,
-                    TextAlign::Center => (align_width - advance_width) / 2.0,
-                    TextAlign::Right => align_width - advance_width,
-                };
-                let y = i as f32 * line_height_val + baseline_offset;
-
-                // Draw background highlight behind text
-                if let Some(ref bg) = self.style.text_background {
-                    let bg_paint = paint_from_hex(&bg.color);
-                    let bg_rect = Rect::from_xywh(
-                        x - bg.padding + blob_bounds.left,
-                        y + blob_bounds.top - bg.padding / 2.0,
-                        line_width + bg.padding * 2.0,
-                        -blob_bounds.top + blob_bounds.bottom + bg.padding,
-                    );
-                    if bg.corner_radius > 0.0 {
-                        let rrect = skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
-                        canvas.draw_rrect(rrect, &bg_paint);
-                    } else {
-                        canvas.draw_rect(bg_rect, &bg_paint);
-                    }
+            // Draw background highlight behind text
+            if let Some(ref bg) = self.style.text_background {
+                let bg_paint = paint_from_hex(&bg.color);
+                let (_, font_rect) = font.measure_str(line, None);
+                let bg_rect = Rect::from_xywh(
+                    x - bg.padding + font_rect.left,
+                    y + font_rect.top - bg.padding / 2.0,
+                    advance_width + bg.padding * 2.0,
+                    -font_rect.top + font_rect.bottom + bg.padding,
+                );
+                if bg.corner_radius > 0.0 {
+                    let rrect = skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
+                    canvas.draw_rrect(rrect, &bg_paint);
+                } else {
+                    canvas.draw_rect(bg_rect, &bg_paint);
                 }
-
-                // Draw shadow
-                if let Some((ref sp, ox, oy)) = shadow_paint {
-                    canvas.draw_text_blob(&blob, (x + ox, y + oy), sp);
-                }
-
-                // Draw stroke (outline)
-                if let Some(ref sp) = stroke_paint {
-                    canvas.draw_text_blob(&blob, (x, y), sp);
-                }
-
-                // Draw fill
-                canvas.draw_text_blob(&blob, (x, y), &paint);
             }
+
+            // Draw shadow
+            if let Some((ref sp, ox, oy)) = shadow_paint {
+                draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x + ox, y + oy, sp);
+            }
+
+            // Draw stroke (outline)
+            if let Some(ref sp) = stroke_paint {
+                draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, sp);
+            }
+
+            // Draw fill
+            draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, &paint);
         }
 
         Ok(())
@@ -226,11 +217,11 @@ impl Widget for Text {
             .or_else(|| fm.match_family_style("Arial", skia_font_style))
             .unwrap_or_else(|| fm.match_family_style("sans-serif", skia_font_style).unwrap());
         let font = Font::from_typeface(typeface, font_size);
-        let lines = wrap_text(&self.content, &font, self.max_width);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, self.max_width);
         let line_height_val = resolve_line_height(self.style.line_height, font_size);
         let mut max_w = lines.iter().map(|l| {
-            let (w, _) = font.measure_str(l, None);
-            w
+            measure_text_with_fallback(l, &font, &emoji_font, 0.0)
         }).fold(0.0f32, f32::max);
         let mut h = lines.len() as f32 * line_height_val;
 

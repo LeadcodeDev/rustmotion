@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Point};
 
-use crate::engine::renderer::{color4f_from_hex, draw_shape_path, font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
+use crate::engine::renderer::{color4f_from_hex, draw_shape_path, font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
@@ -152,6 +152,7 @@ fn render_shape_text(
         .ok_or(RustmotionError::FontNotFound)?;
 
     let font = skia_safe::Font::from_typeface(typeface, text.font_size);
+    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, text.font_size));
     let (_strike_width, metrics) = font.metrics();
     let ascent = -metrics.ascent;
     let line_height = match text.line_height {
@@ -161,7 +162,7 @@ fn render_shape_text(
     };
     let letter_spacing = text.letter_spacing.unwrap_or(0.0);
 
-    let lines = wrap_text(&text.content, &font, Some(area_w));
+    let lines = wrap_text_with_fallback(&text.content, &font, &emoji_font, Some(area_w));
     let descent = metrics.descent;
     let total_h = if lines.len() > 1 {
         (lines.len() - 1) as f32 * line_height + ascent + descent
@@ -183,24 +184,15 @@ fn render_shape_text(
             continue;
         }
 
-        let blob = if letter_spacing.abs() > 0.01 {
-            make_text_blob_with_spacing(line, &font, letter_spacing)
-        } else {
-            skia_safe::TextBlob::new(line, &font)
+        let line_width = measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
+
+        let x = match text.align {
+            TextAlign::Left => area_x,
+            TextAlign::Center => area_x + (area_w - line_width) / 2.0,
+            TextAlign::Right => area_x + area_w - line_width,
         };
-
-        if let Some(blob) = blob {
-            let blob_bounds = blob.bounds();
-            let line_width = blob_bounds.width();
-
-            let x = match text.align {
-                TextAlign::Left => area_x - blob_bounds.left,
-                TextAlign::Center => area_x + (area_w - line_width) / 2.0 - blob_bounds.left,
-                TextAlign::Right => area_x + area_w - line_width - blob_bounds.left,
-            };
-            let y = y_start + i as f32 * line_height;
-            canvas.draw_text_blob(&blob, (x, y), &paint);
-        }
+        let y = y_start + i as f32 * line_height;
+        draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, &paint);
     }
 
     Ok(())

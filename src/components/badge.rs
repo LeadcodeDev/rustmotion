@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
-use crate::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex};
+use crate::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::LayerStyle;
@@ -95,7 +95,8 @@ impl Badge {
         let font = self.make_font();
         let font_size = self.resolved_font_size();
 
-        let text_width = font.measure_str(&self.text, None).0;
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let text_width = measure_text_with_fallback(&self.text, &font, &emoji_font, 0.0);
         let icon_gap = if self.icon.is_some() { 6.0 } else { 0.0 };
         let icon_w = if self.icon.is_some() { icon_size } else { 0.0 };
 
@@ -209,6 +210,8 @@ impl Widget for Badge {
             color
         };
         let font = self.make_font();
+        let font_size = self.resolved_font_size();
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let mut text_paint = paint_from_hex(text_color);
         text_paint.set_anti_alias(true);
 
@@ -222,9 +225,7 @@ impl Widget for Badge {
         };
         let text_y = (h - cap_h) / 2.0 + cap_h;
 
-        if let Some(blob) = skia_safe::TextBlob::new(&self.text, &font) {
-            canvas.draw_text_blob(&blob, (x_offset, text_y), &text_paint);
-        }
+        draw_text_with_fallback(canvas, &self.text, &font, &emoji_font, 0.0, x_offset, text_y, &text_paint);
 
         Ok(())
     }

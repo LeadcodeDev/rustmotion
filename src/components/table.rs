@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
-use crate::engine::renderer::{font_mgr, paint_from_hex};
+use crate::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
@@ -102,6 +102,8 @@ impl Widget for Table {
 
         // Header row
         let header_font = self.make_font(true);
+        let font_size = self.font_size();
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, header_metrics) = header_font.metrics();
         let header_ascent = -header_metrics.ascent;
 
@@ -116,9 +118,7 @@ impl Widget for Table {
             let x = i as f32 * col_w + cell_padding;
             let y = (row_h - self.font_size()) / 2.0 + header_ascent;
 
-            if let Some(blob) = skia_safe::TextBlob::new(header, &header_font) {
-                canvas.draw_text_blob(&blob, (x, y), &header_text_paint);
-            }
+            draw_text_with_fallback(canvas, header, &header_font, &emoji_font, 0.0, x, y, &header_text_paint);
         }
 
         // Data rows
@@ -147,9 +147,7 @@ impl Widget for Table {
                 let x = col_idx as f32 * col_w + cell_padding;
                 let y = y_base + (row_h - self.font_size()) / 2.0 + body_ascent;
 
-                if let Some(blob) = skia_safe::TextBlob::new(cell, &body_font) {
-                    canvas.draw_text_blob(&blob, (x, y), &text_paint);
-                }
+                draw_text_with_fallback(canvas, cell, &body_font, &emoji_font, 0.0, x, y, &text_paint);
             }
         }
 
