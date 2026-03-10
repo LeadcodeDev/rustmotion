@@ -707,6 +707,17 @@ pub enum Layer {
     Flex(CardLayer),
     ProgressBar(ProgressBarLayer),
     QrCode(QrCodeLayer),
+    // V2-only leaf components — use component structs directly.
+    // The serde round-trip in convert_layers_to_components handles mapping.
+    Avatar(crate::components::Avatar),
+    Badge(crate::components::Badge),
+    Callout(crate::components::Callout),
+    Chart(crate::components::Chart),
+    Divider(crate::components::Divider),
+    Mockup(crate::components::Mockup),
+    Particle(crate::components::Particle),
+    Table(crate::components::Table),
+    Terminal(crate::components::Terminal),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1673,6 +1684,27 @@ pub struct TextGradient {
 
 // --- SizeDimension with Percent support ---
 
+// --- Stub for v2-only components accessed via v1 LayerProps ---
+
+struct V2LayerPropsStub;
+
+impl LayerProps for V2LayerPropsStub {
+    fn animations(&self) -> (&[Animation], Option<&AnimationPreset>, Option<&PresetConfig>) {
+        (&[], None, None)
+    }
+    fn timing(&self) -> (Option<f64>, Option<f64>) {
+        (None, None)
+    }
+    fn wiggle(&self) -> Option<&[WiggleConfig]> {
+        None
+    }
+    fn motion_blur(&self) -> Option<f32> {
+        None
+    }
+}
+
+static V2_LAYER_PROPS_STUB: V2LayerPropsStub = V2LayerPropsStub;
+
 // --- LayerProps implementations ---
 
 macro_rules! impl_layer_props_standard {
@@ -1802,6 +1834,12 @@ impl Layer {
             Layer::Flex(l) => &l.style,
             Layer::ProgressBar(l) => &l.style,
             Layer::QrCode(l) => &l.style,
+            _ => {
+                // V2-only components use the v2 render path
+                static DEFAULT_STYLE: std::sync::LazyLock<LayerStyle> =
+                    std::sync::LazyLock::new(LayerStyle::default);
+                &DEFAULT_STYLE
+            }
         }
     }
 
@@ -1822,6 +1860,17 @@ impl Layer {
             Layer::Flex(l) => l,
             Layer::ProgressBar(l) => l,
             Layer::QrCode(l) => l,
+            // V2-only components use the v2 render path via convert_layers_to_components.
+            // Provide a no-op LayerProps via a static default.
+            Layer::Avatar(_)
+            | Layer::Badge(_)
+            | Layer::Callout(_)
+            | Layer::Chart(_)
+            | Layer::Divider(_)
+            | Layer::Mockup(_)
+            | Layer::Particle(_)
+            | Layer::Table(_)
+            | Layer::Terminal(_) => &V2_LAYER_PROPS_STUB,
         }
     }
 }

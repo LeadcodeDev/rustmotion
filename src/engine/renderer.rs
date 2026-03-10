@@ -459,6 +459,7 @@ fn render_layer_inner(canvas: &Canvas, layer: &Layer, config: &VideoConfig, time
                 Layer::Card(card) | Layer::Flex(card) => render_card($c, card, config, time, scene_duration)?,
                 Layer::ProgressBar(pb) => crate::components::progress::render_progress_bar($c, pb)?,
                 Layer::QrCode(qr) => crate::components::qrcode::render_qr_code($c, qr)?,
+                _ => {} // V2-only components use the v2 render path
             }
         };
     }
@@ -665,6 +666,7 @@ fn get_layer_center(layer: &Layer) -> (f32, f32) {
         }
         Layer::ProgressBar(p) => (p.position.x + p.width / 2.0, p.position.y + p.height / 2.0),
         Layer::QrCode(q) => (q.position.x + q.size / 2.0, q.position.y + q.size / 2.0),
+        _ => (0.0, 0.0), // V2-only components use the v2 render path
     }
 }
 
@@ -1443,6 +1445,7 @@ fn measure_layer(layer: &Layer) -> (f32, f32) {
         }
         Layer::ProgressBar(p) => (p.width, p.height),
         Layer::QrCode(q) => (q.size, q.size),
+        _ => (0.0, 0.0), // V2-only components use the v2 render path
     }
 }
 
@@ -1490,6 +1493,11 @@ fn get_layer_position(layer: &Layer) -> &Position {
         Layer::Card(c) | Layer::Flex(c) => &c.position,
         Layer::ProgressBar(p) => &p.position,
         Layer::QrCode(q) => &q.position,
+        _ => {
+            // V2-only components use the v2 render path
+            static DEFAULT_POS: crate::schema::Position = crate::schema::Position { x: 0.0, y: 0.0 };
+            &DEFAULT_POS
+        }
     }
 }
 
@@ -1534,6 +1542,12 @@ fn card_child_style(child: &CardChild) -> &LayerStyle {
         Layer::Card(c) | Layer::Flex(c) => &c.style,
         Layer::ProgressBar(p) => &p.style,
         Layer::QrCode(q) => &q.style,
+        _ => {
+            // V2-only components use the v2 render path
+            static DEFAULT_STYLE: std::sync::LazyLock<crate::schema::LayerStyle> =
+                std::sync::LazyLock::new(crate::schema::LayerStyle::default);
+            &DEFAULT_STYLE
+        }
     }
 }
 

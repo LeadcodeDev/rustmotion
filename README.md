@@ -724,6 +724,262 @@ Animate between code versions with automatic diff detection.
 
 **Shiki / VS Code:** `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
 
+### Divider
+
+Visual separator line (horizontal or vertical).
+
+```json
+{
+  "type": "divider",
+  "direction": "horizontal",
+  "thickness": 2,
+  "line_style": "solid",
+  "style": { "color": "#4B5563" }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `direction` | `enum` | `"horizontal"` | `"horizontal"` or `"vertical"` |
+| `thickness` | `f32` | `2.0` | Line thickness in pixels |
+| `line_style` | `enum` | `"solid"` | `"solid"`, `"dashed"`, `"dotted"` |
+| `length` | `f32` | | Fixed length (omit for 100% of parent) |
+
+Style: `color` (default `"#FFFFFF"`)
+
+---
+
+### Badge
+
+Compact label with text and optional icon, pill-shaped.
+
+```json
+{
+  "type": "badge",
+  "text": "New",
+  "icon": "lucide:star",
+  "variant": "solid",
+  "badge_size": "md",
+  "style": { "background": "#3B82F6" }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `text` | `string` | (required) | Badge text |
+| `icon` | `string` | | Iconify icon id (e.g. `"lucide:star"`) |
+| `variant` | `enum` | `"solid"` | `"solid"` (filled) or `"outline"` (border only) |
+| `badge_size` | `enum` | `"md"` | `"sm"`, `"md"`, `"lg"` |
+
+Style: `background` (default `"#3B82F6"`) — badge color for solid variant or border color for outline, `font-size`, `font-family`
+
+---
+
+### Avatar
+
+Circular image with optional border and status indicator.
+
+```json
+{
+  "type": "avatar",
+  "src": "photo.jpg",
+  "size": 80,
+  "border_color": "#3B82F6",
+  "border_width": 3,
+  "status": "online"
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `src` | `string` | (required) | Path to image file |
+| `size` | `f32` | `64.0` | Diameter in pixels |
+| `border_color` | `string` | | Border color (hex) |
+| `border_width` | `f32` | `0.0` | Border thickness |
+| `status` | `enum` | `"none"` | `"online"`, `"offline"`, `"away"`, `"none"` |
+| `status_color` | `string` | | Override status dot color |
+
+Status colors: online=#22C55E, offline=#9CA3AF, away=#F59E0B
+
+---
+
+### Callout
+
+Speech bubble with directional arrow.
+
+```json
+{
+  "type": "callout",
+  "text": "Hello!",
+  "arrow_direction": "bottom",
+  "style": {
+    "background": "#333333",
+    "color": "#FFFFFF",
+    "border-radius": 8,
+    "font-size": 16
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `text` | `string` | (required) | Callout text |
+| `arrow_direction` | `enum` | `"bottom"` | `"top"`, `"bottom"`, `"left"`, `"right"` |
+| `arrow_size` | `f32` | `12.0` | Arrow triangle size |
+| `size` | `{width, height}` | | Fixed size (auto-sized if omitted) |
+
+Style: `background` (default `"#333333"`), `color` (default `"#FFFFFF"`), `border-radius` (default `8`), `font-size` (default `16`), `font-family`
+
+---
+
+### Terminal
+
+Terminal/console window with colored lines and optional chrome.
+
+```json
+{
+  "type": "terminal",
+  "title": "Terminal",
+  "theme": "dark",
+  "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
+  "lines": [
+    { "text": "npm install", "line_type": "prompt" },
+    { "text": "added 42 packages", "line_type": "output" }
+  ],
+  "size": { "width": 600, "height": 300 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `lines` | `array` | (required) | `[{ "text", "line_type", "color" }]` |
+| `theme` | `enum` | `"dark"` | `"dark"` or `"light"` |
+| `title` | `string` | | Window title |
+| `show_chrome` | `bool` | `true` | Show title bar with traffic light dots |
+| `reveal` | `object` | | `{ "mode": "typewriter"\|"line_by_line", "start": 0, "duration": 1, "easing": "linear" }` |
+| `size` | `{width, height}` | | Terminal size (default 500x auto) |
+
+**Line types:** `"prompt"` (shows `$ ` prefix in green), `"command"` (white text), `"output"` (gray text)
+
+**Reveal modes:** `"typewriter"` reveals characters one by one, `"line_by_line"` fades lines in sequentially.
+
+---
+
+### Table
+
+Data table with headers and styled rows.
+
+```json
+{
+  "type": "table",
+  "headers": ["Name", "Role", "Status"],
+  "rows": [
+    ["Alice", "Engineer", "Active"],
+    ["Bob", "Designer", "Away"]
+  ],
+  "size": { "width": 600, "height": 200 },
+  "style": { "color": "#FFFFFF", "font-size": 14 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `headers` | `string[]` | (required) | Column headers |
+| `rows` | `string[][]` | (required) | Data rows |
+| `header_color` | `string` | `"#374151"` | Header row background |
+| `row_colors` | `string[]` | `["#1F2937", "#111827"]` | Alternating row colors |
+| `border_color` | `string` | `"#4B5563"` | Grid line color |
+| `header_text_color` | `string` | `"#FFFFFF"` | Header text color |
+| `size` | `{width, height}` | | Table size |
+
+Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default `14`), `font-family`, `border-radius`
+
+---
+
+### Chart
+
+Data visualization with bar, line, or pie charts. Animated by default.
+
+```json
+{
+  "type": "chart",
+  "chart_type": "bar",
+  "data": [
+    { "value": 85, "label": "Q1" },
+    { "value": 120, "label": "Q2" },
+    { "value": 95, "label": "Q3" },
+    { "value": 150, "label": "Q4" }
+  ],
+  "size": { "width": 400, "height": 300 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `chart_type` | `enum` | (required) | `"bar"`, `"line"`, `"pie"` |
+| `data` | `array` | (required) | `[{ "value", "label"?, "color"? }]` |
+| `size` | `{width, height}` | `300x200` | Chart size |
+| `animated` | `bool` | `true` | Animate chart fill/draw |
+| `animation_duration` | `f64` | `1.5` | Animation duration in seconds |
+| `colors` | `string[]` | | Custom color palette (hex) |
+
+Default palette: `#3B82F6`, `#EF4444`, `#22C55E`, `#F59E0B`, `#8B5CF6`, `#EC4899`, `#06B6D4`, `#F97316`
+
+---
+
+### Mockup
+
+Device frame (phone, laptop, browser) with image content inside.
+
+```json
+{
+  "type": "mockup",
+  "device": "iphone",
+  "src": "screenshot.png",
+  "theme": "dark",
+  "size": { "width": 375, "height": 812 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `device` | `enum` | (required) | `"iphone"`, `"android"`, `"laptop"`, `"browser"` |
+| `src` | `string` | (required) | Path to content image |
+| `theme` | `enum` | `"dark"` | `"dark"` or `"light"` bezel color |
+| `size` | `{width, height}` | | Device size (defaults: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600) |
+
+---
+
+### Particle
+
+Animated particle system for visual effects (confetti, snow, stars, bubbles).
+
+```json
+{
+  "type": "particle",
+  "particle_type": "confetti",
+  "count": 80,
+  "speed": 1.2,
+  "seed": 42
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `particle_type` | `enum` | (required) | `"confetti"`, `"snow"`, `"stars"`, `"bubbles"`, `"halo"` |
+| `count` | `u32` | `50` | Number of particles |
+| `colors` | `string[]` | | Custom colors (defaults vary by type) |
+| `speed` | `f32` | `1.0` | Speed multiplier |
+| `size_range` | `{min, max}` | `{4, 12}` | Particle size range in pixels |
+| `seed` | `u64` | `42` | Random seed for reproducible results |
+
+**Particle behaviors:**
+- **confetti**: colored rectangles falling with rotation and horizontal wobble
+- **snow**: white circles falling gently with lateral drift
+- **stars**: fixed positions with twinkling opacity
+- **bubbles**: semi-transparent circles rising with oscillation
+- **halo**: soft glowing circles drifting slowly with pulsing opacity (great for backgrounds)
+
 ---
 
 ## Animations

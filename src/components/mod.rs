@@ -1,17 +1,26 @@
+pub mod avatar;
+pub mod badge;
+pub mod callout;
 pub mod caption;
 pub mod card;
+pub mod chart;
 pub mod codeblock;
 pub mod counter;
+pub mod divider;
 pub mod flex;
 pub mod gif;
 pub mod grid;
 pub mod icon;
 pub mod image;
+pub mod mockup;
+pub mod particle;
+pub mod positioned;
 pub mod progress;
 pub mod qrcode;
 pub mod shape;
-pub mod positioned;
 pub mod svg;
+pub mod table;
+pub mod terminal;
 pub mod text;
 pub mod video;
 
@@ -20,18 +29,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::traits::{Animatable, Container, Styled, Timed, Widget};
 
+pub use avatar::Avatar;
+pub use badge::Badge;
+pub use callout::Callout;
 pub use caption::Caption;
 pub use card::Card;
+pub use chart::Chart;
 pub use codeblock::Codeblock;
 pub use counter::Counter;
+pub use divider::Divider;
 pub use flex::Flex;
 pub use gif::Gif;
 pub use grid::Grid;
 pub use icon::Icon;
 pub use image::Image;
-pub use shape::Shape;
+pub use mockup::Mockup;
+pub use particle::Particle;
 pub use positioned::Positioned;
+pub use shape::Shape;
 pub use svg::Svg;
+pub use table::Table;
+pub use terminal::Terminal;
 pub use text::Text;
 pub use video::Video;
 
@@ -106,6 +124,15 @@ pub enum Component {
     Counter(Counter),
     Caption(Caption),
     Codeblock(Codeblock),
+    Avatar(Avatar),
+    Badge(Badge),
+    Callout(Callout),
+    Chart(Chart),
+    Divider(Divider),
+    Mockup(Mockup),
+    Particle(Particle),
+    Table(Table),
+    Terminal(Terminal),
     // Container components
     Positioned(Positioned),
     Flex(Flex),
@@ -130,6 +157,15 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
+            Component::Avatar(c) => c,
+            Component::Badge(c) => c,
+            Component::Callout(c) => c,
+            Component::Chart(c) => c,
+            Component::Divider(c) => c,
+            Component::Mockup(c) => c,
+            Component::Particle(c) => c,
+            Component::Table(c) => c,
+            Component::Terminal(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
@@ -150,6 +186,15 @@ impl Component {
             Component::Counter(c) => Some(c),
             Component::Caption(c) => Some(c),
             Component::Codeblock(c) => Some(c),
+            Component::Avatar(c) => Some(c),
+            Component::Badge(c) => Some(c),
+            Component::Callout(c) => Some(c),
+            Component::Chart(c) => Some(c),
+            Component::Divider(c) => Some(c),
+            Component::Mockup(c) => Some(c),
+            Component::Particle(c) => Some(c),
+            Component::Table(c) => Some(c),
+            Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -169,6 +214,15 @@ impl Component {
             Component::Gif(c) => Some(c),
             Component::Counter(c) => Some(c),
             Component::Codeblock(c) => Some(c),
+            Component::Avatar(c) => Some(c),
+            Component::Badge(c) => Some(c),
+            Component::Callout(c) => Some(c),
+            Component::Chart(c) => Some(c),
+            Component::Divider(c) => Some(c),
+            Component::Mockup(c) => Some(c),
+            Component::Particle(c) => Some(c),
+            Component::Table(c) => Some(c),
+            Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -189,6 +243,15 @@ impl Component {
             Component::Counter(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
+            Component::Avatar(c) => c,
+            Component::Badge(c) => c,
+            Component::Callout(c) => c,
+            Component::Chart(c) => c,
+            Component::Divider(c) => c,
+            Component::Mockup(c) => c,
+            Component::Particle(c) => c,
+            Component::Table(c) => c,
+            Component::Terminal(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,

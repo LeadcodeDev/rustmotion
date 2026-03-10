@@ -1685,7 +1685,8 @@
                 "color": "#6366F1",
                 "animation": [
                   {
-                    "name": "spin"
+                    "name": "spin",
+                    "loop": true
                   }
                 ]
               }
@@ -1701,7 +1702,8 @@
                 "color": "#FBBF24",
                 "animation": [
                   {
-                    "name": "shake"
+                    "name": "shake",
+                    "loop": true
                   }
                 ]
               }
@@ -1717,7 +1719,8 @@
                 "color": "#38BDF8",
                 "animation": [
                   {
-                    "name": "float"
+                    "name": "float",
+                    "loop": true
                   }
                 ]
               }
@@ -1733,7 +1736,8 @@
                 "color": "#22C55E",
                 "animation": [
                   {
-                    "name": "pulse"
+                    "name": "pulse",
+                    "loop": true
                   }
                 ]
               }
@@ -2020,115 +2024,80 @@
             "width": 180,
             "height": 180
           },
-          "animations": [
-            {
-              "property": "translate_x",
-              "keyframes": [
-                {
-                  "time": 0.0,
-                  "value": -500
-                },
-                {
-                  "time": 1.5,
-                  "value": 0
-                }
-              ],
-              "easing": "spring",
-              "spring": {
-                "damping": 12,
-                "stiffness": 100,
-                "mass": 1
-              }
-            },
-            {
-              "property": "rotation",
-              "keyframes": [
-                {
-                  "time": 0.0,
-                  "value": -180
-                },
-                {
-                  "time": 1.5,
-                  "value": 0
-                }
-              ],
-              "easing": "spring",
-              "spring": {
-                "damping": 12,
-                "stiffness": 100,
-                "mass": 1
-              }
-            },
-            {
-              "property": "scale",
-              "keyframes": [
-                {
-                  "time": 0.0,
-                  "value": 0.0
-                },
-                {
-                  "time": 1.5,
-                  "value": 1.0
-                }
-              ],
-              "easing": "spring",
-              "spring": {
-                "damping": 15,
-                "stiffness": 120,
-                "mass": 1
-              }
-            }
-          ],
           "style": {
             "fill": {
               "type": "linear",
               "colors": ["#6366F1", "#EC4899"],
               "angle": 135
             },
-            "border-radius": 32
+            "border-radius": 32,
+            "animation": [
+              {
+                "name": "keyframes",
+                "keyframes": [
+                  {
+                    "property": "translate_x",
+                    "keyframes": [
+                      { "time": 0.0, "value": -500 },
+                      { "time": 1.5, "value": 0 }
+                    ],
+                    "easing": "spring",
+                    "spring": { "damping": 12, "stiffness": 100, "mass": 1 }
+                  },
+                  {
+                    "property": "rotation",
+                    "keyframes": [
+                      { "time": 0.0, "value": -180 },
+                      { "time": 1.5, "value": 0 }
+                    ],
+                    "easing": "spring",
+                    "spring": { "damping": 12, "stiffness": 100, "mass": 1 }
+                  },
+                  {
+                    "property": "scale",
+                    "keyframes": [
+                      { "time": 0.0, "value": 0.0 },
+                      { "time": 1.5, "value": 1.0 }
+                    ],
+                    "easing": "spring",
+                    "spring": { "damping": 15, "stiffness": 120, "mass": 1 }
+                  }
+                ]
+              }
+            ]
           }
         },
         {
           "type": "text",
           "content": "Spring Physics Animation",
-          "animations": [
-            {
-              "property": "opacity",
-              "keyframes": [
-                {
-                  "time": 0.0,
-                  "value": 0
-                },
-                {
-                  "time": 1.5,
-                  "value": 0
-                },
-                {
-                  "time": 2.0,
-                  "value": 1.0
-                }
-              ],
-              "easing": "ease_out"
-            },
-            {
-              "property": "translate_y",
-              "keyframes": [
-                {
-                  "time": 1.5,
-                  "value": 20
-                },
-                {
-                  "time": 2.2,
-                  "value": 0
-                }
-              ],
-              "easing": "ease_out"
-            }
-          ],
           "style": {
             "font-size": 32,
             "color": "#CBD5E1",
-            "text-align": "center"
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "keyframes",
+                "keyframes": [
+                  {
+                    "property": "opacity",
+                    "keyframes": [
+                      { "time": 0.0, "value": 0 },
+                      { "time": 1.5, "value": 0 },
+                      { "time": 2.0, "value": 1.0 }
+                    ],
+                    "easing": "ease_out"
+                  },
+                  {
+                    "property": "translate_y",
+                    "keyframes": [
+                      { "time": 1.5, "value": 20 },
+                      { "time": 2.2, "value": 0 }
+                    ],
+                    "easing": "ease_out"
+                  }
+                ]
+              }
+            ]
           }
         },
         {
@@ -2159,28 +2128,24 @@
                 "width": 50,
                 "height": 50
               },
-              "animations": [
-                {
-                  "property": "translate_y",
-                  "keyframes": [
-                    {
-                      "time": 0.0,
-                      "value": 0
-                    },
-                    {
-                      "time": 0.5,
-                      "value": -30
-                    },
-                    {
-                      "time": 1.0,
-                      "value": 0
-                    }
-                  ],
-                  "easing": "ease_in_out"
-                }
-              ],
               "style": {
-                "fill": "#6366F1"
+                "fill": "#6366F1",
+                "animation": [
+                  {
+                    "name": "keyframes",
+                    "keyframes": [
+                      {
+                        "property": "translate_y",
+                        "keyframes": [
+                          { "time": 0.0, "value": 0 },
+                          { "time": 0.5, "value": -30 },
+                          { "time": 1.0, "value": 0 }
+                        ],
+                        "easing": "ease_in_out"
+                      }
+                    ]
+                  }
+                ]
               }
             },
             {
@@ -2190,28 +2155,24 @@
                 "width": 50,
                 "height": 50
               },
-              "animations": [
-                {
-                  "property": "translate_y",
-                  "keyframes": [
-                    {
-                      "time": 0.2,
-                      "value": 0
-                    },
-                    {
-                      "time": 0.7,
-                      "value": -30
-                    },
-                    {
-                      "time": 1.2,
-                      "value": 0
-                    }
-                  ],
-                  "easing": "ease_in_out"
-                }
-              ],
               "style": {
-                "fill": "#8B5CF6"
+                "fill": "#8B5CF6",
+                "animation": [
+                  {
+                    "name": "keyframes",
+                    "keyframes": [
+                      {
+                        "property": "translate_y",
+                        "keyframes": [
+                          { "time": 0.2, "value": 0 },
+                          { "time": 0.7, "value": -30 },
+                          { "time": 1.2, "value": 0 }
+                        ],
+                        "easing": "ease_in_out"
+                      }
+                    ]
+                  }
+                ]
               }
             },
             {
@@ -2221,29 +2182,625 @@
                 "width": 50,
                 "height": 50
               },
-              "animations": [
-                {
-                  "property": "translate_y",
-                  "keyframes": [
-                    {
-                      "time": 0.4,
-                      "value": 0
-                    },
-                    {
-                      "time": 0.9,
-                      "value": -30
-                    },
-                    {
-                      "time": 1.4,
-                      "value": 0
-                    }
-                  ],
-                  "easing": "ease_in_out"
-                }
+              "style": {
+                "fill": "#EC4899",
+                "animation": [
+                  {
+                    "name": "keyframes",
+                    "keyframes": [
+                      {
+                        "property": "translate_y",
+                        "keyframes": [
+                          { "time": 0.4, "value": 0 },
+                          { "time": 0.9, "value": -30 },
+                          { "time": 1.4, "value": 0 }
+                        ],
+                        "easing": "ease_in_out"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "slide",
+        "duration": 0.5
+      },
+      "background": "#0B1120",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32,
+        "padding": 60
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Badges & Dividers",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "letter-spacing": 3.0,
+            "animation": [
+              {
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "size": {
+            "width": 800,
+            "height": "auto"
+          },
+          "style": {
+            "flex-direction": "row",
+            "gap": 20,
+            "justify-content": "center",
+            "align-items": "center",
+            "padding": 24,
+            "animation": [
+              {
+                "delay": 0.3,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "badge",
+              "text": "New",
+              "icon": "lucide:sparkles",
+              "variant": "solid",
+              "badge_size": "lg",
+              "style": {
+                "background": "#8B5CF6"
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Stable",
+              "icon": "lucide:check",
+              "variant": "solid",
+              "badge_size": "lg",
+              "style": {
+                "background": "#22C55E"
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Beta",
+              "variant": "outline",
+              "badge_size": "lg",
+              "style": {
+                "background": "#F59E0B"
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Deprecated",
+              "variant": "outline",
+              "badge_size": "lg",
+              "style": {
+                "background": "#EF4444"
+              }
+            }
+          ]
+        },
+        {
+          "type": "divider",
+          "direction": "horizontal",
+          "thickness": 2,
+          "line_style": "dashed",
+          "length": 700,
+          "style": {
+            "color": "#334155",
+            "animation": [
+              {
+                "delay": 0.6,
+                "duration": 0.8,
+                "name": "fade_in"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "size": {
+            "width": 800,
+            "height": "auto"
+          },
+          "style": {
+            "flex-direction": "row",
+            "gap": 20,
+            "justify-content": "center",
+            "align-items": "center",
+            "padding": 24,
+            "animation": [
+              {
+                "delay": 0.8,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "badge",
+              "text": "Rust",
+              "icon": "devicon:rust",
+              "variant": "solid",
+              "badge_size": "md",
+              "style": {
+                "background": "#CE422B"
+              }
+            },
+            {
+              "type": "badge",
+              "text": "TypeScript",
+              "icon": "devicon:typescript",
+              "variant": "solid",
+              "badge_size": "md",
+              "style": {
+                "background": "#3178C6"
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Python",
+              "icon": "devicon:python",
+              "variant": "solid",
+              "badge_size": "md",
+              "style": {
+                "background": "#3776AB"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "fade",
+        "duration": 0.5
+      },
+      "background": "#0F172A",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32,
+        "padding": 60
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Callout & Terminal",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "letter-spacing": 3.0,
+            "animation": [
+              {
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "size": {
+            "width": 1400,
+            "height": "auto"
+          },
+          "style": {
+            "flex-direction": "row",
+            "gap": 40,
+            "justify-content": "center",
+            "align-items": "start",
+            "padding": 24,
+            "animation": [
+              {
+                "delay": 0.3,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "callout",
+              "text": "Speech bubbles with\ndirectional arrows!",
+              "arrow_direction": "bottom",
+              "arrow_size": 14,
+              "size": { "width": 300, "height": 120 },
+              "style": {
+                "background": "#6366F1",
+                "color": "#FFFFFF",
+                "border-radius": 12,
+                "font-size": 18
+              }
+            },
+            {
+              "type": "terminal",
+              "title": "rustmotion",
+              "theme": "dark",
+              "show_chrome": true,
+              "size": { "width": 600, "height": 260 },
+              "reveal": {
+                "mode": "typewriter",
+                "start": 0.5,
+                "duration": 3.0,
+                "easing": "linear"
+              },
+              "lines": [
+                { "text": "cargo install rustmotion", "line_type": "prompt" },
+                { "text": "Compiling rustmotion v0.3.1", "line_type": "output" },
+                { "text": "Finished release [optimized]", "line_type": "output", "color": "#22C55E" },
+                { "text": "rustmotion render scene.json -o video.mp4", "line_type": "prompt" },
+                { "text": "Rendered 150 frames in 2.3s", "line_type": "output", "color": "#38BDF8" }
               ],
               "style": {
-                "fill": "#EC4899"
+                "animation": [
+                  {
+                    "delay": 0.5,
+                    "duration": 0.6,
+                    "name": "fade_in"
+                  }
+                ]
               }
+            },
+            {
+              "type": "callout",
+              "text": "Themed terminal\nwith colored lines",
+              "arrow_direction": "left",
+              "arrow_size": 14,
+              "size": { "width": 280, "height": 120 },
+              "style": {
+                "background": "#22C55E",
+                "color": "#FFFFFF",
+                "border-radius": 12,
+                "font-size": 18
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "wipe_left",
+        "duration": 0.5
+      },
+      "background": "#0B1120",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32,
+        "padding": 60
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Tables & Charts",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "letter-spacing": 3.0,
+            "animation": [
+              {
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "size": {
+            "width": 1500,
+            "height": "auto"
+          },
+          "style": {
+            "flex-direction": "row",
+            "gap": 40,
+            "justify-content": "center",
+            "align-items": "start",
+            "padding": 24,
+            "animation": [
+              {
+                "delay": 0.3,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "table",
+              "headers": ["Feature", "Status", "Version"],
+              "rows": [
+                ["Text Rendering", "Stable", "v0.1"],
+                ["Animations", "Stable", "v0.2"],
+                ["Charts", "New", "v0.3"],
+                ["Particles", "New", "v0.3"]
+              ],
+              "header_color": "#1E3A5F",
+              "row_colors": ["#0F172A", "#1E293B"],
+              "border_color": "#334155",
+              "header_text_color": "#38BDF8",
+              "size": { "width": 520, "height": 220 },
+              "style": {
+                "color": "#CBD5E1",
+                "font-size": 15,
+                "border-radius": 10
+              }
+            },
+            {
+              "type": "chart",
+              "chart_type": "bar",
+              "data": [
+                { "value": 85, "label": "Q1" },
+                { "value": 120, "label": "Q2" },
+                { "value": 95, "label": "Q3" },
+                { "value": 150, "label": "Q4" }
+              ],
+              "animated": true,
+              "size": { "width": 400, "height": 280 },
+              "style": {
+                "animation": [
+                  {
+                    "delay": 0.5,
+                    "duration": 0.6,
+                    "name": "fade_in"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "chart",
+              "chart_type": "pie",
+              "data": [
+                { "value": 40, "label": "Rust" },
+                { "value": 25, "label": "TS" },
+                { "value": 20, "label": "Go" },
+                { "value": 15, "label": "Other" }
+              ],
+              "animated": true,
+              "size": { "width": 280, "height": 280 },
+              "style": {
+                "animation": [
+                  {
+                    "delay": 0.8,
+                    "duration": 0.6,
+                    "name": "fade_in"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "iris",
+        "duration": 0.6
+      },
+      "background": "#0F0F1A",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32,
+        "padding": 60
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Particle Effects",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "letter-spacing": 3.0,
+            "animation": [
+              {
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "size": {
+            "width": 1700,
+            "height": 500
+          },
+          "style": {
+            "flex-direction": "row",
+            "gap": 20,
+            "justify-content": "center",
+            "align-items": "center",
+            "padding": 24,
+            "animation": [
+              {
+                "delay": 0.3,
+                "duration": 0.6,
+                "name": "fade_in_up"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "card",
+              "size": { "width": 300, "height": 400 },
+              "style": {
+                "background": "#1E1E2E",
+                "border-radius": 16,
+                "align-items": "center",
+                "justify-content": "end",
+                "padding": 16
+              },
+              "children": [
+                {
+                  "type": "particle",
+                  "particle_type": "confetti",
+                  "count": 60,
+                  "speed": 1.0,
+                  "seed": 42
+                },
+                {
+                  "type": "text",
+                  "content": "Confetti",
+                  "style": {
+                    "font-size": 22,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "size": { "width": 300, "height": 400 },
+              "style": {
+                "background": "#0C1222",
+                "border-radius": 16,
+                "align-items": "center",
+                "justify-content": "end",
+                "padding": 16
+              },
+              "children": [
+                {
+                  "type": "particle",
+                  "particle_type": "snow",
+                  "count": 40,
+                  "speed": 0.6,
+                  "seed": 99
+                },
+                {
+                  "type": "text",
+                  "content": "Snow",
+                  "style": {
+                    "font-size": 22,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "size": { "width": 300, "height": 400 },
+              "style": {
+                "background": "#0A0A1A",
+                "border-radius": 16,
+                "align-items": "center",
+                "justify-content": "end",
+                "padding": 16
+              },
+              "children": [
+                {
+                  "type": "particle",
+                  "particle_type": "stars",
+                  "count": 50,
+                  "speed": 1.0,
+                  "seed": 7
+                },
+                {
+                  "type": "text",
+                  "content": "Stars",
+                  "style": {
+                    "font-size": 22,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "size": { "width": 300, "height": 400 },
+              "style": {
+                "background": "#0A1628",
+                "border-radius": 16,
+                "align-items": "center",
+                "justify-content": "end",
+                "padding": 16
+              },
+              "children": [
+                {
+                  "type": "particle",
+                  "particle_type": "bubbles",
+                  "count": 30,
+                  "speed": 0.8,
+                  "seed": 13
+                },
+                {
+                  "type": "text",
+                  "content": "Bubbles",
+                  "style": {
+                    "font-size": 22,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "size": { "width": 300, "height": 400 },
+              "style": {
+                "background": "#0F0A1E",
+                "border-radius": 16,
+                "align-items": "center",
+                "justify-content": "end",
+                "padding": 16
+              },
+              "children": [
+                {
+                  "type": "particle",
+                  "particle_type": "halo",
+                  "count": 12,
+                  "speed": 0.5,
+                  "size_range": { "min": 30, "max": 80 },
+                  "colors": ["#6366F150", "#8B5CF650", "#EC489950"],
+                  "seed": 77
+                },
+                {
+                  "type": "text",
+                  "content": "Halo",
+                  "style": {
+                    "font-size": 22,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                }
+              ]
             }
           ]
         }

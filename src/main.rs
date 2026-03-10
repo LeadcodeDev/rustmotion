@@ -623,6 +623,7 @@ fn validate_scenario(scenario: &schema::ResolvedScenario) -> Vec<String> {
                         }
                     }
                 }
+                _ => {} // V2-only components validated elsewhere
             }
         }
     }

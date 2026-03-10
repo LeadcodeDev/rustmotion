@@ -799,6 +799,177 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 
 **Available themes (72):** `base16-ocean.dark`, `base16-ocean.light`, `base16-eighties.dark`, `base16-mocha.dark`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`, `andromeeda`, `aurora-x`, `ayu-dark`, `ayu-light`, `ayu-mirage`, `dark-plus`, `dracula`, `dracula-soft`, `everforest-dark`, `everforest-light`, `github-dark`, `github-dark-default`, `github-dark-dimmed`, `github-dark-high-contrast`, `github-light`, `github-light-default`, `github-light-high-contrast`, `gruvbox-dark-hard`, `gruvbox-dark-medium`, `gruvbox-dark-soft`, `gruvbox-light-hard`, `gruvbox-light-medium`, `gruvbox-light-soft`, `horizon`, `horizon-bright`, `houston`, `kanagawa-dragon`, `kanagawa-lotus`, `kanagawa-wave`, `laserwave`, `light-plus`, `material-theme`, `material-theme-darker`, `material-theme-lighter`, `material-theme-ocean`, `material-theme-palenight`, `min-dark`, `min-light`, `monokai`, `night-owl`, `night-owl-light`, `nord`, `one-dark-pro`, `one-light`, `plastic`, `poimandres`, `red`, `rose-pine`, `rose-pine-dawn`, `rose-pine-moon`, `slack-dark`, `slack-ochin`, `snazzy-light`, `solarized-dark`, `solarized-light`, `synthwave-84`, `tokyo-night`, `vesper`, `vitesse-black`, `vitesse-dark`, `vitesse-light`
 
+### 13. `divider`
+
+Visual separator line.
+
+```json
+{
+  "type": "divider",
+  "direction": "horizontal",
+  "thickness": 2,
+  "line_style": "solid",
+  "style": { "color": "#4B5563" }
+}
+```
+
+**Root fields:** `direction` (horizontal/vertical), `thickness` (default 2.0), `line_style` (solid/dashed/dotted), `length` (optional fixed length)
+
+Style: `color` (default `"#FFFFFF"`)
+
+### 14. `badge`
+
+Compact pill-shaped label with optional icon.
+
+```json
+{
+  "type": "badge",
+  "text": "New",
+  "icon": "lucide:star",
+  "variant": "solid",
+  "badge_size": "md",
+  "style": { "background": "#3B82F6" }
+}
+```
+
+**Root fields:** `text` (required), `icon` (Iconify id), `variant` (solid/outline), `badge_size` (sm/md/lg)
+
+Style: `background` (default `"#3B82F6"`) — badge color, `font-size`, `font-family`
+
+### 15. `avatar`
+
+Circular image with optional border and status indicator.
+
+```json
+{
+  "type": "avatar",
+  "src": "photo.jpg",
+  "size": 80,
+  "border_color": "#3B82F6",
+  "border_width": 3,
+  "status": "online"
+}
+```
+
+**Root fields:** `src` (required), `size` (diameter, default 64), `border_color`, `border_width`, `status` (online/offline/away/none), `status_color`
+
+### 16. `callout`
+
+Speech bubble with directional arrow.
+
+```json
+{
+  "type": "callout",
+  "text": "Hello!",
+  "arrow_direction": "bottom",
+  "arrow_size": 12,
+  "style": { "background": "#333333", "color": "#FFFFFF", "border-radius": 8, "font-size": 16 }
+}
+```
+
+**Root fields:** `text` (required), `arrow_direction` (top/bottom/left/right), `arrow_size` (default 12), `size`
+
+Style: `background` (default `"#333333"`), `color` (default `"#FFFFFF"`), `border-radius` (default 8), `font-size` (default 16), `font-family`
+
+### 17. `terminal`
+
+Terminal window with colored lines and chrome.
+
+```json
+{
+  "type": "terminal",
+  "title": "Terminal",
+  "theme": "dark",
+  "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
+  "lines": [
+    { "text": "npm install", "line_type": "prompt" },
+    { "text": "added 42 packages", "line_type": "output" }
+  ],
+  "size": { "width": 600, "height": 300 }
+}
+```
+
+**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `size`
+
+**Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance like the codeblock component.
+
+Line types: `"prompt"` ($ prefix in green), `"command"` (white), `"output"` (gray)
+
+Style: `font-size` (default 14)
+
+### 18. `table`
+
+Data table with headers and styled rows.
+
+```json
+{
+  "type": "table",
+  "headers": ["Name", "Role"],
+  "rows": [["Alice", "Engineer"], ["Bob", "Designer"]],
+  "size": { "width": 600, "height": 200 },
+  "style": { "color": "#FFFFFF", "font-size": 14 }
+}
+```
+
+**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating), `border_color` (#4B5563), `header_text_color`, `size`
+
+Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default 14), `font-family`, `border-radius`
+
+### 19. `chart`
+
+Data visualization (bar/line/pie) with animation.
+
+```json
+{
+  "type": "chart",
+  "chart_type": "bar",
+  "data": [
+    { "value": 85, "label": "Q1" },
+    { "value": 120, "label": "Q2" }
+  ],
+  "size": { "width": 400, "height": 300 }
+}
+```
+
+**Root fields:** `chart_type` (required — bar/line/pie), `data` (required — `[{ "value", "label"?, "color"? }]`), `size` (default 300x200), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
+
+Default palette: `#3B82F6`, `#EF4444`, `#22C55E`, `#F59E0B`, `#8B5CF6`, `#EC4899`, `#06B6D4`, `#F97316`
+
+### 20. `mockup`
+
+Device frame with image content inside.
+
+```json
+{
+  "type": "mockup",
+  "device": "iphone",
+  "src": "screenshot.png",
+  "theme": "dark"
+}
+```
+
+**Root fields:** `device` (required — iphone/android/laptop/browser), `src` (required — path to image), `theme` (dark/light), `size`
+
+Default sizes: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600
+
+### 21. `particle`
+
+Animated particle system for visual effects.
+
+```json
+{
+  "type": "particle",
+  "particle_type": "confetti",
+  "count": 80,
+  "speed": 1.2,
+  "seed": 42
+}
+```
+
+**Root fields:** `particle_type` (required — confetti/snow/stars/bubbles/halo), `count` (default 50), `colors`, `speed` (default 1.0), `size_range` ({min, max}, default {4, 12}), `seed` (default 42)
+
+Behaviors: confetti=falling rotating rects, snow=falling circles, stars=twinkling fixed positions, bubbles=rising circles, halo=soft glowing circles drifting with pulsing opacity (use larger size_range like {30, 80} and low count ~10-15)
+
 ---
 
 ### Animations
