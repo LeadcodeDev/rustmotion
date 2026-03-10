@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use skia_safe::{surfaces, AlphaType, ColorType, ImageInfo};
+use skia_safe::{
+    surfaces, AlphaType, Color4f, ColorType, Font, FontStyle, ImageInfo, Paint, Path, RRect, Rect,
+    TextBlob,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
@@ -16,6 +19,7 @@ use winit::window::{Window, WindowId};
 
 use crate::encode::{self, video::FrameTask};
 use crate::engine;
+use crate::engine::renderer::font_mgr;
 use crate::error::RustmotionError;
 use crate::schema::ResolvedScenario;
 
@@ -44,16 +48,152 @@ enum ReloadResponse {
     },
 }
 
-const TIMELINE_HEIGHT: u32 = 40;
-const TIMELINE_PADDING: u32 = 12;
+// ── Constants ───────────────────────────────────────────────────────
 
-fn timeline_x_to_frame(x: f64, window_w: u32, total: u32) -> u32 {
-    let bar_x_start = TIMELINE_PADDING as f64;
-    let bar_x_end = window_w as f64 - TIMELINE_PADDING as f64;
-    let bar_w = bar_x_end - bar_x_start;
-    if bar_w <= 0.0 { return 0; }
-    let ratio = ((x - bar_x_start) / bar_w).clamp(0.0, 1.0);
+const CONTROLS_BAR_W_RATIO: f32 = 0.45; // bar is 45% of window width
+const CONTROLS_BAR_MIN_W: f32 = 280.0;
+const CONTROLS_BAR_MARGIN_BOTTOM: f32 = 24.0;
+const CONTROLS_BAR_RADIUS: f32 = 14.0;
+const CONTROLS_BAR_PAD_X: f32 = 20.0;
+const CONTROLS_BAR_PAD_Y: f32 = 12.0;
+const BUTTON_SIZE: f32 = 32.0;
+const BUTTON_ICON_SIZE: f32 = 14.0;
+const BUTTON_GAP: f32 = 16.0;
+const TIMELINE_BAR_H: f32 = 4.0;
+const TIMELINE_BAR_RADIUS: f32 = 2.0;
+const TIMELINE_ROW_H: f32 = 20.0;
+
+// ── Layout ──────────────────────────────────────────────────────────
+
+struct ControlBarLayout {
+    bar_rect: Rect,       // outer floating pill
+    prev_btn: Rect,
+    play_btn: Rect,
+    next_btn: Rect,
+    timeline_rect: Rect,
+    time_left_pos: (f32, f32),  // baseline position for left time label
+    time_right_pos: (f32, f32), // baseline position for right time label
+}
+
+fn compute_control_bar_layout(width: f32, height: f32) -> ControlBarLayout {
+    // Bar dimensions
+    let bar_w = (width * CONTROLS_BAR_W_RATIO).max(CONTROLS_BAR_MIN_W).min(width - 40.0);
+    let buttons_row_h = BUTTON_SIZE;
+    let bar_h = CONTROLS_BAR_PAD_Y + buttons_row_h + 8.0 + TIMELINE_ROW_H + CONTROLS_BAR_PAD_Y;
+    let bar_x = (width - bar_w) / 2.0;
+    let bar_y = height - CONTROLS_BAR_MARGIN_BOTTOM - bar_h;
+    let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_w, bar_h);
+
+    // Row 1: transport buttons centered
+    let btn_row_cy = bar_y + CONTROLS_BAR_PAD_Y + buttons_row_h / 2.0;
+    let btn_y = btn_row_cy - BUTTON_SIZE / 2.0;
+    let total_btns_w = 3.0 * BUTTON_SIZE + 2.0 * BUTTON_GAP;
+    let btn_x0 = bar_x + (bar_w - total_btns_w) / 2.0;
+    let prev_btn = Rect::from_xywh(btn_x0, btn_y, BUTTON_SIZE, BUTTON_SIZE);
+    let play_btn = Rect::from_xywh(btn_x0 + BUTTON_SIZE + BUTTON_GAP, btn_y, BUTTON_SIZE, BUTTON_SIZE);
+    let next_btn = Rect::from_xywh(btn_x0 + 2.0 * (BUTTON_SIZE + BUTTON_GAP), btn_y, BUTTON_SIZE, BUTTON_SIZE);
+
+    // Row 2: time_left — timeline — time_right
+    let row2_y = bar_y + CONTROLS_BAR_PAD_Y + buttons_row_h + 8.0;
+    let row2_cy = row2_y + TIMELINE_ROW_H / 2.0;
+    let time_label_w = 44.0; // space reserved for "00:00" style labels
+    let tl_x = bar_x + CONTROLS_BAR_PAD_X + time_label_w + 8.0;
+    let tl_right = bar_x + bar_w - CONTROLS_BAR_PAD_X - time_label_w - 8.0;
+    let tl_w = (tl_right - tl_x).max(0.0);
+    let timeline_rect = Rect::from_xywh(tl_x, row2_cy - TIMELINE_BAR_H / 2.0, tl_w, TIMELINE_BAR_H);
+
+    let time_baseline_y = row2_cy + 4.0;
+    let time_left_pos = (bar_x + CONTROLS_BAR_PAD_X, time_baseline_y);
+    let time_right_pos = (bar_x + bar_w - CONTROLS_BAR_PAD_X, time_baseline_y);
+
+    ControlBarLayout {
+        bar_rect,
+        prev_btn,
+        play_btn,
+        next_btn,
+        timeline_rect,
+        time_left_pos,
+        time_right_pos,
+    }
+}
+
+fn timeline_x_to_frame(x: f64, tl_left: f64, tl_right: f64, total: u32) -> u32 {
+    let bar_w = tl_right - tl_left;
+    if bar_w <= 0.0 {
+        return 0;
+    }
+    let ratio = ((x - tl_left) / bar_w).clamp(0.0, 1.0);
     ((ratio * total as f64) as u32).min(total.saturating_sub(1))
+}
+
+fn rect_contains(rect: &Rect, x: f32, y: f32) -> bool {
+    x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+// ── Drawing helpers ─────────────────────────────────────────────────
+
+fn draw_play_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
+    let cx = rect.center_x();
+    let cy = rect.center_y();
+    let s = BUTTON_ICON_SIZE / 2.0;
+    let mut path = Path::new();
+    path.move_to((cx - s * 0.5, cy - s));
+    path.line_to((cx + s * 0.8, cy));
+    path.line_to((cx - s * 0.5, cy + s));
+    path.close();
+    canvas.draw_path(&path, paint);
+}
+
+fn draw_pause_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
+    let cx = rect.center_x();
+    let cy = rect.center_y();
+    let s = BUTTON_ICON_SIZE / 2.0;
+    let bar_w = s * 0.45;
+    let gap = s * 0.25;
+    canvas.draw_rect(
+        Rect::from_xywh(cx - gap - bar_w, cy - s, bar_w, s * 2.0),
+        paint,
+    );
+    canvas.draw_rect(
+        Rect::from_xywh(cx + gap, cy - s, bar_w, s * 2.0),
+        paint,
+    );
+}
+
+fn draw_prev_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
+    let cx = rect.center_x();
+    let cy = rect.center_y();
+    let s = BUTTON_ICON_SIZE / 2.0;
+    // Vertical bar on the left
+    canvas.draw_rect(
+        Rect::from_xywh(cx - s * 0.8, cy - s * 0.7, 2.0, s * 1.4),
+        paint,
+    );
+    // Triangle pointing left
+    let mut path = Path::new();
+    path.move_to((cx + s * 0.6, cy - s * 0.7));
+    path.line_to((cx - s * 0.4, cy));
+    path.line_to((cx + s * 0.6, cy + s * 0.7));
+    path.close();
+    canvas.draw_path(&path, paint);
+}
+
+fn draw_next_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
+    let cx = rect.center_x();
+    let cy = rect.center_y();
+    let s = BUTTON_ICON_SIZE / 2.0;
+    // Triangle pointing right
+    let mut path = Path::new();
+    path.move_to((cx - s * 0.6, cy - s * 0.7));
+    path.line_to((cx + s * 0.4, cy));
+    path.line_to((cx - s * 0.6, cy + s * 0.7));
+    path.close();
+    canvas.draw_path(&path, paint);
+    // Vertical bar on the right
+    canvas.draw_rect(
+        Rect::from_xywh(cx + s * 0.8 - 2.0, cy - s * 0.7, 2.0, s * 1.4),
+        paint,
+    );
 }
 
 // ── PreviewApp ──────────────────────────────────────────────────────
@@ -96,12 +236,16 @@ struct PreviewApp {
     // Mouse
     modifiers: ModifiersState,
     timeline_dragging: bool,
+    cursor_x: f64,
     cursor_y: f64,
+
 }
 
 impl PreviewApp {
     fn request_frame(&mut self, frame: u32) {
-        if frame >= self.total_frames { return; }
+        if frame >= self.total_frames {
+            return;
+        }
         if self.frame_cache.contains_key(&frame) {
             if self.pending_frame == Some(frame) {
                 self.pending_frame = None;
@@ -111,7 +255,9 @@ impl PreviewApp {
             }
             return;
         }
-        if self.pending_frame == Some(frame) { return; }
+        if self.pending_frame == Some(frame) {
+            return;
+        }
         self.pending_frame = Some(frame);
         let _ = self.render_tx.send(RenderRequest::Frame(frame));
     }
@@ -147,7 +293,9 @@ impl PreviewApp {
 
     fn update_title(&self) {
         if let Some(window) = &self.window {
-            let name = self.input_path.as_ref()
+            let name = self
+                .input_path
+                .as_ref()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("preview");
@@ -177,9 +325,37 @@ impl PreviewApp {
         }
     }
 
+    fn make_ui_font(&self, size: f32) -> Font {
+        let fm = font_mgr();
+        let typeface = fm
+            .match_family_style("SF Pro", FontStyle::normal())
+            .or_else(|| fm.match_family_style("Helvetica Neue", FontStyle::normal()))
+            .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
+            .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
+            .unwrap_or_else(|| {
+                fm.legacy_make_typeface(None, FontStyle::normal())
+                    .expect("No fallback font")
+            });
+        Font::from_typeface(typeface, size)
+    }
+
     fn blit(&mut self) {
-        let Some(surface) = &mut self.surface else { return };
-        let Some(window) = &self.window else { return };
+        // Pre-extract data needed for drawing (avoids borrow conflicts with surface)
+        let current_frame = self.current_frame;
+        let total_frames = self.total_frames;
+        let fps = self.fps;
+        let playing = self.playing;
+        let rendered_width = self.rendered_width;
+        let rendered_height = self.rendered_height;
+
+        let ui_font = self.make_ui_font(11.0);
+
+        let Some(surface) = &mut self.surface else {
+            return;
+        };
+        let Some(window) = &self.window else {
+            return;
+        };
 
         let physical = window.inner_size();
         let width = physical.width;
@@ -193,7 +369,9 @@ impl PreviewApp {
             }
         }
 
-        let Ok(mut buffer) = surface.buffer_mut() else { return };
+        let Ok(mut buffer) = surface.buffer_mut() else {
+            return;
+        };
 
         // Wrap softbuffer memory as a Skia surface (BGRA8888 = u32 layout on little-endian)
         let buf_info = ImageInfo::new(
@@ -208,9 +386,9 @@ impl PreviewApp {
                 (width * height) as usize * 4,
             )
         };
-        let Some(mut skia_surface) = surfaces::wrap_pixels(
-            &buf_info, byte_buf, width as usize * 4, None,
-        ) else {
+        let Some(mut skia_surface) =
+            surfaces::wrap_pixels(&buf_info, byte_buf, width as usize * 4, None)
+        else {
             let _ = buffer.present();
             return;
         };
@@ -218,20 +396,23 @@ impl PreviewApp {
         let canvas = skia_surface.canvas();
         canvas.clear(skia_safe::Color::BLACK);
 
-        // Draw video frame (Skia handles scaling + color conversion directly)
-        let video_display_h = height.saturating_sub(TIMELINE_HEIGHT);
-        let display_frame = if self.frame_cache.contains_key(&self.current_frame) {
-            Some(self.current_frame)
+        let w = width as f32;
+        let h = height as f32;
+
+        // ── Video frame (fills entire window) ────────────────────
+        let display_frame = if self.frame_cache.contains_key(&current_frame) {
+            Some(current_frame)
         } else {
-            self.frame_cache.keys()
-                .min_by_key(|&&k| (k as i64 - self.current_frame as i64).unsigned_abs())
+            self.frame_cache
+                .keys()
+                .min_by_key(|&&k| (k as i64 - current_frame as i64).unsigned_abs())
                 .copied()
         };
 
         if let Some(frame_id) = display_frame {
             if let Some(rgba) = self.frame_cache.get(&frame_id) {
-                let rw = self.rendered_width;
-                let rh = self.rendered_height;
+                let rw = rendered_width;
+                let rh = rendered_height;
                 let src_info = ImageInfo::new(
                     (rw as i32, rh as i32),
                     ColorType::RGBA8888,
@@ -239,49 +420,111 @@ impl PreviewApp {
                     None,
                 );
                 let src_data = skia_safe::Data::new_copy(rgba);
-                if let Some(img) = skia_safe::images::raster_from_data(
-                    &src_info, src_data, rw as usize * 4,
-                ) {
-                    let dst_rect = skia_safe::Rect::from_wh(width as f32, video_display_h as f32);
-                    let mut paint = skia_safe::Paint::default();
+                if let Some(img) =
+                    skia_safe::images::raster_from_data(&src_info, src_data, rw as usize * 4)
+                {
+                    let dst_rect = skia_safe::Rect::from_wh(w, h);
+                    let mut paint = Paint::default();
                     paint.set_anti_alias(true);
                     canvas.draw_image_rect(&img, None, dst_rect, &paint);
                 }
             }
         }
 
-        // Draw timeline directly with Skia
-        let tl_y = video_display_h as f32;
-        let w = width as f32;
-        let h = height as f32;
+        // ── Floating control bar (QuickTime style) ──────────────
+        let layout = compute_control_bar_layout(w, h);
 
-        // Timeline background
-        let mut paint = skia_safe::Paint::default();
-        paint.set_color(skia_safe::Color::from_rgb(0x1a, 0x1a, 0x1a));
-        canvas.draw_rect(skia_safe::Rect::from_xywh(0.0, tl_y, w, h - tl_y), &paint);
+        // Pill background
+        let mut bg_paint = Paint::default();
+        bg_paint.set_color4f(Color4f::new(0.1, 0.1, 0.1, 0.82), None);
+        bg_paint.set_anti_alias(true);
+        let bar_rrect = RRect::new_rect_xy(layout.bar_rect, CONTROLS_BAR_RADIUS, CONTROLS_BAR_RADIUS);
+        canvas.draw_rrect(bar_rrect, &bg_paint);
 
-        if self.total_frames > 0 {
-            let pad = TIMELINE_PADDING as f32;
-            let bar_y = tl_y + 14.0;
-            let bar_h = 12.0;
-            let bar_w = w - pad * 2.0;
-            let progress = self.current_frame as f32 / self.total_frames as f32;
-            let filled_w = bar_w * progress;
+        // Subtle border
+        let mut border_paint = Paint::default();
+        border_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.1), None);
+        border_paint.set_anti_alias(true);
+        border_paint.set_style(skia_safe::PaintStyle::Stroke);
+        border_paint.set_stroke_width(0.5);
+        canvas.draw_rrect(bar_rrect, &border_paint);
 
-            // Unfilled bar
-            paint.set_color(skia_safe::Color::from_rgb(0x33, 0x33, 0x33));
-            canvas.draw_rect(skia_safe::Rect::from_xywh(pad, bar_y, bar_w, bar_h), &paint);
+        // Transport button icons (centered row)
+        let mut icon_paint = Paint::default();
+        icon_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
+        icon_paint.set_anti_alias(true);
 
-            // Filled bar
-            paint.set_color(skia_safe::Color::from_rgb(0x00, 0xbc, 0xd4));
-            canvas.draw_rect(skia_safe::Rect::from_xywh(pad, bar_y, filled_w, bar_h), &paint);
+        draw_prev_icon(canvas, &layout.prev_btn, &icon_paint);
+        if playing {
+            draw_pause_icon(canvas, &layout.play_btn, &icon_paint);
+        } else {
+            draw_play_icon(canvas, &layout.play_btn, &icon_paint);
+        }
+        draw_next_icon(canvas, &layout.next_btn, &icon_paint);
 
-            // Playhead
-            paint.set_color(skia_safe::Color::WHITE);
-            let ph_x = pad + filled_w;
-            let ph_y = tl_y + 8.0;
-            let ph_h = TIMELINE_HEIGHT as f32 - 16.0;
-            canvas.draw_rect(skia_safe::Rect::from_xywh(ph_x, ph_y, 2.0, ph_h), &paint);
+        // Timeline row: time_left — scrub bar — time_right
+        if total_frames > 0 {
+            let progress = current_frame as f32 / total_frames.max(1) as f32;
+
+            // Track background
+            let mut track_paint = Paint::default();
+            track_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.15), None);
+            track_paint.set_anti_alias(true);
+            let track_rrect = RRect::new_rect_xy(
+                layout.timeline_rect,
+                TIMELINE_BAR_RADIUS,
+                TIMELINE_BAR_RADIUS,
+            );
+            canvas.draw_rrect(track_rrect, &track_paint);
+
+            // Filled portion
+            let filled_w = layout.timeline_rect.width() * progress;
+            let filled_rect = Rect::from_xywh(
+                layout.timeline_rect.left,
+                layout.timeline_rect.top,
+                filled_w,
+                TIMELINE_BAR_H,
+            );
+            let mut fill_paint = Paint::default();
+            fill_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.6), None);
+            fill_paint.set_anti_alias(true);
+            let fill_rrect =
+                RRect::new_rect_xy(filled_rect, TIMELINE_BAR_RADIUS, TIMELINE_BAR_RADIUS);
+            canvas.draw_rrect(fill_rrect, &fill_paint);
+
+            // Playhead circle
+            let ph_x = layout.timeline_rect.left + filled_w;
+            let ph_cy = layout.timeline_rect.center_y();
+            let mut ph_paint = Paint::default();
+            ph_paint.set_color(skia_safe::Color::WHITE);
+            ph_paint.set_anti_alias(true);
+            canvas.draw_circle((ph_x, ph_cy), 5.0, &ph_paint);
+
+            // Current time (left)
+            let cur_time = current_frame as f64 / fps.max(1) as f64;
+            let cur_min = (cur_time / 60.0) as u32;
+            let cur_sec = cur_time % 60.0;
+            let cur_text = format!("{:02}:{:02}", cur_min, cur_sec as u32);
+            if let Some(blob) = TextBlob::new(&cur_text, &ui_font) {
+                let mut tp = Paint::default();
+                tp.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.5), None);
+                tp.set_anti_alias(true);
+                canvas.draw_text_blob(&blob, layout.time_left_pos, &tp);
+            }
+
+            // Total time (right)
+            let tot_time = total_frames as f64 / fps.max(1) as f64;
+            let tot_min = (tot_time / 60.0) as u32;
+            let tot_sec = tot_time % 60.0;
+            let tot_text = format!("{:02}:{:02}", tot_min, tot_sec as u32);
+            if let Some(blob) = TextBlob::new(&tot_text, &ui_font) {
+                let mut tp = Paint::default();
+                tp.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.5), None);
+                tp.set_anti_alias(true);
+                let text_w = blob.bounds().width();
+                let x = layout.time_right_pos.0 - text_w;
+                canvas.draw_text_blob(&blob, (x, layout.time_right_pos.1), &tp);
+            }
         }
 
         // Drop skia surface before accessing buffer again
@@ -299,50 +542,57 @@ impl PreviewApp {
 impl ApplicationHandler for PreviewApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Calculate scale to fit screen (logical pixels)
-        let monitor = event_loop.primary_monitor()
+        let monitor = event_loop
+            .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());
         let (max_w, max_h) = monitor
             .map(|m| {
                 let size = m.size();
                 let scale_factor = m.scale_factor();
-                (size.width as f64 / scale_factor * 0.85, size.height as f64 / scale_factor * 0.85)
+                (
+                    size.width as f64 / scale_factor * 0.85,
+                    size.height as f64 / scale_factor * 0.85,
+                )
             })
             .unwrap_or((1920.0, 1080.0));
 
         self.scale = (max_w / self.video_width as f64)
-            .min(max_h / (self.video_height as f64 + TIMELINE_HEIGHT as f64))
+            .min(max_h / self.video_height as f64)
             .min(1.0);
 
         let logical_w = ((self.video_width as f64 * self.scale) as u32).max(1);
-        let logical_h = ((self.video_height as f64 * self.scale) as u32 + TIMELINE_HEIGHT).max(1);
+        let logical_h = ((self.video_height as f64 * self.scale) as u32).max(1);
 
         let window_attrs = Window::default_attributes()
             .with_title("rustmotion \u{2014} preview")
             .with_inner_size(LogicalSize::new(logical_w, logical_h))
             .with_resizable(false);
 
-        let window = Arc::new(event_loop.create_window(window_attrs).expect("Failed to create window"));
+        let window =
+            Arc::new(event_loop.create_window(window_attrs).expect("Failed to create window"));
 
         // Use physical pixel dimensions for the surface buffer (Retina-aware)
         let scale_factor = window.scale_factor();
         self.display_width = ((logical_w as f64 * scale_factor) as u32).max(1);
         self.display_height = ((logical_h as f64 * scale_factor) as u32).max(1);
-        let context = softbuffer::Context::new(window.clone()).expect("Failed to create softbuffer context");
-        let mut surface = softbuffer::Surface::new(&context, window.clone()).expect("Failed to create surface");
+        let context =
+            softbuffer::Context::new(window.clone()).expect("Failed to create softbuffer context");
+        let mut surface =
+            softbuffer::Surface::new(&context, window.clone()).expect("Failed to create surface");
 
-        surface.resize(
-            NonZeroU32::new(self.display_width).unwrap(),
-            NonZeroU32::new(self.display_height).unwrap(),
-        ).expect("Failed to resize surface");
+        surface
+            .resize(
+                NonZeroU32::new(self.display_width).unwrap(),
+                NonZeroU32::new(self.display_height).unwrap(),
+            )
+            .expect("Failed to resize surface");
 
         self.window = Some(window);
         self.surface = Some(surface);
 
         // Send scale factor to render thread for high-DPI rendering
-        // Use .min() to fit within display area, exclude timeline from height
-        let video_area_h = self.display_height.saturating_sub(TIMELINE_HEIGHT);
         let render_scale = (self.display_width as f32 / self.video_width as f32)
-            .min(video_area_h as f32 / self.video_height as f32);
+            .min(self.display_height as f32 / self.video_height as f32);
         let _ = self.render_tx.send(RenderRequest::SetScale(render_scale));
 
         self.update_title();
@@ -361,11 +611,12 @@ impl ApplicationHandler for PreviewApp {
             }
 
             WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    physical_key: PhysicalKey::Code(key),
-                    state: ElementState::Pressed,
-                    ..
-                },
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key),
+                        state: ElementState::Pressed,
+                        ..
+                    },
                 ..
             } => {
                 let shift = self.modifiers.shift_key();
@@ -386,26 +637,62 @@ impl ApplicationHandler for PreviewApp {
             }
 
             WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_x = position.x;
                 self.cursor_y = position.y;
                 if self.timeline_dragging {
-                    let frame = timeline_x_to_frame(position.x, self.display_width, self.total_frames);
+                    let layout = compute_control_bar_layout(
+                        self.display_width as f32,
+                        self.display_height as f32,
+                    );
+                    let frame = timeline_x_to_frame(
+                        position.x,
+                        layout.timeline_rect.left as f64,
+                        layout.timeline_rect.right as f64,
+                        self.total_frames,
+                    );
                     self.playing = false;
                     self.go_to_frame(frame);
                 }
             }
 
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                let video_h = self.display_height - TIMELINE_HEIGHT;
-                let in_timeline = self.cursor_y >= video_h as f64;
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let layout = compute_control_bar_layout(
+                    self.display_width as f32,
+                    self.display_height as f32,
+                );
+                let pt = (self.cursor_x as f32, self.cursor_y as f32);
+
                 match state {
-                    ElementState::Pressed if in_timeline => {
-                        self.timeline_dragging = true;
-                        self.playing = false;
+                    ElementState::Pressed => {
+                        if rect_contains(&layout.prev_btn, pt.0, pt.1) {
+                            self.step_frame(-1);
+                        } else if rect_contains(&layout.play_btn, pt.0, pt.1) {
+                            self.toggle_playback();
+                        } else if rect_contains(&layout.next_btn, pt.0, pt.1) {
+                            self.step_frame(1);
+                        } else if self.cursor_y >= layout.bar_rect.top as f64
+                            && self.cursor_y >= layout.timeline_rect.top as f64 - 10.0
+                            && self.cursor_x >= layout.timeline_rect.left as f64
+                            && self.cursor_x <= layout.timeline_rect.right as f64
+                        {
+                            self.timeline_dragging = true;
+                            self.playing = false;
+                            let frame = timeline_x_to_frame(
+                                self.cursor_x,
+                                layout.timeline_rect.left as f64,
+                                layout.timeline_rect.right as f64,
+                                self.total_frames,
+                            );
+                            self.go_to_frame(frame);
+                        }
                     }
                     ElementState::Released => {
                         self.timeline_dragging = false;
                     }
-                    _ => {}
                 }
             }
 
@@ -434,7 +721,12 @@ impl ApplicationHandler for PreviewApp {
         // Poll reload responses
         while let Ok(response) = self.reload_rx.try_recv() {
             match response {
-                ReloadResponse::Ready { total_frames, fps, width, height } => {
+                ReloadResponse::Ready {
+                    total_frames,
+                    fps,
+                    width,
+                    height,
+                } => {
                     self.total_frames = total_frames;
                     self.fps = fps;
                     self.video_width = width;
@@ -474,14 +766,12 @@ impl ApplicationHandler for PreviewApp {
                     self.update_title();
                 }
             } else if !frame_ready {
-                // Reset timer so we don't instantly skip ahead when the frame arrives
                 self.last_frame_time = now;
             }
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if self.pending_frame.is_some()
             || self.frame_cache.len() < self.total_frames as usize
         {
-            // Keep polling while render thread is still working
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));
@@ -511,14 +801,23 @@ fn render_thread(
                       done: &mut Vec<bool>,
                       tx: &Sender<RenderResponse>,
                       sf: f32| {
-        if fi >= tasks.len() as u32 { return; }
-        if done[fi as usize] { return; }
+        if fi >= tasks.len() as u32 {
+            return;
+        }
+        if done[fi as usize] {
+            return;
+        }
         if let Some(task) = tasks.get(fi as usize) {
             match encode::render_frame_task_scaled(&sc.video, &sc.scenes, task, sf) {
                 Ok(rgba) => {
                     let pw = (sc.video.width as f32 * sf) as u32;
                     let ph = (sc.video.height as f32 * sf) as u32;
-                    let _ = tx.send(RenderResponse { frame: fi, rgba, pixel_width: pw, pixel_height: ph });
+                    let _ = tx.send(RenderResponse {
+                        frame: fi,
+                        rgba,
+                        pixel_width: pw,
+                        pixel_height: ph,
+                    });
                     done[fi as usize] = true;
                 }
                 Err(e) => eprintln!("Render error frame {}: {}", fi, e),
@@ -533,7 +832,8 @@ fn render_thread(
                           cursor: &mut u32,
                           sf: &mut f32,
                           tx: &Sender<RenderResponse>,
-                          reload_tx: &Sender<ReloadResponse>| -> bool {
+                          reload_tx: &Sender<ReloadResponse>|
+     -> bool {
         match req {
             RenderRequest::Frame(fi) => {
                 let total = tasks.len() as u32;
@@ -567,7 +867,10 @@ fn render_thread(
                 *done = vec![false; new_total as usize];
                 *cursor = 0;
                 let _ = reload_tx.send(ReloadResponse::Ready {
-                    total_frames: new_total, fps, width: w, height: h,
+                    total_frames: new_total,
+                    fps,
+                    width: w,
+                    height: h,
                 });
             }
             RenderRequest::Shutdown => return true,
@@ -577,14 +880,32 @@ fn render_thread(
 
     // Wait for the first request
     let Ok(first) = req_rx.recv() else { return };
-    if handle_request(first, &mut frame_tasks, &mut scenario, &mut rendered, &mut bg_cursor, &mut scale, &resp_tx, &reload_resp_tx) {
+    if handle_request(
+        first,
+        &mut frame_tasks,
+        &mut scenario,
+        &mut rendered,
+        &mut bg_cursor,
+        &mut scale,
+        &resp_tx,
+        &reload_resp_tx,
+    ) {
         return;
     }
 
     // Main loop: handle urgent requests, then background render
     loop {
         while let Ok(req) = req_rx.try_recv() {
-            if handle_request(req, &mut frame_tasks, &mut scenario, &mut rendered, &mut bg_cursor, &mut scale, &resp_tx, &reload_resp_tx) {
+            if handle_request(
+                req,
+                &mut frame_tasks,
+                &mut scenario,
+                &mut rendered,
+                &mut bg_cursor,
+                &mut scale,
+                &resp_tx,
+                &reload_resp_tx,
+            ) {
                 return;
             }
         }
@@ -602,7 +923,16 @@ fn render_thread(
             // All frames rendered — block until a new request arrives
             match req_rx.recv() {
                 Ok(req) => {
-                    if handle_request(req, &mut frame_tasks, &mut scenario, &mut rendered, &mut bg_cursor, &mut scale, &resp_tx, &reload_resp_tx) {
+                    if handle_request(
+                        req,
+                        &mut frame_tasks,
+                        &mut scenario,
+                        &mut rendered,
+                        &mut bg_cursor,
+                        &mut scale,
+                        &resp_tx,
+                        &reload_resp_tx,
+                    ) {
                         return;
                     }
                 }
@@ -647,17 +977,23 @@ pub fn run_preview(
             let (tx, rx) = mpsc::channel();
             let watch_path = path.clone();
             std::thread::spawn(move || {
-                use notify::{Watcher, RecursiveMode};
-                let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                    if let Ok(event) = res {
-                        if event.kind.is_modify() || event.kind.is_create() {
-                            let _ = tx.send(());
+                use notify::{RecursiveMode, Watcher};
+                let mut watcher = notify::recommended_watcher(
+                    move |res: Result<notify::Event, notify::Error>| {
+                        if let Ok(event) = res {
+                            if event.kind.is_modify() || event.kind.is_create() {
+                                let _ = tx.send(());
+                            }
                         }
-                    }
-                }).expect("Failed to create file watcher");
-                watcher.watch(watch_path.as_ref(), RecursiveMode::NonRecursive)
+                    },
+                )
+                .expect("Failed to create file watcher");
+                watcher
+                    .watch(watch_path.as_ref(), RecursiveMode::NonRecursive)
                     .expect("Failed to watch file");
-                loop { std::thread::sleep(Duration::from_secs(3600)); }
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
             });
             Some(rx)
         } else {
@@ -668,7 +1004,9 @@ pub fn run_preview(
     };
 
     let event_loop = EventLoop::new()
-        .map_err(|e| RustmotionError::PreviewWindow { reason: e.to_string() })?;
+        .map_err(|e| RustmotionError::PreviewWindow {
+            reason: e.to_string(),
+        })?;
 
     let mut app = PreviewApp {
         total_frames,
@@ -691,15 +1029,19 @@ pub fn run_preview(
         window: None,
         surface: None,
         display_width: video_width,
-        display_height: video_height + TIMELINE_HEIGHT,
+        display_height: video_height,
         scale: 1.0,
         modifiers: ModifiersState::empty(),
         timeline_dragging: false,
+        cursor_x: 0.0,
         cursor_y: 0.0,
     };
 
-    event_loop.run_app(&mut app)
-        .map_err(|e| RustmotionError::PreviewWindow { reason: e.to_string() })?;
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| RustmotionError::PreviewWindow {
+            reason: e.to_string(),
+        })?;
 
     Ok(())
 }
