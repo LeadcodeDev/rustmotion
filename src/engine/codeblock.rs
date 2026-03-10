@@ -11,8 +11,9 @@ use syntect::parsing::SyntaxSet;
 
 use super::renderer::paint_from_hex;
 use crate::engine::animator::{ease, AnimatedProperties};
+use crate::components::Codeblock;
 use crate::schema::{
-    CodeblockHighlight, CodeblockLayer, EasingType, FontWeight, RevealMode, Spacing, VideoConfig,
+    CodeblockHighlight, EasingType, FontWeight, RevealMode, Spacing, VideoConfig,
 };
 
 // ─── Syntect caches ──────────────────────────────────────────────────────────
@@ -524,7 +525,7 @@ struct CodeDimensions {
 
 pub fn render_codeblock(
     canvas: &Canvas,
-    layer: &CodeblockLayer,
+    layer: &Codeblock,
     _config: &VideoConfig,
     time: f64,
     _props: &AnimatedProperties,
@@ -604,8 +605,8 @@ pub fn render_codeblock(
 
     // Snap to integer pixel boundaries to eliminate sub-pixel anti-aliasing
     // artifacts on the edges (jagged/crenelated borders)
-    let x = layer.position.x.round();
-    let y = layer.position.y.round();
+    let x = 0.0f32;
+    let y = 0.0f32;
     let total_width = total_width.round();
     let total_height = total_height.round();
 
@@ -690,35 +691,13 @@ pub fn render_codeblock(
 }
 
 /// V2 entry point: render a Codeblock component at the current canvas origin.
-/// Constructs a temporary CodeblockLayer and delegates to the existing renderer.
+/// Render a v2 Codeblock component.
 pub fn render_codeblock_v2(
     canvas: &Canvas,
     cb: &crate::components::Codeblock,
     time: f64,
 ) -> Result<()> {
     use crate::engine::animator::AnimatedProperties;
-    use crate::schema::{CodeblockLayer, Position};
-
-    let layer = CodeblockLayer {
-        code: cb.code.clone(),
-        language: cb.language.clone(),
-        theme: cb.theme.clone(),
-        position: Position { x: 0.0, y: 0.0 },
-        size: cb.size.clone(),
-        show_line_numbers: cb.show_line_numbers,
-        chrome: cb.chrome.clone(),
-        highlights: cb.highlights.clone(),
-        reveal: cb.reveal.clone(),
-        states: cb.states.clone(),
-        style: cb.style.clone(),
-        animations: vec![],
-        preset: None,
-        preset_config: None,
-        start_at: None,
-        end_at: None,
-        wiggle: None,
-        motion_blur: None,
-    };
 
     let dummy_config = crate::schema::VideoConfig {
         width: 1920,
@@ -731,7 +710,7 @@ pub fn render_codeblock_v2(
 
     render_codeblock(
         canvas,
-        &layer,
+        cb,
         &dummy_config,
         time,
         &AnimatedProperties::default(),
@@ -745,7 +724,7 @@ fn compute_code_dimensions(
     font: &Font,
     padding: &Spacing,
     chrome_height: f32,
-    layer: &CodeblockLayer,
+    layer: &Codeblock,
 ) -> CodeDimensions {
     let font_size = layer.style.font_size.unwrap_or(14.0);
     let line_height = layer.style.line_height.unwrap_or(1.5);
@@ -790,7 +769,7 @@ struct TransitionInfo {
     cursor_config: Option<crate::schema::CodeblockCursor>,
 }
 
-fn determine_active_state(layer: &CodeblockLayer, time: f64) -> (String, Option<TransitionInfo>) {
+fn determine_active_state(layer: &Codeblock, time: f64) -> (String, Option<TransitionInfo>) {
     if layer.states.is_empty() {
         return (layer.code.clone(), None);
     }
@@ -863,7 +842,7 @@ fn highlight_code(code: &str, language: &str, theme: &Theme) -> Vec<HighlightedL
 
 fn draw_chrome(
     canvas: &Canvas,
-    layer: &CodeblockLayer,
+    layer: &Codeblock,
     x: f32,
     y: f32,
     width: f32,
@@ -1003,7 +982,7 @@ fn draw_highlights(
 // ─── Reveal ──────────────────────────────────────────────────────────────────
 
 fn compute_reveal(
-    layer: &CodeblockLayer,
+    layer: &Codeblock,
     time: f64,
     highlighted: &[HighlightedLine],
 ) -> (usize, Option<usize>, f32) {
@@ -1185,7 +1164,7 @@ enum AnimatedLineContent {
 
 fn render_diff_transition(
     canvas: &Canvas,
-    layer: &CodeblockLayer,
+    layer: &Codeblock,
     font: &Font,
     theme: &Theme,
     code_x: f32,

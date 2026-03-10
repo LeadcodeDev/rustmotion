@@ -13,6 +13,8 @@ mod traits;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use components::{ChildComponent, Component};
+use schema::{CardDisplay, ResolvedScenario, Scenario};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -163,10 +165,10 @@ fn main() -> Result<()> {
     }
 }
 
-fn load_scenario(input: &PathBuf) -> Result<schema::ResolvedScenario> {
+fn load_scenario(input: &PathBuf) -> Result<ResolvedScenario> {
     let json_str = std::fs::read_to_string(input)
         .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.display(), e))?;
-    let scenario: schema::Scenario = serde_json::from_str(&json_str)
+    let scenario: Scenario = serde_json::from_str(&json_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }
@@ -174,14 +176,14 @@ fn load_scenario(input: &PathBuf) -> Result<schema::ResolvedScenario> {
 fn load_scenario_from_source(
     input: Option<&PathBuf>,
     json: Option<&str>,
-) -> Result<schema::ResolvedScenario> {
+) -> Result<ResolvedScenario> {
     match (input, json) {
         (Some(_), Some(_)) => {
             anyhow::bail!("Cannot use both input file and --json")
         }
         (Some(path), None) => load_scenario(path),
         (None, Some(json_str)) => {
-            let scenario: schema::Scenario = serde_json::from_str(json_str)
+            let scenario: Scenario = serde_json::from_str(json_str)
                 .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
             include::resolve_includes(scenario, &include::IncludeSource::Inline)
         }
@@ -192,7 +194,7 @@ fn load_scenario_from_source(
 }
 
 fn cmd_render(
-    scenario: schema::ResolvedScenario,
+    scenario: ResolvedScenario,
     output: &PathBuf,
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
@@ -343,7 +345,7 @@ fn cmd_watch(
     }
 }
 
-fn render_single_frame(scenario: &schema::ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
+fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
     let config = &scenario.video;
     let fps = config.fps;
 
@@ -379,7 +381,7 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", input.display(), e))?;
 
     // Parse JSON
-    let scenario: Result<schema::Scenario, _> = serde_json::from_str(&json_str);
+    let scenario: Result<Scenario, _> = serde_json::from_str(&json_str);
 
     match scenario {
         Ok(scenario) => {
@@ -421,7 +423,102 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
     }
 }
 
-fn validate_scenario(scenario: &schema::ResolvedScenario) -> Vec<String> {
+fn validate_children(
+    children: &[ChildComponent],
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    for (j, child) in children.iter().enumerate() {
+        let p = format!("{}.children[{}]", path, j);
+
+        // Timing validation (common to all timed components)
+        if let Some(timed) = child.component.as_timed() {
+            let (start, end) = timed.timing();
+            if let (Some(s), Some(e)) = (start, end) {
+                if s >= e {
+                    errors.push(format!("{}: start_at ({}) must be < end_at ({})", p, s, e));
+                }
+            }
+        }
+
+        // Component-specific validation
+        match &child.component {
+            Component::Image(img) => {
+                if !std::path::Path::new(&img.src).exists() {
+                    errors.push(format!("{}.src: file not found '{}'", p, img.src));
+                }
+            }
+            Component::Video(v) => {
+                if !std::path::Path::new(&v.src).exists() {
+                    errors.push(format!("{}.src: file not found '{}'", p, v.src));
+                }
+            }
+            Component::Gif(g) => {
+                if !std::path::Path::new(&g.src).exists() {
+                    errors.push(format!("{}.src: file not found '{}'", p, g.src));
+                }
+            }
+            Component::Svg(svg) => {
+                if svg.src.is_none() && svg.data.is_none() {
+                    errors.push(format!("{}: SVG must have 'src' or 'data'", p));
+                }
+                if let Some(ref src) = svg.src {
+                    if !std::path::Path::new(src).exists() {
+                        errors.push(format!("{}.src: file not found '{}'", p, src));
+                    }
+                }
+            }
+            Component::Icon(icon) => {
+                if let Some((prefix, name)) = icon.icon.split_once(':') {
+                    if prefix.is_empty() || name.is_empty() {
+                        errors.push(format!(
+                            "{}: icon '{}' has empty prefix or name (expected 'prefix:name')",
+                            p, icon.icon
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "{}: invalid icon format '{}' (expected 'prefix:name', e.g. 'lucide:home')",
+                        p, icon.icon
+                    ));
+                }
+            }
+            Component::QrCode(qr) => {
+                if qr.content.is_empty() {
+                    errors.push(format!("{}: QR code content must not be empty", p));
+                }
+            }
+            Component::Mockup(m) => {
+                if !std::path::Path::new(&m.src).exists() {
+                    errors.push(format!("{}.src: file not found '{}'", p, m.src));
+                }
+            }
+            Component::Card(card) => {
+                if matches!(card.style.display, Some(CardDisplay::Grid))
+                    && card.style.grid_template_columns.is_none()
+                {
+                    errors.push(format!("{}: grid display without grid-template-columns", p));
+                }
+                validate_children(&card.children, &p, errors);
+            }
+            Component::Flex(flex) => {
+                validate_children(&flex.children, &p, errors);
+            }
+            Component::Grid(grid) => {
+                if grid.style.grid_template_columns.is_none() {
+                    errors.push(format!("{}: grid without grid-template-columns", p));
+                }
+                validate_children(&grid.children, &p, errors);
+            }
+            Component::Positioned(pos) => {
+                validate_children(&pos.children, &p, errors);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn validate_scenario(scenario: &ResolvedScenario) -> Vec<String> {
     let mut errors = Vec::new();
 
     if scenario.video.width == 0 || scenario.video.height == 0 {
@@ -442,190 +539,7 @@ fn validate_scenario(scenario: &schema::ResolvedScenario) -> Vec<String> {
             errors.push(format!("scenes[{}].duration must be > 0", i));
         }
 
-        for (j, layer) in scene.children.iter().enumerate() {
-            match layer {
-                schema::Layer::Image(img) => {
-                    if !std::path::Path::new(&img.src).exists() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}].src: file not found '{}'",
-                            i, j, img.src
-                        ));
-                    }
-                    if let (Some(start), Some(end)) = (img.start_at, img.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Text(t) => {
-                    if let (Some(start), Some(end)) = (t.start_at, t.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Shape(s) => {
-                    if let (Some(start), Some(end)) = (s.start_at, s.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Svg(svg) => {
-                    if svg.src.is_none() && svg.data.is_none() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}]: SVG layer must have 'src' or 'data'",
-                            i, j
-                        ));
-                    }
-                    if let Some(ref src) = svg.src {
-                        if !std::path::Path::new(src).exists() {
-                            errors.push(format!(
-                                "scenes[{}].children[{}].src: file not found '{}'",
-                                i, j, src
-                            ));
-                        }
-                    }
-                    if let (Some(start), Some(end)) = (svg.start_at, svg.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Gif(g) => {
-                    if !std::path::Path::new(&g.src).exists() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}].src: file not found '{}'",
-                            i, j, g.src
-                        ));
-                    }
-                    if let (Some(start), Some(end)) = (g.start_at, g.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Codeblock(cb) => {
-                    if let (Some(start), Some(end)) = (cb.start_at, cb.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Video(v) => {
-                    if !std::path::Path::new(&v.src).exists() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}].src: file not found '{}'",
-                            i, j, v.src
-                        ));
-                    }
-                    if let (Some(start), Some(end)) = (v.start_at, v.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Counter(ct) => {
-                    if let (Some(start), Some(end)) = (ct.start_at, ct.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Card(card) | schema::Layer::Flex(card) => {
-                    if let (Some(start), Some(end)) = (card.start_at, card.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                    // Grid validation
-                    if matches!(card.style.display, Some(schema::CardDisplay::Grid)) && card.style.grid_template_columns.is_none() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}]: grid display without grid-template-columns",
-                            i, j
-                        ));
-                    }
-                }
-                schema::Layer::Icon(icon) => {
-                    if let Some((prefix, name)) = icon.icon.split_once(':') {
-                        if prefix.is_empty() || name.is_empty() {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: icon '{}' has empty prefix or name (expected 'prefix:name')",
-                                i, j, icon.icon
-                            ));
-                        }
-                    } else {
-                        errors.push(format!(
-                            "scenes[{}].children[{}]: invalid icon format '{}' (expected 'prefix:name', e.g. 'lucide:home')",
-                            i, j, icon.icon
-                        ));
-                    }
-                    if let (Some(start), Some(end)) = (icon.start_at, icon.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::Caption(_) => {}
-                schema::Layer::ProgressBar(pb) => {
-                    if let (Some(start), Some(end)) = (pb.start_at, pb.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                schema::Layer::QrCode(qr) => {
-                    if qr.content.is_empty() {
-                        errors.push(format!(
-                            "scenes[{}].children[{}]: QR code content must not be empty",
-                            i, j
-                        ));
-                    }
-                    if let (Some(start), Some(end)) = (qr.start_at, qr.end_at) {
-                        if start >= end {
-                            errors.push(format!(
-                                "scenes[{}].children[{}]: start_at ({}) must be < end_at ({})",
-                                i, j, start, end
-                            ));
-                        }
-                    }
-                }
-                _ => {} // V2-only components validated elsewhere
-            }
-        }
+        validate_children(&scene.children, &format!("scenes[{}]", i), &mut errors);
     }
 
     for (i, audio) in scenario.audio.iter().enumerate() {
@@ -655,7 +569,7 @@ fn cmd_schema(output: Option<&std::path::Path>) -> Result<()> {
 }
 
 fn cmd_still(
-    scenario: schema::ResolvedScenario,
+    scenario: ResolvedScenario,
     output: &PathBuf,
     time: f64,
     format: Option<String>,

@@ -5,7 +5,7 @@ use super::animator::{apply_wiggles, extract_effects, resolve_animations, Animat
 use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{Layer, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
@@ -456,58 +456,16 @@ pub fn compute_root_layout(
     crate::layout::flex::layout_flex(&root, &constraints)
 }
 
-/// Convert v1 layers to v2 ChildComponents using serde round-trip.
-/// Both Layer and ChildComponent use compatible JSON formats with `#[serde(tag = "type")]`.
-pub fn convert_layers_to_components(layers: &[Layer]) -> Result<Vec<ChildComponent>> {
-    let json = serde_json::to_value(layers)?;
-    let mut children: Vec<ChildComponent> = serde_json::from_value(json)?;
-    // Strip position from all children except inside Positioned containers.
-    // Root children flow in the implicit scene flex container.
-    for child in &mut children {
-        child.position = None;
-        child.x = None;
-        child.y = None;
-        strip_positions_except_positioned(child);
-    }
-    Ok(children)
-}
-
-/// Recursively strip `position` from all container children,
-/// except children of `Positioned` containers (which need absolute coords).
-fn strip_positions_except_positioned(child: &mut ChildComponent) {
-    match &child.component {
-        crate::components::Component::Positioned(_) => {
-            // Positioned children keep their position — just recurse into grandchildren
-            if let Some(children) = child.component.children_mut() {
-                for c in children {
-                    strip_positions_except_positioned(c);
-                }
-            }
-        }
-        _ => {
-            if let Some(children) = child.component.children_mut() {
-                for c in children.iter_mut() {
-                    c.position = None;
-                    c.x = None;
-                    c.y = None;
-                    strip_positions_except_positioned(c);
-                }
-            }
-        }
-    }
-}
-
-/// Convert a scene's layers and compute layout — ready for render_frame_v2.
-pub fn prepare_scene(
-    scene: &Scene,
+/// Compute layout for a scene's children — ready for render_frame_v2.
+pub fn prepare_scene<'a>(
+    scene: &'a Scene,
     config: &VideoConfig,
-) -> Result<(Vec<ChildComponent>, LayoutNode)> {
-    let children = convert_layers_to_components(&scene.children)?;
-    let layout = compute_root_layout(&children, config, scene.layout.as_ref());
-    Ok((children, layout))
+) -> (&'a [ChildComponent], LayoutNode) {
+    let layout = compute_root_layout(&scene.children, config, scene.layout.as_ref());
+    (&scene.children, layout)
 }
 
-/// Render a single frame using v2 pipeline, falling back to v1 on failure.
+/// Render a single frame using the v2 pipeline.
 /// This is the unified entry point for both single-frame and video encoding.
 pub fn render_scene_frame(
     config: &VideoConfig,
@@ -515,12 +473,6 @@ pub fn render_scene_frame(
     frame_in_scene: u32,
     scene_total_frames: u32,
 ) -> Result<Vec<u8>> {
-    match prepare_scene(scene, config) {
-        Ok((children, layout)) => {
-            render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children, &layout)
-        }
-        Err(_) => {
-            super::render_frame(config, scene, frame_in_scene, scene_total_frames)
-        }
-    }
+    let (children, layout) = prepare_scene(scene, config);
+    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, children, &layout)
 }

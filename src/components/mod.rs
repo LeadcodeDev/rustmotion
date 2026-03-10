@@ -46,6 +46,8 @@ pub use image::Image;
 pub use mockup::Mockup;
 pub use particle::Particle;
 pub use positioned::Positioned;
+pub use progress::Progress;
+pub use qrcode::QrCode;
 pub use shape::Shape;
 pub use svg::Svg;
 pub use table::Table;
@@ -131,6 +133,9 @@ pub enum Component {
     Divider(Divider),
     Mockup(Mockup),
     Particle(Particle),
+    #[serde(alias = "progress_bar")]
+    Progress(Progress),
+    QrCode(QrCode),
     Table(Table),
     Terminal(Terminal),
     // Container components
@@ -164,6 +169,8 @@ impl Component {
             Component::Divider(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
+            Component::Progress(c) => c,
+            Component::QrCode(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Positioned(c) => c,
@@ -193,6 +200,8 @@ impl Component {
             Component::Divider(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
+            Component::Progress(c) => Some(c),
+            Component::QrCode(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
@@ -221,6 +230,8 @@ impl Component {
             Component::Divider(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
+            Component::Progress(c) => Some(c),
+            Component::QrCode(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
@@ -250,6 +261,8 @@ impl Component {
             Component::Divider(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
+            Component::Progress(c) => c,
+            Component::QrCode(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Positioned(c) => c,
@@ -276,14 +289,4 @@ impl Component {
         matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_))
     }
 
-    /// Returns a mutable reference to this component's children, if it has any.
-    pub fn children_mut(&mut self) -> Option<&mut Vec<ChildComponent>> {
-        match self {
-            Component::Positioned(c) => Some(&mut c.children),
-            Component::Flex(c) => Some(&mut c.children),
-            Component::Grid(c) => Some(&mut c.children),
-            Component::Card(c) => Some(&mut c.children),
-            _ => None,
-        }
-    }
 }

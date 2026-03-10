@@ -28,15 +28,33 @@
             "letter-spacing": 8.0,
             "animation": [
               {
-                "duration": 1.0,
-                "name": "blur_in"
-              },
-              {
-                "property": "translate_y",
-                "amplitude": 6,
-                "frequency": 0.8,
-                "seed": 7,
-                "name": "wiggle"
+                "name": "keyframes",
+                "keyframes": [
+                  {
+                    "property": "opacity",
+                    "keyframes": [
+                      { "time": 0.0, "value": 0 },
+                      { "time": 1.2, "value": 1.0 }
+                    ],
+                    "easing": "ease_out"
+                  },
+                  {
+                    "property": "blur",
+                    "keyframes": [
+                      { "time": 0.0, "value": 20 },
+                      { "time": 1.2, "value": 0 }
+                    ],
+                    "easing": "ease_out"
+                  },
+                  {
+                    "property": "scale",
+                    "keyframes": [
+                      { "time": 0.0, "value": 0.9 },
+                      { "time": 1.2, "value": 1.0 }
+                    ],
+                    "easing": "ease_out"
+                  }
+                ]
               },
               {
                 "color": "#6366F1",
