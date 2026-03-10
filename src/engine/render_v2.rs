@@ -347,8 +347,23 @@ pub fn render_frame_v2(
     root_children: &[ChildComponent],
     root_layout: &LayoutNode,
 ) -> Result<Vec<u8>> {
-    let width = config.width as i32;
-    let height = config.height as i32;
+    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, root_layout, 1.0)
+}
+
+/// Render a frame with an optional scale factor for higher-resolution output.
+/// The layout is computed at video dimensions; the surface and rendering are
+/// scaled up so text and vector graphics remain sharp.
+pub fn render_frame_v2_scaled(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_index: u32,
+    _total_frames: u32,
+    root_children: &[ChildComponent],
+    root_layout: &LayoutNode,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    let scaled_w = (config.width as f32 * scale_factor) as i32;
+    let scaled_h = (config.height as f32 * scale_factor) as i32;
     let mut time = frame_index as f64 / config.fps as f64;
 
     // Apply freeze_at
@@ -359,7 +374,7 @@ pub fn render_frame_v2(
     }
 
     let info = ImageInfo::new(
-        (width, height),
+        (scaled_w, scaled_h),
         ColorType::RGBA8888,
         skia_safe::AlphaType::Premul,
         None,
@@ -369,6 +384,11 @@ pub fn render_frame_v2(
         .ok_or(RustmotionError::SurfaceCreation)?;
 
     let canvas = surface.canvas();
+
+    // Apply scale factor before rendering
+    if scale_factor != 1.0 {
+        canvas.scale((scale_factor, scale_factor));
+    }
 
     // Fill background
     let bg = scene.background.as_deref().unwrap_or(&config.background);
@@ -387,11 +407,11 @@ pub fn render_frame_v2(
     // Render component tree
     render_children(canvas, root_children, root_layout, &ctx)?;
 
-    // Read pixels
-    let row_bytes = width as usize * 4;
-    let mut pixels = vec![0u8; row_bytes * height as usize];
+    // Read pixels at scaled dimensions
+    let row_bytes = scaled_w as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
     let dst_info = ImageInfo::new(
-        (width, height),
+        (scaled_w, scaled_h),
         ColorType::RGBA8888,
         skia_safe::AlphaType::Premul,
         None,
@@ -476,4 +496,15 @@ pub fn render_scene_frame(
 ) -> Result<Vec<u8>> {
     let (children, layout) = prepare_scene(scene, config);
     render_frame_v2(config, scene, frame_in_scene, scene_total_frames, children, &layout)
+}
+
+pub fn render_scene_frame_scaled(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_in_scene: u32,
+    scene_total_frames: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    let (children, layout) = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor)
 }

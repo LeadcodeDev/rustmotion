@@ -2,6 +2,7 @@ mod encode;
 mod engine;
 mod error;
 mod include;
+mod preview;
 mod schema;
 mod tui;
 
@@ -76,6 +77,10 @@ enum Commands {
         /// Watch the input file for changes and re-render automatically
         #[arg(short, long)]
         watch: bool,
+
+        /// Open a preview window instead of encoding
+        #[arg(short = 'p', long)]
+        preview: bool,
     },
 
     /// Export a single frame as a still image (PNG, JPEG, WebP)
@@ -148,8 +153,13 @@ fn main() -> Result<()> {
             format,
             transparent,
             watch,
+            preview,
         } => {
-            if watch {
+            if preview {
+                let input_path = input.ok_or(RustmotionError::PreviewRequiresFile)?;
+                let scenario = load_scenario(&input_path)?;
+                preview::run_preview(scenario, Some(input_path), watch)
+            } else if watch {
                 let input_path = input.ok_or(RustmotionError::WatchRequiresFile)?;
                 cmd_watch(&input_path, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
             } else {

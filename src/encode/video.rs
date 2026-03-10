@@ -26,7 +26,7 @@ pub enum EncodeProgress {
 
 /// Description of what to render for a specific frame
 #[derive(Clone)]
-enum FrameTask {
+pub enum FrameTask {
     Normal {
         scene_idx: usize,
         frame_in_scene: u32,
@@ -146,15 +146,30 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     Ok(())
 }
 
-fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::render_scene_frame;
+pub fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -> Result<Vec<u8>> {
+    render_frame_task_scaled(config, scenes, task, 1.0)
+}
+
+pub fn render_frame_task_scaled(
+    config: &VideoConfig,
+    scenes: &[Scene],
+    task: &FrameTask,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled};
 
     match task {
         FrameTask::Normal {
             scene_idx,
             frame_in_scene,
             scene_total_frames,
-        } => render_scene_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames),
+        } => {
+            if scale_factor == 1.0 {
+                render_scene_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames)
+            } else {
+                render_scene_frame_scaled(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames, scale_factor)
+            }
+        }
         FrameTask::Transition {
             scene_a_idx,
             scene_b_idx,
@@ -165,26 +180,47 @@ fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -
             transition_type,
             transition_duration,
         } => {
-            let frame_a = render_scene_frame(
-                config,
-                &scenes[*scene_a_idx],
-                scene_a_frame_offset + frame_in_transition,
-                *scene_a_total_frames,
-            )?;
-            let frame_b = render_scene_frame(
-                config,
-                &scenes[*scene_b_idx],
-                *frame_in_transition,
-                *scene_b_total_frames,
-            )?;
+            let (frame_a, frame_b) = if scale_factor == 1.0 {
+                let a = render_scene_frame(
+                    config,
+                    &scenes[*scene_a_idx],
+                    scene_a_frame_offset + frame_in_transition,
+                    *scene_a_total_frames,
+                )?;
+                let b = render_scene_frame(
+                    config,
+                    &scenes[*scene_b_idx],
+                    *frame_in_transition,
+                    *scene_b_total_frames,
+                )?;
+                (a, b)
+            } else {
+                let a = render_scene_frame_scaled(
+                    config,
+                    &scenes[*scene_a_idx],
+                    scene_a_frame_offset + frame_in_transition,
+                    *scene_a_total_frames,
+                    scale_factor,
+                )?;
+                let b = render_scene_frame_scaled(
+                    config,
+                    &scenes[*scene_b_idx],
+                    *frame_in_transition,
+                    *scene_b_total_frames,
+                    scale_factor,
+                )?;
+                (a, b)
+            };
 
+            let scaled_w = (config.width as f32 * scale_factor) as u32;
+            let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
             let progress = *frame_in_transition as f64 / (transition_duration * fps as f64);
             Ok(apply_transition(
                 &frame_a,
                 &frame_b,
-                config.width,
-                config.height,
+                scaled_w,
+                scaled_h,
                 progress,
                 transition_type,
             ))
@@ -192,7 +228,7 @@ fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -
     }
 }
 
-fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
+pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     let fps = scenario.video.fps;
     let scenes = &scenario.scenes;
     let mut tasks = Vec::new();

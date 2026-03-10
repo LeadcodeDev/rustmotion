@@ -11,3 +11,6 @@ pub use video::hash_video_config;
 pub use video::SceneSegment;
 pub use video::hash_scene as hash_video_config_scene;
 pub use video::EncodeProgress;
+pub use video::build_frame_tasks;
+pub use video::render_frame_task;
+pub use video::render_frame_task_scaled;

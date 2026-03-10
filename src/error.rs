@@ -154,4 +154,11 @@ pub enum RustmotionError {
 
     #[error("File watcher channel closed")]
     WatcherClosed,
+
+    // --- Preview ---
+    #[error("Failed to create preview window: {reason}")]
+    PreviewWindow { reason: String },
+
+    #[error("--preview requires an input file path (cannot use --json or stdin)")]
+    PreviewRequiresFile,
 }
