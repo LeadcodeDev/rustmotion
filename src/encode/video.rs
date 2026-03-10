@@ -14,6 +14,16 @@ use crate::error::RustmotionError;
 use crate::schema::{Scene, ResolvedScenario as Scenario, TransitionType, VideoConfig};
 use crate::tui::TuiProgress;
 
+/// Progress events emitted by encode_video_incremental
+pub enum EncodeProgress {
+    /// Rendering frames: (current, total)
+    Rendering(u32, u32),
+    /// Encoding H.264: (current, total)
+    Encoding(u32, u32),
+    /// Muxing MP4
+    Muxing,
+}
+
 /// Description of what to render for a specific frame
 #[derive(Clone)]
 enum FrameTask {
@@ -237,6 +247,272 @@ fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     }
 
     tasks
+}
+
+/// Cached H.264 data for a single scene segment
+pub struct SceneSegment {
+    pub h264_data: Vec<u8>,
+    pub scene_hash: u64,
+}
+
+pub fn hash_scene(scene: &Scene) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let json = serde_json::to_string(scene).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn hash_video_config(config: &VideoConfig) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let json = serde_json::to_string(config).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Build frame tasks for a single scene (by index)
+fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTask> {
+    let fps = scenario.video.fps;
+    let scenes = &scenario.scenes;
+    let scene = &scenes[scene_idx];
+    let mut tasks = Vec::new();
+
+    let scene_frames = (scene.duration * fps as f64).round() as u32;
+    let next_transition = scenes.get(scene_idx + 1).and_then(|s| s.transition.as_ref());
+    let outgoing_transition_frames = next_transition
+        .map(|t| (t.duration * fps as f64).round() as u32)
+        .unwrap_or(0);
+
+    let incoming_transition_frames = if scene_idx > 0 {
+        scene
+            .transition
+            .as_ref()
+            .map(|t| (t.duration * fps as f64).round() as u32)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let normal_start = incoming_transition_frames;
+    let normal_end = scene_frames.saturating_sub(outgoing_transition_frames);
+
+    for f in normal_start..normal_end {
+        tasks.push(FrameTask::Normal {
+            scene_idx,
+            frame_in_scene: f,
+            scene_total_frames: scene_frames,
+        });
+    }
+
+    if let Some(transition) = next_transition {
+        let actual_transition_frames = outgoing_transition_frames.min(scene_frames);
+        let scene_b_frames = (scenes[scene_idx + 1].duration * fps as f64).round() as u32;
+        for f in 0..actual_transition_frames {
+            tasks.push(FrameTask::Transition {
+                scene_a_idx: scene_idx,
+                scene_b_idx: scene_idx + 1,
+                frame_in_transition: f,
+                scene_a_frame_offset: scene_frames - actual_transition_frames,
+                scene_a_total_frames: scene_frames,
+                scene_b_total_frames: scene_b_frames,
+                transition_type: transition.transition_type.clone(),
+                transition_duration: transition.duration,
+            });
+        }
+    }
+
+    tasks
+}
+
+/// Encode video incrementally, reusing cached segments for unchanged scenes.
+/// Returns the new scene segments for use in subsequent incremental renders.
+pub fn encode_video_incremental(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    prev_segments: Option<&[SceneSegment]>,
+    mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<Vec<SceneSegment>> {
+    let config = &scenario.video;
+    let width = config.width;
+    let height = config.height;
+    let fps = config.fps;
+
+    preextract_video_frames(&scenario.scenes, fps);
+    prefetch_icons(&scenario.scenes);
+
+    let num_scenes = scenario.scenes.len();
+
+    // Hash all scenes
+    let scene_hashes: Vec<u64> = scenario.scenes.iter().map(hash_scene).collect();
+
+    // Determine which scenes need re-rendering
+    let mut needs_render = vec![true; num_scenes];
+    if let Some(prev) = prev_segments {
+        if prev.len() == num_scenes {
+            for i in 0..num_scenes {
+                let hash_changed = scene_hashes[i] != prev[i].scene_hash;
+                // Invalidate if next scene changed and has a transition
+                // (because segment[i] contains outgoing transition frames to scene[i+1])
+                let next_changed_with_transition = if i + 1 < num_scenes {
+                    scene_hashes[i + 1] != prev[i + 1].scene_hash
+                        && scenario.scenes[i + 1].transition.is_some()
+                } else {
+                    false
+                };
+                needs_render[i] = hash_changed || next_changed_with_transition;
+            }
+        }
+    }
+
+    let scenes_to_render: usize = needs_render.iter().filter(|&&r| r).count();
+
+    if !quiet && on_progress.is_none() {
+        eprintln!("Re-rendering {}/{} scenes...", scenes_to_render, num_scenes);
+    }
+
+    // Build per-scene tasks
+    let scene_tasks: Vec<Vec<FrameTask>> = (0..num_scenes)
+        .map(|i| build_scene_frame_tasks(scenario, i))
+        .collect();
+
+    let total_frames: u32 = scene_tasks.iter().map(|t| t.len() as u32).sum();
+
+    if total_frames == 0 {
+        return Err(RustmotionError::NoFrames.into());
+    }
+
+    // Flatten all tasks that need rendering, tagged with scene index
+    let mut flat_tasks: Vec<(usize, &FrameTask)> = Vec::new();
+    let mut scene_frame_counts: Vec<(usize, u32)> = Vec::new();
+    for i in 0..num_scenes {
+        if needs_render[i] {
+            let tasks = &scene_tasks[i];
+            scene_frame_counts.push((i, tasks.len() as u32));
+            for task in tasks {
+                flat_tasks.push((i, task));
+            }
+        }
+    }
+
+    let frames_to_render = flat_tasks.len() as u32;
+
+    // Render in parallel batches with per-frame progress
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let counter = AtomicU32::new(0);
+    let mut all_yuv: Vec<Result<Vec<u8>>> = Vec::with_capacity(flat_tasks.len());
+
+    for batch in flat_tasks.chunks(batch_size) {
+        let batch_results: Vec<Result<Vec<u8>>> = batch
+            .par_iter()
+            .map(|(_, task)| {
+                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let yuv = rgba_to_yuv420(&rgba, width, height);
+                counter.fetch_add(1, Ordering::Relaxed);
+                Ok(yuv)
+            })
+            .collect();
+
+        if let Some(ref mut cb) = on_progress {
+            cb(EncodeProgress::Rendering(counter.load(Ordering::Relaxed), frames_to_render));
+        }
+
+        all_yuv.extend(batch_results);
+    }
+
+    // Signal encoding phase
+    if let Some(ref mut cb) = on_progress {
+        cb(EncodeProgress::Encoding(0, frames_to_render));
+    }
+
+    // Encode sequentially with a SINGLE encoder, splitting output by scene
+    let api = OpenH264API::from_source();
+    let pixels = (width * height) as u32;
+    let target_bitrate = (pixels as f64 * fps as f64 * 0.1) as u32;
+    let encoder_config = EncoderConfig::new()
+        .set_bitrate_bps(target_bitrate.max(3_000_000))
+        .max_frame_rate(fps as f32);
+    let mut encoder = Encoder::with_api_config(api, encoder_config)?;
+
+    let mut yuv_iter = all_yuv.into_iter();
+    let mut rendered_segments: std::collections::HashMap<usize, Vec<u8>> = std::collections::HashMap::new();
+    let mut encoded_count: u32 = 0;
+
+    for &(scene_idx, frame_count) in &scene_frame_counts {
+        let mut segment_h264: Vec<u8> = Vec::new();
+
+        for _ in 0..frame_count {
+            let yuv = yuv_iter.next().unwrap()?;
+            encoder.force_intra_frame();
+            let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
+            let bitstream = encoder.encode(&yuv_buf)?;
+            bitstream.write_vec(&mut segment_h264);
+            encoded_count += 1;
+            if let Some(ref mut cb) = on_progress {
+                cb(EncodeProgress::Encoding(encoded_count, frames_to_render));
+            }
+        }
+
+        rendered_segments.insert(scene_idx, segment_h264);
+    }
+
+    // Assemble final segments in order (cached + freshly rendered)
+    let mut new_segments = Vec::with_capacity(num_scenes);
+    for i in 0..num_scenes {
+        if let Some(h264_data) = rendered_segments.remove(&i) {
+            new_segments.push(SceneSegment {
+                h264_data,
+                scene_hash: scene_hashes[i],
+            });
+        } else if let Some(prev) = prev_segments {
+            new_segments.push(SceneSegment {
+                h264_data: prev[i].h264_data.clone(),
+                scene_hash: prev[i].scene_hash,
+            });
+        }
+    }
+
+    // Concatenate all H.264 segments
+    let total_h264_size: usize = new_segments.iter().map(|s| s.h264_data.len()).sum();
+    let mut h264_data: Vec<u8> = Vec::with_capacity(total_h264_size);
+    for seg in &new_segments {
+        h264_data.extend_from_slice(&seg.h264_data);
+    }
+
+    // Process audio
+    let total_duration = total_frames as f64 / fps as f64;
+    let pcm_data = if !scenario.audio.is_empty() {
+        super::audio::mix_audio_tracks(&scenario.audio, total_duration)?
+    } else {
+        None
+    };
+
+    // Signal muxing phase
+    if let Some(ref mut cb) = on_progress {
+        cb(EncodeProgress::Muxing);
+    }
+
+    // Mux
+    let file = File::create(output_path)?;
+    let writer = BufWriter::new(file);
+    let mut muxer = Mp4Muxer::new(writer);
+    muxer.init_video(width as i32, height as i32, false, "rustmotion");
+    if let Some(ref pcm) = pcm_data {
+        muxer.init_audio(128000, 44100, 2);
+        muxer.write_video_with_audio(&h264_data, fps, pcm);
+    } else {
+        muxer.write_video_with_fps(&h264_data, fps);
+    }
+    muxer.close();
+
+    if !quiet && on_progress.is_none() {
+        eprintln!("Done!");
+    }
+
+    Ok(new_segments)
 }
 
 /// Encode frames as a PNG sequence (one PNG file per frame)

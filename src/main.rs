@@ -74,7 +74,7 @@ enum Commands {
         transparent: bool,
 
         /// Watch the input file for changes and re-render automatically
-        #[arg(long)]
+        #[arg(short, long)]
         watch: bool,
     },
 
@@ -299,14 +299,85 @@ fn cmd_watch(
     use notify::{Watcher, RecursiveMode};
     use std::sync::mpsc;
 
-    eprintln!("Watching {} for changes... (Ctrl+C to stop)", input.display());
+    // Determine if we can use incremental rendering (native h264 only)
+    let fmt = format.as_deref().unwrap_or_else(|| {
+        output.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4")
+    });
+    let use_ffmpeg = codec.as_deref().map_or(false, |c| c != "h264")
+        || matches!(fmt, "webm" | "mov")
+        || transparent;
+    let can_incremental = frame.is_none()
+        && !matches!(fmt, "png-seq" | "gif" | "raw")
+        && !use_ffmpeg;
+
+    // State for incremental rendering
+    let mut prev_segments: Option<Vec<encode::SceneSegment>> = None;
+    let mut prev_config_hash: Option<u64> = None;
+
+    // Initialize TUI for watch mode
+    let codec_label = codec.as_deref().unwrap_or("h264");
+    let mut tui_watch: Option<tui::TuiWatch> = None;
 
     // Initial render
     match load_scenario(input) {
         Ok(scenario) => {
-            engine::clear_asset_cache();
-            if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
-                eprintln!("Render error: {}", e);
+            // Load custom fonts if defined
+            if !scenario.fonts.is_empty() {
+                engine::renderer::load_custom_fonts(&scenario.fonts);
+            }
+
+            if !quiet {
+                tui_watch = tui::TuiWatch::new(
+                    &input.display().to_string(),
+                    &output.display().to_string(),
+                    scenario.video.width,
+                    scenario.video.height,
+                    scenario.video.fps,
+                    codec_label,
+                ).ok();
+            }
+
+            if can_incremental {
+                let config_hash = encode::hash_video_config(&scenario.video);
+                if let Some(ref mut tui) = tui_watch {
+                    tui.set_phase(tui::WatchPhase::InitialRender);
+                }
+                let mut encoding_started = false;
+                let mut cb = |progress: encode::EncodeProgress| {
+                    if let Some(ref mut tui) = tui_watch {
+                        match progress {
+                            encode::EncodeProgress::Rendering(current, total) => tui.set_frame_progress(current, total),
+                            encode::EncodeProgress::Encoding(current, total) => {
+                                if !encoding_started {
+                                    tui.set_phase(tui::WatchPhase::Encoding);
+                                    encoding_started = true;
+                                }
+                                tui.set_frame_progress(current, total);
+                            }
+                            encode::EncodeProgress::Muxing => tui.set_phase(tui::WatchPhase::Muxing),
+                        }
+                    }
+                };
+                match encode::encode_video_incremental(&scenario, output.to_str().unwrap(), quiet, None, Some(&mut cb)) {
+                    Ok(segments) => {
+                        prev_segments = Some(segments);
+                        prev_config_hash = Some(config_hash);
+                        if let Some(ref mut tui) = tui_watch {
+                            tui.finish_render();
+                        }
+                    }
+                    Err(e) => eprintln!("Render error: {}", e),
+                }
+            } else {
+                engine::clear_asset_cache();
+                if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                    eprintln!("Render error: {}", e);
+                }
+                if let Some(ref mut tui) = tui_watch {
+                    tui.finish_render();
+                }
             }
         }
         Err(e) => eprintln!("Load error: {}", e),
@@ -333,13 +404,74 @@ fn cmd_watch(
         std::thread::sleep(std::time::Duration::from_millis(100));
         while rx.try_recv().is_ok() {}
 
-        eprintln!("\nFile changed, re-rendering...");
-
         match load_scenario(input) {
             Ok(scenario) => {
-                engine::clear_asset_cache();
-                if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
-                    eprintln!("Render error: {}", e);
+                if can_incremental {
+                    let config_hash = encode::hash_video_config(&scenario.video);
+                    // If video config changed (resolution/fps), do full re-render
+                    let use_prev = if prev_config_hash == Some(config_hash) {
+                        prev_segments.as_deref()
+                    } else {
+                        engine::clear_asset_cache();
+                        None
+                    };
+
+                    // Count changed scenes for the TUI
+                    let num_scenes = scenario.scenes.len();
+                    let scene_hashes: Vec<u64> = scenario.scenes.iter()
+                        .map(|s| encode::hash_video_config_scene(s))
+                        .collect();
+                    let changed = if let Some(ref prev) = use_prev {
+                        if prev.len() == num_scenes {
+                            (0..num_scenes).filter(|&i| {
+                                let hash_changed = scene_hashes[i] != prev[i].scene_hash;
+                                let next_changed = if i + 1 < num_scenes {
+                                    scene_hashes[i + 1] != prev[i + 1].scene_hash
+                                        && scenario.scenes[i + 1].transition.is_some()
+                                } else { false };
+                                hash_changed || next_changed
+                            }).count()
+                        } else { num_scenes }
+                    } else { num_scenes };
+
+                    if let Some(ref mut tui) = tui_watch {
+                        tui.set_phase(tui::WatchPhase::Rerendering { changed, total: num_scenes });
+                    }
+
+                    let mut encoding_started = false;
+                    let mut cb = |progress: encode::EncodeProgress| {
+                        if let Some(ref mut tui) = tui_watch {
+                            match progress {
+                                encode::EncodeProgress::Rendering(current, total) => tui.set_frame_progress(current, total),
+                                encode::EncodeProgress::Encoding(current, total) => {
+                                    if !encoding_started {
+                                        tui.set_phase(tui::WatchPhase::Encoding);
+                                        encoding_started = true;
+                                    }
+                                    tui.set_frame_progress(current, total);
+                                }
+                                encode::EncodeProgress::Muxing => tui.set_phase(tui::WatchPhase::Muxing),
+                            }
+                        }
+                    };
+                    match encode::encode_video_incremental(&scenario, output.to_str().unwrap(), quiet, use_prev, Some(&mut cb)) {
+                        Ok(segments) => {
+                            prev_segments = Some(segments);
+                            prev_config_hash = Some(config_hash);
+                            if let Some(ref mut tui) = tui_watch {
+                                tui.finish_render();
+                            }
+                        }
+                        Err(e) => eprintln!("Render error: {}", e),
+                    }
+                } else {
+                    engine::clear_asset_cache();
+                    if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                        eprintln!("Render error: {}", e);
+                    }
+                    if let Some(ref mut tui) = tui_watch {
+                        tui.finish_render();
+                    }
                 }
             }
             Err(e) => eprintln!("Load error: {}", e),
