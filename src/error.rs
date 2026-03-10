@@ -4,7 +4,10 @@ use thiserror::Error;
 pub enum RustmotionError {
     // --- IO / File errors ---
     #[error("Failed to read '{path}': {source}")]
-    FileRead { path: String, source: std::io::Error },
+    FileRead {
+        path: String,
+        source: std::io::Error,
+    },
 
     // --- JSON parsing ---
     #[error("Failed to parse JSON: {source}")]
@@ -43,6 +46,18 @@ pub enum RustmotionError {
 
     #[error("Failed to create Skia image from {target}")]
     SkiaImageCreation { target: String },
+
+    #[error("Failed to open GIF '{path}': {reason}")]
+    GifOpen { path: String, reason: String },
+
+    #[error("Failed to decode GIF '{path}': {reason}")]
+    GifDecode { path: String, reason: String },
+
+    #[error("QR code generation failed: {reason}")]
+    QrCodeGeneration { reason: String },
+
+    #[error("No fonts available on this system")]
+    FontNotFound,
 
     // --- Include system ---
     #[error("Include depth limit ({limit}) exceeded while resolving '{path}'")]

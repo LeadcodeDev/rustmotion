@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Point};
 
 use crate::engine::renderer::{color4f_from_hex, draw_shape_path, font_mgr, make_text_blob_with_spacing, paint_from_hex, wrap_text};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -148,7 +149,7 @@ fn render_shape_text(
                 None
             }
         })
-        .expect("No fonts available on this system");
+        .ok_or(RustmotionError::FontNotFound)?;
 
     let font = skia_safe::Font::from_typeface(typeface, text.font_size);
     let (_strike_width, metrics) = font.metrics();

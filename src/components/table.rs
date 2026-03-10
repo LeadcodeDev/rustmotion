@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
 use crate::engine::renderer::{font_mgr, paint_from_hex};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -61,7 +62,7 @@ impl Table {
             .match_family_style(family, font_style)
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
-            .expect("No fonts available");
+            .expect(&RustmotionError::FontNotFound.to_string());
 
         skia_safe::Font::from_typeface(typeface, self.font_size())
     }

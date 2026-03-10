@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
 use crate::engine::renderer::color4f_from_hex;
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::LayerStyle;
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -50,7 +51,7 @@ impl Widget for QrCode {
         use qrcode::QrCode as QrCodeLib;
 
         let code = QrCodeLib::new(self.content.as_bytes())
-            .map_err(|e| anyhow::anyhow!("QR code generation failed: {}", e))?;
+            .map_err(|e| RustmotionError::QrCodeGeneration { reason: e.to_string() })?;
 
         let modules = code.to_colors();
         let module_count = code.width() as f32;

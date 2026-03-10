@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, Rect, RRect};
 
 use crate::engine::renderer::{font_mgr, paint_from_hex, wrap_text};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{LayerStyle, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -159,7 +160,7 @@ impl Widget for Callout {
             .match_family_style(family, font_style)
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
-            .expect("No fonts available");
+            .ok_or(RustmotionError::FontNotFound)?;
 
         let font = skia_safe::Font::from_typeface(typeface, font_size);
         let (_, metrics) = font.metrics();
@@ -202,7 +203,7 @@ impl Widget for Callout {
         let typeface = fm
             .match_family_style("Inter", skia_safe::FontStyle::normal())
             .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::normal()))
-            .expect("No fonts");
+            .expect(&RustmotionError::FontNotFound.to_string());
         let font = skia_safe::Font::from_typeface(typeface, font_size);
         let text_w = font.measure_str(&self.text, None).0;
 

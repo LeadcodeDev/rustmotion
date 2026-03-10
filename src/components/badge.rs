@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
 use crate::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::LayerStyle;
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -84,7 +85,7 @@ impl Badge {
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.match_family_style("sans-serif", font_style))
-            .expect("No fonts available");
+            .expect(&RustmotionError::FontNotFound.to_string());
 
         skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
     }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
 use crate::engine::animator::ease;
+use crate::error::RustmotionError;
 use crate::engine::renderer::{font_mgr, paint_from_hex};
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
@@ -135,7 +136,7 @@ impl Terminal {
             .or_else(|| fm.match_family_style("Courier New", font_style))
             .or_else(|| fm.match_family_style("monospace", font_style))
             .or_else(|| fm.match_family_style("Courier", font_style))
-            .expect("No monospace fonts available");
+            .expect(&RustmotionError::FontNotFound.to_string());
 
         let size = self.style.font_size.unwrap_or(FONT_SIZE);
 

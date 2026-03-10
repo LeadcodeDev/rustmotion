@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, TextBlob};
 
 use crate::engine::renderer::{font_mgr, format_counter_value, make_text_blob_with_spacing, paint_from_hex};
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -74,7 +75,7 @@ impl Widget for Counter {
             .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
             .or_else(|| fm.match_family_style("Arial", skia_font_style))
             .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
-            .expect("No fonts available on this system");
+            .ok_or(RustmotionError::FontNotFound)?;
 
         let font = Font::from_typeface(typeface, font_size);
         let mut paint = paint_from_hex(color);

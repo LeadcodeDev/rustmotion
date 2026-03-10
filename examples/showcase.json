@@ -19,7 +19,7 @@
       "children": [
         {
           "type": "text",
-          "content": "rustmotion",
+          "content": "rustmotion :)",
           "style": {
             "font-size": 96,
             "color": "#FFFFFF",
@@ -2469,10 +2469,24 @@
               },
               "lines": [
                 { "text": "cargo install rustmotion", "line_type": "prompt" },
-                { "text": "Compiling rustmotion v0.3.1", "line_type": "output" },
-                { "text": "Finished release [optimized]", "line_type": "output", "color": "#22C55E" },
-                { "text": "rustmotion render scene.json -o video.mp4", "line_type": "prompt" },
-                { "text": "Rendered 150 frames in 2.3s", "line_type": "output", "color": "#38BDF8" }
+                {
+                  "text": "Compiling rustmotion v0.3.1",
+                  "line_type": "output"
+                },
+                {
+                  "text": "Finished release [optimized]",
+                  "line_type": "output",
+                  "color": "#22C55E"
+                },
+                {
+                  "text": "rustmotion render scene.json -o video.mp4",
+                  "line_type": "prompt"
+                },
+                {
+                  "text": "Rendered 150 frames in 2.3s",
+                  "line_type": "output",
+                  "color": "#38BDF8"
+                }
               ],
               "style": {
                 "animation": [

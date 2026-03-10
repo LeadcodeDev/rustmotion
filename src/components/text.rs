@@ -3,6 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect, TextBlob};
 
+use crate::error::RustmotionError;
+
 /// Resolve `line-height`: values <= 10 are treated as a multiplier (CSS-like),
 /// values > 10 are absolute pixels.
 fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
@@ -71,7 +73,7 @@ impl Widget for Text {
                     None
                 }
             })
-            .expect("No fonts available on this system");
+            .ok_or(RustmotionError::FontNotFound)?;
 
         let font = Font::from_typeface(typeface, font_size);
         let mut paint = paint_from_hex(color);

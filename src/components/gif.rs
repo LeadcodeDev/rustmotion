@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 use crate::engine::renderer::gif_cache;
+use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{ImageFit, LayerStyle, Size};
 use crate::traits::{RenderContext, TimingConfig, Widget};
@@ -41,12 +42,12 @@ impl Widget for Gif {
             cached.clone()
         } else {
             let file = std::fs::File::open(&self.src)
-                .map_err(|e| anyhow::anyhow!("Failed to open GIF '{}': {}", self.src, e))?;
+                .map_err(|e| RustmotionError::GifOpen { path: self.src.clone(), reason: e.to_string() })?;
 
             let mut decoder = gif::DecodeOptions::new();
             decoder.set_color_output(gif::ColorOutput::RGBA);
             let mut decoder = decoder.read_info(file)
-                .map_err(|e| anyhow::anyhow!("Failed to decode GIF '{}': {}", self.src, e))?;
+                .map_err(|e| RustmotionError::GifDecode { path: self.src.clone(), reason: e.to_string() })?;
 
             let gif_width = decoder.width() as u32;
             let gif_height = decoder.height() as u32;
@@ -56,7 +57,7 @@ impl Widget for Gif {
             let mut accumulated = 0.0;
 
             while let Some(frame) = decoder.read_next_frame()
-                .map_err(|e| anyhow::anyhow!("Failed to read GIF frame: {}", e))? {
+                .map_err(|e| RustmotionError::GifFrame { reason: e.to_string() })? {
                 let delay = frame.delay as f64 / 100.0;
                 let delay = if delay < 0.01 { 0.1 } else { delay };
                 accumulated += delay;
