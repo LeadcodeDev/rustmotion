@@ -143,6 +143,11 @@ impl Terminal {
         skia_safe::Font::from_typeface(typeface, size)
     }
 
+    fn line_height(&self) -> f32 {
+        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        (font_size * LINE_HEIGHT / FONT_SIZE).ceil()
+    }
+
     /// Get the prefix string for a line type.
     fn line_prefix(line_type: &TerminalLineType) -> &'static str {
         match line_type {
@@ -344,7 +349,7 @@ impl Widget for Terminal {
                 draw_text_with_fallback(canvas, &draw_text, &font, &emoji_font, 0.0, x, y, &text_paint);
             }
 
-            y_offset += LINE_HEIGHT;
+            y_offset += self.line_height();
         }
 
         Ok(())
@@ -356,7 +361,7 @@ impl Widget for Terminal {
         }
 
         let chrome_h = if self.show_chrome { CHROME_HEIGHT } else { 0.0 };
-        let content_h = self.lines.len() as f32 * LINE_HEIGHT + PADDING * 2.0;
+        let content_h = self.lines.len() as f32 * self.line_height() + PADDING * 2.0;
 
         (500.0, chrome_h + content_h)
     }

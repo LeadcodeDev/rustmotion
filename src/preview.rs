@@ -62,6 +62,8 @@ const BUTTON_GAP: f32 = 16.0;
 const TIMELINE_BAR_H: f32 = 4.0;
 const TIMELINE_BAR_RADIUS: f32 = 2.0;
 const TIMELINE_ROW_H: f32 = 20.0;
+const EXPORT_BTN_W: f32 = 32.0;
+const EXPORT_BTN_H: f32 = 32.0;
 
 // ── Layout ──────────────────────────────────────────────────────────
 
@@ -70,6 +72,7 @@ struct ControlBarLayout {
     prev_btn: Rect,
     play_btn: Rect,
     next_btn: Rect,
+    export_btn: Rect,
     timeline_rect: Rect,
     time_left_pos: (f32, f32),  // baseline position for left time label
     time_right_pos: (f32, f32), // baseline position for right time label
@@ -84,7 +87,7 @@ fn compute_control_bar_layout(width: f32, height: f32) -> ControlBarLayout {
     let bar_y = height - CONTROLS_BAR_MARGIN_BOTTOM - bar_h;
     let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_w, bar_h);
 
-    // Row 1: transport buttons centered
+    // Row 1: transport buttons centered, export button on far right
     let btn_row_cy = bar_y + CONTROLS_BAR_PAD_Y + buttons_row_h / 2.0;
     let btn_y = btn_row_cy - BUTTON_SIZE / 2.0;
     let total_btns_w = 3.0 * BUTTON_SIZE + 2.0 * BUTTON_GAP;
@@ -92,6 +95,12 @@ fn compute_control_bar_layout(width: f32, height: f32) -> ControlBarLayout {
     let prev_btn = Rect::from_xywh(btn_x0, btn_y, BUTTON_SIZE, BUTTON_SIZE);
     let play_btn = Rect::from_xywh(btn_x0 + BUTTON_SIZE + BUTTON_GAP, btn_y, BUTTON_SIZE, BUTTON_SIZE);
     let next_btn = Rect::from_xywh(btn_x0 + 2.0 * (BUTTON_SIZE + BUTTON_GAP), btn_y, BUTTON_SIZE, BUTTON_SIZE);
+    let export_btn = Rect::from_xywh(
+        bar_x + bar_w - CONTROLS_BAR_PAD_X - EXPORT_BTN_W,
+        btn_row_cy - EXPORT_BTN_H / 2.0,
+        EXPORT_BTN_W,
+        EXPORT_BTN_H,
+    );
 
     // Row 2: time_left — timeline — time_right
     let row2_y = bar_y + CONTROLS_BAR_PAD_Y + buttons_row_h + 8.0;
@@ -111,6 +120,7 @@ fn compute_control_bar_layout(width: f32, height: f32) -> ControlBarLayout {
         prev_btn,
         play_btn,
         next_btn,
+        export_btn,
         timeline_rect,
         time_left_pos,
         time_right_pos,
@@ -196,6 +206,42 @@ fn draw_next_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
     );
 }
 
+fn draw_export_icon(canvas: &skia_safe::Canvas, rect: &Rect, paint: &Paint) {
+    let cx = rect.center_x();
+    let cy = rect.center_y();
+    let s = BUTTON_ICON_SIZE / 2.0;
+    // Download arrow: vertical line + arrowhead
+    let mut path = Path::new();
+    // Vertical stem
+    path.move_to((cx, cy - s * 0.8));
+    path.line_to((cx, cy + s * 0.3));
+    // Arrowhead
+    path.move_to((cx - s * 0.5, cy - s * 0.1));
+    path.line_to((cx, cy + s * 0.5));
+    path.line_to((cx + s * 0.5, cy - s * 0.1));
+    let mut stroke_paint = paint.clone();
+    stroke_paint.set_style(skia_safe::PaintStyle::Stroke);
+    stroke_paint.set_stroke_width(1.8);
+    stroke_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+    stroke_paint.set_stroke_join(skia_safe::paint::Join::Round);
+    canvas.draw_path(&path, &stroke_paint);
+    // Bottom tray
+    let mut tray = Path::new();
+    tray.move_to((cx - s * 0.7, cy + s * 0.7));
+    tray.line_to((cx - s * 0.7, cy + s * 0.9));
+    tray.line_to((cx + s * 0.7, cy + s * 0.9));
+    tray.line_to((cx + s * 0.7, cy + s * 0.7));
+    canvas.draw_path(&tray, &stroke_paint);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExportState {
+    Idle,
+    Exporting,
+    Done(Instant),  // timestamp when export finished
+    Error(Instant), // timestamp when error occurred
+}
+
 // ── PreviewApp ──────────────────────────────────────────────────────
 
 struct PreviewApp {
@@ -239,6 +285,9 @@ struct PreviewApp {
     cursor_x: f64,
     cursor_y: f64,
 
+    // Export
+    export_state: ExportState,
+    export_done_rx: Option<Receiver<Result<String, String>>>,
 }
 
 impl PreviewApp {
@@ -325,6 +374,57 @@ impl PreviewApp {
         }
     }
 
+    fn start_export(&mut self) {
+        if self.export_state == ExportState::Exporting {
+            return; // Already exporting
+        }
+        let Some(ref input_path) = self.input_path else {
+            return;
+        };
+
+        // Show native file save dialog
+        let default_name = input_path
+            .with_extension("mp4")
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output.mp4".to_string());
+
+        let default_dir = input_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+        let dialog = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .set_directory(&default_dir)
+            .add_filter("MP4 Video", &["mp4"]);
+
+        let Some(output_path) = dialog.save_file() else {
+            return; // User cancelled
+        };
+
+        self.export_state = ExportState::Exporting;
+        let input = input_path.clone();
+        let output_str = output_path.to_string_lossy().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.export_done_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<String, String> {
+                let scenario = crate::load_scenario(&input)
+                    .map_err(|e| format!("Load error: {}", e))?;
+                if !scenario.fonts.is_empty() {
+                    crate::engine::renderer::load_custom_fonts(&scenario.fonts);
+                }
+                crate::engine::prefetch_icons(&scenario.scenes);
+                crate::engine::preextract_video_frames(&scenario.scenes, scenario.video.fps);
+                crate::encode::video::encode_video(&scenario, &output_str, true)
+                    .map_err(|e| format!("Encode error: {}", e))?;
+                Ok(output_str)
+            })();
+            let _ = tx.send(result);
+        });
+    }
+
     fn make_ui_font(&self, size: f32) -> Font {
         let fm = font_mgr();
         let typeface = fm
@@ -347,6 +447,7 @@ impl PreviewApp {
         let playing = self.playing;
         let rendered_width = self.rendered_width;
         let rendered_height = self.rendered_height;
+        let export_state = self.export_state;
 
         let ui_font = self.make_ui_font(11.0);
 
@@ -461,6 +562,67 @@ impl PreviewApp {
             draw_play_icon(canvas, &layout.play_btn, &icon_paint);
         }
         draw_next_icon(canvas, &layout.next_btn, &icon_paint);
+
+        // Export button (right side)
+        match export_state {
+            ExportState::Idle => {
+                draw_export_icon(canvas, &layout.export_btn, &icon_paint);
+            }
+            ExportState::Exporting => {
+                // Spinning arc indicator
+                let ecx = layout.export_btn.center_x();
+                let ecy = layout.export_btn.center_y();
+                let r = BUTTON_ICON_SIZE / 2.0;
+                let angle = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() % 1000) as f32 / 1000.0 * 360.0;
+                let mut spinner_paint = Paint::default();
+                spinner_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
+                spinner_paint.set_anti_alias(true);
+                spinner_paint.set_style(skia_safe::PaintStyle::Stroke);
+                spinner_paint.set_stroke_width(2.0);
+                spinner_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+                let oval = Rect::from_xywh(ecx - r, ecy - r, r * 2.0, r * 2.0);
+                canvas.draw_arc(oval, angle, 270.0, false, &spinner_paint);
+            }
+            ExportState::Done(_) => {
+                // Checkmark icon
+                let ecx = layout.export_btn.center_x();
+                let ecy = layout.export_btn.center_y();
+                let s = BUTTON_ICON_SIZE / 2.0;
+                let mut check = Path::new();
+                check.move_to((ecx - s * 0.5, ecy));
+                check.line_to((ecx - s * 0.1, ecy + s * 0.4));
+                check.line_to((ecx + s * 0.5, ecy - s * 0.4));
+                let mut check_paint = Paint::default();
+                check_paint.set_color4f(Color4f::new(0.2, 0.9, 0.4, 0.9), None);
+                check_paint.set_anti_alias(true);
+                check_paint.set_style(skia_safe::PaintStyle::Stroke);
+                check_paint.set_stroke_width(2.0);
+                check_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+                check_paint.set_stroke_join(skia_safe::paint::Join::Round);
+                canvas.draw_path(&check, &check_paint);
+            }
+            ExportState::Error(_) => {
+                // Red X icon
+                let ecx = layout.export_btn.center_x();
+                let ecy = layout.export_btn.center_y();
+                let s = BUTTON_ICON_SIZE / 2.0 * 0.5;
+                let mut x_path = Path::new();
+                x_path.move_to((ecx - s, ecy - s));
+                x_path.line_to((ecx + s, ecy + s));
+                x_path.move_to((ecx + s, ecy - s));
+                x_path.line_to((ecx - s, ecy + s));
+                let mut err_paint = Paint::default();
+                err_paint.set_color4f(Color4f::new(1.0, 0.3, 0.3, 0.9), None);
+                err_paint.set_anti_alias(true);
+                err_paint.set_style(skia_safe::PaintStyle::Stroke);
+                err_paint.set_stroke_width(2.0);
+                err_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+                canvas.draw_path(&x_path, &err_paint);
+            }
+        }
 
         // Timeline row: time_left — scrub bar — time_right
         if total_frames > 0 {
@@ -668,7 +830,9 @@ impl ApplicationHandler for PreviewApp {
 
                 match state {
                     ElementState::Pressed => {
-                        if rect_contains(&layout.prev_btn, pt.0, pt.1) {
+                        if rect_contains(&layout.export_btn, pt.0, pt.1) {
+                            self.start_export();
+                        } else if rect_contains(&layout.prev_btn, pt.0, pt.1) {
                             self.step_frame(-1);
                         } else if rect_contains(&layout.play_btn, pt.0, pt.1) {
                             self.toggle_playback();
@@ -750,7 +914,44 @@ impl ApplicationHandler for PreviewApp {
             }
         }
 
+        // Poll export completion
+        if let Some(ref rx) = self.export_done_rx {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(path) => {
+                        eprintln!("Export done: {}", path);
+                        self.export_state = ExportState::Done(Instant::now());
+                    }
+                    Err(e) => {
+                        eprintln!("Export error: {}", e);
+                        self.export_state = ExportState::Error(Instant::now());
+                    }
+                }
+                self.export_done_rx = None;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
+
+        // Revert Done/Error to Idle after 2 seconds
+        match self.export_state {
+            ExportState::Done(t) | ExportState::Error(t) => {
+                if t.elapsed() >= Duration::from_secs(2) {
+                    self.export_state = ExportState::Idle;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+            _ => {}
+        }
+
         // Advance playback — only advance when current frame is cached (no frame drops)
+        // Determine if we need continuous redraws
+        let needs_animation = matches!(self.export_state,
+            ExportState::Exporting | ExportState::Done(_) | ExportState::Error(_));
+
         if self.playing {
             let now = Instant::now();
             let frame_ready = self.frame_cache.contains_key(&self.current_frame);
@@ -769,9 +970,15 @@ impl ApplicationHandler for PreviewApp {
                 self.last_frame_time = now;
             }
             event_loop.set_control_flow(ControlFlow::Poll);
-        } else if self.pending_frame.is_some()
+        } else if needs_animation
+            || self.pending_frame.is_some()
             || self.frame_cache.len() < self.total_frames as usize
         {
+            if needs_animation {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));
@@ -1035,6 +1242,8 @@ pub fn run_preview(
         timeline_dragging: false,
         cursor_x: 0.0,
         cursor_y: 0.0,
+        export_state: ExportState::Idle,
+        export_done_rx: None,
     };
 
     event_loop
