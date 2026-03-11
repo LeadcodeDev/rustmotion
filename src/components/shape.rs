@@ -29,7 +29,7 @@ crate::impl_traits!(Shape {
 });
 
 impl Widget for Shape {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let w = layout.width;
         let h = layout.height;
         let corner_radius = self.style.border_radius;
@@ -93,11 +93,39 @@ impl Widget for Shape {
             draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
-        // Stroke
+        // Stroke (with optional draw_progress for stroke animation)
         if let Some(stroke) = &self.style.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
-            paint.set_stroke_width(stroke.width);
+            let stroke_w = if props.stroke_width >= 0.0 { props.stroke_width } else { stroke.width };
+            paint.set_stroke_width(stroke_w);
+
+            // Apply draw_progress: animate stroke appearance using dash path effect
+            if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
+                // Estimate path length (approximate for complex shapes)
+                let path_len = match &self.shape {
+                    crate::schema::ShapeType::Circle => std::f32::consts::PI * w.min(h),
+                    crate::schema::ShapeType::Ellipse => {
+                        // Ramanujan approximation
+                        let a = w / 2.0;
+                        let b = h / 2.0;
+                        std::f32::consts::PI * (3.0 * (a + b) - ((3.0 * a + b) * (a + 3.0 * b)).sqrt())
+                    }
+                    crate::schema::ShapeType::Rect | crate::schema::ShapeType::RoundedRect => 2.0 * (w + h),
+                    crate::schema::ShapeType::Triangle => {
+                        let side_a = w;
+                        let side_b = (w * w / 4.0 + h * h).sqrt();
+                        side_a + 2.0 * side_b
+                    }
+                    _ => 2.0 * (w + h), // fallback perimeter estimate
+                };
+                let draw_len = path_len * props.draw_progress.clamp(0.0, 1.0);
+                let intervals = [draw_len, path_len - draw_len + 0.01];
+                if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
+                    paint.set_path_effect(dash);
+                }
+            }
+
             draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 

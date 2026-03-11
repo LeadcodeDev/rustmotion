@@ -16,6 +16,10 @@ pub trait Styled {
     fn margin(&self) -> (f32, f32, f32, f32) {
         self.style_config().margin_resolved()
     }
+
+    fn backdrop_blur(&self) -> f32 {
+        self.style_config().backdrop_blur.unwrap_or(0.0)
+    }
 }
 
 /// Mutable access to style config — needed by builder traits.

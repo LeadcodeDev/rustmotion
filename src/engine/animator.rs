@@ -245,6 +245,12 @@ pub struct AnimatedProperties {
     pub shadow_blur: f32,
     pub glow_radius: f32,
     pub glow_intensity: f32,
+    // 3D perspective transforms
+    pub rotate_x: f32,
+    pub rotate_y: f32,
+    pub perspective: f32,
+    // Path animation
+    pub draw_progress: f32,
 }
 
 impl Default for AnimatedProperties {
@@ -270,6 +276,10 @@ impl Default for AnimatedProperties {
             shadow_blur: -1.0,
             glow_radius: -1.0,
             glow_intensity: -1.0,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            perspective: -1.0,
+            draw_progress: -1.0,
         }
     }
 }
@@ -321,6 +331,11 @@ impl AnimatedProperties {
         if other.shadow_blur >= 0.0 { self.shadow_blur = other.shadow_blur; }
         if other.glow_radius >= 0.0 { self.glow_radius = other.glow_radius; }
         if other.glow_intensity >= 0.0 { self.glow_intensity = other.glow_intensity; }
+        // 3D perspective transforms (additive like rotation)
+        if other.rotate_x.abs() > 0.01 { self.rotate_x += other.rotate_x; }
+        if other.rotate_y.abs() > 0.01 { self.rotate_y += other.rotate_y; }
+        if other.perspective >= 0.0 { self.perspective = other.perspective; }
+        if other.draw_progress >= 0.0 { self.draw_progress = other.draw_progress; }
     }
 }
 
@@ -506,6 +521,10 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "shadow_blur" => props.shadow_blur = value as f32,
         "glow_radius" => props.glow_radius = value as f32,
         "glow_intensity" => props.glow_intensity = value as f32,
+        "rotate_x" => props.rotate_x = value as f32,
+        "rotate_y" => props.rotate_y = value as f32,
+        "perspective" => props.perspective = value as f32,
+        "draw_progress" => props.draw_progress = value as f32,
         _ => {} // Unknown property, ignore
     }
 }
@@ -600,6 +619,10 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "shadow_blur" => props.shadow_blur as f64,
         "glow_radius" => props.glow_radius as f64,
         "glow_intensity" => props.glow_intensity as f64,
+        "rotate_x" => props.rotate_x as f64,
+        "rotate_y" => props.rotate_y as f64,
+        "perspective" => props.perspective as f64,
+        "draw_progress" => props.draw_progress as f64,
         _ => 0.0,
     }
 }
@@ -727,6 +750,35 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
         ],
         AnimationPreset::Spin => vec![
             kf_anim("rotation", 0.0, 0.0, 1.0, 360.0, EasingType::Linear),
+        ],
+
+        // ── 3D ───────────────────────────────────────────────────────────
+        AnimationPreset::FlipInX => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("rotate_x", delay, 90.0, end, 0.0, EasingType::EaseOutCubic),
+            kf_anim("perspective", delay, 800.0, end, 800.0, EasingType::Linear),
+        ],
+        AnimationPreset::FlipInY => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("rotate_y", delay, 90.0, end, 0.0, EasingType::EaseOutCubic),
+            kf_anim("perspective", delay, 800.0, end, 800.0, EasingType::Linear),
+        ],
+        AnimationPreset::FlipOutX => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("rotate_x", delay, 0.0, end, -90.0, EasingType::EaseInCubic),
+            kf_anim("perspective", delay, 800.0, end, 800.0, EasingType::Linear),
+        ],
+        AnimationPreset::FlipOutY => vec![
+            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+            kf_anim("rotate_y", delay, 0.0, end, -90.0, EasingType::EaseInCubic),
+            kf_anim("perspective", delay, 800.0, end, 800.0, EasingType::Linear),
+        ],
+        AnimationPreset::TiltIn => vec![
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+            kf_anim("rotate_x", delay, 15.0, end, 0.0, EasingType::EaseOutCubic),
+            kf_anim("rotate_y", delay, -15.0, end, 0.0, EasingType::EaseOutCubic),
+            kf_anim("perspective", delay, 1000.0, end, 1000.0, EasingType::Linear),
+            kf_anim("scale", delay, 0.9, end, 1.0, EasingType::EaseOutCubic),
         ],
 
         // ── Spéciaux ────────────────────────────────────────────────────

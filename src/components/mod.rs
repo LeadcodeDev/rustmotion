@@ -6,17 +6,20 @@ pub mod card;
 pub mod chart;
 pub mod codeblock;
 pub mod counter;
+pub mod cursor;
 pub mod divider;
 pub mod flex;
 pub mod gif;
 pub mod grid;
 pub mod icon;
+pub mod line;
 pub mod image;
 pub mod mockup;
 pub mod particle;
 pub mod positioned;
 pub mod progress;
 pub mod qrcode;
+pub mod rich_text;
 pub mod shape;
 pub mod svg;
 pub mod table;
@@ -37,17 +40,20 @@ pub use card::Card;
 pub use chart::Chart;
 pub use codeblock::Codeblock;
 pub use counter::Counter;
+pub use cursor::Cursor;
 pub use divider::Divider;
 pub use flex::Flex;
 pub use gif::Gif;
 pub use grid::Grid;
 pub use icon::Icon;
 pub use image::Image;
+pub use line::Line;
 pub use mockup::Mockup;
 pub use particle::Particle;
 pub use positioned::Positioned;
 pub use progress::Progress;
 pub use qrcode::QrCode;
+pub use rich_text::RichText;
 pub use shape::Shape;
 pub use svg::Svg;
 pub use table::Table;
@@ -124,6 +130,7 @@ pub enum Component {
     Video(Video),
     Gif(Gif),
     Counter(Counter),
+    Cursor(Cursor),
     Caption(Caption),
     Codeblock(Codeblock),
     Avatar(Avatar),
@@ -131,11 +138,13 @@ pub enum Component {
     Callout(Callout),
     Chart(Chart),
     Divider(Divider),
+    Line(Line),
     Mockup(Mockup),
     Particle(Particle),
     #[serde(alias = "progress_bar")]
     Progress(Progress),
     QrCode(QrCode),
+    RichText(RichText),
     Table(Table),
     Terminal(Terminal),
     // Container components
@@ -160,6 +169,7 @@ impl Component {
             Component::Video(c) => c,
             Component::Gif(c) => c,
             Component::Counter(c) => c,
+            Component::Cursor(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
@@ -167,10 +177,12 @@ impl Component {
             Component::Callout(c) => c,
             Component::Chart(c) => c,
             Component::Divider(c) => c,
+            Component::Line(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Positioned(c) => c,
@@ -191,6 +203,7 @@ impl Component {
             Component::Video(c) => Some(c),
             Component::Gif(c) => Some(c),
             Component::Counter(c) => Some(c),
+            Component::Cursor(c) => Some(c),
             Component::Caption(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
@@ -198,10 +211,12 @@ impl Component {
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Line(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
@@ -222,16 +237,19 @@ impl Component {
             Component::Video(c) => Some(c),
             Component::Gif(c) => Some(c),
             Component::Counter(c) => Some(c),
+            Component::Cursor(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
             Component::Badge(c) => Some(c),
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Line(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Flex(c) => Some(c),
@@ -252,6 +270,7 @@ impl Component {
             Component::Video(c) => c,
             Component::Gif(c) => c,
             Component::Counter(c) => c,
+            Component::Cursor(c) => c,
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
@@ -259,10 +278,12 @@ impl Component {
             Component::Callout(c) => c,
             Component::Chart(c) => c,
             Component::Divider(c) => c,
+            Component::Line(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Positioned(c) => c,
@@ -289,4 +310,55 @@ impl Component {
         matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_))
     }
 
+}
+
+/// Draw a gradient border on a rounded rectangle.
+pub fn draw_gradient_border(
+    canvas: &skia_safe::Canvas,
+    rrect: &skia_safe::RRect,
+    gb: &crate::schema::GradientBorder,
+) {
+    use skia_safe::{Paint, PaintStyle, Point, gradient_shader::GradientShaderColors};
+
+    if gb.colors.len() < 2 {
+        return;
+    }
+
+    let bounds = rrect.bounds();
+    let angle_rad = gb.angle * std::f32::consts::PI / 180.0;
+    let cx = bounds.center_x();
+    let cy = bounds.center_y();
+    let half_diag = (bounds.width().powi(2) + bounds.height().powi(2)).sqrt() / 2.0;
+
+    let start = Point::new(
+        cx - angle_rad.cos() * half_diag,
+        cy - angle_rad.sin() * half_diag,
+    );
+    let end = Point::new(
+        cx + angle_rad.cos() * half_diag,
+        cy + angle_rad.sin() * half_diag,
+    );
+
+    let colors: Vec<skia_safe::Color> = gb.colors.iter().map(|c| {
+        let (r, g, b, a) = crate::engine::renderer::parse_hex_color(c);
+        skia_safe::Color::from_argb(a, r, g, b)
+    }).collect();
+
+    let shader = skia_safe::shader::Shader::linear_gradient(
+        (start, end),
+        GradientShaderColors::Colors(&colors),
+        None,
+        skia_safe::TileMode::Clamp,
+        None,
+        None,
+    );
+
+    if let Some(shader) = shader {
+        let mut paint = Paint::default();
+        paint.set_style(PaintStyle::Stroke);
+        paint.set_stroke_width(gb.width);
+        paint.set_anti_alias(true);
+        paint.set_shader(shader);
+        canvas.draw_rrect(rrect, &paint);
+    }
 }

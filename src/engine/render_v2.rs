@@ -1,12 +1,12 @@
 use anyhow::Result;
-use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
+use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint, M44, V3};
 
 use super::animator::{apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
 use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{AnimatedBackground, GradientType, LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
@@ -46,16 +46,20 @@ pub fn render_component(
         if !effects.is_empty() {
             let extracted = extract_effects(effects);
 
-            // Adjust animation time by start_at offset
-            let anim_time = if let Some(timed) = component.as_timed() {
-                let (start_at, _) = timed.timing();
-                if let Some(start) = start_at {
-                    ctx.time - start
+            // Adjust animation time by start_at offset and stagger
+            let anim_time = {
+                let base_time = if let Some(timed) = component.as_timed() {
+                    let (start_at, _) = timed.timing();
+                    if let Some(start) = start_at {
+                        ctx.time - start
+                    } else {
+                        ctx.time
+                    }
                 } else {
                     ctx.time
-                }
-            } else {
-                ctx.time
+                };
+                // Apply stagger offset (delays animations for staggered children)
+                (base_time - ctx.stagger_offset).max(0.0)
             };
 
             // Resolve all presets + keyframes
@@ -138,19 +142,77 @@ fn render_component_inner(
     // Apply position offset from animation
     canvas.translate((props.translate_x, props.translate_y));
 
-    // Apply scale and rotation around center
-    if (props.scale_x - 1.0).abs() > 0.001
-        || (props.scale_y - 1.0).abs() > 0.001
-        || props.rotation.abs() > 0.01
-    {
-        canvas.translate((cx, cy));
+    // Check if we need 3D perspective transforms
+    let needs_3d = props.rotate_x.abs() > 0.01
+        || props.rotate_y.abs() > 0.01
+        || props.perspective >= 0.0;
+
+    if needs_3d {
+        // 3D transform via M44: translate to center, apply perspective + rotations, translate back
+        let perspective_dist = if props.perspective >= 0.0 { props.perspective } else { 800.0 };
+
+        // Build the 4x4 transform matrix
+        let mut m = M44::translate(cx, cy, 0.0);
+
+        // Apply perspective: shrink Z contribution to simulate depth
+        if perspective_dist > 0.0 {
+            // Perspective matrix: row 3 col 2 = -1/d
+            // This makes objects further in Z appear smaller
+            let persp = M44::col_major(&[
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, -1.0 / perspective_dist, 1.0,
+            ]);
+            m.pre_concat(&persp);
+        }
+
+        // Apply rotations (in degrees → radians)
+        if props.rotate_x.abs() > 0.01 {
+            let rad = props.rotate_x * std::f32::consts::PI / 180.0;
+            m.pre_concat(&M44::rotate(V3::new(1.0, 0.0, 0.0), rad));
+        }
+        if props.rotate_y.abs() > 0.01 {
+            let rad = props.rotate_y * std::f32::consts::PI / 180.0;
+            m.pre_concat(&M44::rotate(V3::new(0.0, 1.0, 0.0), rad));
+        }
+
+        // Apply 2D rotation (Z axis)
         if props.rotation.abs() > 0.01 {
-            canvas.rotate(props.rotation, None);
+            let rad = props.rotation * std::f32::consts::PI / 180.0;
+            m.pre_concat(&M44::rotate(V3::new(0.0, 0.0, 1.0), rad));
         }
+
+        // Apply scale
         if (props.scale_x - 1.0).abs() > 0.001 || (props.scale_y - 1.0).abs() > 0.001 {
-            canvas.scale((props.scale_x, props.scale_y));
+            let scale_m = M44::col_major(&[
+                props.scale_x, 0.0, 0.0, 0.0,
+                0.0, props.scale_y, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ]);
+            m.pre_concat(&scale_m);
         }
-        canvas.translate((-cx, -cy));
+
+        // Translate back from center
+        m.pre_concat(&M44::translate(-cx, -cy, 0.0));
+
+        canvas.concat_44(&m);
+    } else {
+        // Standard 2D transforms (faster path, no M44 overhead)
+        if (props.scale_x - 1.0).abs() > 0.001
+            || (props.scale_y - 1.0).abs() > 0.001
+            || props.rotation.abs() > 0.01
+        {
+            canvas.translate((cx, cy));
+            if props.rotation.abs() > 0.01 {
+                canvas.rotate(props.rotation, None);
+            }
+            if (props.scale_x - 1.0).abs() > 0.001 || (props.scale_y - 1.0).abs() > 0.001 {
+                canvas.scale((props.scale_x, props.scale_y));
+            }
+            canvas.translate((-cx, -cy));
+        }
     }
 
     // Margin offset
@@ -164,6 +226,27 @@ fn render_component_inner(
         let (pad_t, _pad_r, _pad_b, pad_l) = styled.padding();
         if pad_t.abs() > 0.001 || pad_l.abs() > 0.001 {
             canvas.translate((pad_l, pad_t));
+        }
+    }
+
+    // Backdrop blur (glassmorphism): apply blur to content behind this element
+    let backdrop_blur = styled.backdrop_blur();
+    if backdrop_blur > 0.01 {
+        if let Some(blur_filter) = skia_safe::image_filters::blur(
+            (backdrop_blur, backdrop_blur),
+            skia_safe::TileMode::Clamp,
+            None,
+            None,
+        ) {
+            // Clip to element bounds, then save_layer with backdrop filter
+            let bounds = skia_safe::Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
+            canvas.save();
+            canvas.clip_rect(bounds, skia_safe::ClipOp::Intersect, true);
+            canvas.save_layer(
+                &skia_safe::canvas::SaveLayerRec::default().backdrop(&blur_filter),
+            );
+            canvas.restore(); // restore save_layer (backdrop is now applied)
+            canvas.restore(); // restore clip
         }
     }
 
@@ -321,15 +404,33 @@ pub fn render_children(
     layout: &LayoutNode,
     ctx: &RenderContext,
 ) -> Result<()> {
+    render_children_with_stagger(canvas, children, layout, ctx, None)
+}
+
+pub fn render_children_with_stagger(
+    canvas: &Canvas,
+    children: &[ChildComponent],
+    layout: &LayoutNode,
+    ctx: &RenderContext,
+    stagger: Option<f32>,
+) -> Result<()> {
     for (i, child) in children.iter().enumerate() {
         if i >= layout.children.len() {
             break;
         }
         let child_layout = &layout.children[i];
 
+        let child_ctx = if let Some(stagger_val) = stagger {
+            let mut c = ctx.clone();
+            c.stagger_offset = ctx.stagger_offset + i as f64 * stagger_val as f64;
+            c
+        } else {
+            ctx.clone()
+        };
+
         canvas.save();
         canvas.translate((child_layout.x, child_layout.y));
-        render_component(canvas, child, child_layout, ctx)?;
+        render_component(canvas, child, child_layout, &child_ctx)?;
         canvas.restore();
     }
     Ok(())
@@ -394,6 +495,11 @@ pub fn render_frame_v2_scaled(
     let bg = scene.background.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
 
+    // Animated background gradient
+    if let Some(ref anim_bg) = scene.animated_background {
+        draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+    }
+
     // Build render context
     let ctx = RenderContext {
         time,
@@ -402,6 +508,7 @@ pub fn render_frame_v2_scaled(
         fps: config.fps,
         video_width: config.width,
         video_height: config.height,
+        stagger_offset: 0.0,
     };
 
     // Render component tree
@@ -507,4 +614,60 @@ pub fn render_scene_frame_scaled(
 ) -> Result<Vec<u8>> {
     let (children, layout) = prepare_scene(scene, config);
     render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor)
+}
+
+/// Draw an animated gradient background that rotates over time.
+fn draw_animated_background(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    use skia_safe::{gradient_shader::GradientShaderColors, Point, Rect};
+
+    if bg.colors.len() < 2 {
+        return;
+    }
+
+    let colors: Vec<skia_safe::Color4f> = bg.colors.iter().map(|c| color4f_from_hex(c)).collect();
+    let angle = (bg.speed * time) % 360.0;
+    let rad = angle.to_radians();
+
+    let shader = match bg.gradient_type {
+        GradientType::Linear => {
+            let cx = width / 2.0;
+            let cy = height / 2.0;
+            let half_diag = (width.powi(2) + height.powi(2)).sqrt() / 2.0;
+            let start = Point::new(cx - rad.cos() * half_diag, cy - rad.sin() * half_diag);
+            let end = Point::new(cx + rad.cos() * half_diag, cy + rad.sin() * half_diag);
+            skia_safe::shader::Shader::linear_gradient(
+                (start, end),
+                GradientShaderColors::ColorsInSpace(&colors, Some(skia_safe::ColorSpace::new_srgb())),
+                None,
+                skia_safe::TileMode::Clamp,
+                None,
+                None,
+            )
+        }
+        GradientType::Radial => {
+            let center = Point::new(width / 2.0, height / 2.0);
+            let radius = width.max(height) / 2.0;
+            skia_safe::shader::Shader::radial_gradient(
+                center,
+                radius,
+                GradientShaderColors::ColorsInSpace(&colors, Some(skia_safe::ColorSpace::new_srgb())),
+                None,
+                skia_safe::TileMode::Clamp,
+                None,
+                None,
+            )
+        }
+    };
+
+    if let Some(shader) = shader {
+        let mut paint = Paint::default();
+        paint.set_shader(shader);
+        canvas.draw_rect(Rect::from_wh(width, height), &paint);
+    }
 }

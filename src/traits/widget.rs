@@ -19,6 +19,8 @@ pub struct RenderContext {
     pub video_width: u32,
     /// Video canvas height.
     pub video_height: u32,
+    /// Extra animation delay offset from parent stagger (seconds).
+    pub stagger_offset: f64,
 }
 
 /// Base trait for all renderable components.

@@ -150,8 +150,8 @@ impl Widget for Flex {
         canvas.save();
         canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
 
-        // 4. Render children with animation support
-        crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
+        // 4. Render children with animation support (with optional stagger)
+        crate::engine::render_v2::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)?;
 
         canvas.restore();
 
@@ -161,6 +161,11 @@ impl Widget for Flex {
             border_paint.set_style(PaintStyle::Stroke);
             border_paint.set_stroke_width(border.width);
             canvas.draw_rrect(rrect, &border_paint);
+        }
+
+        // 5b. Gradient border
+        if let Some(ref gb) = self.style.gradient_border {
+            super::draw_gradient_border(canvas, &rrect, gb);
         }
 
         Ok(())
