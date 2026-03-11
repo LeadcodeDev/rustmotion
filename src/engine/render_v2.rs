@@ -661,8 +661,8 @@ pub fn render_frame_v2_scaled(
     let bg = scene.background.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
 
-    // Animated background gradient
-    if let Some(ref anim_bg) = scene.animated_background {
+    // Animated background gradient(s)
+    for anim_bg in &scene.animated_background {
         draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
     }
 
@@ -793,6 +793,298 @@ pub fn render_scene_frame_scaled(
     render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor)
 }
 
+/// Render a single frame of a world view: shared background, camera translation, visible scenes.
+pub fn render_world_frame_scaled(
+    config: &VideoConfig,
+    view: &crate::schema::ResolvedView,
+    timeline: &crate::engine::world::WorldTimeline,
+    frame_in_view: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    let scaled_w = (config.width as f32 * scale_factor) as i32;
+    let scaled_h = (config.height as f32 * scale_factor) as i32;
+    let fps = config.fps;
+    let time = frame_in_view as f64 / fps as f64;
+
+    let info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    let mut surface = surfaces::raster(&info, None, None)
+        .ok_or(RustmotionError::SurfaceCreation)?;
+    let canvas = surface.canvas();
+
+    if scale_factor != 1.0 {
+        canvas.scale((scale_factor, scale_factor));
+    }
+
+    let vw = config.width as f32;
+    let vh = config.height as f32;
+
+    // 1. Draw base background (view-level or video-level)
+    let bg_color = view.background.as_deref().unwrap_or(&config.background);
+    canvas.clear(color4f_from_hex(bg_color));
+
+    // 2. Draw animated backgrounds
+    // Determine which scene's backgrounds to use (crossfade during pan)
+    let visible = timeline.visible_scenes_at(time, &view.scenes, fps);
+
+    // Find the "active" scene (the one currently being displayed, latest in sequence)
+    // and optionally a "previous" scene during camera pan for crossfade
+    let active_scene_idx = visible.iter()
+        .filter(|v| !v.is_persisted)
+        .map(|v| v.scene_idx)
+        .max();
+
+    if let Some(active_idx) = active_scene_idx {
+        let active_scene = &view.scenes[active_idx];
+        let active_bgs = if active_scene.animated_background.is_empty() {
+            &view.animated_background
+        } else {
+            &active_scene.animated_background
+        };
+
+        // Check if we're during a camera pan (two non-persisted scenes visible)
+        let non_persisted: Vec<_> = visible.iter()
+            .filter(|v| !v.is_persisted)
+            .collect();
+
+        if non_persisted.len() >= 2 {
+            // Crossfade between outgoing and incoming scene backgrounds
+            let scene_a_idx = non_persisted[0].scene_idx;
+            let scene_b_idx = non_persisted[1].scene_idx;
+            let scene_a = &view.scenes[scene_a_idx];
+            let scene_b = &view.scenes[scene_b_idx];
+
+            let bgs_a = if scene_a.animated_background.is_empty() {
+                &view.animated_background
+            } else {
+                &scene_a.animated_background
+            };
+            let bgs_b = if scene_b.animated_background.is_empty() {
+                &view.animated_background
+            } else {
+                &scene_b.animated_background
+            };
+
+            // Calculate crossfade progress based on camera pan position
+            let pan_half = timeline.camera_pan_duration / 2.0;
+            let (_, _scene_b_start) = timeline.scene_windows[scene_b_idx];
+            let pan_start = timeline.scene_windows[scene_b_idx].0 - pan_half;
+            let pan_end = timeline.scene_windows[scene_b_idx].0 + pan_half;
+            let crossfade = if pan_end > pan_start {
+                ((time - pan_start) / (pan_end - pan_start)).clamp(0.0, 1.0) as f32
+            } else {
+                1.0
+            };
+
+            // Draw scene A backgrounds with fading alpha
+            if crossfade < 1.0 {
+                for bg in bgs_a {
+                    draw_animated_background(canvas, bg, time as f32, vw, vh);
+                }
+            }
+            // Draw scene B backgrounds with growing alpha
+            if crossfade > 0.0 && bgs_a as *const _ != bgs_b as *const _ {
+                // If backgrounds are different, create a temporary surface for B and blend
+                let bg_info = ImageInfo::new(
+                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                );
+                if let Some(mut bg_surface) = surfaces::raster(&bg_info, None, None) {
+                    let bg_canvas = bg_surface.canvas();
+                    if scale_factor != 1.0 { bg_canvas.scale((scale_factor, scale_factor)); }
+                    bg_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+                    for bg in bgs_b {
+                        draw_animated_background(bg_canvas, bg, time as f32, vw, vh);
+                    }
+                    let snapshot = bg_surface.image_snapshot();
+                    let mut paint = skia_safe::Paint::default();
+                    paint.set_alpha_f(crossfade);
+                    canvas.save();
+                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
+                    canvas.restore();
+                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+                }
+            }
+        } else {
+            // Single active scene — just draw its backgrounds
+            for bg in active_bgs {
+                draw_animated_background(canvas, bg, time as f32, vw, vh);
+            }
+        }
+    } else {
+        // No active scene — draw view-level backgrounds
+        for bg in &view.animated_background {
+            draw_animated_background(canvas, bg, time as f32, vw, vh);
+        }
+    }
+
+    // 3. Calculate camera position and apply world transform
+    let (cam_x, cam_y) = timeline.camera_at(time, &view.camera_easing);
+    let viewport_cx = vw / 2.0;
+    let viewport_cy = vh / 2.0;
+
+    canvas.save();
+    canvas.translate((viewport_cx - cam_x, viewport_cy - cam_y));
+
+    // 4. Render each visible scene at its world position
+    for vis in &visible {
+        let scene = &view.scenes[vis.scene_idx];
+        let (wx, wy) = scene.world_position.as_ref()
+            .map(|p| (p.x, p.y))
+            .unwrap_or((0.0, 0.0));
+
+        // Apply crossfade opacity via save_layer during camera pans
+        let needs_opacity = vis.opacity < 1.0 - f32::EPSILON;
+        if needs_opacity {
+            let mut layer_paint = Paint::default();
+            layer_paint.set_alpha_f(vis.opacity);
+            canvas.save_layer_alpha_f(None, vis.opacity);
+        }
+
+        canvas.save();
+        // Translate to scene's world position, offset so scene center = world position
+        canvas.translate((wx - viewport_cx, wy - viewport_cy));
+
+        let (children, layout) = prepare_scene(scene, config);
+
+        // Use local_time for animations (clamped to 0 if pan hasn't finished)
+        let anim_time = vis.local_time.max(0.0);
+        let ctx = RenderContext {
+            time: anim_time,
+            scene_duration: scene.duration,
+            frame_index: vis.local_frame,
+            fps,
+            video_width: config.width,
+            video_height: config.height,
+            stagger_offset: 0.0,
+        };
+
+        // Apply per-scene camera if present
+        let has_camera = scene.camera.is_some();
+        if let Some(ref camera) = scene.camera {
+            apply_camera_transform(canvas, camera, anim_time as f32, vw, vh);
+        }
+
+        render_children(canvas, children, &layout, &ctx)?;
+
+        if has_camera {
+            canvas.restore();
+        }
+
+        canvas.restore();
+
+        // Restore opacity layer
+        if needs_opacity {
+            canvas.restore();
+        }
+    }
+
+    // Restore world transform
+    canvas.restore();
+
+    // 5. Read pixels
+    let row_bytes = scaled_w as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
+    let dst_info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+
+    Ok(pixels)
+}
+
+/// Render only the background (solid color + animated-background) of a scene.
+pub fn render_scene_bg_scaled(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_in_scene: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    let scaled_w = (config.width as f32 * scale_factor) as i32;
+    let scaled_h = (config.height as f32 * scale_factor) as i32;
+    let mut time = frame_in_scene as f64 / config.fps as f64;
+    if let Some(freeze_at) = scene.freeze_at {
+        if time > freeze_at { time = freeze_at; }
+    }
+    let info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    let mut surface = surfaces::raster(&info, None, None)
+        .ok_or(RustmotionError::SurfaceCreation)?;
+    let canvas = surface.canvas();
+    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+
+    let bg = scene.background.as_deref().unwrap_or(&config.background);
+    canvas.clear(color4f_from_hex(bg));
+    for anim_bg in &scene.animated_background {
+        draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+    }
+
+    let row_bytes = scaled_w as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
+    let dst_info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+    Ok(pixels)
+}
+
+/// Render only the children (foreground) of a scene on a transparent canvas.
+pub fn render_scene_fg_scaled(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_in_scene: u32,
+    _scene_total_frames: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    let (children, layout) = prepare_scene(scene, config);
+    let scaled_w = (config.width as f32 * scale_factor) as i32;
+    let scaled_h = (config.height as f32 * scale_factor) as i32;
+    let mut time = frame_in_scene as f64 / config.fps as f64;
+    if let Some(freeze_at) = scene.freeze_at {
+        if time > freeze_at { time = freeze_at; }
+    }
+    let info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    let mut surface = surfaces::raster(&info, None, None)
+        .ok_or(RustmotionError::SurfaceCreation)?;
+    let canvas = surface.canvas();
+    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+
+    // Transparent background
+    canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+    let ctx = RenderContext {
+        time,
+        scene_duration: scene.duration,
+        frame_index: frame_in_scene,
+        fps: config.fps,
+        video_width: config.width,
+        video_height: config.height,
+        stagger_offset: 0.0,
+    };
+
+    let has_camera = scene.camera.is_some();
+    if let Some(ref camera) = scene.camera {
+        apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
+    }
+    render_children(canvas, children, &layout, &ctx)?;
+    if has_camera { canvas.restore(); }
+
+    let row_bytes = scaled_w as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
+    let dst_info = ImageInfo::new(
+        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+    );
+    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+    Ok(pixels)
+}
+
 /// Draw an animated background (gradient, concentric circles, or grid dots).
 fn draw_animated_background(
     canvas: &Canvas,
@@ -804,6 +1096,7 @@ fn draw_animated_background(
     match bg.preset.as_deref() {
         Some("concentric_circles") => draw_bg_concentric_circles(canvas, bg, time, width, height),
         Some("grid_dots") => draw_bg_grid_dots(canvas, bg, time, width, height),
+        Some("halo") => draw_bg_halo(canvas, bg, time, width, height),
         _ => draw_bg_gradient_shift(canvas, bg, time, width, height),
     }
 }
@@ -863,6 +1156,35 @@ fn draw_bg_gradient_shift(
     }
 }
 
+/// Soft colored glow zones (halo preset).
+fn draw_bg_halo(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    for zone in &bg.zones {
+        let cx = zone.x * width;
+        let cy = zone.y * height;
+        let base_radius = zone.radius * width.max(height);
+        // Subtle breathing animation
+        let breath = 1.0 + 0.05 * (time * bg.speed).sin();
+        let radius = base_radius * breath;
+
+        let color = color4f_from_hex(&zone.color);
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color4f(color, None);
+        paint.set_mask_filter(skia_safe::MaskFilter::blur(
+            skia_safe::BlurStyle::Normal,
+            radius / 2.0,
+            false,
+        ));
+        canvas.draw_circle((cx, cy), radius, &paint);
+    }
+}
+
 /// Expanding concentric circles from center.
 fn draw_bg_concentric_circles(
     canvas: &Canvas,
@@ -876,13 +1198,21 @@ fn draw_bg_concentric_circles(
     let color_str = bg.colors.first().map(|s| s.as_str()).unwrap_or("#FFFFFF20");
     let mut paint = super::renderer::paint_from_hex(color_str);
     paint.set_style(PaintStyle::Stroke);
-    paint.set_stroke_width(1.5);
+    paint.set_stroke_width(bg.element_size);
     paint.set_anti_alias(true);
 
     let cx = width / 2.0;
     let cy = height / 2.0;
     let max_radius = (width.powi(2) + height.powi(2)).sqrt() / 2.0;
-    let spacing = bg.spacing.max(20.0);
+    let spacing = if let Some(count) = bg.count {
+        if count > 0 {
+            max_radius / count as f32
+        } else {
+            bg.spacing.max(20.0)
+        }
+    } else {
+        bg.spacing.max(20.0)
+    };
     let offset = (time * bg.speed) % spacing;
 
     let mut r = offset;

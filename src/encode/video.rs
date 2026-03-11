@@ -8,10 +8,10 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::engine::transition::apply_transition;
+use crate::engine::transition::{apply_transition, camera_pan_transition};
 use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
 use crate::error::RustmotionError;
-use crate::schema::{Scene, ResolvedScenario as Scenario, TransitionType, VideoConfig};
+use crate::schema::{EasingType, ResolvedView, Scene, ResolvedScenario as Scenario, TransitionType, VideoConfig, ViewType};
 use crate::tui::TuiProgress;
 
 /// Progress events emitted by encode_video_incremental
@@ -26,13 +26,16 @@ pub enum EncodeProgress {
 
 /// Description of what to render for a specific frame
 #[derive(Clone)]
+#[allow(dead_code)]
 pub enum FrameTask {
     Normal {
+        view_idx: usize,
         scene_idx: usize,
         frame_in_scene: u32,
         scene_total_frames: u32,
     },
-    Transition {
+    SlideTransition {
+        view_idx: usize,
         scene_a_idx: usize,
         scene_b_idx: usize,
         frame_in_transition: u32,
@@ -41,6 +44,20 @@ pub enum FrameTask {
         scene_b_total_frames: u32,
         transition_type: TransitionType,
         transition_duration: f64,
+        easing: EasingType,
+    },
+    WorldFrame {
+        view_idx: usize,
+        frame_in_view: u32,
+        view_total_frames: u32,
+    },
+    ViewTransition {
+        view_a_idx: usize,
+        view_b_idx: usize,
+        frame_in_transition: u32,
+        transition_type: TransitionType,
+        transition_duration: f64,
+        easing: EasingType,
     },
 }
 
@@ -51,10 +68,10 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     let fps = config.fps;
 
     // Pre-extract video frames in bulk (if any VideoLayer present)
-    preextract_video_frames(&scenario.scenes, fps);
-
-    // Pre-fetch icon SVGs from Iconify API before parallel rendering
-    prefetch_icons(&scenario.scenes);
+    for view in &scenario.views {
+        preextract_video_frames(&view.scenes, fps);
+        prefetch_icons(&view.scenes);
+    }
 
     // Build a flat list of frame tasks
     let tasks = build_frame_tasks(scenario);
@@ -88,7 +105,7 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
         let yuv_frames: Vec<Result<Vec<u8>>> = batch
             .par_iter()
             .map(|task| {
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let rgba = render_frame_task(config, scenario, task)?;
                 let yuv = rgba_to_yuv420(&rgba, width, height);
                 counter.fetch_add(1, Ordering::Relaxed);
                 Ok(yuv)
@@ -146,31 +163,34 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     Ok(())
 }
 
-pub fn render_frame_task(config: &VideoConfig, scenes: &[Scene], task: &FrameTask) -> Result<Vec<u8>> {
-    render_frame_task_scaled(config, scenes, task, 1.0)
+pub fn render_frame_task(config: &VideoConfig, scenario: &Scenario, task: &FrameTask) -> Result<Vec<u8>> {
+    render_frame_task_scaled(config, scenario, task, 1.0)
 }
 
 pub fn render_frame_task_scaled(
     config: &VideoConfig,
-    scenes: &[Scene],
+    scenario: &Scenario,
     task: &FrameTask,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled};
+    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled, render_scene_bg_scaled, render_scene_fg_scaled};
 
     match task {
         FrameTask::Normal {
+            view_idx,
             scene_idx,
             frame_in_scene,
             scene_total_frames,
         } => {
+            let scene = &scenario.views[*view_idx].scenes[*scene_idx];
             if scale_factor == 1.0 {
-                render_scene_frame(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames)
+                render_scene_frame(config, scene, *frame_in_scene, *scene_total_frames)
             } else {
-                render_scene_frame_scaled(config, &scenes[*scene_idx], *frame_in_scene, *scene_total_frames, scale_factor)
+                render_scene_frame_scaled(config, scene, *frame_in_scene, *scene_total_frames, scale_factor)
             }
         }
-        FrameTask::Transition {
+        FrameTask::SlideTransition {
+            view_idx,
             scene_a_idx,
             scene_b_idx,
             frame_in_transition,
@@ -179,43 +199,85 @@ pub fn render_frame_task_scaled(
             scene_b_total_frames,
             transition_type,
             transition_duration,
+            easing,
         } => {
-            let (frame_a, frame_b) = if scale_factor == 1.0 {
-                let a = render_scene_frame(
-                    config,
-                    &scenes[*scene_a_idx],
-                    scene_a_frame_offset + frame_in_transition,
-                    *scene_a_total_frames,
-                )?;
-                let b = render_scene_frame(
-                    config,
-                    &scenes[*scene_b_idx],
-                    *frame_in_transition,
-                    *scene_b_total_frames,
-                )?;
-                (a, b)
-            } else {
-                let a = render_scene_frame_scaled(
-                    config,
-                    &scenes[*scene_a_idx],
-                    scene_a_frame_offset + frame_in_transition,
-                    *scene_a_total_frames,
-                    scale_factor,
-                )?;
-                let b = render_scene_frame_scaled(
-                    config,
-                    &scenes[*scene_b_idx],
-                    *frame_in_transition,
-                    *scene_b_total_frames,
-                    scale_factor,
-                )?;
-                (a, b)
-            };
-
+            let scenes = &scenario.views[*view_idx].scenes;
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
             let progress = *frame_in_transition as f64 / (transition_duration * fps as f64);
+            let frame_a_idx = scene_a_frame_offset + frame_in_transition;
+
+            // Camera pan: static bg + sliding foreground children
+            if matches!(transition_type, TransitionType::CameraPan) {
+                let (ax, ay) = scenes[*scene_a_idx].world_position.as_ref().map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+                let (bx, by) = scenes[*scene_b_idx].world_position.as_ref().map(|p| (p.x, p.y)).unwrap_or((0.0, 0.0));
+                let dx = bx - ax;
+                let dy = by - ay;
+                let bg = render_scene_bg_scaled(config, &scenes[*scene_a_idx], frame_a_idx, scale_factor)?;
+                let fg_a = render_scene_fg_scaled(config, &scenes[*scene_a_idx], frame_a_idx, *scene_a_total_frames, scale_factor)?;
+                let fg_b = render_scene_fg_scaled(config, &scenes[*scene_b_idx], *frame_in_transition, *scene_b_total_frames, scale_factor)?;
+                return Ok(camera_pan_transition(
+                    &bg, &fg_a, &fg_b,
+                    scaled_w, scaled_h,
+                    progress,
+                    dx * scale_factor, dy * scale_factor,
+                    easing,
+                ));
+            }
+
+            // Other transitions: render full frames
+            let (frame_a, frame_b) = if scale_factor == 1.0 {
+                let a = render_scene_frame(config, &scenes[*scene_a_idx], frame_a_idx, *scene_a_total_frames)?;
+                let b = render_scene_frame(config, &scenes[*scene_b_idx], *frame_in_transition, *scene_b_total_frames)?;
+                (a, b)
+            } else {
+                let a = render_scene_frame_scaled(config, &scenes[*scene_a_idx], frame_a_idx, *scene_a_total_frames, scale_factor)?;
+                let b = render_scene_frame_scaled(config, &scenes[*scene_b_idx], *frame_in_transition, *scene_b_total_frames, scale_factor)?;
+                (a, b)
+            };
+
+            Ok(apply_transition(
+                &frame_a,
+                &frame_b,
+                scaled_w,
+                scaled_h,
+                progress,
+                transition_type,
+            ))
+        }
+        FrameTask::WorldFrame {
+            view_idx,
+            frame_in_view,
+            view_total_frames: _,
+        } => {
+            use crate::engine::world::WorldTimeline;
+            let view = &scenario.views[*view_idx];
+            let timeline = WorldTimeline::build(view, config.fps);
+            crate::engine::render_v2::render_world_frame_scaled(
+                config, view, &timeline, *frame_in_view, scale_factor,
+            )
+        }
+        FrameTask::ViewTransition {
+            view_a_idx,
+            view_b_idx,
+            frame_in_transition,
+            transition_type,
+            transition_duration,
+            easing: _,
+        } => {
+            let scaled_w = (config.width as f32 * scale_factor) as u32;
+            let scaled_h = (config.height as f32 * scale_factor) as u32;
+            let fps = config.fps;
+            let progress = *frame_in_transition as f64 / (transition_duration * fps as f64);
+
+            // Render last frame of view_a and first frame of view_b
+            let view_a = &scenario.views[*view_a_idx];
+            let view_b = &scenario.views[*view_b_idx];
+
+            let frame_a = render_last_frame_of_view(config, view_a, fps, scale_factor)?;
+            let frame_b = render_first_frame_of_view(config, view_b, fps, scale_factor)?;
+
             Ok(apply_transition(
                 &frame_a,
                 &frame_b,
@@ -228,10 +290,92 @@ pub fn render_frame_task_scaled(
     }
 }
 
+/// Render the last frame of a view (used for ViewTransition)
+fn render_last_frame_of_view(
+    config: &VideoConfig,
+    view: &ResolvedView,
+    fps: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    use crate::engine::render_v2::render_scene_frame_scaled;
+    match view.view_type {
+        ViewType::Slide => {
+            if let Some(last_scene) = view.scenes.last() {
+                let scene_frames = (last_scene.duration * fps as f64).round() as u32;
+                render_scene_frame_scaled(config, last_scene, scene_frames.saturating_sub(1), scene_frames, scale_factor)
+            } else {
+                Ok(vec![0u8; (config.width as f32 * scale_factor) as usize * (config.height as f32 * scale_factor) as usize * 4])
+            }
+        }
+        ViewType::World => {
+            let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+            let total_frames = timeline.total_frames(fps);
+            crate::engine::render_v2::render_world_frame_scaled(
+                config, view, &timeline, total_frames.saturating_sub(1), scale_factor,
+            )
+        }
+    }
+}
+
+/// Render the first frame of a view (used for ViewTransition)
+fn render_first_frame_of_view(
+    config: &VideoConfig,
+    view: &ResolvedView,
+    fps: u32,
+    scale_factor: f32,
+) -> Result<Vec<u8>> {
+    use crate::engine::render_v2::render_scene_frame_scaled;
+    match view.view_type {
+        ViewType::Slide => {
+            if let Some(first_scene) = view.scenes.first() {
+                let scene_frames = (first_scene.duration * fps as f64).round() as u32;
+                render_scene_frame_scaled(config, first_scene, 0, scene_frames, scale_factor)
+            } else {
+                Ok(vec![0u8; (config.width as f32 * scale_factor) as usize * (config.height as f32 * scale_factor) as usize * 4])
+            }
+        }
+        ViewType::World => {
+            let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+            crate::engine::render_v2::render_world_frame_scaled(
+                config, view, &timeline, 0, scale_factor,
+            )
+        }
+    }
+}
+
 pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     let fps = scenario.video.fps;
-    let scenes = &scenario.scenes;
     let mut tasks = Vec::new();
+
+    for (view_idx, view) in scenario.views.iter().enumerate() {
+        // Inter-view transition: if this view has a transition and it's not the first view
+        if view_idx > 0 {
+            if let Some(ref transition) = view.transition {
+                let transition_frames = (transition.duration * fps as f64).round() as u32;
+                for f in 0..transition_frames {
+                    tasks.push(FrameTask::ViewTransition {
+                        view_a_idx: view_idx - 1,
+                        view_b_idx: view_idx,
+                        frame_in_transition: f,
+                        transition_type: transition.transition_type.clone(),
+                        transition_duration: transition.duration,
+                        easing: transition.easing.clone(),
+                    });
+                }
+            }
+        }
+
+        match view.view_type {
+            ViewType::Slide => build_slide_view_tasks(&mut tasks, view_idx, view, fps),
+            ViewType::World => build_world_view_tasks(&mut tasks, view_idx, view, fps),
+        }
+    }
+
+    tasks
+}
+
+fn build_slide_view_tasks(tasks: &mut Vec<FrameTask>, view_idx: usize, view: &ResolvedView, fps: u32) {
+    let scenes = &view.scenes;
 
     for (i, scene) in scenes.iter().enumerate() {
         let scene_frames = (scene.duration * fps as f64).round() as u32;
@@ -240,7 +384,6 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
             .map(|t| (t.duration * fps as f64).round() as u32)
             .unwrap_or(0);
 
-        // Skip frames already rendered by the incoming transition from the previous scene
         let incoming_transition_frames = if i > 0 {
             scene
                 .transition
@@ -254,21 +397,22 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
         let normal_start = incoming_transition_frames;
         let normal_end = scene_frames.saturating_sub(outgoing_transition_frames);
 
-        // Normal frames
         for f in normal_start..normal_end {
             tasks.push(FrameTask::Normal {
+                view_idx,
                 scene_idx: i,
                 frame_in_scene: f,
                 scene_total_frames: scene_frames,
             });
         }
 
-        // Transition frames
         if let Some(transition) = next_transition {
             let actual_transition_frames = outgoing_transition_frames.min(scene_frames);
             let scene_b_frames = (scenes[i + 1].duration * fps as f64).round() as u32;
+            let easing = transition.easing.clone();
             for f in 0..actual_transition_frames {
-                tasks.push(FrameTask::Transition {
+                tasks.push(FrameTask::SlideTransition {
+                    view_idx,
                     scene_a_idx: i,
                     scene_b_idx: i + 1,
                     frame_in_transition: f,
@@ -277,12 +421,23 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
                     transition_duration: transition.duration,
+                    easing: easing.clone(),
                 });
             }
         }
     }
+}
 
-    tasks
+fn build_world_view_tasks(tasks: &mut Vec<FrameTask>, view_idx: usize, view: &ResolvedView, fps: u32) {
+    let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+    let total_frames = timeline.total_frames(fps);
+    for f in 0..total_frames {
+        tasks.push(FrameTask::WorldFrame {
+            view_idx,
+            frame_in_view: f,
+            view_total_frames: total_frames,
+        });
+    }
 }
 
 /// Cached H.264 data for a single scene segment
@@ -309,10 +464,13 @@ pub fn hash_video_config(config: &VideoConfig) -> u64 {
     hasher.finish()
 }
 
-/// Build frame tasks for a single scene (by index)
+/// Build frame tasks for a single scene (by index) within a slide view.
+/// Used by incremental encoding (operates on view 0 only for backward compat).
 fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTask> {
     let fps = scenario.video.fps;
-    let scenes = &scenario.scenes;
+    // Incremental encoding only works with simple single-slide-view scenarios
+    let view_idx = 0;
+    let scenes = &scenario.views[view_idx].scenes;
     let scene = &scenes[scene_idx];
     let mut tasks = Vec::new();
 
@@ -337,6 +495,7 @@ fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTa
 
     for f in normal_start..normal_end {
         tasks.push(FrameTask::Normal {
+            view_idx,
             scene_idx,
             frame_in_scene: f,
             scene_total_frames: scene_frames,
@@ -346,8 +505,10 @@ fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTa
     if let Some(transition) = next_transition {
         let actual_transition_frames = outgoing_transition_frames.min(scene_frames);
         let scene_b_frames = (scenes[scene_idx + 1].duration * fps as f64).round() as u32;
+        let easing = transition.easing.clone();
         for f in 0..actual_transition_frames {
-            tasks.push(FrameTask::Transition {
+            tasks.push(FrameTask::SlideTransition {
+                view_idx,
                 scene_a_idx: scene_idx,
                 scene_b_idx: scene_idx + 1,
                 frame_in_transition: f,
@@ -356,6 +517,7 @@ fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTa
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
                 transition_duration: transition.duration,
+                easing: easing.clone(),
             });
         }
     }
@@ -377,25 +539,29 @@ pub fn encode_video_incremental(
     let height = config.height;
     let fps = config.fps;
 
-    preextract_video_frames(&scenario.scenes, fps);
-    prefetch_icons(&scenario.scenes);
+    for view in &scenario.views {
+        preextract_video_frames(&view.scenes, fps);
+        prefetch_icons(&view.scenes);
+    }
 
-    let num_scenes = scenario.scenes.len();
+    // Incremental encoding operates on view 0's scenes (backward compat for single slide view)
+    let num_scenes = scenario.views.get(0).map(|v| v.scenes.len()).unwrap_or(0);
 
     // Hash all scenes
-    let scene_hashes: Vec<u64> = scenario.scenes.iter().map(hash_scene).collect();
+    let scene_hashes: Vec<u64> = scenario.views.get(0)
+        .map(|v| v.scenes.iter().map(hash_scene).collect())
+        .unwrap_or_default();
 
     // Determine which scenes need re-rendering
     let mut needs_render = vec![true; num_scenes];
     if let Some(prev) = prev_segments {
         if prev.len() == num_scenes {
+            let scenes = &scenario.views[0].scenes;
             for i in 0..num_scenes {
                 let hash_changed = scene_hashes[i] != prev[i].scene_hash;
-                // Invalidate if next scene changed and has a transition
-                // (because segment[i] contains outgoing transition frames to scene[i+1])
                 let next_changed_with_transition = if i + 1 < num_scenes {
                     scene_hashes[i + 1] != prev[i + 1].scene_hash
-                        && scenario.scenes[i + 1].transition.is_some()
+                        && scenes[i + 1].transition.is_some()
                 } else {
                     false
                 };
@@ -445,7 +611,7 @@ pub fn encode_video_incremental(
         let batch_results: Vec<Result<Vec<u8>>> = batch
             .par_iter()
             .map(|(_, task)| {
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let rgba = render_frame_task(config, scenario, task)?;
                 let yuv = rgba_to_yuv420(&rgba, width, height);
                 counter.fetch_add(1, Ordering::Relaxed);
                 Ok(yuv)
@@ -557,7 +723,9 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
     let width = config.width;
     let height = config.height;
 
-    prefetch_icons(&scenario.scenes);
+    for view in &scenario.views {
+        prefetch_icons(&view.scenes);
+    }
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -583,7 +751,7 @@ pub fn encode_png_sequence(scenario: &Scenario, output_dir: &str, quiet: bool, _
             .par_iter()
             .map(|task| {
                 let frame_num = counter.fetch_add(1, Ordering::Relaxed);
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let rgba = render_frame_task(config, scenario, task)?;
                 Ok((frame_num, rgba))
             })
             .collect();
@@ -615,7 +783,9 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
     let height = config.height;
     let fps = config.fps;
 
-    prefetch_icons(&scenario.scenes);
+    for view in &scenario.views {
+        prefetch_icons(&view.scenes);
+    }
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -650,7 +820,7 @@ pub fn encode_gif(scenario: &Scenario, output_path: &str, quiet: bool) -> Result
         let results: Vec<Result<Vec<u8>>> = batch
             .par_iter()
             .map(|task| {
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let rgba = render_frame_task(config, scenario, task)?;
                 counter.fetch_add(1, Ordering::Relaxed);
                 Ok(rgba)
             })
@@ -686,21 +856,23 @@ pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
 
     let mut frame_offset = 0u32;
-    for scene in &scenario.scenes {
-        let scene_frames = (scene.duration * fps as f64).round() as u32;
+    for view in &scenario.views {
+        for scene in &view.scenes {
+            let scene_frames = (scene.duration * fps as f64).round() as u32;
 
-        for local_frame in 0..scene_frames {
-            let rgba = crate::engine::render_v2::render_scene_frame(
-                config, scene, local_frame, scene_frames,
-            )?;
-            stdout.write_all(&rgba)?;
+            for local_frame in 0..scene_frames {
+                let rgba = crate::engine::render_v2::render_scene_frame(
+                    config, scene, local_frame, scene_frames,
+                )?;
+                stdout.write_all(&rgba)?;
 
-            if !quiet {
-                let global_frame = frame_offset + local_frame;
-                eprint!("\rFrame {}", global_frame);
+                if !quiet {
+                    let global_frame = frame_offset + local_frame;
+                    eprint!("\rFrame {}", global_frame);
+                }
             }
+            frame_offset += scene_frames;
         }
-        frame_offset += scene_frames;
     }
 
     if !quiet {
@@ -724,7 +896,9 @@ pub fn encode_with_ffmpeg(
     let height = config.height;
     let fps = config.fps;
 
-    prefetch_icons(&scenario.scenes);
+    for view in &scenario.views {
+        prefetch_icons(&view.scenes);
+    }
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -837,7 +1011,7 @@ pub fn encode_with_ffmpeg(
         let results: Vec<Result<Vec<u8>>> = batch
             .par_iter()
             .map(|task| {
-                let rgba = render_frame_task(config, &scenario.scenes, task)?;
+                let rgba = render_frame_task(config, scenario, task)?;
                 counter.fetch_add(1, Ordering::Relaxed);
                 Ok(rgba)
             })

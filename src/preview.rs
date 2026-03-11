@@ -365,8 +365,10 @@ impl PreviewApp {
                     if !scenario.fonts.is_empty() {
                         engine::renderer::load_custom_fonts(&scenario.fonts);
                     }
-                    engine::prefetch_icons(&scenario.scenes);
-                    engine::preextract_video_frames(&scenario.scenes, scenario.video.fps);
+                    for view in &scenario.views {
+                        engine::prefetch_icons(&view.scenes);
+                        engine::preextract_video_frames(&view.scenes, scenario.video.fps);
+                    }
                     let _ = self.render_tx.send(RenderRequest::Reload(scenario));
                 }
                 Err(e) => eprintln!("Reload error: {}", e),
@@ -415,8 +417,10 @@ impl PreviewApp {
                 if !scenario.fonts.is_empty() {
                     crate::engine::renderer::load_custom_fonts(&scenario.fonts);
                 }
-                crate::engine::prefetch_icons(&scenario.scenes);
-                crate::engine::preextract_video_frames(&scenario.scenes, scenario.video.fps);
+                for view in &scenario.views {
+                    crate::engine::prefetch_icons(&view.scenes);
+                    crate::engine::preextract_video_frames(&view.scenes, scenario.video.fps);
+                }
                 crate::encode::video::encode_video(&scenario, &output_str, true)
                     .map_err(|e| format!("Encode error: {}", e))?;
                 Ok(output_str)
@@ -1015,7 +1019,7 @@ fn render_thread(
             return;
         }
         if let Some(task) = tasks.get(fi as usize) {
-            match encode::render_frame_task_scaled(&sc.video, &sc.scenes, task, sf) {
+            match encode::render_frame_task_scaled(&sc.video, &sc, task, sf) {
                 Ok(rgba) => {
                     let pw = (sc.video.width as f32 * sf) as u32;
                     let ph = (sc.video.height as f32 * sf) as u32;
@@ -1157,8 +1161,10 @@ pub fn run_preview(
     watch: bool,
 ) -> Result<()> {
     // Prefetch assets
-    engine::prefetch_icons(&scenario.scenes);
-    engine::preextract_video_frames(&scenario.scenes, scenario.video.fps);
+    for view in &scenario.views {
+        engine::prefetch_icons(&view.scenes);
+        engine::preextract_video_frames(&view.scenes, scenario.video.fps);
+    }
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }

@@ -1,4 +1,5 @@
-use crate::schema::TransitionType;
+use crate::engine::animator::ease;
+use crate::schema::{EasingType, TransitionType};
 use skia_safe::{
     surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect,
 };
@@ -28,6 +29,7 @@ pub fn apply_transition(
         TransitionType::Iris => iris_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Slide => slide_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Dissolve => dissolve_transition(frame_a, frame_b, width, height, progress),
+        TransitionType::CameraPan => blend_fade(frame_a, frame_b, progress),
         TransitionType::None => {
             if progress < 0.5 {
                 frame_a.to_vec()
@@ -336,4 +338,50 @@ fn slide_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, pro
 fn dissolve_transition(frame_a: &[u8], frame_b: &[u8], _width: u32, _height: u32, progress: f32) -> Vec<u8> {
     // Dissolve is a smooth cross-dissolve (same as fade in standard video editing)
     blend_fade(frame_a, frame_b, progress)
+}
+
+/// Camera pan transition: static background + sliding foreground children.
+/// `bg` is the static background, `fg_a`/`fg_b` are children-only (transparent).
+/// fg_a slides out by (-dx*t, -dy*t), fg_b slides in from (dx*(1-t), dy*(1-t)).
+pub fn camera_pan_transition(
+    bg: &[u8],
+    fg_a: &[u8],
+    fg_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f64,
+    dx: f32,
+    dy: f32,
+    easing: &EasingType,
+) -> Vec<u8> {
+    let t = ease(progress, easing) as f32;
+
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return bg.to_vec(),
+    };
+    let img_bg = match frame_to_image(bg, width, height) {
+        Some(i) => i,
+        None => return bg.to_vec(),
+    };
+    let img_fg_a = match frame_to_image(fg_a, width, height) {
+        Some(i) => i,
+        None => return bg.to_vec(),
+    };
+    let img_fg_b = match frame_to_image(fg_b, width, height) {
+        Some(i) => i,
+        None => return bg.to_vec(),
+    };
+
+    let canvas = surface.canvas();
+
+    // Static background
+    canvas.draw_image(&img_bg, (0.0, 0.0), None);
+
+    // fg_a slides out
+    canvas.draw_image(&img_fg_a, (-dx * t, -dy * t), None);
+    // fg_b slides in
+    canvas.draw_image(&img_fg_b, (dx * (1.0 - t), dy * (1.0 - t)), None);
+
+    surface_to_pixels(surface, width, height)
 }

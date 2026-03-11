@@ -1240,6 +1240,9 @@ Scenes can have animated gradient backgrounds.
 | `speed` | `f32` | `30.0` | Animation speed |
 | `gradient_type` | `string` | `"linear"` | `"linear"` or `"radial"` |
 | `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"` |
+| `element_size` | `f32` | `4.0` | Dot size for grid_dots; stroke width for concentric_circles |
+| `spacing` | `f32` | `60.0` | Element spacing for grid_dots/concentric_circles |
+| `count` | `u32` | | Number of circles for concentric_circles (overrides spacing) |
 
 ---
 
