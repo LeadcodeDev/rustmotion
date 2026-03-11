@@ -41,30 +41,54 @@ pub fn render_component(
     }
 
     // 2. Resolve animations
-    let props = if let Some(animatable) = component.as_animatable() {
-        let effects = animatable.animation_effects();
-        if !effects.is_empty() {
-            let extracted = extract_effects(effects);
+    // Compute base animation time adjusted for start_at and stagger
+    let anim_time = {
+        let base_time = if let Some(timed) = component.as_timed() {
+            let (start_at, _) = timed.timing();
+            if let Some(start) = start_at {
+                ctx.time - start
+            } else {
+                ctx.time
+            }
+        } else {
+            ctx.time
+        };
+        (base_time - ctx.stagger_offset).max(0.0)
+    };
 
-            // Adjust animation time by start_at offset and stagger
-            let anim_time = {
-                let base_time = if let Some(timed) = component.as_timed() {
-                    let (start_at, _) = timed.timing();
-                    if let Some(start) = start_at {
-                        ctx.time - start
-                    } else {
-                        ctx.time
-                    }
-                } else {
-                    ctx.time
-                };
-                // Apply stagger offset (delays animations for staggered children)
-                (base_time - ctx.stagger_offset).max(0.0)
-            };
+    let props = {
+        let styled = component.as_styled();
+        let timeline = &styled.style_config().timeline;
 
-            // Resolve all presets + keyframes
+        // Collect all animation effects: base animation + active timeline steps
+        let base_effects = component.as_animatable()
+            .map(|a| a.animation_effects())
+            .unwrap_or(&[]);
+
+        // Timeline: merge active steps' effects with base effects
+        let timeline_effects: Vec<_> = if !timeline.is_empty() {
+            timeline.iter()
+                .filter(|step| anim_time >= step.at)
+                .flat_map(|step| {
+                    // Adjust each step's animation times relative to step.at
+                    step.animation.iter().map(move |effect| {
+                        (effect, step.at)
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let has_effects = !base_effects.is_empty() || !timeline_effects.is_empty();
+
+        if has_effects {
+            // Extract base effects
+            let extracted_base = extract_effects(base_effects);
+
+            // Resolve base presets + keyframes
             let mut props = AnimatedProperties::default();
-            for (preset, preset_config) in &extracted.presets {
+            for (preset, preset_config) in &extracted_base.presets {
                 let p = resolve_animations(
                     &[],
                     Some(preset),
@@ -74,10 +98,8 @@ pub fn render_component(
                 );
                 props.merge(&p);
             }
-
-            // Apply explicit keyframes on top
-            if !extracted.keyframes.is_empty() {
-                let kf_animations: Vec<_> = extracted.keyframes.into_iter().cloned().collect();
+            if !extracted_base.keyframes.is_empty() {
+                let kf_animations: Vec<_> = extracted_base.keyframes.into_iter().cloned().collect();
                 let kf_props = resolve_animations(
                     &kf_animations,
                     None,
@@ -88,20 +110,49 @@ pub fn render_component(
                 props.merge(&kf_props);
             }
 
-            // Apply wiggles additively
-            if !extracted.wiggles.is_empty() {
-                let wiggles: Vec<_> = extracted.wiggles.into_iter().cloned().collect();
+            // Resolve timeline step effects (time relative to each step's `at`)
+            for (effect, step_at) in &timeline_effects {
+                let step_time = anim_time - step_at;
+                let step_effects = std::slice::from_ref(*effect);
+                let extracted_step = extract_effects(step_effects);
+
+                for (preset, preset_config) in &extracted_step.presets {
+                    let p = resolve_animations(
+                        &[],
+                        Some(preset),
+                        Some(preset_config),
+                        step_time,
+                        ctx.scene_duration,
+                    );
+                    props.merge(&p);
+                }
+                if !extracted_step.keyframes.is_empty() {
+                    let kf_animations: Vec<_> = extracted_step.keyframes.into_iter().cloned().collect();
+                    let kf_props = resolve_animations(
+                        &kf_animations,
+                        None,
+                        None,
+                        step_time,
+                        ctx.scene_duration,
+                    );
+                    props.merge(&kf_props);
+                }
+            }
+
+            // Apply wiggles additively (base only)
+            if !extracted_base.wiggles.is_empty() {
+                let wiggles: Vec<_> = extracted_base.wiggles.into_iter().cloned().collect();
                 apply_wiggles(&mut props, &wiggles, ctx.time);
             }
 
-            // Apply orbit effects
-            if !extracted.orbits.is_empty() {
-                let orbits: Vec<_> = extracted.orbits.into_iter().cloned().collect();
+            // Apply orbit effects (base only)
+            if !extracted_base.orbits.is_empty() {
+                let orbits: Vec<_> = extracted_base.orbits.into_iter().cloned().collect();
                 apply_orbits(&mut props, &orbits, ctx.time);
             }
 
             // Handle motion blur
-            if let Some(blur_intensity) = extracted.motion_blur {
+            if let Some(blur_intensity) = extracted_base.motion_blur {
                 if blur_intensity > 0.01 {
                     return render_component_with_motion_blur(
                         canvas,
@@ -117,8 +168,6 @@ pub fn render_component(
         } else {
             AnimatedProperties::default()
         }
-    } else {
-        AnimatedProperties::default()
     };
 
     // Skip if fully transparent

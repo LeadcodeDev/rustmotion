@@ -783,6 +783,22 @@ pub struct LayerStyle {
     // Animation effects (accepts single object or array)
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
+    // Timeline: sequence of animation steps triggered at specific times.
+    // Each step has an `at` time and its own animation effects.
+    // When present, animations are resolved per-step instead of all at once.
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+}
+
+/// A single step in a component's animation timeline.
+/// Triggers a set of animations at a specific time within the scene.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TimelineStep {
+    /// Time (in seconds, relative to component start) when this step begins.
+    pub at: f64,
+    /// Animation effects to apply during this step.
+    #[serde(default, deserialize_with = "deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
 }
 
 impl Default for LayerStyle {
@@ -833,6 +849,7 @@ impl Default for LayerStyle {
             motion_path: None,
             stagger: None,
             animation: Vec::new(),
+            timeline: Vec::new(),
         }
     }
 }
