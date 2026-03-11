@@ -3,7 +3,7 @@ use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint, M44, V3};
 
 use super::animator::{apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
 use super::renderer::color4f_from_hex;
-use crate::components::ChildComponent;
+use crate::components::{ChildComponent, Overlay, OverlayAnchor};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{AnimatedBackground, Camera, GradientType, InnerShadow, LayerStyle, Scene, SceneLayout, VideoConfig};
@@ -450,8 +450,89 @@ pub fn render_children_with_stagger(
         canvas.save();
         canvas.translate((child_layout.x, child_layout.y));
         render_component(canvas, child, child_layout, &child_ctx)?;
+
+        // Render overlays positioned relative to this component's bounds
+        if !child.overlays.is_empty() {
+            render_overlays(canvas, &child.overlays, child_layout, &child_ctx)?;
+        }
+
         canvas.restore();
     }
+    Ok(())
+}
+
+/// Render overlay components positioned relative to a parent's bounds.
+fn render_overlays(
+    canvas: &Canvas,
+    overlays: &[Overlay],
+    parent_layout: &LayoutNode,
+    ctx: &RenderContext,
+) -> Result<()> {
+    let pw = parent_layout.width;
+    let ph = parent_layout.height;
+
+    for overlay in overlays {
+        // Measure the overlay component
+        let widget = overlay.component.as_widget();
+        let constraints = Constraints { min_width: 0.0, max_width: pw, min_height: 0.0, max_height: ph };
+        let (ow, oh) = widget.measure(&constraints);
+
+        // Compute position based on anchor
+        let (ax, ay) = match overlay.anchor {
+            OverlayAnchor::TopRight => (pw - ow / 2.0, -oh / 2.0),
+            OverlayAnchor::TopLeft => (-ow / 2.0, -oh / 2.0),
+            OverlayAnchor::BottomRight => (pw - ow / 2.0, ph - oh / 2.0),
+            OverlayAnchor::BottomLeft => (-ow / 2.0, ph - oh / 2.0),
+            OverlayAnchor::Center => ((pw - ow) / 2.0, (ph - oh) / 2.0),
+        };
+
+        let x = ax + overlay.offset_x;
+        let y = ay + overlay.offset_y;
+
+        let overlay_layout = LayoutNode::new(0.0, 0.0, ow, oh);
+
+        // Resolve animations for the overlay component
+        let props = if let Some(animatable) = overlay.component.as_animatable() {
+            let effects = animatable.animation_effects();
+            if !effects.is_empty() {
+                let extracted = extract_effects(effects);
+                let mut props = AnimatedProperties::default();
+                for (preset, preset_config) in &extracted.presets {
+                    let p = resolve_animations(&[], Some(preset), Some(preset_config), ctx.time, ctx.scene_duration);
+                    props.merge(&p);
+                }
+                if !extracted.keyframes.is_empty() {
+                    let kf_animations: Vec<_> = extracted.keyframes.into_iter().cloned().collect();
+                    let kf_props = resolve_animations(&kf_animations, None, None, ctx.time, ctx.scene_duration);
+                    props.merge(&kf_props);
+                }
+                props
+            } else {
+                AnimatedProperties::default()
+            }
+        } else {
+            AnimatedProperties::default()
+        };
+
+        if props.opacity <= 0.0 { continue; }
+
+        canvas.save();
+        canvas.translate((x, y));
+
+        // Apply opacity
+        let needs_layer = props.opacity < 1.0;
+        if needs_layer {
+            let mut layer_paint = Paint::default();
+            layer_paint.set_alpha_f(props.opacity);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
+        }
+
+        widget.render(canvas, &overlay_layout, ctx, &props)?;
+
+        if needs_layer { canvas.restore(); }
+        canvas.restore();
+    }
+
     Ok(())
 }
 

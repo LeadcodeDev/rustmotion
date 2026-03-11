@@ -99,6 +99,38 @@ pub struct ChildComponent {
     pub x: Option<f32>,
     #[serde(default)]
     pub y: Option<f32>,
+    /// Overlay components positioned relative to this component's bounds.
+    #[serde(default)]
+    pub overlays: Vec<Overlay>,
+}
+
+/// An overlay component positioned relative to its parent.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Overlay {
+    /// The component to render as overlay.
+    #[serde(flatten)]
+    pub component: Component,
+    /// Anchor position relative to the parent.
+    #[serde(default)]
+    pub anchor: OverlayAnchor,
+    /// Horizontal offset from the anchor position.
+    #[serde(default)]
+    pub offset_x: f32,
+    /// Vertical offset from the anchor position.
+    #[serde(default)]
+    pub offset_y: f32,
+}
+
+/// Anchor position for an overlay.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OverlayAnchor {
+    #[default]
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+    Center,
 }
 
 impl ChildComponent {
