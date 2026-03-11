@@ -788,6 +788,13 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
         ],
 
         // ── Spéciaux ────────────────────────────────────────────────────
+        AnimationPreset::DrawIn => vec![
+            kf_anim("draw_progress", delay, 0.0, end, 1.0, EasingType::EaseInOut),
+        ],
+        AnimationPreset::StrokeReveal => vec![
+            kf_anim("draw_progress", delay, 0.0, end, 1.0, EasingType::EaseOut),
+            kf_anim("opacity", delay, 0.0, delay + dur * 0.2, 1.0, EasingType::EaseOut),
+        ],
         AnimationPreset::Typewriter => vec![
             kf_anim("visible_chars_progress", delay, 0.0, end, 1.0, EasingType::Linear),
         ],
