@@ -545,24 +545,38 @@ impl Default for AnimationTiming {
     }
 }
 
-/// Per-character text animation configuration.
+/// Per-character or per-word text animation configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CharAnimation {
-    /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in".
+    /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up".
     #[serde(default = "default_char_preset")]
     pub preset: CharAnimPreset,
-    /// Delay between each character in seconds.
+    /// Granularity: animate per character or per word.
+    #[serde(default)]
+    pub granularity: TextAnimGranularity,
+    /// Delay between each unit (char or word) in seconds.
     #[serde(default = "default_char_stagger")]
     pub stagger: f32,
-    /// Duration of each character's animation in seconds.
+    /// Duration of each unit's animation in seconds.
     #[serde(default = "default_char_duration")]
     pub duration: f32,
     /// Easing function.
     #[serde(default)]
     pub easing: EasingType,
-    /// Initial delay before the first character starts.
+    /// Initial delay before the first unit starts.
     #[serde(default)]
     pub delay: f32,
+}
+
+/// Granularity for text animation: per character or per word.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAnimGranularity {
+    /// Animate each character individually (default).
+    #[default]
+    Char,
+    /// Animate each word as a unit.
+    Word,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

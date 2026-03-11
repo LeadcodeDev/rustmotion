@@ -18,7 +18,7 @@ fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
 
 use crate::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign};
+use crate::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign, TextAnimGranularity};
 use crate::traits::{RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -41,7 +41,79 @@ crate::impl_traits!(Text {
     Styled => style,
 });
 
-/// Render text with per-character animation.
+/// Apply a text animation preset to a single unit (char or word).
+/// Returns the text draw position adjustments and paint modifications.
+fn apply_text_anim_preset(
+    canvas: &Canvas,
+    text: &str,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    cursor_x: f32,
+    line_y: f32,
+    unit_width: f32,
+    preset: &CharAnimPreset,
+    t: f32,
+    time: f64,
+    unit_idx: usize,
+    font_size: f32,
+) {
+    let center_x = cursor_x + unit_width / 2.0;
+    let center_y = line_y;
+
+    match preset {
+        CharAnimPreset::ScaleIn => {
+            let scale = t;
+            if scale < 0.001 {
+                return;
+            }
+            canvas.translate((center_x, center_y));
+            canvas.scale((scale, scale));
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, paint);
+        }
+        CharAnimPreset::FadeIn => {
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, &p);
+        }
+        CharAnimPreset::Wave => {
+            let wave_offset = (time as f32 * 4.0 + unit_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
+            let mut p = paint.clone();
+            p.set_alpha_f(t.min(1.0) * paint.alpha_f());
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y + wave_offset, &p);
+        }
+        CharAnimPreset::Bounce => {
+            let scale = if t < 0.5 {
+                t * 2.0 * 1.3
+            } else {
+                1.3 - 0.3 * ((t - 0.5) * 2.0)
+            };
+            let scale = scale.max(0.001);
+            canvas.translate((center_x, center_y));
+            canvas.scale((scale, scale));
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, paint);
+        }
+        CharAnimPreset::RotateIn => {
+            let angle = (1.0 - t) * -90.0;
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            canvas.translate((center_x, center_y));
+            canvas.rotate(angle, None);
+            canvas.translate((-center_x, -center_y));
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, &p);
+        }
+        CharAnimPreset::SlideUp => {
+            let offset_y = (1.0 - t) * font_size * 0.8;
+            let mut p = paint.clone();
+            p.set_alpha_f(t * paint.alpha_f());
+            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y + offset_y, &p);
+        }
+    }
+}
+
+/// Render text with per-character or per-word animation.
 fn render_char_animation(
     canvas: &Canvas,
     _content: &str,
@@ -57,7 +129,8 @@ fn render_char_animation(
     char_anim: &CharAnimation,
     time: f64,
 ) {
-    let mut global_char_idx = 0usize;
+    let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
+    let mut global_unit_idx = 0usize;
 
     for (line_idx, line) in lines.iter().enumerate() {
         if line.is_empty() {
@@ -72,90 +145,97 @@ fn render_char_animation(
         };
         let line_y = line_idx as f32 * line_height_val + baseline_offset;
 
-        let mut cursor_x = line_x;
-        for ch in line.chars() {
-            let ch_str = ch.to_string();
-            let (ch_width, _) = font.measure_str(&ch_str, None);
-            let ch_width = ch_width + letter_spacing;
+        if is_word_mode {
+            // Per-word animation: split line into words and spaces
+            let mut cursor_x = line_x;
+            let mut chars = line.chars().peekable();
 
-            // Calculate per-character animation progress
-            let char_start = char_anim.delay as f64 + global_char_idx as f64 * char_anim.stagger as f64;
-            let char_end = char_start + char_anim.duration as f64;
-            let raw_t = if time <= char_start {
-                0.0
-            } else if time >= char_end {
-                1.0
-            } else {
-                (time - char_start) / (char_end - char_start)
-            };
-            let t = ease(raw_t, &char_anim.easing) as f32;
-
-            // Apply per-character transform based on preset
-            let ch_center_x = cursor_x + ch_width / 2.0;
-            let ch_center_y = line_y;
-
-            canvas.save();
-
-            match char_anim.preset {
-                CharAnimPreset::ScaleIn => {
-                    let scale = t;
-                    if scale < 0.001 {
-                        canvas.restore();
-                        cursor_x += ch_width;
-                        global_char_idx += 1;
-                        continue;
-                    }
-                    canvas.translate((ch_center_x, ch_center_y));
-                    canvas.scale((scale, scale));
-                    canvas.translate((-ch_center_x, -ch_center_y));
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y, paint);
-                }
-                CharAnimPreset::FadeIn => {
-                    let mut char_paint = paint.clone();
-                    char_paint.set_alpha_f(t * paint.alpha_f());
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y, &char_paint);
-                }
-                CharAnimPreset::Wave => {
-                    // Continuous wave: sine oscillation based on char index + time
-                    let wave_offset = (time as f32 * 4.0 + global_char_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
-                    let mut char_paint = paint.clone();
-                    char_paint.set_alpha_f(t.min(1.0) * paint.alpha_f());
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y + wave_offset, &char_paint);
-                }
-                CharAnimPreset::Bounce => {
-                    let scale = if t < 0.5 {
-                        // Overshoot to 1.3
-                        t * 2.0 * 1.3
+            while chars.peek().is_some() {
+                // Collect leading spaces
+                let mut spaces = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        spaces.push(c);
+                        chars.next();
                     } else {
-                        // Settle back to 1.0
-                        1.3 - 0.3 * ((t - 0.5) * 2.0)
-                    };
-                    let scale = scale.max(0.001);
-                    canvas.translate((ch_center_x, ch_center_y));
-                    canvas.scale((scale, scale));
-                    canvas.translate((-ch_center_x, -ch_center_y));
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y, paint);
+                        break;
+                    }
                 }
-                CharAnimPreset::RotateIn => {
-                    let angle = (1.0 - t) * -90.0;
-                    let mut char_paint = paint.clone();
-                    char_paint.set_alpha_f(t * paint.alpha_f());
-                    canvas.translate((ch_center_x, ch_center_y));
-                    canvas.rotate(angle, None);
-                    canvas.translate((-ch_center_x, -ch_center_y));
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y, &char_paint);
+                if !spaces.is_empty() {
+                    let space_w = measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
+                    // Draw spaces without animation
+                    draw_text_with_fallback(canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint);
+                    cursor_x += space_w;
                 }
-                CharAnimPreset::SlideUp => {
-                    let offset_y = (1.0 - t) * font.size() * 0.8;
-                    let mut char_paint = paint.clone();
-                    char_paint.set_alpha_f(t * paint.alpha_f());
-                    draw_text_with_fallback(canvas, &ch_str, font, emoji_font, 0.0, cursor_x, line_y + offset_y, &char_paint);
-                }
-            }
 
-            canvas.restore();
-            cursor_x += ch_width;
-            global_char_idx += 1;
+                // Collect the word
+                let mut word = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    word.push(c);
+                    chars.next();
+                }
+                if word.is_empty() {
+                    continue;
+                }
+
+                let word_width = measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
+
+                // Calculate animation progress for this word
+                let unit_start = char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
+                let unit_end = unit_start + char_anim.duration as f64;
+                let raw_t = if time <= unit_start {
+                    0.0
+                } else if time >= unit_end {
+                    1.0
+                } else {
+                    (time - unit_start) / (unit_end - unit_start)
+                };
+                let t = ease(raw_t, &char_anim.easing) as f32;
+
+                canvas.save();
+                apply_text_anim_preset(
+                    canvas, &word, font, emoji_font, paint,
+                    cursor_x, line_y, word_width,
+                    &char_anim.preset, t, time, global_unit_idx, font.size(),
+                );
+                canvas.restore();
+
+                cursor_x += word_width;
+                global_unit_idx += 1;
+            }
+        } else {
+            // Per-character animation (original behavior)
+            let mut cursor_x = line_x;
+            for ch in line.chars() {
+                let ch_str = ch.to_string();
+                let (ch_width, _) = font.measure_str(&ch_str, None);
+                let ch_width = ch_width + letter_spacing;
+
+                let unit_start = char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
+                let unit_end = unit_start + char_anim.duration as f64;
+                let raw_t = if time <= unit_start {
+                    0.0
+                } else if time >= unit_end {
+                    1.0
+                } else {
+                    (time - unit_start) / (unit_end - unit_start)
+                };
+                let t = ease(raw_t, &char_anim.easing) as f32;
+
+                canvas.save();
+                apply_text_anim_preset(
+                    canvas, &ch_str, font, emoji_font, paint,
+                    cursor_x, line_y, ch_width,
+                    &char_anim.preset, t, time, global_unit_idx, font.size(),
+                );
+                canvas.restore();
+
+                cursor_x += ch_width;
+                global_unit_idx += 1;
+            }
         }
     }
 }
