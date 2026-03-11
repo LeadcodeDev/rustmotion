@@ -1,3 +1,4 @@
+pub mod arrow;
 pub mod avatar;
 pub mod badge;
 pub mod callout;
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::traits::{Animatable, Container, Styled, Timed, Widget};
 
+pub use arrow::Arrow;
 pub use avatar::Avatar;
 pub use badge::Badge;
 pub use callout::Callout;
@@ -134,6 +136,7 @@ pub enum Component {
     Caption(Caption),
     Codeblock(Codeblock),
     Avatar(Avatar),
+    Arrow(Arrow),
     Badge(Badge),
     Callout(Callout),
     Chart(Chart),
@@ -173,6 +176,7 @@ impl Component {
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
+            Component::Arrow(c) => c,
             Component::Badge(c) => c,
             Component::Callout(c) => c,
             Component::Chart(c) => c,
@@ -207,6 +211,7 @@ impl Component {
             Component::Caption(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
+            Component::Arrow(c) => Some(c),
             Component::Badge(c) => Some(c),
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
@@ -240,6 +245,7 @@ impl Component {
             Component::Cursor(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
+            Component::Arrow(c) => Some(c),
             Component::Badge(c) => Some(c),
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
@@ -274,6 +280,7 @@ impl Component {
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
+            Component::Arrow(c) => c,
             Component::Badge(c) => c,
             Component::Callout(c) => c,
             Component::Chart(c) => c,
