@@ -251,6 +251,8 @@ pub struct AnimatedProperties {
     pub perspective: f32,
     // Path animation
     pub draw_progress: f32,
+    // Motion path progress (0.0 = start, 1.0 = end)
+    pub motion_progress: f32,
 }
 
 impl Default for AnimatedProperties {
@@ -280,6 +282,7 @@ impl Default for AnimatedProperties {
             rotate_y: 0.0,
             perspective: -1.0,
             draw_progress: -1.0,
+            motion_progress: -1.0,
         }
     }
 }
@@ -336,6 +339,7 @@ impl AnimatedProperties {
         if other.rotate_y.abs() > 0.01 { self.rotate_y += other.rotate_y; }
         if other.perspective >= 0.0 { self.perspective = other.perspective; }
         if other.draw_progress >= 0.0 { self.draw_progress = other.draw_progress; }
+        if other.motion_progress >= 0.0 { self.motion_progress = other.motion_progress; }
     }
 }
 
@@ -525,6 +529,7 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         "rotate_y" => props.rotate_y = value as f32,
         "perspective" => props.perspective = value as f32,
         "draw_progress" => props.draw_progress = value as f32,
+        "motion_progress" => props.motion_progress = value as f32,
         _ => {} // Unknown property, ignore
     }
 }
@@ -623,6 +628,7 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
         "rotate_y" => props.rotate_y as f64,
         "perspective" => props.perspective as f64,
         "draw_progress" => props.draw_progress as f64,
+        "motion_progress" => props.motion_progress as f64,
         _ => 0.0,
     }
 }

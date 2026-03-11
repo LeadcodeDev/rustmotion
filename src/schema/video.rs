@@ -113,19 +113,85 @@ pub struct Scene {
     /// Animated background gradient
     #[serde(default, rename = "animated-background")]
     pub animated_background: Option<AnimatedBackground>,
+    /// Virtual camera with animatable x, y, zoom, rotation.
+    #[serde(default)]
+    pub camera: Option<Camera>,
+}
+
+/// Virtual camera for pan/zoom/rotation effects at the scene level.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Camera {
+    /// Camera center X offset from scene center (pixels). Default: 0.
+    #[serde(default)]
+    pub x: f32,
+    /// Camera center Y offset from scene center (pixels). Default: 0.
+    #[serde(default)]
+    pub y: f32,
+    /// Zoom factor. 1.0 = no zoom, 2.0 = 2x zoom in, 0.5 = zoom out.
+    #[serde(default = "default_camera_zoom")]
+    pub zoom: f32,
+    /// Rotation in degrees around the scene center. Default: 0.
+    #[serde(default)]
+    pub rotation: f32,
+    /// Keyframe animations for camera properties.
+    #[serde(default)]
+    pub keyframes: Vec<CameraKeyframe>,
+}
+
+/// A keyframe for a camera property.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CameraKeyframe {
+    /// The camera property to animate: "x", "y", "zoom", "rotation".
+    pub property: String,
+    /// Time-value pairs for the animation.
+    pub values: Vec<CameraKeyframePoint>,
+    /// Easing function for interpolation.
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+/// A single time-value point in a camera keyframe.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CameraKeyframePoint {
+    /// Time in seconds (relative to scene start).
+    pub time: f64,
+    /// Value at this time.
+    pub value: f32,
+}
+
+fn default_camera_zoom() -> f32 {
+    1.0
 }
 
 /// Animated background configuration for scenes.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AnimatedBackground {
     /// Gradient colors (hex strings).
+    #[serde(default)]
     pub colors: Vec<String>,
-    /// Animation speed in degrees per second (default 30).
+    /// Animation speed (degrees/sec for gradient, pixels/sec for others; default 30).
     #[serde(default = "default_bg_speed")]
     pub speed: f32,
     /// Gradient type: "linear" or "radial" (default "linear").
     #[serde(default = "default_bg_type")]
     pub gradient_type: GradientType,
+    /// Preset pattern: "gradient_shift" (default), "concentric_circles", "grid_dots".
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Dot/circle size for grid_dots and concentric_circles presets.
+    #[serde(default = "default_bg_element_size")]
+    pub element_size: f32,
+    /// Spacing between elements for grid_dots preset.
+    #[serde(default = "default_bg_spacing")]
+    pub spacing: f32,
+}
+
+fn default_bg_element_size() -> f32 {
+    4.0
+}
+
+fn default_bg_spacing() -> f32 {
+    60.0
 }
 
 fn default_bg_speed() -> f32 {
@@ -259,6 +325,22 @@ pub struct CardShadow {
     pub offset_y: f32,
     #[serde(default)]
     pub blur: f32,
+}
+
+/// Inner shadow configuration (inset shadow).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InnerShadow {
+    pub color: String,
+    #[serde(default)]
+    pub offset_x: f32,
+    #[serde(default)]
+    pub offset_y: f32,
+    #[serde(default = "default_inner_shadow_blur")]
+    pub blur: f32,
+}
+
+fn default_inner_shadow_blur() -> f32 {
+    10.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -615,6 +697,12 @@ pub struct LayerStyle {
     pub aspect_ratio: Option<f32>,
     #[serde(default, rename = "text-gradient")]
     pub text_gradient: Option<TextGradient>,
+    // Inner shadow (inset shadow)
+    #[serde(default, rename = "inner-shadow")]
+    pub inner_shadow: Option<InnerShadow>,
+    // Motion path: SVG path string that elements follow
+    #[serde(default, rename = "motion-path")]
+    pub motion_path: Option<String>,
     // Stagger: automatic delay offset per child in a container (seconds)
     #[serde(default)]
     pub stagger: Option<f32>,
@@ -667,6 +755,8 @@ impl Default for LayerStyle {
             clip_path: None,
             aspect_ratio: None,
             text_gradient: None,
+            inner_shadow: None,
+            motion_path: None,
             stagger: None,
             animation: Vec::new(),
         }
