@@ -535,6 +535,56 @@ impl Default for AnimationTiming {
     }
 }
 
+/// Per-character text animation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CharAnimation {
+    /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in".
+    #[serde(default = "default_char_preset")]
+    pub preset: CharAnimPreset,
+    /// Delay between each character in seconds.
+    #[serde(default = "default_char_stagger")]
+    pub stagger: f32,
+    /// Duration of each character's animation in seconds.
+    #[serde(default = "default_char_duration")]
+    pub duration: f32,
+    /// Easing function.
+    #[serde(default)]
+    pub easing: EasingType,
+    /// Initial delay before the first character starts.
+    #[serde(default)]
+    pub delay: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CharAnimPreset {
+    /// Each character scales from 0 to 1.
+    #[default]
+    ScaleIn,
+    /// Each character fades from 0 to 1 opacity.
+    FadeIn,
+    /// Characters oscillate vertically in a wave pattern.
+    Wave,
+    /// Each character bounces in (scale overshoot).
+    Bounce,
+    /// Each character rotates in from a random angle.
+    RotateIn,
+    /// Each character slides up from below.
+    SlideUp,
+}
+
+fn default_char_preset() -> CharAnimPreset {
+    CharAnimPreset::ScaleIn
+}
+
+fn default_char_stagger() -> f32 {
+    0.03
+}
+
+fn default_char_duration() -> f32 {
+    0.4
+}
+
 impl AnimationTiming {
     /// Convert to PresetConfig for compatibility with resolve_animations.
     pub fn to_preset_config(&self) -> PresetConfig {
