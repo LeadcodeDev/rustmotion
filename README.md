@@ -982,6 +982,267 @@ Animated particle system for visual effects (confetti, snow, stars, bubbles).
 
 ---
 
+### Arrow
+
+Directional arrow with optional bezier curves. Use `draw_in` or `stroke_reveal` animation presets for drawing effects.
+
+```json
+{
+  "type": "arrow",
+  "x1": 100, "y1": 300,
+  "x2": 500, "y2": 300,
+  "curve": 0.3,
+  "width": 3,
+  "color": "#58A6FF",
+  "arrow_end": true,
+  "style": {
+    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `x1`, `y1` | `f32` | `0.0` | Start point |
+| `x2`, `y2` | `f32` | (required) | End point |
+| `cp` | `{x, y}` | | Quadratic bezier control point |
+| `cp1`, `cp2` | `{x, y}` | | Cubic bezier control points |
+| `curve` | `f32` | | Auto-curve (-1.0 to 1.0) |
+| `width` | `f32` | `3.0` | Stroke width |
+| `color` | `string` | `"#FFFFFF"` | Arrow color |
+| `arrow_end` | `bool` | `true` | Arrowhead at end |
+| `arrow_start` | `bool` | `false` | Arrowhead at start |
+| `arrow_size` | `f32` | `12.0` | Arrowhead size |
+| `dashed` | `f32[]` | | Dash pattern (e.g. `[8, 4]`) |
+
+---
+
+### Connector
+
+Connects two points with automatic routing. Great for diagrams and flowcharts.
+
+```json
+{
+  "type": "connector",
+  "from": { "x": 200, "y": 150 },
+  "to": { "x": 600, "y": 400 },
+  "routing": "curved",
+  "color": "#58A6FF",
+  "arrow_end": true,
+  "style": {
+    "animation": [{ "name": "stroke_reveal", "duration": 0.8 }]
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `from` | `{x, y}` | (required) | Start point |
+| `to` | `{x, y}` | (required) | End point |
+| `routing` | `string` | `"straight"` | `"straight"`, `"curved"`, `"elbow"` (L-shaped) |
+| `curvature` | `f32` | `0.4` | Curve intensity (for `curved` routing) |
+| `width` | `f32` | `2.0` | Stroke width |
+| `color` | `string` | `"#FFFFFF"` | Line color |
+| `arrow_end` | `bool` | `true` | Arrowhead at end |
+| `arrow_start` | `bool` | `false` | Arrowhead at start |
+| `arrow_size` | `f32` | `10.0` | Arrowhead size |
+| `dashed` | `f32[]` | | Dash pattern |
+
+---
+
+### Timeline
+
+Step-by-step timeline with animated progress bar and node icons.
+
+```json
+{
+  "type": "timeline",
+  "width": 800,
+  "direction": "horizontal",
+  "fill_progress": 0.75,
+  "steps": [
+    { "label": "Design", "sublabel": "Week 1", "color": "#58A6FF", "icon": "1" },
+    { "label": "Build", "sublabel": "Week 2-3", "color": "#58A6FF", "icon": "2" },
+    { "label": "Ship", "sublabel": "Week 4", "color": "#22C55E", "icon": "🚀" }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `steps` | `array` | (required) | `[{ "label", "sublabel"?, "color"?, "icon"? }]` |
+| `width` | `f32` | `800.0` | Timeline width |
+| `direction` | `string` | `"horizontal"` | `"horizontal"` or `"vertical"` |
+| `node_radius` | `f32` | `24.0` | Circle radius |
+| `bar_color` | `string` | `"#333333"` | Background bar color |
+| `bar_fill_color` | `string` | `"#58A6FF"` | Filled bar color |
+| `fill_progress` | `f32` | `1.0` | Progress 0.0 to 1.0 |
+
+---
+
+### Lottie
+
+Renders Lottie animations from pre-rendered PNG frame sequences.
+
+```json
+{
+  "type": "lottie",
+  "src": "animation.json",
+  "frames_dir": "/path/to/frames",
+  "size": { "width": 300, "height": 300 },
+  "speed": 1.0,
+  "loop": true
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `src` | `string` | | Path to Lottie JSON (for timing metadata) |
+| `data` | `string` | | Inline Lottie JSON data |
+| `frames_dir` | `string` | | Directory with numbered PNGs (`0000.png`, `0001.png`, ...) |
+| `size` | `{width, height}` | | Display size (falls back to Lottie intrinsic size) |
+| `speed` | `f32` | `1.0` | Playback speed multiplier |
+| `loop` | `bool` | `true` | Loop the animation |
+
+Generate frames with: `npx lottie-to-frames animation.json --output frames/`
+
+---
+
+### Cursor
+
+Animated cursor with click effects, blinking, and smooth path animation.
+
+```json
+{
+  "type": "cursor",
+  "color": "#FFFFFF",
+  "blink": 0.5,
+  "auto_path": [
+    { "time": 0.5, "x": 100, "y": 200 },
+    { "time": 1.5, "x": 400, "y": 300 },
+    { "time": 2.5, "x": 600, "y": 150 }
+  ],
+  "path_easing": "ease_in_out",
+  "position": { "x": 200, "y": 200 }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `width` | `f32` | `3.0` | Cursor width |
+| `height` | `f32` | `40.0` | Cursor height |
+| `color` | `string` | `"#FFFFFF"` | Cursor color |
+| `blink` | `f32` | `0.5` | Blink cycle (0 = no blink) |
+| `click_at` | `f64[]` | `[]` | Click animation times (seconds) |
+| `auto_path` | `array` | `[]` | Waypoints: `[{ "time", "x", "y" }]` |
+| `click_duration` | `f32` | `0.3` | Click animation duration |
+| `path_easing` | `string` | `"ease_in_out"` | `"linear"`, `"ease_out"`, `"ease_in_out"` |
+
+When `auto_path` is set, clicks trigger at each waypoint. Uses Catmull-Rom spline interpolation for smooth curves.
+
+---
+
+### Line
+
+Simple line from point A to point B. Supports `draw_in` animation.
+
+```json
+{
+  "type": "line",
+  "x1": 0, "y1": 0,
+  "x2": 400, "y2": 200,
+  "width": 2,
+  "color": "#58A6FF",
+  "style": { "animation": [{ "name": "draw_in", "duration": 0.8 }] }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `x1`, `y1` | `f32` | `0.0` | Start point |
+| `x2`, `y2` | `f32` | (required) | End point |
+| `width` | `f32` | `2.0` | Stroke width |
+| `color` | `string` | `"#FFFFFF"` | Line color |
+| `dashed` | `f32[]` | | Dash pattern |
+
+---
+
+### Rich Text
+
+Multi-styled text with individually styled spans. Each span inherits unset properties from the component's `style`.
+
+```json
+{
+  "type": "rich_text",
+  "spans": [
+    { "text": "Hello ", "color": "#FFFFFF", "font-weight": "bold" },
+    { "text": "World", "color": "#58A6FF", "font-size": 64 }
+  ],
+  "max_width": 800,
+  "style": { "font-size": 48, "color": "#FFFFFF" }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `spans` | `array` | (required) | `[{ "text", "color"?, "font-size"?, "font-weight"?, "font-family"?, "font-style"?, "letter-spacing"? }]` |
+| `max_width` | `f32` | | Maximum width before wrapping |
+
+---
+
+## Scene-Level Features
+
+### Virtual Camera
+
+Scenes support a virtual camera with animatable pan, zoom, and rotation.
+
+```json
+{
+  "duration": 5.0,
+  "camera": {
+    "x": 0, "y": 0, "zoom": 1.0, "rotation": 0,
+    "keyframes": [
+      { "property": "zoom", "values": [{ "time": 0, "value": 1.0 }, { "time": 3, "value": 1.5 }], "easing": "ease_in_out" },
+      { "property": "x", "values": [{ "time": 0, "value": 0 }, { "time": 3, "value": -100 }], "easing": "ease_out" }
+    ]
+  },
+  "children": [...]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `x` | `f32` | `0.0` | Camera center X offset |
+| `y` | `f32` | `0.0` | Camera center Y offset |
+| `zoom` | `f32` | `1.0` | Zoom factor (2.0 = 2x in) |
+| `rotation` | `f32` | `0.0` | Rotation in degrees |
+| `keyframes` | `array` | `[]` | `[{ "property", "values": [{"time", "value"}], "easing" }]` |
+
+### Animated Background
+
+Scenes can have animated gradient backgrounds.
+
+```json
+{
+  "duration": 5.0,
+  "animated-background": {
+    "colors": ["#667eea", "#764ba2", "#f093fb"],
+    "speed": 30,
+    "gradient_type": "linear"
+  },
+  "children": [...]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `colors` | `string[]` | `[]` | Gradient colors (hex) |
+| `speed` | `f32` | `30.0` | Animation speed |
+| `gradient_type` | `string` | `"linear"` | `"linear"` or `"radial"` |
+| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"` |
+
+---
+
 ## Animations
 
 All animation effects are defined inside `style.animation` as a **typed array**, each discriminated by `"name"`. A single effect (without array) is also accepted.
@@ -1002,9 +1263,10 @@ All animation effects are defined inside `style.animation` as a **typed array**,
 
 | Effect name | Fields | Description |
 |---|---|---|
-| *preset name* | `delay`, `duration`, `loop` | Any of the 31 presets (e.g. `fade_in_up`, `scale_in`) |
+| *preset name* | `delay`, `duration`, `loop` | Any of the 39 presets (e.g. `fade_in_up`, `scale_in`) |
 | `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
 | `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
+| `orbit` | `radius_x`, `radius_y`, `speed`, `depth`, `tilt`, ... | Elliptical orbital motion with pseudo-3D |
 | `keyframes` | `keyframes` | Custom keyframe animations |
 | `motion_blur` | `intensity` | Motion blur effect |
 
@@ -1069,6 +1331,26 @@ Use `"loop": true` for continuous animation:
 | `float` | Vertical floating motion |
 | `shake` | Horizontal shake |
 | `spin` | 360-degree continuous rotation |
+| `float_3d` | Floating + subtle 3D rotation with perspective |
+
+#### 3D Presets
+
+| Preset | Description |
+|---|---|
+| `flip_in_x` | 3D flip around X axis (card flip from top) |
+| `flip_in_y` | 3D flip around Y axis (card flip from side) |
+| `flip_out_x` | 3D flip out around X axis |
+| `flip_out_y` | 3D flip out around Y axis |
+| `tilt_in` | 3D tilt entrance (rotate_x + rotate_y) |
+
+#### Stroke Presets
+
+For arrows, connectors, and lines:
+
+| Preset | Description |
+|---|---|
+| `draw_in` | Animate `draw_progress` from 0 to 1 (stroke drawing effect) |
+| `stroke_reveal` | `draw_in` + fade-in opacity over first 20% of duration |
 
 #### Special Presets
 
@@ -1158,6 +1440,57 @@ Wiggle adds continuous organic movement. Offsets are applied **additively** on t
 | `phase` | `f64` | `0.0` | Phase offset |
 | `decay` | `f64` | | Exponential decay rate |
 | `easing` | `string` | | Remap noise through an easing curve |
+
+### Orbit (Circular/Elliptical Motion)
+
+Creates continuous circular or elliptical orbital motion with pseudo-3D depth. Applied **additively** like wiggle.
+
+```json
+{
+  "style": {
+    "animation": [
+      { "name": "orbit", "radius_x": 30, "radius_y": 20, "speed": 0.5, "depth": 0.15, "tilt": 20 }
+    ]
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `radius_x` | `f64` | `30.0` | Horizontal orbit radius |
+| `radius_y` | `f64` | `30.0` | Vertical orbit radius |
+| `speed` | `f64` | `0.5` | Revolutions per second |
+| `start_angle` | `f64` | `0.0` | Starting angle in degrees |
+| `depth` | `f64` | `0.15` | Scale modulation for pseudo-3D |
+| `opacity_depth` | `f64` | `0.0` | Opacity modulation for depth |
+| `tilt` | `f64` | `0.0` | Orbit plane tilt in degrees |
+| `phase` | `f64` | `0.0` | Phase offset (0.0 to 1.0) |
+
+### Per-Character Text Animation
+
+Animate each character independently with staggered timing. Set `char-animation` on `text` components.
+
+```json
+{
+  "type": "text",
+  "content": "Hello World",
+  "char-animation": {
+    "preset": "scale_in",
+    "stagger": 0.03,
+    "duration": 0.4,
+    "delay": 0.2
+  },
+  "style": { "font-size": 64, "color": "#FFFFFF" }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `preset` | `string` | `"scale_in"` | `"scale_in"`, `"fade_in"`, `"wave"`, `"bounce"`, `"rotate_in"`, `"slide_up"` |
+| `stagger` | `f32` | `0.03` | Delay between characters (seconds) |
+| `duration` | `f32` | `0.4` | Each character's animation duration |
+| `delay` | `f32` | `0.0` | Initial delay before first character |
+| `easing` | `string` | `"linear"` | Easing function |
 
 ### Motion Blur
 
