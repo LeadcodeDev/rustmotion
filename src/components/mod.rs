@@ -27,6 +27,7 @@ pub mod svg;
 pub mod table;
 pub mod terminal;
 pub mod text;
+pub mod timeline;
 pub mod video;
 
 use schemars::JsonSchema;
@@ -63,6 +64,7 @@ pub use svg::Svg;
 pub use table::Table;
 pub use terminal::Terminal;
 pub use text::Text;
+pub use timeline::Timeline;
 pub use video::Video;
 
 // --- Position mode ---
@@ -185,6 +187,7 @@ pub enum Component {
     RichText(RichText),
     Table(Table),
     Terminal(Terminal),
+    Timeline(Timeline),
     // Container components
     Positioned(Positioned),
     Flex(Flex),
@@ -225,6 +228,7 @@ impl Component {
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
+            Component::Timeline(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
@@ -261,6 +265,7 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
+            Component::Timeline(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -296,6 +301,7 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
+            Component::Timeline(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -332,6 +338,7 @@ impl Component {
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
+            Component::Timeline(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
