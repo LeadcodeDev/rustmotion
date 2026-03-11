@@ -56,6 +56,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/hex-colors.md](rules/hex-colors.md) - Colors in hex format only (#RRGGBB or #RRGGBBAA)
 - [rules/easing-guidelines.md](rules/easing-guidelines.md) - Easing guidelines for motion design
 - [rules/text-background.md](rules/text-background.md) - text-background renders a colored rectangle behind text
+- [rules/3d-perspective.md](rules/3d-perspective.md) - 3D perspective transforms with rotate_x, rotate_y, perspective keyframes
+- [rules/timeline-sequencing.md](rules/timeline-sequencing.md) - Timeline steps for multi-phase animations within a single scene
 
 ---
 
@@ -468,9 +470,9 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 | `stroke`          | object   | `null` — `{ "color": "#000", "width": 2 }` |
 | `text-background` | object   | `null` — `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
 
-**Per-character animation (`char-animation` field):**
+**Per-character / per-word animation (`char-animation` field):**
 
-Animates each character independently with staggered timing.
+Animates each character or word independently with staggered timing.
 
 ```json
 {
@@ -481,19 +483,37 @@ Animates each character independently with staggered timing.
     "stagger": 0.03,
     "duration": 0.4,
     "delay": 0.2,
-    "easing": "ease_out"
+    "easing": "ease_out",
+    "granularity": "char"
   },
   "style": { "font-size": 64, "color": "#FFFFFF" }
 }
 ```
 
-| Field     | Type   | Default      | Description                                      |
-| --------- | ------ | ------------ | ------------------------------------------------ |
-| `preset`  | enum   | `"scale_in"` | `"scale_in"`, `"fade_in"`, `"wave"`, `"bounce"`, `"rotate_in"`, `"slide_up"` |
-| `stagger` | f32    | `0.03`       | Delay between each character (seconds)           |
-| `duration`| f32    | `0.4`        | Duration of each character's animation (seconds) |
-| `delay`   | f32    | `0.0`        | Initial delay before the first character starts  |
-| `easing`  | string | `"linear"`   | Easing function (same as keyframe easings)       |
+| Field         | Type   | Default      | Description                                      |
+| ------------- | ------ | ------------ | ------------------------------------------------ |
+| `preset`      | enum   | `"scale_in"` | `"scale_in"`, `"fade_in"`, `"wave"`, `"bounce"`, `"rotate_in"`, `"slide_up"` |
+| `stagger`     | f32    | `0.03`       | Delay between each unit (seconds)                |
+| `duration`    | f32    | `0.4`        | Duration of each unit's animation (seconds)      |
+| `delay`       | f32    | `0.0`        | Initial delay before the first unit starts       |
+| `easing`      | string | `"linear"`   | Easing function (same as keyframe easings)       |
+| `granularity` | enum   | `"char"`     | `"char"` (per-character) or `"word"` (per-word)  |
+
+**Per-word mode** (`"granularity": "word"`) splits text by whitespace and animates each word as a unit. Ideal for headline reveals with larger stagger values (0.1-0.3s):
+
+```json
+{
+  "type": "text",
+  "content": "One platform to rule them all",
+  "char-animation": {
+    "preset": "fade_in",
+    "stagger": 0.15,
+    "duration": 0.5,
+    "granularity": "word"
+  },
+  "style": { "font-size": 56, "color": "#FFFFFF", "font-weight": "bold" }
+}
+```
 
 ### 2. `shape`
 
@@ -1312,6 +1332,77 @@ New style fields available on all components:
 | `inner-shadow`    | object | `null`  | `{ "color": "#000", "offset_x": 0, "offset_y": 0, "blur": 10 }` — inset shadow |
 | `motion-path`     | string | `null`  | SVG path string that the element follows during animation |
 | `stagger`         | f32    | `null`  | Auto-delay offset per child in a container (seconds)     |
+| `timeline`        | array  | `[]`    | Intra-scene timeline steps — sequential animation phases |
+
+---
+
+### 3D Perspective Transforms
+
+Any component can be rendered with true 3D perspective using keyframe animations on `rotate_x`, `rotate_y`, and `perspective` properties. The engine uses a Skia M44 4x4 matrix for real 3D rendering.
+
+```json
+{
+  "type": "card",
+  "position": { "x": 360, "y": 300 },
+  "size": { "width": 1000, "height": 400 },
+  "style": {
+    "background": "rgba(255,255,255,0.03)",
+    "border-radius": 24,
+    "backdrop-blur": 15,
+    "border": { "color": "rgba(255,255,255,0.08)", "width": 1 },
+    "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
+    "animation": [{
+      "name": "keyframes",
+      "keyframes": [
+        { "property": "rotate_x", "keyframes": [{ "time": 0, "value": 20 }, { "time": 2, "value": 8 }], "easing": "ease_out" },
+        { "property": "rotate_y", "keyframes": [{ "time": 0, "value": -15 }, { "time": 2, "value": -5 }], "easing": "ease_out" },
+        { "property": "perspective", "keyframes": [{ "time": 0, "value": 800 }, { "time": 2, "value": 800 }], "easing": "linear" }
+      ]
+    }]
+  },
+  "children": [...]
+}
+```
+
+**3D Adaptive Shadow:** When a component has 3D rotation and a `box-shadow`, the shadow automatically shifts and scales based on the tilt angle — creating a realistic ground-plane shadow that moves opposite to the rotation direction.
+
+---
+
+### Timeline Sequencing
+
+The `timeline` field on any component's style allows defining sequential animation phases within a single scene. Each step triggers at a specific time and applies its own animation effects relative to that time.
+
+```json
+{
+  "type": "card",
+  "style": {
+    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
+    "timeline": [
+      {
+        "at": 2.0,
+        "animation": [{ "name": "shake", "duration": 0.5 }]
+      },
+      {
+        "at": 4.0,
+        "animation": [{ "name": "fade_out", "duration": 0.8 }]
+      }
+    ]
+  }
+}
+```
+
+| Field       | Type   | Description                                              |
+| ----------- | ------ | -------------------------------------------------------- |
+| `at`        | f64    | Time in seconds when this step activates                 |
+| `animation` | array  | Animation effects to apply (same format as `style.animation`) |
+
+**How it works:**
+- Base `style.animation` plays from the start (e.g. entrance)
+- Each timeline step activates when scene time reaches `step.at`
+- Step animations resolve with time relative to `step.at` (so a step at 2.0s with a 0.5s animation runs from 2.0-2.5s)
+- Multiple steps can overlap — their effects merge additively
+
+**Use cases:** fade in → shake → fade out, entrance → highlight → exit, staged multi-phase animations without needing separate scenes.
 
 ---
 
@@ -1341,7 +1432,14 @@ New style fields available on all components:
 }
 ```
 
-**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`
+**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`, `rotate_x`, `rotate_y`, `perspective`
+
+**3D keyframe properties:**
+- `rotate_x` — Rotation around X axis in degrees (tilts forward/backward)
+- `rotate_y` — Rotation around Y axis in degrees (tilts left/right)
+- `perspective` — Perspective distance in pixels (lower = more dramatic, typical: 800)
+
+When any 3D property is animated, the component renders with a true 3D perspective transform (Skia M44 matrix). **3D adaptive shadows** are automatically computed — box-shadows shift and scale based on the rotation angles, creating a realistic ground-plane shadow effect.
 
 **11 easing functions:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 

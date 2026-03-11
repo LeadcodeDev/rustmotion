@@ -1270,6 +1270,8 @@ All animation effects are defined inside `style.animation` as a **typed array**,
 | `keyframes` | `keyframes` | Custom keyframe animations |
 | `motion_blur` | `intensity` | Motion blur effect |
 
+Components also support a `timeline` field (array of `{ "at": f64, "animation": [...] }` steps) for multi-phase sequential animations within a scene.
+
 ### Animation Presets
 
 ```json
@@ -1384,7 +1386,7 @@ For arrows, connectors, and lines:
 }
 ```
 
-**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`
+**Animatable properties:** `opacity`, `translate_x`, `translate_y`, `scale_x`, `scale_y`, `scale` (both axes), `rotation`, `blur`, `color`, `rotate_x`, `rotate_y`, `perspective`
 
 **11 easing functions:** `linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
 
@@ -1466,9 +1468,9 @@ Creates continuous circular or elliptical orbital motion with pseudo-3D depth. A
 | `tilt` | `f64` | `0.0` | Orbit plane tilt in degrees |
 | `phase` | `f64` | `0.0` | Phase offset (0.0 to 1.0) |
 
-### Per-Character Text Animation
+### Per-Character / Per-Word Text Animation
 
-Animate each character independently with staggered timing. Set `char-animation` on `text` components.
+Animate each character or word independently with staggered timing. Set `char-animation` on `text` components.
 
 ```json
 {
@@ -1478,7 +1480,8 @@ Animate each character independently with staggered timing. Set `char-animation`
     "preset": "scale_in",
     "stagger": 0.03,
     "duration": 0.4,
-    "delay": 0.2
+    "delay": 0.2,
+    "granularity": "char"
   },
   "style": { "font-size": 64, "color": "#FFFFFF" }
 }
@@ -1487,10 +1490,67 @@ Animate each character independently with staggered timing. Set `char-animation`
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `preset` | `string` | `"scale_in"` | `"scale_in"`, `"fade_in"`, `"wave"`, `"bounce"`, `"rotate_in"`, `"slide_up"` |
-| `stagger` | `f32` | `0.03` | Delay between characters (seconds) |
-| `duration` | `f32` | `0.4` | Each character's animation duration |
-| `delay` | `f32` | `0.0` | Initial delay before first character |
+| `stagger` | `f32` | `0.03` | Delay between each unit (seconds) |
+| `duration` | `f32` | `0.4` | Each unit's animation duration |
+| `delay` | `f32` | `0.0` | Initial delay before first unit |
 | `easing` | `string` | `"linear"` | Easing function |
+| `granularity` | `string` | `"char"` | `"char"` (per-character) or `"word"` (per-word) |
+
+**Per-word mode** (`"granularity": "word"`) splits text by whitespace and animates each word as a unit. Use larger stagger values (0.1–0.3s) for word reveals:
+
+```json
+{
+  "type": "text",
+  "content": "One platform to rule them all",
+  "char-animation": {
+    "preset": "fade_in",
+    "stagger": 0.15,
+    "duration": 0.5,
+    "granularity": "word"
+  },
+  "style": { "font-size": 56, "color": "#FFFFFF", "font-weight": "bold" }
+}
+```
+
+### 3D Perspective Transforms
+
+Any component can be rendered with true 3D perspective using keyframe animations on `rotate_x`, `rotate_y`, and `perspective` properties:
+
+```json
+{
+  "style": {
+    "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
+    "animation": [{
+      "name": "keyframes",
+      "keyframes": [
+        { "property": "rotate_x", "keyframes": [{ "time": 0, "value": 20 }, { "time": 2, "value": 8 }], "easing": "ease_out" },
+        { "property": "rotate_y", "keyframes": [{ "time": 0, "value": -15 }, { "time": 2, "value": -5 }], "easing": "ease_out" },
+        { "property": "perspective", "keyframes": [{ "time": 0, "value": 800 }, { "time": 2, "value": 800 }], "easing": "linear" }
+      ]
+    }]
+  }
+}
+```
+
+Uses a Skia M44 4x4 matrix for real 3D rendering. Components with `box-shadow` get **3D adaptive shadows** — the shadow automatically shifts and scales based on tilt angles.
+
+### Timeline Sequencing
+
+Define sequential animation phases within a single scene using the `timeline` field:
+
+```json
+{
+  "style": {
+    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
+    "timeline": [
+      { "at": 2.0, "animation": [{ "name": "shake", "duration": 0.5 }] },
+      { "at": 4.0, "animation": [{ "name": "fade_out", "duration": 0.8 }] }
+    ]
+  }
+}
+```
+
+Each step activates at `step.at` seconds, with animations resolved relative to that time. Steps merge additively with base animations.
 
 ### Motion Blur
 
