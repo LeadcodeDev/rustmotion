@@ -142,6 +142,9 @@ pub enum AnimationPreset {
     FlipOutX,
     FlipOutY,
     TiltIn,
+    // Stroke
+    DrawIn,
+    StrokeReveal,
     // Spéciaux
     Typewriter,
     WipeLeft,

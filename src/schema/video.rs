@@ -450,6 +450,9 @@ pub enum AnimationEffect {
     FlipOutX(AnimationTiming),
     FlipOutY(AnimationTiming),
     TiltIn(AnimationTiming),
+    // --- Stroke presets ---
+    DrawIn(AnimationTiming),
+    StrokeReveal(AnimationTiming),
     // --- Special presets ---
     Typewriter(AnimationTiming),
     WipeLeft(AnimationTiming),
@@ -499,6 +502,8 @@ impl AnimationEffect {
             Self::FlipOutX(t) => Some((AnimationPreset::FlipOutX, t)),
             Self::FlipOutY(t) => Some((AnimationPreset::FlipOutY, t)),
             Self::TiltIn(t) => Some((AnimationPreset::TiltIn, t)),
+            Self::DrawIn(t) => Some((AnimationPreset::DrawIn, t)),
+            Self::StrokeReveal(t) => Some((AnimationPreset::StrokeReveal, t)),
             Self::Typewriter(t) => Some((AnimationPreset::Typewriter, t)),
             Self::WipeLeft(t) => Some((AnimationPreset::WipeLeft, t)),
             Self::WipeRight(t) => Some((AnimationPreset::WipeRight, t)),
