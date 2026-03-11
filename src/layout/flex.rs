@@ -71,6 +71,23 @@ pub fn layout_flex(
     container: &(impl Container + Styled + ?Sized),
     constraints: &Constraints,
 ) -> LayoutNode {
+    layout_flex_inner(container, constraints, false)
+}
+
+/// Like `layout_flex`, but when `force_flow` is true all children participate in
+/// flex flow regardless of their `position` attribute (absolute positions are ignored).
+pub fn layout_flex_all_flow(
+    container: &(impl Container + Styled + ?Sized),
+    constraints: &Constraints,
+) -> LayoutNode {
+    layout_flex_inner(container, constraints, true)
+}
+
+fn layout_flex_inner(
+    container: &(impl Container + Styled + ?Sized),
+    constraints: &Constraints,
+    force_flow: bool,
+) -> LayoutNode {
     let children = container.children();
     if children.is_empty() {
         let (w, h) = constraints.constrain(0.0, 0.0);
@@ -106,10 +123,17 @@ pub fn layout_flex(
     };
 
     // Separate flow and absolute children
+    // In force_flow mode (world scenes), skip decorative children (particles) entirely
     let flow_indices: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.is_flow())
+        .filter(|(_, c)| {
+            if force_flow {
+                !c.is_decorative()
+            } else {
+                c.is_flow()
+            }
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -163,8 +187,10 @@ pub fn layout_flex(
             &child_constraints,
         );
 
-        // Handle absolute children
-        layout_absolute_children(children, &child_sizes, &mut child_nodes, pl, pt);
+        // Handle absolute children (skipped when force_flow is true)
+        if !force_flow {
+            layout_absolute_children(children, &child_sizes, &mut child_nodes, pl, pt);
+        }
 
         let flat = LayoutNode::new(0.0, 0.0, container_w, container_h).with_children(child_nodes);
         return enrich_child_layouts(flat, children);
@@ -246,11 +272,13 @@ pub fn layout_flex(
         cross_offset += line_cross + gap;
     }
 
-    // Handle absolute children
-    for (i, child) in children.iter().enumerate() {
-        if let Some((ax, ay)) = child.absolute_position() {
-            let (cw, ch) = child_sizes[i];
-            child_nodes[i] = Some(LayoutNode::new(pl + ax, pt + ay, cw, ch));
+    // Handle absolute children (skipped when force_flow is true)
+    if !force_flow {
+        for (i, child) in children.iter().enumerate() {
+            if let Some((ax, ay)) = child.absolute_position() {
+                let (cw, ch) = child_sizes[i];
+                child_nodes[i] = Some(LayoutNode::new(pl + ax, pt + ay, cw, ch));
+            }
         }
     }
 

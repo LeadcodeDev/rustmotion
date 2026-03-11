@@ -1,0 +1,291 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0A0A1A"
+  },
+  "composition": [
+    {
+      "type": "world",
+      "background": "#0A0A1A",
+      "camera_easing": "ease_in_out",
+      "camera_pan_duration": 0.8,
+      "animated-background": {
+        "colors": ["#0A0A1A", "#1a1145", "#0A0A1A"],
+        "speed": 10,
+        "gradient_type": "radial",
+        "preset": "concentric_circles",
+        "element_size": 1.5,
+        "count": 4
+      },
+      "scenes": [
+        {
+          "duration": 4.0,
+          "world-position": { "x": 960, "y": 540 },
+          "layout": { "justify_content": "center", "align_items": "center", "gap": 12 },
+          "animated-background": {
+            "colors": ["#0A0A1A", "#1a1145", "#0A0A1A"],
+            "speed": 10,
+            "gradient_type": "radial",
+            "preset": "concentric_circles",
+            "element_size": 1.5,
+            "count": 4
+          },
+          "camera": {
+            "zoom": 1.0,
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  { "time": 0.0, "value": 1.0 },
+                  { "time": 1.5, "value": 1.03 },
+                  { "time": 3.2, "value": 1.0 }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Introduction",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 48,
+                "font-weight": "bold",
+                "color": "#FFFFFF",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "Bienvenue dans cette présentation interactive",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 24,
+                "color": "#CCCCCC",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8 }]
+              }
+            }
+          ]
+        },
+
+        {
+          "duration": 4.0,
+          "world-position": { "x": 2100, "y": 0 },
+          "layout": { "justify_content": "center", "align_items": "center", "gap": 12 },
+          "animated-background": {
+            "colors": ["#0A0A1A", "#3D0A0A", "#0A0A1A"],
+            "speed": 10,
+            "gradient_type": "radial",
+            "preset": "concentric_circles",
+            "element_size": 1.5,
+            "count": 4
+          },
+          "camera": {
+            "zoom": 1.0,
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  { "time": 0.0, "value": 1.0 },
+                  { "time": 1.5, "value": 1.03 },
+                  { "time": 3.2, "value": 1.0 }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Fonctionnalités",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 48,
+                "font-weight": "bold",
+                "color": "#FFFFFF",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "Découvrez les principales caractéristiques",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 24,
+                "color": "#CCCCCC",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8 }]
+              }
+            }
+          ]
+        },
+
+        {
+          "duration": 4.0,
+          "world-position": { "x": 1700, "y": 800 },
+          "layout": { "justify_content": "center", "align_items": "center", "gap": 12 },
+          "animated-background": {
+            "colors": ["#0A0A1A", "#3D2A0A", "#0A0A1A"],
+            "speed": 10,
+            "gradient_type": "radial",
+            "preset": "concentric_circles",
+            "element_size": 1.5,
+            "count": 4
+          },
+          "camera": {
+            "zoom": 1.0,
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  { "time": 0.0, "value": 1.0 },
+                  { "time": 1.5, "value": 1.03 },
+                  { "time": 3.2, "value": 1.0 }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Architecture",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 48,
+                "font-weight": "bold",
+                "color": "#FFFFFF",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "Une conception modulaire et évolutive",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 24,
+                "color": "#CCCCCC",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8 }]
+              }
+            }
+          ]
+        },
+
+        {
+          "duration": 4.0,
+          "world-position": { "x": 2800, "y": 1400 },
+          "layout": { "justify_content": "center", "align_items": "center", "gap": 12 },
+          "animated-background": {
+            "colors": ["#0A0A1A", "#0A3D1A", "#0A0A1A"],
+            "speed": 10,
+            "gradient_type": "radial",
+            "preset": "concentric_circles",
+            "element_size": 1.5,
+            "count": 4
+          },
+          "camera": {
+            "zoom": 1.0,
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  { "time": 0.0, "value": 1.0 },
+                  { "time": 1.5, "value": 1.03 },
+                  { "time": 3.2, "value": 1.0 }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Performance",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 48,
+                "font-weight": "bold",
+                "color": "#FFFFFF",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "Des résultats mesurables et concrets",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 24,
+                "color": "#CCCCCC",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8 }]
+              }
+            }
+          ]
+        },
+
+        {
+          "duration": 3.8,
+          "world-position": { "x": 1400, "y": 1200 },
+          "layout": { "justify_content": "center", "align_items": "center", "gap": 12 },
+          "animated-background": {
+            "colors": ["#0A0A1A", "#0A1A3D", "#0A0A1A"],
+            "speed": 10,
+            "gradient_type": "radial",
+            "preset": "concentric_circles",
+            "element_size": 1.5,
+            "count": 4
+          },
+          "camera": {
+            "zoom": 1.0,
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  { "time": 0.0, "value": 1.0 },
+                  { "time": 1.5, "value": 1.03 },
+                  { "time": 3.0, "value": 1.0 }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Conclusion",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 48,
+                "font-weight": "bold",
+                "color": "#FFFFFF",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "Prêt à passer à l'action",
+              "start_at": 0.2,
+              "style": {
+                "font-size": 24,
+                "color": "#CCCCCC",
+                "text-align": "center",
+                "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.8 }]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -143,6 +143,12 @@ impl ChildComponent {
         self.position.is_none()
     }
 
+    /// Returns true if this child is a decorative fullscreen component (e.g. particle)
+    /// that should not participate in flex flow in world scenes.
+    pub fn is_decorative(&self) -> bool {
+        matches!(self.component, Component::Particle(_))
+    }
+
     /// Returns the absolute position if this child is absolutely positioned.
     pub fn absolute_position(&self) -> Option<(f32, f32)> {
         match &self.position {

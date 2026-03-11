@@ -761,6 +761,19 @@ pub fn compute_root_layout(
     crate::layout::flex::layout_flex(&root, &constraints)
 }
 
+/// Like `compute_root_layout`, but forces all children into flex flow
+/// (ignores absolute positions). Used for world scenes where content
+/// should be centered regardless of position attributes in the JSON.
+pub fn compute_root_layout_all_flow(
+    children: &[ChildComponent],
+    config: &VideoConfig,
+    scene_layout: Option<&SceneLayout>,
+) -> LayoutNode {
+    let constraints = Constraints::tight(config.width as f32, config.height as f32);
+    let root = RootContainer::new(children, scene_layout);
+    crate::layout::flex::layout_flex_all_flow(&root, &constraints)
+}
+
 /// Compute layout for a scene's children — ready for render_frame_v2.
 pub fn prepare_scene<'a>(
     scene: &'a Scene,
@@ -930,9 +943,10 @@ pub fn render_world_frame_scaled(
     // 4. Render each visible scene at its world position
     for vis in &visible {
         let scene = &view.scenes[vis.scene_idx];
+        // Use world-position if specified, otherwise fall back to horizontal grid
         let (wx, wy) = scene.world_position.as_ref()
             .map(|p| (p.x, p.y))
-            .unwrap_or((0.0, 0.0));
+            .unwrap_or((vw / 2.0 + vis.scene_idx as f32 * vw, vh / 2.0));
 
         // Apply crossfade opacity via save_layer during camera pans
         let needs_opacity = vis.opacity < 1.0 - f32::EPSILON;
@@ -945,8 +959,6 @@ pub fn render_world_frame_scaled(
         canvas.save();
         // Translate to scene's world position, offset so scene center = world position
         canvas.translate((wx - viewport_cx, wy - viewport_cy));
-
-        let (children, layout) = prepare_scene(scene, config);
 
         // Use local_time for animations (clamped to 0 if pan hasn't finished)
         let anim_time = vis.local_time.max(0.0);
@@ -966,7 +978,38 @@ pub fn render_world_frame_scaled(
             apply_camera_transform(canvas, camera, anim_time as f32, vw, vh);
         }
 
-        render_children(canvas, children, &layout, &ctx)?;
+        // World scenes: force content children into centered flex flow.
+        // Decorative children (particles) are excluded from flex and rendered fullscreen.
+        let world_default_layout = crate::schema::SceneLayout {
+            direction: Some(crate::schema::CardDirection::Column),
+            gap: Some(12.0),
+            align_items: Some(crate::schema::CardAlign::Center),
+            justify_content: Some(crate::schema::CardJustify::Center),
+            padding: None,
+        };
+        let scene_layout = scene.layout.as_ref().unwrap_or(&world_default_layout);
+        let layout = compute_root_layout_all_flow(&scene.children, config, Some(scene_layout));
+
+        // Render: decorative children get fullscreen layout, content children get flex layout
+        for (i, child) in scene.children.iter().enumerate() {
+            if i >= layout.children.len() { break; }
+            if child.is_decorative() {
+                // Render particles fullscreen
+                let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
+                canvas.save();
+                render_component(canvas, child, &deco_layout, &ctx)?;
+                canvas.restore();
+            } else {
+                let child_layout = &layout.children[i];
+                canvas.save();
+                canvas.translate((child_layout.x, child_layout.y));
+                render_component(canvas, child, child_layout, &ctx)?;
+                if !child.overlays.is_empty() {
+                    render_overlays(canvas, &child.overlays, child_layout, &ctx)?;
+                }
+                canvas.restore();
+            }
+        }
 
         if has_camera {
             canvas.restore();

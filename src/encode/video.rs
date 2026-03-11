@@ -253,7 +253,7 @@ pub fn render_frame_task_scaled(
         } => {
             use crate::engine::world::WorldTimeline;
             let view = &scenario.views[*view_idx];
-            let timeline = WorldTimeline::build(view, config.fps);
+            let timeline = WorldTimeline::build(view, config.fps, config.width, config.height);
             crate::engine::render_v2::render_world_frame_scaled(
                 config, view, &timeline, *frame_in_view, scale_factor,
             )
@@ -308,7 +308,7 @@ fn render_last_frame_of_view(
             }
         }
         ViewType::World => {
-            let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+            let timeline = crate::engine::world::WorldTimeline::build(view, fps, config.width, config.height);
             let total_frames = timeline.total_frames(fps);
             crate::engine::render_v2::render_world_frame_scaled(
                 config, view, &timeline, total_frames.saturating_sub(1), scale_factor,
@@ -335,7 +335,7 @@ fn render_first_frame_of_view(
             }
         }
         ViewType::World => {
-            let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+            let timeline = crate::engine::world::WorldTimeline::build(view, fps, config.width, config.height);
             crate::engine::render_v2::render_world_frame_scaled(
                 config, view, &timeline, 0, scale_factor,
             )
@@ -367,7 +367,7 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
 
         match view.view_type {
             ViewType::Slide => build_slide_view_tasks(&mut tasks, view_idx, view, fps),
-            ViewType::World => build_world_view_tasks(&mut tasks, view_idx, view, fps),
+            ViewType::World => build_world_view_tasks(&mut tasks, view_idx, view, fps, scenario.video.width, scenario.video.height),
         }
     }
 
@@ -428,8 +428,8 @@ fn build_slide_view_tasks(tasks: &mut Vec<FrameTask>, view_idx: usize, view: &Re
     }
 }
 
-fn build_world_view_tasks(tasks: &mut Vec<FrameTask>, view_idx: usize, view: &ResolvedView, fps: u32) {
-    let timeline = crate::engine::world::WorldTimeline::build(view, fps);
+fn build_world_view_tasks(tasks: &mut Vec<FrameTask>, view_idx: usize, view: &ResolvedView, fps: u32, video_width: u32, video_height: u32) {
+    let timeline = crate::engine::world::WorldTimeline::build(view, fps, video_width, video_height);
     let total_frames = timeline.total_frames(fps);
     for f in 0..total_frames {
         tasks.push(FrameTask::WorldFrame {
