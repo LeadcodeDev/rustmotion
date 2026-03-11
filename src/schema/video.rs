@@ -457,9 +457,13 @@ pub enum AnimationEffect {
     Typewriter(AnimationTiming),
     WipeLeft(AnimationTiming),
     WipeRight(AnimationTiming),
+    // --- Floating/orbit presets ---
+    #[serde(alias = "float_3d")]
+    Float3d(AnimationTiming),
     // --- Non-preset effects ---
     Glow(GlowConfig),
     Wiggle(WiggleConfig),
+    Orbit(OrbitConfig),
     Keyframes(KeyframesConfig),
     MotionBlur(MotionBlurConfig),
 }
@@ -504,6 +508,7 @@ impl AnimationEffect {
             Self::TiltIn(t) => Some((AnimationPreset::TiltIn, t)),
             Self::DrawIn(t) => Some((AnimationPreset::DrawIn, t)),
             Self::StrokeReveal(t) => Some((AnimationPreset::StrokeReveal, t)),
+            Self::Float3d(t) => Some((AnimationPreset::Float3d, t)),
             Self::Typewriter(t) => Some((AnimationPreset::Typewriter, t)),
             Self::WipeLeft(t) => Some((AnimationPreset::WipeLeft, t)),
             Self::WipeRight(t) => Some((AnimationPreset::WipeRight, t)),
@@ -1089,6 +1094,42 @@ pub struct CodeblockCursor {
     #[serde(default = "default_true")]
     pub blink: bool,
 }
+
+// --- Orbit Config ---
+
+/// Configuration for a 3D orbit/floating animation effect.
+/// Creates circular or elliptical motion with pseudo-depth (scale + opacity modulation).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrbitConfig {
+    /// Horizontal radius of the orbit in pixels.
+    #[serde(default = "default_orbit_radius")]
+    pub radius_x: f64,
+    /// Vertical radius of the orbit in pixels.
+    #[serde(default = "default_orbit_radius")]
+    pub radius_y: f64,
+    /// Orbit speed in revolutions per second.
+    #[serde(default = "default_orbit_speed")]
+    pub speed: f64,
+    /// Starting angle in degrees (0 = right, 90 = bottom).
+    #[serde(default)]
+    pub start_angle: f64,
+    /// Scale modulation depth (0.0 = none, 0.2 = 20% size variation for depth effect).
+    #[serde(default = "default_orbit_depth")]
+    pub depth: f64,
+    /// Opacity modulation depth (0.0 = none, 0.3 = 30% opacity variation for depth).
+    #[serde(default)]
+    pub opacity_depth: f64,
+    /// Tilt angle in degrees — tilts the orbit plane for a 3D perspective look.
+    #[serde(default)]
+    pub tilt: f64,
+    /// Phase offset (0.0 to 1.0) — offsets the starting position along the orbit.
+    #[serde(default)]
+    pub phase: f64,
+}
+
+fn default_orbit_radius() -> f64 { 30.0 }
+fn default_orbit_speed() -> f64 { 0.5 }
+fn default_orbit_depth() -> f64 { 0.15 }
 
 // --- Wiggle Config ---
 

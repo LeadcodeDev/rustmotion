@@ -145,6 +145,9 @@ pub enum AnimationPreset {
     // Stroke
     DrawIn,
     StrokeReveal,
+    // Floating/orbit
+    #[serde(alias = "float_3d")]
+    Float3d,
     // Spéciaux
     Typewriter,
     WipeLeft,

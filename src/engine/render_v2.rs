@@ -1,7 +1,7 @@
 use anyhow::Result;
 use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint, M44, V3};
 
-use super::animator::{apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
+use super::animator::{apply_orbits, apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};
 use super::renderer::color4f_from_hex;
 use crate::components::{ChildComponent, Overlay, OverlayAnchor};
 use crate::error::RustmotionError;
@@ -92,6 +92,12 @@ pub fn render_component(
             if !extracted.wiggles.is_empty() {
                 let wiggles: Vec<_> = extracted.wiggles.into_iter().cloned().collect();
                 apply_wiggles(&mut props, &wiggles, ctx.time);
+            }
+
+            // Apply orbit effects
+            if !extracted.orbits.is_empty() {
+                let orbits: Vec<_> = extracted.orbits.into_iter().cloned().collect();
+                apply_orbits(&mut props, &orbits, ctx.time);
             }
 
             // Handle motion blur
@@ -396,6 +402,10 @@ fn render_component_with_motion_blur(
                 if !extracted.wiggles.is_empty() {
                     let wiggles: Vec<_> = extracted.wiggles.into_iter().cloned().collect();
                     apply_wiggles(&mut p, &wiggles, sample_time);
+                }
+                if !extracted.orbits.is_empty() {
+                    let orbits: Vec<_> = extracted.orbits.into_iter().cloned().collect();
+                    apply_orbits(&mut p, &orbits, sample_time);
                 }
                 p
             } else {
