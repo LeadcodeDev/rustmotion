@@ -502,7 +502,7 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
         match view.view_type {
             ViewType::World => {
                 // World view: all scenes share a single continuous timeline
-                let timeline = engine::world::WorldTimeline::build(view, fps);
+                let timeline = engine::world::WorldTimeline::build(view, fps, config.width, config.height);
                 let view_frames = timeline.total_frames(fps);
                 if frame_num < frame_offset + view_frames {
                     let frame_in_view = frame_num - frame_offset;
