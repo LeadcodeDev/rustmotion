@@ -6,6 +6,7 @@ pub mod caption;
 pub mod card;
 pub mod chart;
 pub mod codeblock;
+pub mod connector;
 pub mod counter;
 pub mod cursor;
 pub mod divider;
@@ -41,6 +42,7 @@ pub use caption::Caption;
 pub use card::Card;
 pub use chart::Chart;
 pub use codeblock::Codeblock;
+pub use connector::Connector;
 pub use counter::Counter;
 pub use cursor::Cursor;
 pub use divider::Divider;
@@ -135,6 +137,7 @@ pub enum Component {
     Cursor(Cursor),
     Caption(Caption),
     Codeblock(Codeblock),
+    Connector(Connector),
     Avatar(Avatar),
     Arrow(Arrow),
     Badge(Badge),
@@ -177,6 +180,7 @@ impl Component {
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
             Component::Arrow(c) => c,
+            Component::Connector(c) => c,
             Component::Badge(c) => c,
             Component::Callout(c) => c,
             Component::Chart(c) => c,
@@ -212,6 +216,7 @@ impl Component {
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
             Component::Arrow(c) => Some(c),
+            Component::Connector(c) => Some(c),
             Component::Badge(c) => Some(c),
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
@@ -246,6 +251,7 @@ impl Component {
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
             Component::Arrow(c) => Some(c),
+            Component::Connector(c) => Some(c),
             Component::Badge(c) => Some(c),
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
@@ -281,6 +287,7 @@ impl Component {
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
             Component::Arrow(c) => c,
+            Component::Connector(c) => c,
             Component::Badge(c) => c,
             Component::Callout(c) => c,
             Component::Chart(c) => c,
