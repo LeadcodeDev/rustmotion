@@ -15,6 +15,7 @@ pub mod gif;
 pub mod grid;
 pub mod icon;
 pub mod line;
+pub mod lottie;
 pub mod image;
 pub mod mockup;
 pub mod particle;
@@ -53,6 +54,7 @@ pub use grid::Grid;
 pub use icon::Icon;
 pub use image::Image;
 pub use line::Line;
+pub use lottie::Lottie;
 pub use mockup::Mockup;
 pub use particle::Particle;
 pub use positioned::Positioned;
@@ -179,6 +181,7 @@ pub enum Component {
     Chart(Chart),
     Divider(Divider),
     Line(Line),
+    Lottie(Lottie),
     Mockup(Mockup),
     Particle(Particle),
     #[serde(alias = "progress_bar")]
@@ -221,6 +224,7 @@ impl Component {
             Component::Chart(c) => c,
             Component::Divider(c) => c,
             Component::Line(c) => c,
+            Component::Lottie(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
@@ -258,6 +262,7 @@ impl Component {
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::Line(c) => Some(c),
+            Component::Lottie(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -294,6 +299,7 @@ impl Component {
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::Line(c) => Some(c),
+            Component::Lottie(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -331,6 +337,7 @@ impl Component {
             Component::Chart(c) => c,
             Component::Divider(c) => c,
             Component::Line(c) => c,
+            Component::Lottie(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
