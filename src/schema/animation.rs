@@ -136,6 +136,12 @@ pub enum AnimationPreset {
     Float,
     Shake,
     Spin,
+    // 3D
+    FlipInX,
+    FlipInY,
+    FlipOutX,
+    FlipOutY,
+    TiltIn,
     // Spéciaux
     Typewriter,
     WipeLeft,

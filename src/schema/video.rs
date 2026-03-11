@@ -110,6 +110,30 @@ pub struct Scene {
     /// Flex layout for automatic layer positioning
     #[serde(default)]
     pub layout: Option<SceneLayout>,
+    /// Animated background gradient
+    #[serde(default, rename = "animated-background")]
+    pub animated_background: Option<AnimatedBackground>,
+}
+
+/// Animated background configuration for scenes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AnimatedBackground {
+    /// Gradient colors (hex strings).
+    pub colors: Vec<String>,
+    /// Animation speed in degrees per second (default 30).
+    #[serde(default = "default_bg_speed")]
+    pub speed: f32,
+    /// Gradient type: "linear" or "radial" (default "linear").
+    #[serde(default = "default_bg_type")]
+    pub gradient_type: GradientType,
+}
+
+fn default_bg_speed() -> f32 {
+    30.0
+}
+
+fn default_bg_type() -> GradientType {
+    GradientType::Linear
 }
 
 /// Scene-level flex layout configuration
@@ -211,6 +235,19 @@ pub struct CardBorder {
     pub color: String,
     #[serde(default = "default_card_border_width")]
     pub width: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GradientBorder {
+    pub colors: Vec<String>,
+    #[serde(default = "default_gradient_border_width")]
+    pub width: f32,
+    #[serde(default)]
+    pub angle: f32,
+}
+
+fn default_gradient_border_width() -> f32 {
+    2.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -325,6 +362,12 @@ pub enum AnimationEffect {
     Float(AnimationTiming),
     Shake(AnimationTiming),
     Spin(AnimationTiming),
+    // --- 3D presets ---
+    FlipInX(AnimationTiming),
+    FlipInY(AnimationTiming),
+    FlipOutX(AnimationTiming),
+    FlipOutY(AnimationTiming),
+    TiltIn(AnimationTiming),
     // --- Special presets ---
     Typewriter(AnimationTiming),
     WipeLeft(AnimationTiming),
@@ -369,6 +412,11 @@ impl AnimationEffect {
             Self::Float(t) => Some((AnimationPreset::Float, t)),
             Self::Shake(t) => Some((AnimationPreset::Shake, t)),
             Self::Spin(t) => Some((AnimationPreset::Spin, t)),
+            Self::FlipInX(t) => Some((AnimationPreset::FlipInX, t)),
+            Self::FlipInY(t) => Some((AnimationPreset::FlipInY, t)),
+            Self::FlipOutX(t) => Some((AnimationPreset::FlipOutX, t)),
+            Self::FlipOutY(t) => Some((AnimationPreset::FlipOutY, t)),
+            Self::TiltIn(t) => Some((AnimationPreset::TiltIn, t)),
             Self::Typewriter(t) => Some((AnimationPreset::Typewriter, t)),
             Self::WipeLeft(t) => Some((AnimationPreset::WipeLeft, t)),
             Self::WipeRight(t) => Some((AnimationPreset::WipeRight, t)),
@@ -549,6 +597,11 @@ pub struct LayerStyle {
     // Text highlight background
     #[serde(default, rename = "text-background")]
     pub text_background: Option<TextBackground>,
+    // Glassmorphism / advanced effects
+    #[serde(default, rename = "backdrop-blur")]
+    pub backdrop_blur: Option<f32>,
+    #[serde(default, rename = "gradient-border")]
+    pub gradient_border: Option<GradientBorder>,
     // Visual effects
     #[serde(default)]
     pub filter: Option<FilterConfig>,
@@ -562,6 +615,9 @@ pub struct LayerStyle {
     pub aspect_ratio: Option<f32>,
     #[serde(default, rename = "text-gradient")]
     pub text_gradient: Option<TextGradient>,
+    // Stagger: automatic delay offset per child in a container (seconds)
+    #[serde(default)]
+    pub stagger: Option<f32>,
     // Animation effects (accepts single object or array)
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
@@ -603,12 +659,15 @@ impl Default for LayerStyle {
             grid_column: None,
             grid_row: None,
             text_background: None,
+            backdrop_blur: None,
+            gradient_border: None,
             filter: None,
             drop_shadow: None,
             blend_mode: None,
             clip_path: None,
             aspect_ratio: None,
             text_gradient: None,
+            stagger: None,
             animation: Vec::new(),
         }
     }
