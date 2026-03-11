@@ -1,6 +1,6 @@
 use crate::schema::{
     Animation, AnimationEffect, AnimationPreset, EasingType, GlowConfig, Keyframe, KeyframeValue,
-    PresetConfig, SpringConfig, WiggleConfig,
+    OrbitConfig, PresetConfig, SpringConfig, WiggleConfig,
 };
 
 // ─── Effect extraction ──────────────────────────────────────────────────────
@@ -10,6 +10,7 @@ pub struct ExtractedEffects<'a> {
     pub presets: Vec<(AnimationPreset, PresetConfig)>,
     pub keyframes: Vec<&'a Animation>,
     pub wiggles: Vec<&'a WiggleConfig>,
+    pub orbits: Vec<&'a OrbitConfig>,
     pub glow: Option<&'a GlowConfig>,
     pub motion_blur: Option<f32>,
 }
@@ -20,6 +21,7 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
         presets: Vec::new(),
         keyframes: Vec::new(),
         wiggles: Vec::new(),
+        orbits: Vec::new(),
         glow: None,
         motion_blur: None,
     };
@@ -34,6 +36,9 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                 }
                 AnimationEffect::Wiggle(config) => {
                     result.wiggles.push(config);
+                }
+                AnimationEffect::Orbit(config) => {
+                    result.orbits.push(config);
                 }
                 AnimationEffect::Keyframes(config) => {
                     for kf in &config.keyframes {
@@ -604,6 +609,53 @@ pub fn apply_wiggles(props: &mut AnimatedProperties, wiggles: &[WiggleConfig], t
     }
 }
 
+/// Apply orbit effects additively to animated properties.
+/// Creates circular/elliptical motion with pseudo-3D depth via scale and opacity modulation.
+pub fn apply_orbits(props: &mut AnimatedProperties, orbits: &[OrbitConfig], time: f64) {
+    use std::f64::consts::{PI, TAU};
+
+    for orbit in orbits {
+        let angle_offset = orbit.start_angle * PI / 180.0;
+        let phase_offset = orbit.phase * TAU;
+        let tilt_rad = orbit.tilt * PI / 180.0;
+
+        let theta = TAU * orbit.speed * time + angle_offset + phase_offset;
+
+        // Elliptical orbit position
+        let raw_x = orbit.radius_x * theta.cos();
+        let raw_y = orbit.radius_y * theta.sin();
+
+        // Apply tilt: compress Y axis and add depth effect
+        let x_offset = raw_x;
+        let y_offset = raw_y * tilt_rad.cos();
+
+        props.translate_x += x_offset as f32;
+        props.translate_y += y_offset as f32;
+
+        // Pseudo-depth: when "behind" (sin < 0), scale down and reduce opacity
+        if orbit.depth > 0.0 {
+            // depth_factor goes from (1 - depth) to (1 + depth) based on orbit position
+            let depth_sin = if tilt_rad.abs() > 0.01 {
+                // With tilt, depth is based on the untilted Y (how far "back" the object is)
+                theta.sin()
+            } else {
+                // Without tilt, use Y component for depth
+                theta.sin()
+            };
+            let scale_factor = 1.0 + orbit.depth * depth_sin;
+            props.scale_x *= scale_factor as f32;
+            props.scale_y *= scale_factor as f32;
+        }
+
+        // Opacity modulation for depth
+        if orbit.opacity_depth > 0.0 {
+            let depth_sin = theta.sin();
+            let opacity_factor = 1.0 - orbit.opacity_depth * (1.0 - depth_sin) * 0.5;
+            props.opacity *= opacity_factor as f32;
+        }
+    }
+}
+
 fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
     match property {
         "opacity" => props.opacity as f64,
@@ -785,6 +837,14 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
             kf_anim("rotate_y", delay, -15.0, end, 0.0, EasingType::EaseOutCubic),
             kf_anim("perspective", delay, 1000.0, end, 1000.0, EasingType::Linear),
             kf_anim("scale", delay, 0.9, end, 1.0, EasingType::EaseOutCubic),
+        ],
+
+        // ── Floating/orbit ────────────────────────────────────────────
+        AnimationPreset::Float3d => vec![
+            kf_anim_3kf("position.y", 0.0, -12.0, 0.0, EasingType::EaseInOut),
+            kf_anim_3kf("rotate_x", 0.0, 5.0, 0.0, EasingType::EaseInOut),
+            kf_anim_3kf("rotate_y", 0.0, -8.0, 0.0, EasingType::EaseInOut),
+            kf_anim("perspective", 0.0, 1000.0, 1.0, 1000.0, EasingType::Linear),
         ],
 
         // ── Spéciaux ────────────────────────────────────────────────────
