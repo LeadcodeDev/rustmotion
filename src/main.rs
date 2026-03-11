@@ -427,8 +427,9 @@ fn cmd_watch(
                     };
 
                     // Count changed scenes for the TUI
-                    let num_scenes = scenario.scenes.len();
-                    let scene_hashes: Vec<u64> = scenario.scenes.iter()
+                    let view0_scenes = scenario.views.get(0).map(|v| &v.scenes[..]).unwrap_or(&[]);
+                    let num_scenes = view0_scenes.len();
+                    let scene_hashes: Vec<u64> = view0_scenes.iter()
                         .map(|s| encode::hash_video_config_scene(s))
                         .collect();
                     let changed = if let Some(ref prev) = use_prev {
@@ -437,7 +438,7 @@ fn cmd_watch(
                                 let hash_changed = scene_hashes[i] != prev[i].scene_hash;
                                 let next_changed = if i + 1 < num_scenes {
                                     scene_hashes[i + 1] != prev[i + 1].scene_hash
-                                        && scenario.scenes[i + 1].transition.is_some()
+                                        && view0_scenes[i + 1].transition.is_some()
                                 } else { false };
                                 hash_changed || next_changed
                             }).count()
@@ -490,27 +491,52 @@ fn cmd_watch(
 }
 
 fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
+    use crate::schema::ViewType;
+
     let config = &scenario.video;
     let fps = config.fps;
 
-    // Find which scene this frame belongs to
+    // Find which view and frame this belongs to
     let mut frame_offset = 0u32;
-    for scene in &scenario.scenes {
-        let scene_frames = (scene.duration * fps as f64).round() as u32;
-        if frame_num < frame_offset + scene_frames {
-            let local_frame = frame_num - frame_offset;
+    for view in &scenario.views {
+        match view.view_type {
+            ViewType::World => {
+                // World view: all scenes share a single continuous timeline
+                let timeline = engine::world::WorldTimeline::build(view, fps);
+                let view_frames = timeline.total_frames(fps);
+                if frame_num < frame_offset + view_frames {
+                    let frame_in_view = frame_num - frame_offset;
+                    let rgba = engine::render_v2::render_world_frame_scaled(
+                        config, view, &timeline, frame_in_view, 1.0,
+                    )?;
 
-            let rgba = engine::render_v2::render_scene_frame(
-                config, scene, local_frame, scene_frames,
-            )?;
+                    let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
+                        .ok_or(RustmotionError::PixelImage)?;
+                    img.save(output)?;
+                    return Ok(());
+                }
+                frame_offset += view_frames;
+            }
+            ViewType::Slide => {
+                // Slide view: each scene is independent
+                for scene in &view.scenes {
+                    let scene_frames = (scene.duration * fps as f64).round() as u32;
+                    if frame_num < frame_offset + scene_frames {
+                        let local_frame = frame_num - frame_offset;
 
-            // Save as PNG using the image crate
-            let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
-                .ok_or(RustmotionError::PixelImage)?;
-            img.save(output)?;
-            return Ok(());
+                        let rgba = engine::render_v2::render_scene_frame(
+                            config, scene, local_frame, scene_frames,
+                        )?;
+
+                        let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
+                            .ok_or(RustmotionError::PixelImage)?;
+                        img.save(output)?;
+                        return Ok(());
+                    }
+                    frame_offset += scene_frames;
+                }
+            }
         }
-        frame_offset += scene_frames;
     }
 
     Err(RustmotionError::FrameOutOfRange { frame: frame_num, total: frame_offset }.into())
@@ -533,10 +559,11 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
             match resolved {
                 Ok(resolved) => {
                     let errors = validate_scenario(&resolved);
+                    let all_scenes: Vec<_> = resolved.all_scenes().collect();
                     if errors.is_empty() {
-                        eprintln!("Valid scenario: {} scene(s)", resolved.scenes.len());
+                        eprintln!("Valid scenario: {} scene(s) in {} view(s)", all_scenes.len(), resolved.views.len());
                         let total_duration: f64 =
-                            resolved.scenes.iter().map(|s| s.duration).sum();
+                            all_scenes.iter().map(|s| s.duration).sum();
                         eprintln!(
                             "  Resolution: {}x{} @ {}fps",
                             resolved.video.width, resolved.video.height, resolved.video.fps
@@ -670,16 +697,20 @@ fn validate_scenario(scenario: &ResolvedScenario) -> Vec<String> {
     if scenario.video.fps == 0 {
         errors.push("video.fps must be > 0".to_string());
     }
-    if scenario.scenes.is_empty() {
+
+    let all_scenes: Vec<_> = scenario.all_scenes().collect();
+    if all_scenes.is_empty() {
         errors.push("At least one scene is required".to_string());
     }
 
-    for (i, scene) in scenario.scenes.iter().enumerate() {
-        if scene.duration <= 0.0 {
-            errors.push(format!("scenes[{}].duration must be > 0", i));
-        }
+    for (vi, view) in scenario.views.iter().enumerate() {
+        for (si, scene) in view.scenes.iter().enumerate() {
+            if scene.duration <= 0.0 {
+                errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
+            }
 
-        validate_children(&scene.children, &format!("scenes[{}]", i), &mut errors);
+            validate_children(&scene.children, &format!("views[{}].scenes[{}]", vi, si), &mut errors);
+        }
     }
 
     for (i, audio) in scenario.audio.iter().enumerate() {
@@ -724,10 +755,11 @@ fn cmd_still(
     let fps = config.fps;
 
     // Find which scene contains this time
+    let all_scenes: Vec<_> = scenario.all_scenes().collect();
     let mut scene_start = 0.0f64;
-    for scene in &scenario.scenes {
+    for (idx, scene) in all_scenes.iter().enumerate() {
         let scene_end = scene_start + scene.duration;
-        if time < scene_end || std::ptr::eq(scene, scenario.scenes.last().unwrap()) {
+        if time < scene_end || idx == all_scenes.len() - 1 {
             let local_time = (time - scene_start).max(0.0);
             let frame_index = (local_time * fps as f64).round() as u32;
             let scene_frames = (scene.duration * fps as f64).round() as u32;
@@ -792,37 +824,45 @@ fn cmd_still(
 fn cmd_info(input: &PathBuf) -> Result<()> {
     let scenario = load_scenario(input)?;
     let fps = scenario.video.fps;
-    let total_duration: f64 = scenario.scenes.iter().map(|s| s.duration).sum();
-    let total_frames: u32 = scenario
-        .scenes
+    let all_scenes: Vec<_> = scenario.all_scenes().collect();
+    let total_duration: f64 = all_scenes.iter().map(|s| s.duration).sum();
+    let total_frames: u32 = all_scenes
         .iter()
         .map(|s| (s.duration * fps as f64).round() as u32)
         .sum();
 
-    let total_layers: usize = scenario.scenes.iter().map(|s| s.children.len()).sum();
+    let total_layers: usize = all_scenes.iter().map(|s| s.children.len()).sum();
 
     println!("File: {}", input.display());
     println!("Resolution: {}x{}", scenario.video.width, scenario.video.height);
     println!("FPS: {}", fps);
     println!("Duration: {:.1}s ({} frames)", total_duration, total_frames);
-    println!("Scenes: {}", scenario.scenes.len());
+    println!("Views: {}", scenario.views.len());
+    println!("Scenes: {}", all_scenes.len());
     println!("Total layers: {}", total_layers);
     println!("Audio tracks: {}", scenario.audio.len());
 
-    for (i, scene) in scenario.scenes.iter().enumerate() {
-        let scene_frames = (scene.duration * fps as f64).round() as u32;
-        println!(
-            "  Scene {}: {:.1}s ({} frames, {} layers{})",
-            i + 1,
-            scene.duration,
-            scene_frames,
-            scene.children.len(),
-            scene
-                .transition
-                .as_ref()
-                .map(|t| format!(", transition: {:?} {:.1}s", t.transition_type, t.duration))
-                .unwrap_or_default()
-        );
+    for (vi, view) in scenario.views.iter().enumerate() {
+        let vtype = match view.view_type {
+            schema::ViewType::Slide => "Slide",
+            schema::ViewType::World => "World",
+        };
+        println!("  View {}: {} ({} scenes)", vi + 1, vtype, view.scenes.len());
+        for (si, scene) in view.scenes.iter().enumerate() {
+            let scene_frames = (scene.duration * fps as f64).round() as u32;
+            println!(
+                "    Scene {}: {:.1}s ({} frames, {} layers{})",
+                si + 1,
+                scene.duration,
+                scene_frames,
+                scene.children.len(),
+                scene
+                    .transition
+                    .as_ref()
+                    .map(|t| format!(", transition: {:?} {:.1}s", t.transition_type, t.duration))
+                    .unwrap_or_default()
+            );
+        }
     }
 
     Ok(())

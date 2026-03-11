@@ -14,6 +14,48 @@ pub struct Scenario {
     pub fonts: Vec<FontEntry>,
     #[serde(default)]
     pub scenes: Vec<SceneEntry>,
+    /// Composition: a sequence of views (slide or world). Mutually exclusive with top-level `scenes`.
+    #[serde(default)]
+    pub composition: Option<Vec<View>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewType {
+    Slide,
+    World,
+}
+
+fn default_view_type() -> ViewType {
+    ViewType::Slide
+}
+
+fn default_camera_pan_duration() -> f64 {
+    0.8
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct View {
+    #[serde(rename = "type", default = "default_view_type")]
+    pub view_type: ViewType,
+    #[serde(default)]
+    pub scenes: Vec<SceneEntry>,
+    /// Transition entering this view (between views).
+    #[serde(default)]
+    pub transition: Option<Transition>,
+    /// (world) Shared background. Falls back to video.background.
+    #[serde(default)]
+    pub background: Option<String>,
+    /// (world) Shared animated backgrounds.
+    #[serde(default, rename = "animated-background",
+            deserialize_with = "deserialize_animated_backgrounds")]
+    pub animated_background: Vec<AnimatedBackground>,
+    /// (world) Easing for camera pan between scenes.
+    #[serde(default = "default_transition_easing")]
+    pub camera_easing: EasingType,
+    /// (world) Duration of camera pan between scenes (default 0.8s).
+    #[serde(default = "default_camera_pan_duration")]
+    pub camera_pan_duration: f64,
 }
 
 /// A scenario with all includes expanded — safe to pass to the rendering pipeline.
@@ -22,7 +64,31 @@ pub struct ResolvedScenario {
     pub video: VideoConfig,
     pub audio: Vec<AudioTrack>,
     pub fonts: Vec<FontEntry>,
+    pub views: Vec<ResolvedView>,
+}
+
+impl ResolvedScenario {
+    /// Iterate over all scenes across all views (for prefetch, validation, etc.)
+    pub fn all_scenes(&self) -> impl Iterator<Item = &Scene> {
+        self.views.iter().flat_map(|v| v.scenes.iter())
+    }
+
+    /// Collect all scenes into a flat Vec (for indexed access)
+    #[allow(dead_code)]
+    pub fn all_scenes_vec(&self) -> Vec<&Scene> {
+        self.all_scenes().collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct ResolvedView {
+    pub view_type: ViewType,
     pub scenes: Vec<Scene>,
+    pub transition: Option<Transition>,
+    pub background: Option<String>,
+    pub animated_background: Vec<AnimatedBackground>,
+    pub camera_easing: EasingType,
+    pub camera_pan_duration: f64,
 }
 
 /// An entry in the `scenes` array: either a concrete scene or an include directive.
@@ -96,6 +162,14 @@ pub struct VideoConfig {
     pub crf: Option<u8>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WorldPosition {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Scene {
     pub duration: f64,
@@ -110,12 +184,18 @@ pub struct Scene {
     /// Flex layout for automatic layer positioning
     #[serde(default)]
     pub layout: Option<SceneLayout>,
-    /// Animated background gradient
-    #[serde(default, rename = "animated-background")]
-    pub animated_background: Option<AnimatedBackground>,
+    /// Animated background gradient (single object or array of layered backgrounds)
+    #[serde(default, rename = "animated-background", deserialize_with = "deserialize_animated_backgrounds")]
+    pub animated_background: Vec<AnimatedBackground>,
     /// Virtual camera with animatable x, y, zoom, rotation.
     #[serde(default)]
     pub camera: Option<Camera>,
+    /// Position of this scene in the 2D world (used by world views).
+    #[serde(default, rename = "world-position")]
+    pub world_position: Option<WorldPosition>,
+    /// (world) Keep this scene visible after its time window ends.
+    #[serde(default)]
+    pub persist: bool,
 }
 
 /// Virtual camera for pan/zoom/rotation effects at the scene level.
@@ -184,6 +264,37 @@ pub struct AnimatedBackground {
     /// Spacing between elements for grid_dots preset.
     #[serde(default = "default_bg_spacing")]
     pub spacing: f32,
+    /// Number of circles for concentric_circles preset.
+    /// When set, spacing is derived as max_radius / count.
+    #[serde(default)]
+    pub count: Option<u32>,
+    /// Halo zones for the "halo" preset.
+    #[serde(default)]
+    pub zones: Vec<HaloZone>,
+}
+
+/// A single glow zone for the "halo" animated-background preset.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HaloZone {
+    /// Zone color (hex string).
+    pub color: String,
+    /// X position as fraction of width (0.0 = left, 1.0 = right).
+    #[serde(default = "default_half")]
+    pub x: f32,
+    /// Y position as fraction of height (0.0 = top, 1.0 = bottom).
+    #[serde(default = "default_half")]
+    pub y: f32,
+    /// Radius as fraction of max(width, height).
+    #[serde(default = "default_halo_radius")]
+    pub radius: f32,
+}
+
+fn default_half() -> f32 {
+    0.5
+}
+
+fn default_halo_radius() -> f32 {
+    0.4
 }
 
 fn default_bg_element_size() -> f32 {
@@ -223,6 +334,8 @@ pub struct Transition {
     pub transition_type: TransitionType,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
+    #[serde(default = "default_transition_easing")]
+    pub easing: EasingType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -240,11 +353,16 @@ pub enum TransitionType {
     Iris,
     Slide,
     Dissolve,
+    CameraPan,
     None,
 }
 
 fn default_transition_duration() -> f64 {
     0.5
+}
+
+fn default_transition_easing() -> EasingType {
+    EasingType::EaseInOut
 }
 
 // --- Card types ---
@@ -669,6 +787,42 @@ where
             let effect =
                 AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
             Ok(vec![effect])
+        }
+    }
+
+    deserializer.deserialize_any(OneOrMany)
+}
+
+/// Deserialize `animated-background` as either a single AnimatedBackground or a Vec.
+fn deserialize_animated_backgrounds<'de, D>(deserializer: D) -> Result<Vec<AnimatedBackground>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct OneOrMany;
+
+    impl<'de> de::Visitor<'de> for OneOrMany {
+        type Value = Vec<AnimatedBackground>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a single animated background or an array of animated backgrounds")
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            Vec::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+        where
+            M: de::MapAccess<'de>,
+        {
+            let bg =
+                AnimatedBackground::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            Ok(vec![bg])
         }
     }
 

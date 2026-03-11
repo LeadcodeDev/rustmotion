@@ -331,7 +331,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
 
-Each scene is an **implicit flex container** at video dimensions. All children participate in flex flow. Use `positioned` container for absolute positioning. Default direction: `column`.
+Each scene is an **implicit flex container** at video dimensions. All children participate in flex flow. Children with `position` inside a `card` become absolute. Default direction: `column`.
+
+**IMPORTANT:** Every scene SHOULD include `"layout": {"align_items": "center", "justify_content": "center"}` for centered composition. Without this, content aligns to the top-left corner.
 
 **`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
 
@@ -723,17 +725,18 @@ Animated number counter. See Rule 4: must be standalone.
 
 Style: `font-size` (48.0), `color` (#FFFFFF), `font-family` (Inter), `font-weight`, `text-align`, `letter-spacing`, `text-shadow`, `stroke`
 
-### 10. `positioned`
+### 10. Absolute Positioning (via `card`)
 
-Container that places children at fixed absolute coordinates (like Flutter's `Stack`/`Positioned`). Each child uses `position: {x, y}` relative to the container's top-left.
+To place children at fixed absolute coordinates, use a `card` with transparent background and explicit size. Each child uses `position: {x, y}` relative to the card's top-left. Children with `position` become absolute inside a `card`.
 
 ```json
 {
-  "type": "positioned",
-  "position": { "x": 100, "y": 200 },
+  "type": "card",
+  "size": { "width": 1920, "height": 1080 },
+  "style": { "background": "#00000000", "padding": 0 },
   "children": [
     { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "size": { "width": 400, "height": 300 }, "style": { "fill": "#1E293B", "border-radius": 16 } },
-    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "size": 64, "color": "#FFFFFF" } }
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "size": { "width": 64, "height": 64 }, "style": { "color": "#FFFFFF" } }
   ]
 }
 ```
@@ -1295,16 +1298,18 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 
 #### Animated Background
 
-Scenes can have animated gradient backgrounds.
+Scenes can have animated gradient backgrounds. Use `concentric_circles` for a subtle, professional look (dark arc rings radiating from center). Use `gradient_shift` for color-shifting gradients.
 
 ```json
 {
   "duration": 5.0,
   "animated-background": {
-    "colors": ["#667eea", "#764ba2", "#f093fb"],
-    "speed": 30,
-    "gradient_type": "linear",
-    "preset": "gradient_shift"
+    "colors": ["#0F0E2A", "#1a1145", "#0F0E2A"],
+    "speed": 15,
+    "gradient_type": "radial",
+    "preset": "concentric_circles",
+    "element_size": 1.5,
+    "count": 4
   },
   "children": [...]
 }
@@ -1316,8 +1321,9 @@ Scenes can have animated gradient backgrounds.
 | `speed`        | f32    | `30.0`            | Animation speed (degrees/sec or pixels/sec)   |
 | `gradient_type`| enum   | `"linear"`        | `"linear"` or `"radial"`                      |
 | `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"` |
-| `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots/concentric      |
-| `spacing`      | f32    | `60.0`            | Element spacing for grid_dots                 |
+| `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots; stroke width for concentric_circles |
+| `spacing`      | f32    | `60.0`            | Element spacing for grid_dots/concentric_circles |
+| `count`        | u32    | `null`            | Number of circles for concentric_circles (overrides spacing) |
 
 ---
 
@@ -1346,10 +1352,10 @@ Any component can be rendered with true 3D perspective using keyframe animations
   "position": { "x": 360, "y": 300 },
   "size": { "width": 1000, "height": 400 },
   "style": {
-    "background": "rgba(255,255,255,0.03)",
+    "background": "#FFFFFF08",
     "border-radius": 24,
     "backdrop-blur": 15,
-    "border": { "color": "rgba(255,255,255,0.08)", "width": 1 },
+    "border": { "color": "#FFFFFF14", "width": 1 },
     "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
     "animation": [{
       "name": "keyframes",
@@ -1573,3 +1579,15 @@ rustmotion render scenario.json -o frames/ --format png-seq
 # Machine-readable output
 rustmotion render scenario.json -o output.mp4 --output-format json
 ```
+
+---
+
+### Pre-Delivery Checklist
+
+Before presenting a generated scenario to the user, verify:
+
+- [ ] **ZERO `rgba()` / `rgb()` values** — all colors in `#RRGGBB` or `#RRGGBBAA` hex format
+- [ ] All scenes have `"layout": {"align_items": "center", "justify_content": "center"}` for centered composition
+- [ ] `concentric_circles` animated-background on at least 4 scenes for visual depth
+- [ ] No `end_at` on counters (makes them disappear — use `start_at` only)
+- [ ] `rustmotion validate scenario.json` passes before presenting

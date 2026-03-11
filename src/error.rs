@@ -79,6 +79,9 @@ pub enum RustmotionError {
     #[error("Include: file not found '{path}'")]
     IncludeFileNotFound { path: String },
 
+    #[error("Scenario cannot have both top-level 'scenes' and 'composition' — use one or the other")]
+    CompositionAndScenesConflict,
+
     // --- Encoding ---
     #[error("No frames to render (total duration is 0)")]
     NoFrames,

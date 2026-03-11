@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::error::RustmotionError;
-use crate::schema::{IncludeDirective, ResolvedScenario, Scene, SceneEntry, Scenario};
+use crate::schema::{
+    EasingType, IncludeDirective, ResolvedScenario, ResolvedView, Scene, SceneEntry, Scenario,
+    ViewType,
+};
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
 
@@ -15,16 +18,51 @@ pub enum IncludeSource {
     Inline,
 }
 
-/// Expand all include directives in a scenario, producing a flat list of resolved scenes.
+/// Expand all include directives in a scenario, producing resolved views.
 pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<ResolvedScenario> {
     let mut audio = scenario.audio;
-    let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio)?;
+    let has_scenes = !scenario.scenes.is_empty();
+    let has_composition = scenario.composition.is_some();
+
+    if has_scenes && has_composition {
+        return Err(RustmotionError::CompositionAndScenesConflict.into());
+    }
+
+    let views = if let Some(composition) = scenario.composition {
+        // New format: composition with views
+        let mut views = Vec::with_capacity(composition.len());
+        for view in composition {
+            let scenes = resolve_entries(view.scenes, source, 0, &mut audio)?;
+            views.push(ResolvedView {
+                view_type: view.view_type,
+                scenes,
+                transition: view.transition,
+                background: view.background,
+                animated_background: view.animated_background,
+                camera_easing: view.camera_easing,
+                camera_pan_duration: view.camera_pan_duration,
+            });
+        }
+        views
+    } else {
+        // Backward compat: wrap top-level scenes in a single slide view
+        let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio)?;
+        vec![ResolvedView {
+            view_type: ViewType::Slide,
+            scenes,
+            transition: None,
+            background: None,
+            animated_background: Vec::new(),
+            camera_easing: EasingType::EaseInOut,
+            camera_pan_duration: 0.8,
+        }]
+    };
 
     Ok(ResolvedScenario {
         video: scenario.video,
         audio,
         fonts: scenario.fonts,
-        scenes,
+        views,
     })
 }
 
