@@ -167,6 +167,13 @@ fn render_component_inner(
         || props.rotate_y.abs() > 0.01
         || props.perspective >= 0.0;
 
+    // 3D adaptive shadow: draw ground-plane shadow BEFORE applying 3D transform
+    if needs_3d {
+        if let Some(ref shadow) = styled.style_config().box_shadow {
+            draw_3d_shadow(canvas, layout.width, layout.height, styled.style_config().border_radius_or(0.0), shadow, props);
+        }
+    }
+
     if needs_3d {
         // 3D transform via M44: translate to center, apply perspective + rotations, translate back
         let perspective_dist = if props.perspective >= 0.0 { props.perspective } else { 800.0 };
@@ -919,6 +926,56 @@ fn draw_inner_shadow(
 
     canvas.draw_path(&path, &paint);
     canvas.restore();
+}
+
+/// Draw a 3D-adaptive ground-plane shadow.
+///
+/// When a component has 3D rotation (rotate_x/rotate_y), the shadow is drawn
+/// on the "ground plane" (before 3D transforms) with offset/blur adapted to
+/// the tilt angle. This creates a realistic shadow that grows and shifts
+/// as the element tilts away from the viewer.
+fn draw_3d_shadow(
+    canvas: &Canvas,
+    width: f32,
+    height: f32,
+    corner_radius: f32,
+    shadow: &crate::schema::CardShadow,
+    props: &AnimatedProperties,
+) {
+    use skia_safe::{Rect, RRect};
+
+    let rx = props.rotate_x * std::f32::consts::PI / 180.0;
+    let ry = props.rotate_y * std::f32::consts::PI / 180.0;
+
+    // Shadow offset shifts based on rotation angle (light from top-left)
+    let depth_factor = (height * 0.4).min(80.0);
+    let extra_offset_x = shadow.offset_x - ry.sin() * depth_factor;
+    let extra_offset_y = shadow.offset_y + rx.sin() * depth_factor;
+
+    // Shadow blur increases with tilt angle
+    let tilt_magnitude = (rx.abs() + ry.abs()).min(1.0);
+    let extra_blur = shadow.blur + tilt_magnitude * 20.0;
+
+    // Shadow scales slightly based on perspective foreshortening
+    let scale_x = 1.0 + ry.sin().abs() * 0.15;
+    let scale_y = 1.0 + rx.sin().abs() * 0.15;
+    let sw = width * scale_x;
+    let sh = height * scale_y;
+    let sx = extra_offset_x - (sw - width) / 2.0;
+    let sy = extra_offset_y - (sh - height) / 2.0;
+
+    let shadow_rect = Rect::from_xywh(sx, sy, sw, sh);
+    let shadow_rrect = RRect::new_rect_xy(shadow_rect, corner_radius, corner_radius);
+
+    let mut shadow_paint = super::renderer::paint_from_hex(&shadow.color);
+    if extra_blur > 0.0 {
+        shadow_paint.set_mask_filter(skia_safe::MaskFilter::blur(
+            skia_safe::BlurStyle::Normal,
+            extra_blur / 2.0,
+            false,
+        ));
+    }
+    canvas.draw_rrect(shadow_rrect, &shadow_paint);
 }
 
 /// Interpolate a camera property at a given time using its keyframes.

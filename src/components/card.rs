@@ -114,12 +114,14 @@ impl crate::traits::Clipped for Card {
 }
 
 impl Widget for Card {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         let corner_radius = self.style.border_radius_or(12.0);
         let rect = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let rrect = skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius);
 
-        // 1. Shadow
+        // 1. Shadow (skip if 3D active — render_v2 draws adaptive ground shadow instead)
+        let has_3d = props.rotate_x.abs() > 0.01 || props.rotate_y.abs() > 0.01 || props.perspective >= 0.0;
+        if !has_3d {
         if let Some(ref shadow) = self.style.box_shadow {
             let shadow_rect = Rect::from_xywh(
                 shadow.offset_x, shadow.offset_y,
@@ -137,6 +139,7 @@ impl Widget for Card {
                 ));
             }
             canvas.draw_rrect(shadow_rrect, &shadow_paint);
+        }
         }
 
         // 2. Background
