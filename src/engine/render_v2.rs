@@ -6,7 +6,7 @@ use super::renderer::color4f_from_hex;
 use crate::components::ChildComponent;
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{AnimatedBackground, GradientType, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{AnimatedBackground, Camera, GradientType, InnerShadow, LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
@@ -141,6 +141,20 @@ fn render_component_inner(
 
     // Apply position offset from animation
     canvas.translate((props.translate_x, props.translate_y));
+
+    // Motion path: move element along an SVG path based on motion_progress
+    if let Some(ref motion_path_svg) = styled.style_config().motion_path {
+        if props.motion_progress >= 0.0 {
+            if let Some(path) = skia_safe::Path::from_svg(motion_path_svg) {
+                let mut measure = skia_safe::PathMeasure::new(&path, false, None);
+                let length = measure.length();
+                let distance = length * props.motion_progress.clamp(0.0, 1.0);
+                if let Some((pos, _tangent)) = measure.pos_tan(distance) {
+                    canvas.translate((pos.x, pos.y));
+                }
+            }
+        }
+    }
 
     // Check if we need 3D perspective transforms
     let needs_3d = props.rotate_x.abs() > 0.01
@@ -304,6 +318,11 @@ fn render_component_inner(
 
     // Render the component on top
     component.as_widget().render(canvas, layout, ctx, props)?;
+
+    // Inner shadow (inset shadow effect)
+    if let Some(ref inner_shadow) = styled.style_config().inner_shadow {
+        draw_inner_shadow(canvas, layout.width, layout.height, styled.style_config().border_radius.unwrap_or(0.0), inner_shadow);
+    }
 
     if needs_layer {
         canvas.restore();
@@ -511,8 +530,19 @@ pub fn render_frame_v2_scaled(
         stagger_offset: 0.0,
     };
 
+    // Apply virtual camera transform
+    let has_camera = scene.camera.is_some();
+    if let Some(ref camera) = scene.camera {
+        apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
+    }
+
     // Render component tree
     render_children(canvas, root_children, root_layout, &ctx)?;
+
+    // Restore camera transform
+    if has_camera {
+        canvas.restore();
+    }
 
     // Read pixels at scaled dimensions
     let row_bytes = scaled_w as usize * 4;
@@ -616,7 +646,7 @@ pub fn render_scene_frame_scaled(
     render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor)
 }
 
-/// Draw an animated gradient background that rotates over time.
+/// Draw an animated background (gradient, concentric circles, or grid dots).
 fn draw_animated_background(
     canvas: &Canvas,
     bg: &AnimatedBackground,
@@ -624,7 +654,21 @@ fn draw_animated_background(
     width: f32,
     height: f32,
 ) {
-    use skia_safe::{gradient_shader::GradientShaderColors, Point, Rect};
+    match bg.preset.as_deref() {
+        Some("concentric_circles") => draw_bg_concentric_circles(canvas, bg, time, width, height),
+        Some("grid_dots") => draw_bg_grid_dots(canvas, bg, time, width, height),
+        _ => draw_bg_gradient_shift(canvas, bg, time, width, height),
+    }
+}
+
+fn draw_bg_gradient_shift(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    use skia_safe::{gradient_shader::GradientShaderColors, Point};
 
     if bg.colors.len() < 2 {
         return;
@@ -668,6 +712,197 @@ fn draw_animated_background(
     if let Some(shader) = shader {
         let mut paint = Paint::default();
         paint.set_shader(shader);
-        canvas.draw_rect(Rect::from_wh(width, height), &paint);
+        canvas.draw_rect(skia_safe::Rect::from_wh(width, height), &paint);
     }
+}
+
+/// Expanding concentric circles from center.
+fn draw_bg_concentric_circles(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    use skia_safe::PaintStyle;
+
+    let color_str = bg.colors.first().map(|s| s.as_str()).unwrap_or("#FFFFFF20");
+    let mut paint = super::renderer::paint_from_hex(color_str);
+    paint.set_style(PaintStyle::Stroke);
+    paint.set_stroke_width(1.5);
+    paint.set_anti_alias(true);
+
+    let cx = width / 2.0;
+    let cy = height / 2.0;
+    let max_radius = (width.powi(2) + height.powi(2)).sqrt() / 2.0;
+    let spacing = bg.spacing.max(20.0);
+    let offset = (time * bg.speed) % spacing;
+
+    let mut r = offset;
+    while r < max_radius {
+        // Fade out as circles expand
+        let alpha = 1.0 - (r / max_radius).clamp(0.0, 1.0);
+        paint.set_alpha_f(alpha * 0.3);
+        canvas.draw_circle((cx, cy), r, &paint);
+        r += spacing;
+    }
+}
+
+/// Animated dot grid pattern.
+fn draw_bg_grid_dots(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    let color_str = bg.colors.first().map(|s| s.as_str()).unwrap_or("#FFFFFF15");
+    let mut paint = super::renderer::paint_from_hex(color_str);
+    paint.set_anti_alias(true);
+
+    let spacing = bg.spacing.max(20.0);
+    let dot_radius = bg.element_size / 2.0;
+    let offset_y = (time * bg.speed * 0.5) % spacing;
+
+    let mut y = -spacing + offset_y;
+    while y < height + spacing {
+        let mut x = 0.0_f32;
+        while x < width + spacing {
+            // Pulse: subtle size variation based on position + time
+            let phase = (x * 0.01 + y * 0.01 + time * 2.0).sin() * 0.3 + 0.7;
+            let r = dot_radius * phase;
+            paint.set_alpha_f(phase * 0.4);
+            canvas.draw_circle((x, y), r, &paint);
+            x += spacing;
+        }
+        y += spacing;
+    }
+}
+
+/// Draw an inner (inset) shadow inside an element.
+///
+/// Technique: clip to the element bounds, then draw a large inverted rect
+/// with blur that bleeds inward from the edges.
+fn draw_inner_shadow(
+    canvas: &Canvas,
+    width: f32,
+    height: f32,
+    corner_radius: f32,
+    shadow: &InnerShadow,
+) {
+    use skia_safe::{PaintStyle, Path, Rect, RRect, ClipOp};
+
+    let bounds = Rect::from_xywh(0.0, 0.0, width, height);
+    let rrect = RRect::new_rect_xy(bounds, corner_radius, corner_radius);
+
+    canvas.save();
+    // Clip to element bounds
+    canvas.clip_rrect(rrect, ClipOp::Intersect, true);
+
+    // Draw a large rect around the element with a hole in the center,
+    // offset by the shadow offset, with blur applied.
+    let expand = shadow.blur * 3.0 + 50.0;
+    let outer = Rect::from_xywh(
+        -expand + shadow.offset_x,
+        -expand + shadow.offset_y,
+        width + expand * 2.0,
+        height + expand * 2.0,
+    );
+    let inner = Rect::from_xywh(shadow.offset_x, shadow.offset_y, width, height);
+    let inner_rrect = RRect::new_rect_xy(inner, corner_radius, corner_radius);
+
+    let mut path = Path::new();
+    path.add_rect(outer, None);
+    path.add_rrect(inner_rrect, None);
+    path.set_fill_type(skia_safe::PathFillType::EvenOdd);
+
+    let mut paint = super::renderer::paint_from_hex(&shadow.color);
+    paint.set_style(PaintStyle::Fill);
+    if shadow.blur > 0.0 {
+        paint.set_mask_filter(skia_safe::MaskFilter::blur(
+            skia_safe::BlurStyle::Normal,
+            shadow.blur / 2.0,
+            false,
+        ));
+    }
+
+    canvas.draw_path(&path, &paint);
+    canvas.restore();
+}
+
+/// Interpolate a camera property at a given time using its keyframes.
+fn interpolate_camera_property(camera: &Camera, property: &str, time: f32) -> f32 {
+    use super::animator::ease;
+
+    // Find keyframe track for this property
+    let track = camera.keyframes.iter().find(|k| k.property == property);
+    let track = match track {
+        Some(t) if !t.values.is_empty() => t,
+        _ => {
+            // Return static value
+            return match property {
+                "x" => camera.x,
+                "y" => camera.y,
+                "zoom" => camera.zoom,
+                "rotation" => camera.rotation,
+                _ => 0.0,
+            };
+        }
+    };
+
+    let points = &track.values;
+    let t = time as f64;
+
+    // Before first keyframe
+    if t <= points[0].time {
+        return points[0].value;
+    }
+
+    // After last keyframe
+    if t >= points[points.len() - 1].time {
+        return points[points.len() - 1].value;
+    }
+
+    // Find segment
+    for i in 0..points.len() - 1 {
+        let p0 = &points[i];
+        let p1 = &points[i + 1];
+        if t >= p0.time && t <= p1.time {
+            let segment_t = if (p1.time - p0.time).abs() < 1e-9 {
+                1.0
+            } else {
+                (t - p0.time) / (p1.time - p0.time)
+            };
+            let eased = ease(segment_t, &track.easing) as f32;
+            return p0.value + (p1.value - p0.value) * eased;
+        }
+    }
+
+    points[points.len() - 1].value
+}
+
+/// Apply camera transform to the canvas: translate, zoom, rotate around scene center.
+fn apply_camera_transform(canvas: &Canvas, camera: &Camera, time: f32, width: f32, height: f32) {
+    let x = interpolate_camera_property(camera, "x", time);
+    let y = interpolate_camera_property(camera, "y", time);
+    let zoom = interpolate_camera_property(camera, "zoom", time);
+    let rotation = interpolate_camera_property(camera, "rotation", time);
+
+    let cx = width / 2.0;
+    let cy = height / 2.0;
+
+    canvas.save();
+
+    // 1. Translate to center
+    canvas.translate((cx, cy));
+    // 2. Apply rotation
+    if rotation.abs() > 0.001 {
+        canvas.rotate(rotation, None);
+    }
+    // 3. Apply zoom
+    if (zoom - 1.0).abs() > 0.001 {
+        canvas.scale((zoom, zoom));
+    }
+    // 4. Translate back from center + apply camera pan offset
+    canvas.translate((-cx - x, -cy - y));
 }
