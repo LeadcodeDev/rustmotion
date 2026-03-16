@@ -647,6 +647,9 @@ pub struct AnimationTiming {
     /// Loop the animation continuously.
     #[serde(default, rename = "loop")]
     pub repeat: bool,
+    /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
+    #[serde(default)]
+    pub overshoot: Option<f64>,
 }
 
 fn default_animation_duration() -> f64 {
@@ -659,6 +662,7 @@ impl Default for AnimationTiming {
             delay: 0.0,
             duration: 0.8,
             repeat: false,
+            overshoot: None,
         }
     }
 }
@@ -734,6 +738,7 @@ impl AnimationTiming {
             delay: self.delay,
             duration: self.duration,
             repeat: self.repeat,
+            overshoot: self.overshoot,
         }
     }
 }

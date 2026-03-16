@@ -729,10 +729,22 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
             kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
             kf_anim("position.y", delay, -200.0, end, 0.0, EasingType::EaseOutCubic),
         ],
-        AnimationPreset::ScaleIn => vec![
-            kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
-            kf_anim_spring("scale", delay, 0.0, end, 1.0),
-        ],
+        AnimationPreset::ScaleIn => {
+            let overshoot = config.overshoot.unwrap_or(0.08);
+            vec![
+                kf_anim("opacity", delay, 0.0, delay + dur * 0.3, 1.0, EasingType::EaseOut),
+                Animation {
+                    property: "scale".to_string(),
+                    keyframes: vec![
+                        kf(delay, 0.0),
+                        kf(delay + dur * 0.7, 1.0 + overshoot),
+                        kf(end, 1.0),
+                    ],
+                    easing: EasingType::EaseOutCubic,
+                    spring: None,
+                },
+            ]
+        },
         AnimationPreset::BounceIn => vec![
             kf_anim("opacity", delay, 0.0, delay + dur * 0.2, 1.0, EasingType::EaseOut),
             kf_anim_spring("scale", delay, 0.3, end, 1.0),
@@ -778,10 +790,22 @@ fn expand_preset(preset: &AnimationPreset, config: &PresetConfig, _scene_duratio
             kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
             kf_anim("position.y", delay, 0.0, end, 200.0, EasingType::EaseInCubic),
         ],
-        AnimationPreset::ScaleOut => vec![
-            kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
-            kf_anim("scale", delay, 1.0, end, 0.0, EasingType::EaseInCubic),
-        ],
+        AnimationPreset::ScaleOut => {
+            let overshoot = config.overshoot.unwrap_or(0.08);
+            vec![
+                kf_anim("opacity", delay + dur * 0.7, 1.0, end, 0.0, EasingType::EaseIn),
+                Animation {
+                    property: "scale".to_string(),
+                    keyframes: vec![
+                        kf(delay, 1.0),
+                        kf(delay + dur * 0.2, 1.0 + overshoot),
+                        kf(end, 0.0),
+                    ],
+                    easing: EasingType::EaseInCubic,
+                    spring: None,
+                },
+            ]
+        },
         AnimationPreset::BounceOut => vec![
             kf_anim("opacity", delay + dur * 0.8, 1.0, end, 0.0, EasingType::EaseIn),
             kf_anim_spring("scale", delay, 1.0, end, 0.3),
