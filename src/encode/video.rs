@@ -936,6 +936,7 @@ pub fn encode_with_ffmpeg(
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args([
         "-y",
+        "-loglevel", "error",
         "-f", "rawvideo",
         "-pixel_format", pix_fmt,
         "-video_size", &format!("{}x{}", width, height),
@@ -969,8 +970,8 @@ pub fn encode_with_ffmpeg(
             }
         }
         _ => {
-            // h264
-            cmd.args(["-c:v", "libx264", "-crf", &crf_val.to_string(), "-preset", "medium", "-pix_fmt", "yuv420p"]);
+            // h264 — use 10-bit for smoother dark gradients
+            cmd.args(["-c:v", "libx264", "-crf", &crf_val.to_string(), "-preset", "medium", "-profile:v", "high10", "-pix_fmt", "yuv420p10le"]);
         }
     }
 

@@ -260,12 +260,17 @@ fn cmd_render(
                 encode::encode_raw_stdout(&scenario, false)?;
             }
             _ => {
-                // Check if we need FFmpeg (for h265, vp9, prores, webm, mov)
-                let use_ffmpeg = codec.as_deref().map_or(false, |c| c != "h264")
-                    || matches!(fmt, "webm" | "mov")
-                    || transparent;
+                // Try FFmpeg first (supports 10-bit H.264, all codecs)
+                // Fall back to built-in openh264 encoder if FFmpeg is not available
+                let ffmpeg_available = std::process::Command::new("ffmpeg")
+                    .arg("-version")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
 
-                if use_ffmpeg {
+                if ffmpeg_available {
                     encode::encode_with_ffmpeg(
                         &scenario,
                         output.to_str().unwrap(),

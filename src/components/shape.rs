@@ -85,6 +85,7 @@ impl Widget for Shape {
                     };
                     if let Some(shader) = shader {
                         paint.set_shader(shader);
+                        paint.set_dither(true);
                     }
                     paint
                 }
