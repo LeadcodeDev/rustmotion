@@ -97,6 +97,7 @@ mod tests {
             position: Some(PositionMode::Absolute { x, y }),
             x: None,
             y: None,
+            overlays: vec![],
         }
     }
 
