@@ -1168,9 +1168,15 @@ fn draw_bg_gradient_shift(
         return;
     }
 
-    let colors: Vec<skia_safe::Color4f> = bg.colors.iter().map(|c| color4f_from_hex(c)).collect();
+    let base_colors: Vec<skia_safe::Color4f> = bg.colors.iter().map(|c| color4f_from_hex(c)).collect();
     let angle = (bg.speed * time) % 360.0;
     let rad = angle.to_radians();
+
+    // Interpolate in linear color space to reduce banding on dark gradients
+    let linear_cs = skia_safe::ColorSpace::new_srgb_linear();
+
+    // Subdivide color stops (16 intermediate steps between each pair) for smoother gradients
+    let (colors, positions) = subdivide_gradient_stops(&base_colors, 16);
 
     let shader = match bg.gradient_type {
         GradientType::Linear => {
@@ -1181,8 +1187,8 @@ fn draw_bg_gradient_shift(
             let end = Point::new(cx + rad.cos() * half_diag, cy + rad.sin() * half_diag);
             skia_safe::shader::Shader::linear_gradient(
                 (start, end),
-                GradientShaderColors::ColorsInSpace(&colors, Some(skia_safe::ColorSpace::new_srgb())),
-                None,
+                GradientShaderColors::ColorsInSpace(&colors, Some(linear_cs)),
+                Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
                 None,
@@ -1194,8 +1200,8 @@ fn draw_bg_gradient_shift(
             skia_safe::shader::Shader::radial_gradient(
                 center,
                 radius,
-                GradientShaderColors::ColorsInSpace(&colors, Some(skia_safe::ColorSpace::new_srgb())),
-                None,
+                GradientShaderColors::ColorsInSpace(&colors, Some(linear_cs)),
+                Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
                 None,
@@ -1206,8 +1212,47 @@ fn draw_bg_gradient_shift(
     if let Some(shader) = shader {
         let mut paint = Paint::default();
         paint.set_shader(shader);
+        paint.set_dither(true);
         canvas.draw_rect(skia_safe::Rect::from_wh(width, height), &paint);
     }
+}
+
+/// Subdivide gradient color stops by inserting intermediate interpolated colors.
+/// Returns (colors, positions) with `subdivisions` extra stops between each original pair.
+fn subdivide_gradient_stops(
+    colors: &[skia_safe::Color4f],
+    subdivisions: u32,
+) -> (Vec<skia_safe::Color4f>, Vec<f32>) {
+    let n = colors.len();
+    if n < 2 {
+        return (colors.to_vec(), vec![0.0]);
+    }
+    let total = (n - 1) * subdivisions as usize + n;
+    let mut out_colors = Vec::with_capacity(total);
+    let mut out_pos = Vec::with_capacity(total);
+    let seg = (n - 1) as f32;
+
+    for i in 0..n - 1 {
+        let c0 = &colors[i];
+        let c1 = &colors[i + 1];
+        let steps = subdivisions + 1;
+        for s in 0..steps {
+            let t = s as f32 / steps as f32;
+            let global_t = (i as f32 + t) / seg;
+            out_colors.push(skia_safe::Color4f {
+                r: c0.r + (c1.r - c0.r) * t,
+                g: c0.g + (c1.g - c0.g) * t,
+                b: c0.b + (c1.b - c0.b) * t,
+                a: c0.a + (c1.a - c0.a) * t,
+            });
+            out_pos.push(global_t);
+        }
+    }
+    // Last color
+    out_colors.push(colors[n - 1]);
+    out_pos.push(1.0);
+
+    (out_colors, out_pos)
 }
 
 /// Soft colored glow zones (halo preset).
