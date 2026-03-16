@@ -578,6 +578,13 @@ pub enum AnimationEffect {
     // --- Floating/orbit presets ---
     #[serde(alias = "float_3d")]
     Float3d(AnimationTiming),
+    // --- Char animation presets ---
+    CharScaleIn(CharAnimationTiming),
+    CharFadeIn(CharAnimationTiming),
+    CharWave(CharAnimationTiming),
+    CharBounce(CharAnimationTiming),
+    CharRotateIn(CharAnimationTiming),
+    CharSlideUp(CharAnimationTiming),
     // --- Non-preset effects ---
     Glow(GlowConfig),
     Wiggle(WiggleConfig),
@@ -667,7 +674,38 @@ impl Default for AnimationTiming {
     }
 }
 
-/// Per-character or per-word text animation configuration.
+/// Timing configuration for char animation effect variants (used inside style.animation).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CharAnimationTiming {
+    /// Delay before animation starts (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// Duration of each unit's animation in seconds.
+    #[serde(default = "default_char_duration_f64")]
+    pub duration: f64,
+    /// Delay between each unit (char or word) in seconds.
+    #[serde(default = "default_char_stagger_f64")]
+    pub stagger: f64,
+    /// Granularity: animate per character or per word.
+    #[serde(default)]
+    pub granularity: TextAnimGranularity,
+    /// Easing function for each unit's animation.
+    #[serde(default)]
+    pub easing: EasingType,
+    /// Overshoot intensity for char_scale_in/char_bounce (0.0 = none, default 0.08 = 8%).
+    #[serde(default)]
+    pub overshoot: Option<f64>,
+}
+
+fn default_char_stagger_f64() -> f64 {
+    0.03
+}
+
+fn default_char_duration_f64() -> f64 {
+    0.4
+}
+
+/// Per-character or per-word text animation configuration (legacy root-level prop).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CharAnimation {
     /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up".

@@ -1266,7 +1266,8 @@ All animation effects are defined inside `style.animation` as a **typed array**,
 
 | Effect name | Fields | Description |
 |---|---|---|
-| *preset name* | `delay`, `duration`, `loop` | Any of the 39 presets (e.g. `fade_in_up`, `scale_in`) |
+| *preset name* | `delay`, `duration`, `loop`, `overshoot` | Any of the 39 presets (e.g. `fade_in_up`, `scale_in`) |
+| *char preset* | `delay`, `duration`, `stagger`, `granularity`, `easing`, `overshoot` | Per-char/word text animation: `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` |
 | `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
 | `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
 | `orbit` | `radius_x`, `radius_y`, `speed`, `depth`, `tilt`, ... | Elliptical orbital motion with pseudo-3D |
@@ -1290,6 +1291,7 @@ Components also support a `timeline` field (array of `{ "at": f64, "animation": 
 | `delay` | `f64` | `0.0` | Delay before animation starts (seconds) |
 | `duration` | `f64` | `0.8` | Animation duration (seconds) |
 | `loop` | `bool` | `false` | Loop the animation continuously |
+| `overshoot` | `f64` | `0.08` | Overshoot/anticipation intensity for `scale_in`/`scale_out` (0.0 = none) |
 
 #### Entrance Presets
 
@@ -1304,7 +1306,7 @@ Components also support a `timeline` field (array of `{ "at": f64, "animation": 
 | `slide_in_right` | Slide in from far right |
 | `slide_in_up` | Slide in from below |
 | `slide_in_down` | Slide in from above |
-| `scale_in` | Scale up from 0 with spring bounce |
+| `scale_in` | Scale up from 0 with overshoot (configurable via `overshoot`, default 8%) |
 | `bounce_in` | Bouncy scale from small to normal |
 | `blur_in` | Fade in from blurred |
 | `rotate_in` | Rotate + scale from half size |
@@ -1321,7 +1323,7 @@ Components also support a `timeline` field (array of `{ "at": f64, "animation": 
 | `slide_out_right` | Slide out to the right |
 | `slide_out_up` | Slide out upward |
 | `slide_out_down` | Slide out downward |
-| `scale_out` | Scale down to 0 |
+| `scale_out` | Scale down to 0 with anticipation (configurable via `overshoot`, default 8%) |
 | `bounce_out` | Bouncy scale to small |
 | `blur_out` | Fade out with blur |
 | `rotate_out` | Rotate + scale to half size |
@@ -1473,31 +1475,29 @@ Creates continuous circular or elliptical orbital motion with pseudo-3D depth. A
 
 ### Per-Character / Per-Word Text Animation
 
-Animate each character or word independently with staggered timing. Set `char-animation` on `text` components.
+Animate each character or word independently with staggered timing. Use `char_*` animation presets inside `style.animation` on `text` components.
+
+**Char animation presets:** `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`
 
 ```json
 {
   "type": "text",
   "content": "Hello World",
-  "char-animation": {
-    "preset": "scale_in",
-    "stagger": 0.03,
-    "duration": 0.4,
-    "delay": 0.2,
-    "granularity": "char"
-  },
-  "style": { "font-size": 64, "color": "#FFFFFF" }
+  "style": {
+    "font-size": 64, "color": "#FFFFFF",
+    "animation": [{ "name": "char_scale_in", "stagger": 0.03, "duration": 0.4, "delay": 0.2 }]
+  }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `preset` | `string` | `"scale_in"` | `"scale_in"`, `"fade_in"`, `"wave"`, `"bounce"`, `"rotate_in"`, `"slide_up"` |
-| `stagger` | `f32` | `0.03` | Delay between each unit (seconds) |
-| `duration` | `f32` | `0.4` | Each unit's animation duration |
-| `delay` | `f32` | `0.0` | Initial delay before first unit |
+| `stagger` | `f64` | `0.03` | Delay between each unit (seconds) |
+| `duration` | `f64` | `0.4` | Each unit's animation duration |
+| `delay` | `f64` | `0.0` | Initial delay before first unit |
 | `easing` | `string` | `"linear"` | Easing function |
 | `granularity` | `string` | `"char"` | `"char"` (per-character) or `"word"` (per-word) |
+| `overshoot` | `f64` | `0.08` | Overshoot intensity for `char_scale_in`/`char_bounce` (0.0 = none) |
 
 **Per-word mode** (`"granularity": "word"`) splits text by whitespace and animates each word as a unit. Use larger stagger values (0.1–0.3s) for word reveals:
 
@@ -1505,13 +1505,10 @@ Animate each character or word independently with staggered timing. Set `char-an
 {
   "type": "text",
   "content": "One platform to rule them all",
-  "char-animation": {
-    "preset": "fade_in",
-    "stagger": 0.15,
-    "duration": 0.5,
-    "granularity": "word"
-  },
-  "style": { "font-size": 56, "color": "#FFFFFF", "font-weight": "bold" }
+  "style": {
+    "font-size": 56, "color": "#FFFFFF", "font-weight": "bold",
+    "animation": [{ "name": "char_fade_in", "stagger": 0.15, "duration": 0.5, "granularity": "word" }]
+  }
 }
 ```
 

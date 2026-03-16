@@ -22,7 +22,7 @@ Presets are simpler, less error-prone, and produce consistent motion design. Onl
 }
 ```
 
-## 39 Available Presets
+## 45 Available Presets
 
 | Category   | Presets |
 | ---------- | ------ |
@@ -32,3 +32,6 @@ Presets are simpler, less error-prone, and produce consistent motion design. Onl
 | 3D         | `flip_in_x`, `flip_in_y`, `flip_out_x`, `flip_out_y`, `tilt_in` |
 | Stroke     | `draw_in` (animate stroke drawing), `stroke_reveal` (draw_in + fade-in) |
 | Special    | `typewriter`, `wipe_left`, `wipe_right` |
+| Char (text only) | `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` |
+
+`scale_in` and `scale_out` support `overshoot` (default 0.08 = 8%). Char presets support `stagger`, `granularity`, `easing`, and `overshoot`.

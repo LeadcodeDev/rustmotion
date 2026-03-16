@@ -1,9 +1,21 @@
 use crate::schema::{
-    Animation, AnimationEffect, AnimationPreset, EasingType, GlowConfig, Keyframe, KeyframeValue,
-    OrbitConfig, PresetConfig, SpringConfig, WiggleConfig,
+    Animation, AnimationEffect, AnimationPreset, CharAnimPreset, EasingType, GlowConfig, Keyframe,
+    KeyframeValue, OrbitConfig, PresetConfig, SpringConfig, TextAnimGranularity, WiggleConfig,
 };
 
 // ─── Effect extraction ──────────────────────────────────────────────────────
+
+/// Resolved char animation config ready for the text renderer.
+#[derive(Debug, Clone)]
+pub struct ResolvedCharAnimation {
+    pub preset: CharAnimPreset,
+    pub granularity: TextAnimGranularity,
+    pub stagger: f32,
+    pub duration: f32,
+    pub easing: EasingType,
+    pub delay: f32,
+    pub overshoot: f32,
+}
 
 /// Extracted and categorized animation effects from an AnimationEffect slice.
 pub struct ExtractedEffects<'a> {
@@ -13,6 +25,7 @@ pub struct ExtractedEffects<'a> {
     pub orbits: Vec<&'a OrbitConfig>,
     pub glow: Option<&'a GlowConfig>,
     pub motion_blur: Option<f32>,
+    pub char_animation: Option<ResolvedCharAnimation>,
 }
 
 /// Split a slice of AnimationEffect into categorized buckets for the renderer.
@@ -24,6 +37,7 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
         orbits: Vec::new(),
         glow: None,
         motion_blur: None,
+        char_animation: None,
     };
 
     for effect in effects {
@@ -31,6 +45,25 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
             result.presets.push((preset, timing.to_preset_config()));
         } else {
             match effect {
+                AnimationEffect::CharScaleIn(t) | AnimationEffect::CharFadeIn(t)
+                | AnimationEffect::CharWave(t) | AnimationEffect::CharBounce(t)
+                | AnimationEffect::CharRotateIn(t) | AnimationEffect::CharSlideUp(t) => {
+                    let preset = match effect {
+                        AnimationEffect::CharScaleIn(_) => CharAnimPreset::ScaleIn,
+                        AnimationEffect::CharFadeIn(_) => CharAnimPreset::FadeIn,
+                        AnimationEffect::CharWave(_) => CharAnimPreset::Wave,
+                        AnimationEffect::CharBounce(_) => CharAnimPreset::Bounce,
+                        AnimationEffect::CharRotateIn(_) => CharAnimPreset::RotateIn,
+                        AnimationEffect::CharSlideUp(_) => CharAnimPreset::SlideUp,
+                        _ => unreachable!(),
+                    };
+                    result.char_animation = Some(ResolvedCharAnimation {
+                        preset, granularity: t.granularity.clone(),
+                        stagger: t.stagger as f32, duration: t.duration as f32,
+                        easing: t.easing.clone(), delay: t.delay as f32,
+                        overshoot: t.overshoot.unwrap_or(0.08) as f32,
+                    });
+                }
                 AnimationEffect::Glow(config) => {
                     result.glow = Some(config);
                 }
@@ -258,6 +291,8 @@ pub struct AnimatedProperties {
     pub draw_progress: f32,
     // Motion path progress (0.0 = start, 1.0 = end)
     pub motion_progress: f32,
+    // Char animation (from style.animation char_* variants)
+    pub char_animation: Option<ResolvedCharAnimation>,
 }
 
 impl Default for AnimatedProperties {
@@ -288,6 +323,7 @@ impl Default for AnimatedProperties {
             perspective: -1.0,
             draw_progress: -1.0,
             motion_progress: -1.0,
+            char_animation: None,
         }
     }
 }
@@ -345,6 +381,7 @@ impl AnimatedProperties {
         if other.perspective >= 0.0 { self.perspective = other.perspective; }
         if other.draw_progress >= 0.0 { self.draw_progress = other.draw_progress; }
         if other.motion_progress >= 0.0 { self.motion_progress = other.motion_progress; }
+        if other.char_animation.is_some() { self.char_animation = other.char_animation.clone(); }
     }
 }
 

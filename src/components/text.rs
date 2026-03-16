@@ -26,9 +26,6 @@ pub struct Text {
     pub content: String,
     #[serde(default)]
     pub max_width: Option<f32>,
-    /// Per-character animation (each letter animates independently).
-    #[serde(default, rename = "char-animation")]
-    pub char_animation: Option<CharAnimation>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -57,13 +54,25 @@ fn apply_text_anim_preset(
     time: f64,
     unit_idx: usize,
     font_size: f32,
+    overshoot: f32,
 ) {
     let center_x = cursor_x + unit_width / 2.0;
     let center_y = line_y;
 
     match preset {
         CharAnimPreset::ScaleIn => {
-            let scale = t;
+            // 0→(1+overshoot) at 70%, then settle to 1.0
+            let scale = if overshoot > 0.001 {
+                if t < 0.7 {
+                    let p = t / 0.7;
+                    p * (1.0 + overshoot)
+                } else {
+                    let p = (t - 0.7) / 0.3;
+                    (1.0 + overshoot) - overshoot * p
+                }
+            } else {
+                t
+            };
             if scale < 0.001 {
                 return;
             }
@@ -84,10 +93,11 @@ fn apply_text_anim_preset(
             draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y + wave_offset, &p);
         }
         CharAnimPreset::Bounce => {
+            let peak = 1.0 + overshoot.max(0.3); // bounce always overshoots, min 0.3
             let scale = if t < 0.5 {
-                t * 2.0 * 1.3
+                t * 2.0 * peak
             } else {
-                1.3 - 0.3 * ((t - 0.5) * 2.0)
+                peak - (peak - 1.0) * ((t - 0.5) * 2.0)
             };
             let scale = scale.max(0.001);
             canvas.translate((center_x, center_y));
@@ -128,6 +138,7 @@ fn render_char_animation(
     lines: &[String],
     char_anim: &CharAnimation,
     time: f64,
+    overshoot: f32,
 ) {
     let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
     let mut global_unit_idx = 0usize;
@@ -200,6 +211,7 @@ fn render_char_animation(
                     canvas, &word, font, emoji_font, paint,
                     cursor_x, line_y, word_width,
                     &char_anim.preset, t, time, global_unit_idx, font.size(),
+                    overshoot,
                 );
                 canvas.restore();
 
@@ -230,6 +242,7 @@ fn render_char_animation(
                     canvas, &ch_str, font, emoji_font, paint,
                     cursor_x, line_y, ch_width,
                     &char_anim.preset, t, time, global_unit_idx, font.size(),
+                    overshoot,
                 );
                 canvas.restore();
 
@@ -347,12 +360,20 @@ impl Widget for Text {
             max_w
         };
 
-        // Per-character animation mode
-        if let Some(ref char_anim) = self.char_animation {
+        // Per-character animation mode (via style.animation char_* presets)
+        if let Some(ref resolved) = props.char_animation {
+            let char_anim = CharAnimation {
+                preset: resolved.preset.clone(),
+                granularity: resolved.granularity.clone(),
+                stagger: resolved.stagger,
+                duration: resolved.duration,
+                easing: resolved.easing.clone(),
+                delay: resolved.delay,
+            };
             render_char_animation(
                 canvas, &content, &font, &emoji_font, &paint,
                 letter_spacing, align, align_width, line_height_val, baseline_offset,
-                &lines, char_anim, ctx.time,
+                &lines, &char_anim, ctx.time, resolved.overshoot,
             );
             return Ok(());
         }
