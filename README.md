@@ -12,7 +12,7 @@ A CLI tool that renders motion design videos from JSON scenarios. No browser, no
 cargo install rustmotion
 ```
 
-**Requirements:** Rust toolchain + C++ compiler (for openh264). Optional: `ffmpeg` CLI for H.265/VP9/ProRes/WebM/GIF output.
+**Requirements:** Rust toolchain + C++ compiler (for openh264). **Recommended:** `ffmpeg` CLI for 10-bit H.264 and H.265/VP9/ProRes/WebM/GIF output.
 
 ## Quick Start
 
@@ -1220,7 +1220,7 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 
 ### Animated Background
 
-Scenes can have animated gradient backgrounds.
+Scenes can have animated gradient backgrounds. Gradients are interpolated in linear color space with subdivided color stops for smooth dark transitions.
 
 ```json
 {
@@ -1572,7 +1572,8 @@ Renders multiple sub-frames and composites them for physically-correct motion bl
 
 | Format | Command | Requires |
 |---|---|---|
-| **MP4 (H.264)** | `rustmotion render in.json -o out.mp4` | Built-in |
+| **MP4 (H.264 10-bit)** | `rustmotion render in.json -o out.mp4` | ffmpeg (auto-detected) |
+| **MP4 (H.264 8-bit)** | `rustmotion render in.json -o out.mp4` | Built-in (fallback without ffmpeg) |
 | **MP4 (H.265)** | `rustmotion render in.json -o out.mp4 --codec h265` | ffmpeg |
 | **WebM (VP9)** | `rustmotion render in.json -o out.webm --codec vp9` | ffmpeg |
 | **MOV (ProRes)** | `rustmotion render in.json -o out.mov --codec prores` | ffmpeg |
@@ -1581,6 +1582,8 @@ Renders multiple sub-frames and composites them for physically-correct motion bl
 | **Single Frame** | `rustmotion render in.json --frame 0 -o preview.png` | Built-in |
 
 Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), and ProRes 4444.
+
+> **Gradient quality:** When ffmpeg is available, H.264 uses 10-bit color depth (`yuv420p10le`, `high10` profile) which greatly reduces banding on dark gradients. For maximum quality, use `--codec prores`. The built-in openh264 encoder (fallback without ffmpeg) outputs 8-bit only.
 
 ---
 
