@@ -139,6 +139,11 @@ pub fn render_component(
                 }
             }
 
+            // Propagate char animation
+            if extracted_base.char_animation.is_some() {
+                props.char_animation = extracted_base.char_animation;
+            }
+
             // Apply wiggles additively (base only)
             if !extracted_base.wiggles.is_empty() {
                 let wiggles: Vec<_> = extracted_base.wiggles.into_iter().cloned().collect();
@@ -463,6 +468,9 @@ fn render_component_with_motion_blur(
                     let orbits: Vec<_> = extracted.orbits.into_iter().cloned().collect();
                     apply_orbits(&mut p, &orbits, sample_time);
                 }
+                if extracted.char_animation.is_some() {
+                    p.char_animation = extracted.char_animation;
+                }
                 p
             } else {
                 AnimatedProperties::default()
@@ -571,6 +579,9 @@ fn render_overlays(
                     let kf_animations: Vec<_> = extracted.keyframes.into_iter().cloned().collect();
                     let kf_props = resolve_animations(&kf_animations, None, None, ctx.time, ctx.scene_duration);
                     props.merge(&kf_props);
+                }
+                if extracted.char_animation.is_some() {
+                    props.char_animation = extracted.char_animation;
                 }
                 props
             } else {
