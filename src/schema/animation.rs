@@ -163,6 +163,9 @@ pub struct PresetConfig {
     /// Loop the animation continuously
     #[serde(default, rename = "loop")]
     pub repeat: bool,
+    /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
+    #[serde(default)]
+    pub overshoot: Option<f64>,
 }
 
 impl Default for PresetConfig {
@@ -171,6 +174,7 @@ impl Default for PresetConfig {
             delay: 0.0,
             duration: 0.8,
             repeat: false,
+            overshoot: None,
         }
     }
 }
