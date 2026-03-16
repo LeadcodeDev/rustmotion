@@ -36,6 +36,93 @@ rustmotion schema                          # Print JSON Schema
 
 ---
 
+## Video Creation Wizard
+
+When the user provides a **video idea or subject** (not a technical question), activate this guided wizard flow. Examples of triggers: "je veux créer une vidéo pour...", "make a video about...", "une vidéo de présentation de...", or any prompt describing video content to produce.
+
+### Phase 1: Brief global
+
+Ask the user **3-5 questions** using `AskUserQuestion` to understand the project. Ask them one at a time or grouped logically:
+
+1. **Format & Device** — Portrait 9:16 / Mobile (1080×1920), Landscape 16:9 / Desktop (1920×1080), or Square 1:1 (1080×1080)? Accept aliases: "mobile"/"phone"/"story"/"reel"/"TikTok" → Mobile 9:16, "desktop"/"YouTube"/"presentation" → Desktop 16:9, "tablet"/"iPad" → Tablet. **The chosen device determines all component sizing** — see [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md).
+2. **Target duration** — Short (15-30s), Medium (30-60s), or Long (60s+)?
+3. **Tone/style** — Corporate, Playful, Minimal, Tech/Dark, Colorful?
+4. **Key content** — What text, data, features, or CTA should appear?
+5. **Color palette** — Brand colors, or should we suggest one?
+
+Skip questions where the answer is already obvious from context.
+
+### Phase 2: Scene plan with component suggestions
+
+Based on the brief, propose a **textual scene plan** that maps the user's ideas to concrete rustmotion components. Format:
+
+```
+Scene 1 (3s) : Intro
+  → icon (lucide:rocket) + text (tagline) with char_scale_in
+  → animated-background radial gradient (#0f172a → #1e1b4b)
+  → particle stars for ambiance
+
+Scene 2 (4s) : The Problem
+  → badge "Pain Point" + main text with char_fade_in (granularity: word)
+  → 3x card in row with icons (stagger 0.2s)
+  → dark red background with concentric_circles
+```
+
+Each scene must include:
+- **Concrete components** (text, card, icon, shape, badge, counter, etc.)
+- **Recommended animations** (presets, char animations, glow, wiggle)
+- **Adapted background** (gradient, particles, concentric_circles)
+- **Suggested icons** (lucide:xxx, simple-icons:xxx)
+
+**Idea → Component mapping table:**
+
+| User's idea | Recommended components |
+|---|---|
+| Stats / numbers | `counter` (animated) + `card` |
+| Features / benefits | `card` grid + `icon` + `badge` |
+| Code / technical | `codeblock` + `terminal` |
+| Process / steps | `timeline` component |
+| Comparison | `flex` row with 2 `card` side by side |
+| Testimonial | `card` with `shape` circle (avatar) + `text` italic |
+| Pricing | `card` with `counter` + `text` |
+| Partner logos | `flex` row + `icon` (simple-icons:xxx) |
+| CTA / call to action | `badge` + glow + `particle` confetti |
+| Hero / intro | `text` with `char_scale_in` + main `icon` |
+| Transition / ambiance | `particle` stars/confetti + `animated-background` |
+
+The user validates or adjusts the plan before proceeding.
+
+### Phase 3: Iterative scene-by-scene construction
+
+For each scene in the validated plan:
+1. Generate the JSON for the scene
+2. Add the scene to the global JSON file (named after the subject in kebab-case, e.g. `saas-analytics-presentation.json`)
+3. Validate with `rustmotion validate`
+4. Optionally propose a preview (`rustmotion render --frame N`) for visually complex scenes
+5. The user validates or requests adjustments
+6. Move to the next scene
+
+**Important:** Always write incrementally. Never generate the entire video at once.
+
+### Phase 4: Finalization
+
+1. Assemble the complete JSON with all scenes
+2. Run final `rustmotion validate`
+3. Render with `rustmotion render -o output.mp4 --quiet`
+4. Suggest `--codec prores` for videos with dark gradients
+
+### Design guidelines
+
+- **Scene duration:** 3-5s per scene is the sweet spot. Intro/outro can be shorter (2-3s).
+- **Animation patterns:** Stagger entrances within a scene (0.1-0.3s delays). Use fade/slide transitions between scenes.
+- **Backgrounds:** Radial gradient for dark themes, concentric_circles for tech feel, particles for ambiance.
+- **Visual hierarchy:** Title (large font) → subtitle (medium) → body (smaller). Use color contrast to guide the eye.
+- **Consistency:** Keep the same color palette and animation style across all scenes.
+- **Pacing:** Alternate between dense scenes (multiple elements) and breathing scenes (single focal point).
+- **Device-aware sizing:** All component sizes (font-size, icon size, card width, padding, gaps) MUST be scaled to the target device. Use the Tailwind 4 type scale as reference, multiplied by the device factor (×3 for mobile, ×1.5 for desktop, ×2.5 for square). See [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md). A title on mobile should be `text-4xl` equivalent = 108px, NOT 48px.
+
+---
+
 ## Rules
 
 Read individual rule files for detailed explanations, GOOD/BAD examples, and constraints:
@@ -59,6 +146,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/3d-perspective.md](rules/3d-perspective.md) - 3D perspective transforms with rotate_x, rotate_y, perspective keyframes
 - [rules/timeline-sequencing.md](rules/timeline-sequencing.md) - Timeline steps for multi-phase animations within a single scene
 - [rules/gradient-quality.md](rules/gradient-quality.md) - Gradient quality: linear color space, 10-bit encoding, ProRes for dark gradients
+- [rules/video-wizard.md](rules/video-wizard.md) - Video creation wizard: iterative scene-by-scene construction best practices
+- [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md) - CRITICAL: Scale all sizes to target device using Tailwind 4 type scale (×3 mobile, ×1.5 desktop)
 
 ---
 

@@ -75,6 +75,16 @@ impl Badge {
             .unwrap_or_else(|| self.badge_size.params().0)
     }
 
+    /// Returns (h_padding, v_padding, icon_size) scaled proportionally
+    /// to the resolved font size. If style.font_size overrides the default,
+    /// padding and icon scale with it.
+    fn resolved_params(&self) -> (f32, f32, f32) {
+        let (default_fs, h_pad, v_pad, icon_size) = self.badge_size.params();
+        let actual_fs = self.resolved_font_size();
+        let ratio = actual_fs / default_fs;
+        (h_pad * ratio, v_pad * ratio, icon_size * ratio)
+    }
+
     fn make_font(&self) -> skia_safe::Font {
         let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
@@ -91,13 +101,14 @@ impl Badge {
     }
 
     fn measure_content(&self) -> (f32, f32) {
-        let (_, h_pad, v_pad, icon_size) = self.badge_size.params();
+        let (h_pad, v_pad, icon_size) = self.resolved_params();
         let font = self.make_font();
         let font_size = self.resolved_font_size();
 
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let text_width = measure_text_with_fallback(&self.text, &font, &emoji_font, 0.0);
-        let icon_gap = if self.icon.is_some() { 6.0 } else { 0.0 };
+        let ratio = self.resolved_font_size() / self.badge_size.params().0;
+        let icon_gap = if self.icon.is_some() { 6.0 * ratio } else { 0.0 };
         let icon_w = if self.icon.is_some() { icon_size } else { 0.0 };
 
         let w = h_pad * 2.0 + text_width + icon_w + icon_gap;
@@ -116,7 +127,7 @@ impl Widget for Badge {
         _props: &crate::engine::animator::AnimatedProperties,
     ) -> Result<()> {
         let color = self.style.background.as_deref().unwrap_or("#3B82F6");
-        let (_, h_pad, _v_pad, icon_size) = self.badge_size.params();
+        let (h_pad, _v_pad, icon_size) = self.resolved_params();
 
         let w = layout.width;
         let h = layout.height;
@@ -150,8 +161,8 @@ impl Widget for Badge {
                 color
             };
 
-            let icon_w = icon_size as u32;
-            let icon_h = icon_size as u32;
+            let icon_w = icon_size.round() as u32;
+            let icon_h = icon_size.round() as u32;
             let cache_key = format!("icon:{}:{}:{}x{}", icon_id, icon_color, icon_w, icon_h);
 
             let cache = asset_cache();
@@ -200,7 +211,8 @@ impl Widget for Badge {
             let dst = Rect::from_xywh(x_offset, icon_y, icon_size, icon_size);
             canvas.draw_image_rect(img, None, dst, &Paint::default());
 
-            x_offset += icon_size + 6.0;
+            let ratio = self.resolved_font_size() / self.badge_size.params().0;
+            x_offset += icon_size + 6.0 * ratio;
         }
 
         // Text
