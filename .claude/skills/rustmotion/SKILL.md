@@ -58,6 +58,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/text-background.md](rules/text-background.md) - text-background renders a colored rectangle behind text
 - [rules/3d-perspective.md](rules/3d-perspective.md) - 3D perspective transforms with rotate_x, rotate_y, perspective keyframes
 - [rules/timeline-sequencing.md](rules/timeline-sequencing.md) - Timeline steps for multi-phase animations within a single scene
+- [rules/gradient-quality.md](rules/gradient-quality.md) - Gradient quality: linear color space, 10-bit encoding, ProRes for dark gradients
 
 ---
 
@@ -306,8 +307,10 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 | `height`     | u32    | required    | Video height in pixels. **Must be even for H.264.**     |
 | `fps`        | u32    | `30`        | Frames per second                                       |
 | `background` | string | `"#000000"` | Default background color (hex `#RRGGBB` or `#RRGGBBAA`) |
-| `codec`      | string | `null`      | `"h264"`, `"h265"`, `"vp9"`, `"prores"`                 |
-| `crf`        | u8     | `null`      | Constant Rate Factor (0-51, lower = better quality)     |
+| `codec`      | string | `null`      | `"h264"` (10-bit), `"h265"`, `"vp9"`, `"prores"`        |
+| `crf`        | u8     | `23`        | Constant Rate Factor (0-51, lower = better quality)     |
+
+> **Encoding note:** H.264 outputs 10-bit (`yuv420p10le`) by default when ffmpeg is available, which reduces color banding on dark gradients. For best quality on gradient-heavy videos, use `--codec prores` (lossless).
 
 #### `audio` (optional array)
 
@@ -1294,7 +1297,7 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 
 #### Animated Background
 
-Scenes can have animated gradient backgrounds. Use `concentric_circles` for a subtle, professional look (dark arc rings radiating from center). Use `gradient_shift` for color-shifting gradients.
+Scenes can have animated gradient backgrounds. Gradients are interpolated in **linear color space** with subdivided color stops for smooth dark transitions. Use `concentric_circles` for a subtle, professional look (dark arc rings radiating from center). Use `gradient_shift` for color-shifting gradients.
 
 ```json
 {

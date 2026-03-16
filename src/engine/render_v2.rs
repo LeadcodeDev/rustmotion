@@ -848,6 +848,11 @@ pub fn render_world_frame_scaled(
     let bg_color = view.background.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg_color));
 
+    // Pre-compute camera position for background parallax
+    let (cam_x, cam_y) = timeline.camera_at(time, &view.camera_easing);
+    let viewport_cx = vw / 2.0;
+    let viewport_cy = vh / 2.0;
+
     // 2. Draw animated backgrounds
     // Determine which scene's backgrounds to use (crossfade during pan)
     let visible = timeline.visible_scenes_at(time, &view.scenes, fps);
@@ -904,7 +909,7 @@ pub fn render_world_frame_scaled(
             // Draw scene A backgrounds with fading alpha
             if crossfade < 1.0 {
                 for bg in bgs_a {
-                    draw_animated_background(canvas, bg, time as f32, vw, vh);
+                    draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
                 }
             }
             // Draw scene B backgrounds with growing alpha
@@ -918,7 +923,7 @@ pub fn render_world_frame_scaled(
                     if scale_factor != 1.0 { bg_canvas.scale((scale_factor, scale_factor)); }
                     bg_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
                     for bg in bgs_b {
-                        draw_animated_background(bg_canvas, bg, time as f32, vw, vh);
+                        draw_world_bg_with_parallax(bg_canvas, bg, time as f32, vw, vh, cam_x, cam_y);
                     }
                     let snapshot = bg_surface.image_snapshot();
                     let mut paint = skia_safe::Paint::default();
@@ -933,21 +938,17 @@ pub fn render_world_frame_scaled(
         } else {
             // Single active scene — just draw its backgrounds
             for bg in active_bgs {
-                draw_animated_background(canvas, bg, time as f32, vw, vh);
+                draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
             }
         }
     } else {
         // No active scene — draw view-level backgrounds
         for bg in &view.animated_background {
-            draw_animated_background(canvas, bg, time as f32, vw, vh);
+            draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
         }
     }
 
-    // 3. Calculate camera position and apply world transform
-    let (cam_x, cam_y) = timeline.camera_at(time, &view.camera_easing);
-    let viewport_cx = vw / 2.0;
-    let viewport_cy = vh / 2.0;
-
+    // 3. Apply world camera transform
     canvas.save();
     canvas.translate((viewport_cx - cam_x, viewport_cy - cam_y));
 
@@ -1155,6 +1156,45 @@ fn draw_animated_background(
     }
 }
 
+/// Draw animated background with camera parallax for world views.
+/// Offsets the grid pattern by (cam_x, cam_y) modulo spacing so that
+/// the texture scrolls as the camera pans.
+fn draw_world_bg_with_parallax(
+    canvas: &Canvas,
+    bg: &AnimatedBackground,
+    time: f32,
+    width: f32,
+    height: f32,
+    cam_x: f32,
+    cam_y: f32,
+) {
+    match bg.preset.as_deref() {
+        Some("halo") => {
+            // Halo zones use normalized coordinates (0-1) relative to the drawn area.
+            // To make them scroll with the world, we translate by the full camera offset
+            // and draw on a surface large enough to cover the entire world extent.
+            // We use a large virtual surface so zones are spread across the world.
+            let world_w = width * 5.0;
+            let world_h = height * 5.0;
+            canvas.save();
+            canvas.translate((-cam_x, -cam_y));
+            draw_bg_halo(canvas, bg, time, world_w, world_h);
+            canvas.restore();
+        }
+        _ => {
+            // Grid-based backgrounds (grid_dots, concentric_circles, etc.)
+            // use modulo offset for seamless tiling.
+            let spacing = bg.spacing.max(20.0);
+            let offset_x = -(cam_x % spacing);
+            let offset_y = -(cam_y % spacing);
+            canvas.save();
+            canvas.translate((offset_x, offset_y));
+            draw_animated_background(canvas, bg, time, width + spacing * 2.0, height + spacing * 2.0);
+            canvas.restore();
+        }
+    }
+}
+
 fn draw_bg_gradient_shift(
     canvas: &Canvas,
     bg: &AnimatedBackground,
@@ -1263,12 +1303,14 @@ fn draw_bg_halo(
     width: f32,
     height: f32,
 ) {
-    for zone in &bg.zones {
+    for (i, zone) in bg.zones.iter().enumerate() {
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
-        // Subtle breathing animation
-        let breath = 1.0 + 0.05 * (time * bg.speed).sin();
+        // Each particle gets a unique phase and slightly different frequency
+        let phase = (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
+        let freq = bg.speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
+        let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
 
         let color = color4f_from_hex(&zone.color);
@@ -1277,7 +1319,7 @@ fn draw_bg_halo(
         paint.set_color4f(color, None);
         paint.set_mask_filter(skia_safe::MaskFilter::blur(
             skia_safe::BlurStyle::Normal,
-            radius / 2.0,
+            radius * 0.15,
             false,
         ));
         canvas.draw_circle((cx, cy), radius, &paint);
