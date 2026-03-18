@@ -334,8 +334,8 @@ impl PreviewApp {
             self.last_frame_time = Instant::now();
             if self.current_frame >= self.total_frames.saturating_sub(1) {
                 self.current_frame = 0;
-                self.request_frame(0);
             }
+            self.request_frame(self.current_frame);
         }
         self.update_title();
     }
@@ -972,6 +972,7 @@ impl ApplicationHandler for PreviewApp {
                 }
             } else if !frame_ready {
                 self.last_frame_time = now;
+                self.request_frame(self.current_frame);
             }
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if needs_animation

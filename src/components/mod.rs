@@ -7,6 +7,7 @@ pub mod card;
 pub mod chart;
 pub mod codeblock;
 pub mod connector;
+pub mod container;
 pub mod counter;
 pub mod cursor;
 pub mod divider;
@@ -45,6 +46,7 @@ pub use card::Card;
 pub use chart::Chart;
 pub use codeblock::Codeblock;
 pub use connector::Connector;
+pub use container::ContainerComponent;
 pub use counter::Counter;
 pub use cursor::Cursor;
 pub use divider::Divider;
@@ -203,6 +205,8 @@ pub enum Component {
     Grid(Grid),
     /// Backward-compatible card container (supports both flex and grid display modes).
     Card(Card),
+    /// Invisible container — groups children for shared transforms (scale, opacity, etc.).
+    Container(ContainerComponent),
 }
 
 // --- Dispatch helpers ---
@@ -243,6 +247,7 @@ impl Component {
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
+            Component::Container(c) => c,
         }
     }
 
@@ -280,6 +285,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
             Component::Positioned(_) => None,
         }
     }
@@ -317,6 +323,7 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
             Component::Caption(_) | Component::Positioned(_) => None,
         }
     }
@@ -356,6 +363,7 @@ impl Component {
             Component::Flex(c) => c,
             Component::Grid(c) => c,
             Component::Card(c) => c,
+            Component::Container(c) => c,
         }
     }
 
@@ -367,13 +375,14 @@ impl Component {
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
             _ => None,
         }
     }
 
     /// Returns true if this component is a container that handles padding internally.
     pub fn is_container(&self) -> bool {
-        matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_))
+        matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_) | Component::Container(_))
     }
 
 }

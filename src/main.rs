@@ -685,6 +685,9 @@ fn validate_children(
             Component::Positioned(pos) => {
                 validate_children(&pos.children, &p, errors);
             }
+            Component::Container(container) => {
+                validate_children(&container.children, &p, errors);
+            }
             _ => {}
         }
     }

@@ -89,6 +89,7 @@ Each scene must include:
 | CTA / call to action | `badge` + glow + `particle` confetti |
 | Hero / intro | `text` with `char_scale_in` + main `icon` |
 | Transition / ambiance | `particle` stars/confetti + `animated-background` |
+| Grouped transforms | `container` wrapping children + shared `timeline` scale/fade |
 
 The user validates or adjusts the plan before proceeding.
 
@@ -898,6 +899,35 @@ Each dimension of `size` can be a number or `"auto"`.
 - `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 
 `position` is only valid inside `positioned` containers. Card children are laid out using flex/grid style properties.
+
+### 12. `container`
+
+Invisible wrapper — groups children for shared transforms (scale, opacity, rotation). Like `card`/`flex` but with **no background, no border, no shadow, no clipping**. Children can overflow freely.
+
+Use `container` when you need to apply a single animation/timeline to a group of elements (e.g., scale-out all foreground content together).
+
+```json
+{
+  "type": "container",
+  "size": { "width": "auto", "height": "auto" },
+  "style": {
+    "align-items": "center",
+    "gap": 36,
+    "timeline": [
+      { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
+        { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
+        { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
+      ]}]}
+    ]
+  },
+  "children": [
+    { "type": "icon", "icon": "lucide:zap", "size": { "width": 80, "height": 80 }, "style": { "color": "#25D366" } },
+    { "type": "text", "content": "Grouped content", "style": { "font-size": 48, "color": "#FFFFFF" } }
+  ]
+}
+```
+
+Supports all flex layout properties (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`) and all animation/timeline properties. Prefer `container` over `card` with transparent background when no visual styling is needed.
 
 ### 12. `codeblock`
 

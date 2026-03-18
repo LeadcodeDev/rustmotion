@@ -661,6 +661,11 @@ pub fn prefetch_icons(scenes: &[crate::schema::Scene]) {
                     collect_from_component(child, seen);
                 }
             }
+            Component::Container(c) => {
+                for child in &c.children {
+                    collect_from_component(child, seen);
+                }
+            }
             _ => {}
         }
     }
@@ -808,6 +813,7 @@ pub fn preextract_video_frames(
             Component::Flex(c) => Some(&c.children),
             Component::Grid(c) => Some(&c.children),
             Component::Positioned(c) => Some(&c.children),
+            Component::Container(c) => Some(&c.children),
             _ => None,
         } {
             for c in children {

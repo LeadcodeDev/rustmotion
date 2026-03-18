@@ -571,6 +571,37 @@ Container that places children at fixed absolute coordinates (like Flutter's `St
 
 ---
 
+### Container
+
+Invisible wrapper that groups children for shared transforms (scale, opacity, rotation, etc.). Like an HTML `<div>` with no visual styling. When you scale a `container`, all children scale together from the container's center — no overlap or distortion.
+
+Use `container` instead of `card` when you don't need background, border, or shadow.
+
+```json
+{
+  "type": "container",
+  "size": { "width": "auto", "height": "auto" },
+  "style": {
+    "align-items": "center",
+    "gap": 36,
+    "timeline": [
+      { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
+        { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
+        { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
+      ]}]}
+    ]
+  },
+  "children": [
+    { "type": "icon", "icon": "lucide:zap", "size": { "width": 80, "height": 80 }, "style": { "color": "#25D366" } },
+    { "type": "text", "content": "All children scale together", "style": { "font-size": 48, "color": "#FFFFFF" } }
+  ]
+}
+```
+
+Supports all flex layout properties (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`) and all style properties (`animation`, `timeline`, `opacity`, `margin`). No `background`, `border`, `box-shadow`, or clipping — children can overflow freely.
+
+---
+
 ### Card / Flex
 
 Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. Each dimension of `size` can be a number or `"auto"`.

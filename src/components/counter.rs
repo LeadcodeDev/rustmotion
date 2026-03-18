@@ -46,9 +46,11 @@ impl Widget for Counter {
         let font_style_type = self.style.font_style_or(FontStyleType::Normal);
         let align = self.style.text_align_or(TextAlign::Left);
 
-        let duration = ctx.scene_duration;
-        let t = if duration > 0.0 {
-            (ctx.time / duration).clamp(0.0, 1.0)
+        let start = self.timing.start_at.unwrap_or(0.0);
+        let elapsed = (ctx.time as f64 - start).max(0.0);
+        let remaining_duration = ctx.scene_duration as f64 - start;
+        let t = if remaining_duration > 0.0 {
+            (elapsed / remaining_duration).clamp(0.0, 1.0)
         } else {
             1.0
         };
