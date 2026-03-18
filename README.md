@@ -216,10 +216,89 @@ Scene entries can reference external scenario files to inject their scenes inlin
 |---|---|---|---|
 | `include` | `string` | (required) | Path (relative to parent file) or URL to a scenario JSON |
 | `scenes` | `usize[]` | | Only include scenes at these 0-based indices. Omit to include all |
+| `config` | `object` | | Config overrides to pass to a structural component (see below) |
 
 - The included file's `video` config is ignored
 - Audio tracks from included files are merged
 - Includes can be nested (max depth: 8)
+
+---
+
+## Structural Components (Variables)
+
+Structural components are reusable scenario files with **declared variables**. When rendered standalone, default values apply. When included from a parent, the parent can override any variable.
+
+### Defining config
+
+Add a `config` object at the root of a scenario. Each entry has a `type`, a `default` value, and an optional `description`:
+
+```json
+{
+  "config": {
+    "cta_text": { "type": "string", "default": "Book your demo" },
+    "accent_color": { "type": "string", "default": "#5C39EE" },
+    "logo_src": { "type": "string", "default": "assets/logo.svg" },
+    "counter_target": { "type": "number", "default": 400 },
+    "tagline_spans": {
+      "type": "array",
+      "default": [
+        { "text": "Don't ", "color": "#5C39EE" },
+        { "text": "miss any lead" }
+      ]
+    }
+  },
+  "video": { "width": 1080, "height": 1920, "fps": 30 },
+  "scenes": [
+    {
+      "duration": 7.0,
+      "children": [
+        { "type": "svg", "src": "$logo_src" },
+        { "type": "text", "content": "$cta_text", "style": { "color": "$accent_color" } },
+        { "type": "counter", "from": 0, "to": { "$var": "counter_target" } },
+        { "type": "rich_text", "spans": { "$var": "tagline_spans" } }
+      ]
+    }
+  ]
+}
+```
+
+Supported types: `string`, `number`, `boolean`, `object`, `array`. Array and object types allow passing full components (e.g. rich_text spans, children arrays).
+
+### Referencing config values
+
+| Syntax | Context | Behavior |
+|---|---|---|
+| `"$var_name"` | Entire string value | Replaced by the config value (any type) |
+| `"prefix $var_name suffix"` | String interpolation | Replaced inline (value must be string/number/boolean) |
+| `{ "$var": "var_name" }` | Any position | Replaced by the config value (for non-string types in object position) |
+| `"$$literal"` | Escape | Produces the literal string `"$literal"` |
+
+### Including with overrides
+
+```json
+{
+  "scenes": [
+    { "duration": 5.0, "children": [ ... ] },
+    {
+      "include": "components/outro.json",
+      "config": {
+        "cta_text": "Try WhatsApp",
+        "accent_color": "#25D366",
+        "tagline_spans": [
+          { "text": "Stop losing " },
+          { "text": "customers", "color": "#25D366" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Config entries not listed in overrides keep their default values. Referencing an undefined config key produces an error.
+
+### Standalone rendering
+
+When rendering a structural component directly (`rustmotion render components/outro.json`), all default values are applied automatically.
 
 ---
 

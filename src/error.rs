@@ -82,6 +82,19 @@ pub enum RustmotionError {
     #[error("Scenario cannot have both top-level 'scenes' and 'composition' — use one or the other")]
     CompositionAndScenesConflict,
 
+    // --- Variables ---
+    #[error("Variable '${name}' is not defined in '{path}'")]
+    UndefinedVariable { name: String, path: String },
+
+    #[error("Variable '{name}' in '{path}' is missing a default value")]
+    VariableMissingDefault { name: String, path: String },
+
+    #[error("Unresolved variable reference '${name}' after substitution in '{path}'")]
+    UnresolvedVariable { name: String, path: String },
+
+    #[error("Cannot interpolate non-string variable '${name}' into string in '{path}'")]
+    VariableInterpolationTypeError { name: String, path: String },
+
     // --- Encoding ---
     #[error("No frames to render (total duration is 0)")]
     NoFrames,

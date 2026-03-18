@@ -448,10 +448,86 @@ Scene entries can reference external scenario files to inject their scenes inlin
 | --- | --- | --- | --- |
 | `include` | string | required | Path (relative to parent) or URL to a scenario JSON file |
 | `scenes` | array of usize | `null` | Only include scenes at these 0-based indices |
+| `config` | object | `null` | Config overrides for structural components |
 
 - The included file's `video` config is ignored
 - Audio tracks from included files are merged
 - Includes can be nested (max depth: 8)
+
+#### Structural Components (Config)
+
+Structural components are reusable scenarios with **declared config** (type + default). When rendered standalone, defaults apply. When included, the parent can override config values. Config supports all types including `array` and `object`, allowing full component trees (e.g. rich_text spans) to be passed as parameters.
+
+**Defining a structural component (`components/outro.json`):**
+```json
+{
+  "config": {
+    "cta_text": { "type": "string", "default": "Book your demo" },
+    "accent_color": { "type": "string", "default": "#5C39EE" },
+    "logo_src": { "type": "string", "default": "assets/logo.svg" },
+    "counter_target": { "type": "number", "default": 400 },
+    "tagline_spans": {
+      "type": "array",
+      "default": [
+        { "text": "Don't " },
+        { "text": "miss ", "color": "#B041F0" },
+        { "text": "any lead" }
+      ]
+    }
+  },
+  "video": { "width": 1080, "height": 1920, "fps": 30 },
+  "scenes": [
+    {
+      "duration": 7.0,
+      "children": [
+        { "type": "svg", "src": "$logo_src" },
+        { "type": "text", "content": "$cta_text", "style": { "color": "$accent_color" } },
+        { "type": "counter", "from": 0, "to": { "$var": "counter_target" } },
+        { "type": "rich_text", "spans": { "$var": "tagline_spans" } }
+      ]
+    }
+  ]
+}
+```
+
+**Config reference syntax:**
+
+| Syntax | When to use | Behavior |
+| --- | --- | --- |
+| `"$name"` | Whole string value | Replaced by the config value (preserves type: number, boolean, etc.) |
+| `"text $name text"` | String interpolation | Inline substitution (value must be string/number/boolean) |
+| `{ "$var": "name" }` | Non-string in object position | Replaced by the config value (arrays, objects, numbers) |
+| `"$$literal"` | Escape | Produces literal `"$literal"` |
+
+**Including with overrides:**
+```json
+{
+  "scenes": [
+    { "duration": 5.0, "children": [...] },
+    {
+      "include": "components/outro.json",
+      "config": {
+        "cta_text": "Try WhatsApp",
+        "accent_color": "#25D366",
+        "tagline_spans": [
+          { "text": "Stop losing " },
+          { "text": "customers", "color": "#25D366" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Config types: `string`, `number`, `boolean`, `object`, `array`. Omitted overrides use defaults. Referencing an undefined config key is an error.
+
+**Rules for generation:**
+- Always declare config entries with a `type` and `default`
+- Use `"$name"` for string fields (src, content, color) — replaces the whole value
+- Use `{ "$var": "name" }` for non-string fields (numbers, arrays, objects) to preserve the type
+- Use `array` type to pass component trees (spans, children, gradient color stops)
+- Use `$$` to escape literal dollar signs
+- Never reference config values inside the `"config"` definition block itself
 
 #### Transitions
 

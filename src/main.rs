@@ -5,6 +5,7 @@ mod include;
 mod preview;
 mod schema;
 mod tui;
+mod variables;
 
 // v2 architecture (M1: Foundation)
 #[macro_use]
@@ -180,8 +181,14 @@ fn main() -> Result<()> {
 fn load_scenario(input: &PathBuf) -> Result<ResolvedScenario> {
     let json_str = std::fs::read_to_string(input)
         .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
-    let scenario: Scenario = serde_json::from_str(&json_str)
-        .map_err(RustmotionError::from)?;
+    let mut json_value: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(RustmotionError::from)?;
+
+    // Apply variable defaults for standalone rendering
+    variables::apply_defaults(&mut json_value)?;
+
+    let scenario: Scenario =
+        serde_json::from_value(json_value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }
 
@@ -195,8 +202,11 @@ fn load_scenario_from_source(
         }
         (Some(path), None) => load_scenario(path),
         (None, Some(json_str)) => {
-            let scenario: Scenario = serde_json::from_str(json_str)
-                .map_err(RustmotionError::from)?;
+            let mut json_value: serde_json::Value =
+                serde_json::from_str(json_str).map_err(RustmotionError::from)?;
+            variables::apply_defaults(&mut json_value)?;
+            let scenario: Scenario =
+                serde_json::from_value(json_value).map_err(RustmotionError::from)?;
             include::resolve_includes(scenario, &include::IncludeSource::Inline)
         }
         (None, None) => {
@@ -335,9 +345,14 @@ fn cmd_watch(
     let codec_label = codec.as_deref().unwrap_or("h264");
     let mut tui_watch: Option<tui::TuiWatch> = None;
 
+    // Track included file paths for watch mode
+    let mut initial_includes: Vec<PathBuf> = Vec::new();
+
     // Initial render
     match load_scenario(input) {
         Ok(scenario) => {
+            initial_includes = scenario.included_paths.clone();
+
             // Load custom fonts if defined
             if !scenario.fonts.is_empty() {
                 engine::renderer::load_custom_fonts(&scenario.fonts);
@@ -410,6 +425,12 @@ fn cmd_watch(
 
     watcher.watch(input.as_ref(), RecursiveMode::NonRecursive)?;
 
+    // Watch included files from initial render
+    let mut watched_includes: Vec<PathBuf> = initial_includes;
+    for inc in &watched_includes {
+        let _ = watcher.watch(inc.as_ref(), RecursiveMode::NonRecursive);
+    }
+
     // Debounce: wait for changes, then re-render
     loop {
         // Block until a change event
@@ -421,6 +442,15 @@ fn cmd_watch(
 
         match load_scenario(input) {
             Ok(scenario) => {
+                // Update watched includes: unwatch old, watch new
+                for old in &watched_includes {
+                    let _ = watcher.unwatch(old.as_ref());
+                }
+                watched_includes = scenario.included_paths.clone();
+                for inc in &watched_includes {
+                    let _ = watcher.watch(inc.as_ref(), RecursiveMode::NonRecursive);
+                }
+
                 if can_incremental {
                     let config_hash = encode::hash_video_config(&scenario.video);
                     // If video config changed (resolution/fps), do full re-render
@@ -551,8 +581,36 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
     let json_str = std::fs::read_to_string(input)
         .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
 
-    // Parse JSON
-    let scenario: Result<Scenario, _> = serde_json::from_str(&json_str);
+    // Parse as raw Value first for variable processing
+    let json_value: Result<serde_json::Value, _> = serde_json::from_str(&json_str);
+    let mut json_value = match json_value {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("JSON parse error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Apply variable defaults
+    if let Err(e) = variables::apply_defaults(&mut json_value) {
+        eprintln!("Variable error: {}", e);
+        std::process::exit(1);
+    }
+
+    // Check for unresolved variable references
+    let unresolved = variables::find_unresolved(&json_value);
+    if !unresolved.is_empty() {
+        for name in &unresolved {
+            eprintln!(
+                "Warning: unresolved variable reference '${}' in '{}'",
+                name,
+                input.display()
+            );
+        }
+    }
+
+    // Parse JSON into Scenario
+    let scenario: Result<Scenario, _> = serde_json::from_value(json_value);
 
     match scenario {
         Ok(scenario) => {

@@ -21,6 +21,7 @@ pub enum IncludeSource {
 /// Expand all include directives in a scenario, producing resolved views.
 pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<ResolvedScenario> {
     let mut audio = scenario.audio;
+    let mut included_paths = Vec::new();
     let has_scenes = !scenario.scenes.is_empty();
     let has_composition = scenario.composition.is_some();
 
@@ -32,7 +33,7 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         // New format: composition with views
         let mut views = Vec::with_capacity(composition.len());
         for view in composition {
-            let scenes = resolve_entries(view.scenes, source, 0, &mut audio)?;
+            let scenes = resolve_entries(view.scenes, source, 0, &mut audio, &mut included_paths)?;
             views.push(ResolvedView {
                 view_type: view.view_type,
                 scenes,
@@ -46,7 +47,7 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         views
     } else {
         // Backward compat: wrap top-level scenes in a single slide view
-        let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio)?;
+        let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio, &mut included_paths)?;
         vec![ResolvedView {
             view_type: ViewType::Slide,
             scenes,
@@ -63,6 +64,7 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         audio,
         fonts: scenario.fonts,
         views,
+        included_paths,
     })
 }
 
@@ -71,6 +73,7 @@ fn resolve_entries(
     source: &IncludeSource,
     depth: u8,
     audio: &mut Vec<crate::schema::AudioTrack>,
+    included_paths: &mut Vec<PathBuf>,
 ) -> Result<Vec<Scene>> {
     let mut result = Vec::new();
 
@@ -86,7 +89,7 @@ fn resolve_entries(
                         path: directive.include.clone(),
                     }.into());
                 }
-                let scenes = fetch_and_resolve(&directive, source, depth + 1, audio)?;
+                let scenes = fetch_and_resolve(&directive, source, depth + 1, audio, included_paths)?;
                 result.extend(scenes);
             }
         }
@@ -100,6 +103,7 @@ fn fetch_and_resolve(
     parent_source: &IncludeSource,
     depth: u8,
     audio: &mut Vec<crate::schema::AudioTrack>,
+    included_paths: &mut Vec<PathBuf>,
 ) -> Result<Vec<Scene>> {
     let is_remote = directive.include.starts_with("http://")
         || directive.include.starts_with("https://");
@@ -113,18 +117,30 @@ fn fetch_and_resolve(
         let body = std::fs::read_to_string(&path).map_err(|_| {
             RustmotionError::IncludeFileNotFound { path: path.display().to_string() }
         })?;
+        // Track this included file for watch mode
+        included_paths.push(path.clone());
         let child_source = IncludeSource::File(path);
         (body, child_source)
     };
 
-    let child_scenario: Scenario = serde_json::from_str(&json_str)
-        .map_err(RustmotionError::from)?;
+    // Parse as raw Value first, apply variable substitution, then deserialize
+    let mut json_value: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(RustmotionError::from)?;
+
+    crate::variables::apply_variables(
+        &mut json_value,
+        directive.config.as_ref(),
+        &directive.include,
+    )?;
+
+    let child_scenario: Scenario =
+        serde_json::from_value(json_value).map_err(RustmotionError::from)?;
 
     // Merge audio tracks from the included file
     audio.extend(child_scenario.audio);
 
     // Recursively resolve any nested includes
-    let mut scenes = resolve_entries(child_scenario.scenes, &child_source, depth, audio)?;
+    let mut scenes = resolve_entries(child_scenario.scenes, &child_source, depth, audio, included_paths)?;
 
     // Apply scene index filter if specified
     if let Some(ref indices) = directive.scenes {

@@ -1,7 +1,31 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig};
+
+/// Definition of a variable in a structural component.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VariableDefinition {
+    #[serde(rename = "type")]
+    pub var_type: VariableType,
+    pub default: serde_json::Value,
+    /// Optional description for documentation/schema.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Supported variable types.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VariableType {
+    String,
+    Number,
+    Boolean,
+    Object,
+    Array,
+}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Scenario {
@@ -17,6 +41,9 @@ pub struct Scenario {
     /// Composition: a sequence of views (slide or world). Mutually exclusive with top-level `scenes`.
     #[serde(default)]
     pub composition: Option<Vec<View>>,
+    /// Config definitions for structural components. Each config entry has a type and default value.
+    #[serde(default)]
+    pub config: Option<HashMap<String, VariableDefinition>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -65,6 +92,8 @@ pub struct ResolvedScenario {
     pub audio: Vec<AudioTrack>,
     pub fonts: Vec<FontEntry>,
     pub views: Vec<ResolvedView>,
+    /// Local file paths that were included during resolution (for watch mode).
+    pub included_paths: Vec<std::path::PathBuf>,
 }
 
 impl ResolvedScenario {
@@ -109,6 +138,9 @@ pub struct IncludeDirective {
     /// Only include scenes at these 0-based indices. When absent, all scenes are included.
     #[serde(default)]
     pub scenes: Option<Vec<usize>>,
+    /// Config overrides to pass to the included structural component.
+    #[serde(default)]
+    pub config: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Font file to load at startup
