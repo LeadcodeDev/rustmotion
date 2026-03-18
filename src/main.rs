@@ -38,10 +38,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Render a JSON scenario to MP4
+    /// Open a live preview window with hot-reload
+    Studio {
+        /// Path to the JSON scenario file
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+
+    /// Render a JSON scenario to video or a single frame
     Render {
         /// Path to the JSON scenario file
-        input: Option<PathBuf>,
+        #[arg(short, long)]
+        file: Option<PathBuf>,
 
         /// Inline JSON scenario string
         #[arg(long)]
@@ -78,16 +86,13 @@ enum Commands {
         /// Watch the input file for changes and re-render automatically
         #[arg(short, long)]
         watch: bool,
-
-        /// Open a preview window instead of encoding
-        #[arg(short = 'p', long)]
-        preview: bool,
     },
 
     /// Export a single frame as a still image (PNG, JPEG, WebP)
     Still {
         /// Path to the JSON scenario file
-        input: PathBuf,
+        #[arg(short, long)]
+        file: PathBuf,
 
         /// Output file path
         #[arg(short, long, default_value = "still.png")]
@@ -109,7 +114,8 @@ enum Commands {
     /// Validate a JSON scenario without rendering
     Validate {
         /// Path to the JSON scenario file
-        input: PathBuf,
+        #[arg(short, long)]
+        file: PathBuf,
     },
 
     /// Print the JSON Schema for scenario files
@@ -122,7 +128,8 @@ enum Commands {
     /// Show information about a scenario
     Info {
         /// Path to the JSON scenario file
-        input: PathBuf,
+        #[arg(short, long)]
+        file: PathBuf,
     },
 }
 
@@ -143,8 +150,12 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Commands::Studio { file } => {
+            let scenario = load_scenario(&file)?;
+            preview::run_preview(scenario, Some(file), true)
+        }
         Commands::Render {
-            input,
+            file,
             json,
             output,
             frame,
@@ -154,27 +165,22 @@ fn main() -> Result<()> {
             format,
             transparent,
             watch,
-            preview,
         } => {
-            if preview {
-                let input_path = input.ok_or(RustmotionError::PreviewRequiresFile)?;
-                let scenario = load_scenario(&input_path)?;
-                preview::run_preview(scenario, Some(input_path), watch)
-            } else if watch {
-                let input_path = input.ok_or(RustmotionError::WatchRequiresFile)?;
+            if watch {
+                let input_path = file.ok_or(RustmotionError::WatchRequiresFile)?;
                 cmd_watch(&input_path, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
             } else {
-                let scenario = load_scenario_from_source(input.as_ref(), json.as_deref())?;
+                let scenario = load_scenario_from_source(file.as_ref(), json.as_deref())?;
                 cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
             }
         }
-        Commands::Still { input, output, time, format, quality } => {
-            let scenario = load_scenario(&input)?;
+        Commands::Still { file, output, time, format, quality } => {
+            let scenario = load_scenario(&file)?;
             cmd_still(scenario, &output, time, format, quality)
         }
-        Commands::Validate { input } => cmd_validate(&input),
+        Commands::Validate { file } => cmd_validate(&file),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
-        Commands::Info { input } => cmd_info(&input),
+        Commands::Info { file } => cmd_info(&file),
     }
 }
 

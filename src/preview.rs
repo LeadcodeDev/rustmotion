@@ -337,6 +337,10 @@ impl PreviewApp {
             }
             self.request_frame(self.current_frame);
         }
+        // Force redraw so the play/pause icon updates immediately
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
         self.update_title();
     }
 

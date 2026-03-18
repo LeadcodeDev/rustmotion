@@ -174,7 +174,4 @@ pub enum RustmotionError {
     // --- Preview ---
     #[error("Failed to create preview window: {reason}")]
     PreviewWindow { reason: String },
-
-    #[error("--preview requires an input file path (cannot use --json or stdin)")]
-    PreviewRequiresFile,
 }
