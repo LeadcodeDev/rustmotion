@@ -149,6 +149,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/gradient-quality.md](rules/gradient-quality.md) - Gradient quality: linear color space, 10-bit encoding, ProRes for dark gradients
 - [rules/video-wizard.md](rules/video-wizard.md) - Video creation wizard: iterative scene-by-scene construction best practices
 - [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md) - CRITICAL: Scale all sizes to target device using Tailwind 4 type scale (×3 mobile, ×1.5 desktop)
+- [rules/chart-types.md](rules/chart-types.md) - Chart type selection guide (12 types: bar, line, area, donut, funnel, waterfall, radar, scatter, etc.)
+- [rules/stat-cards.md](rules/stat-cards.md) - Stat/KPI cards best practices (trend, sparkline, dashboard layout)
+- [rules/data-viz-components.md](rules/data-viz-components.md) - Data visualization component selection (gauge vs progress, sparkline vs chart, skeleton patterns)
 
 ---
 
@@ -541,7 +544,7 @@ Default duration: `0.5` seconds.
 
 ---
 
-### Component Types
+### Component Types (37 total)
 
 All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
@@ -1030,7 +1033,18 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 }
 ```
 
-**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
+**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background)
+
+**Diff mode example:**
+```json
+{
+  "type": "codeblock",
+  "language": "diff",
+  "diff": true,
+  "code": " fn render() {\n-    let old = bar();\n+    let new = donut();\n }",
+  "chrome": { "enabled": true, "title": "changes.rs" }
+}
+```
 
 | Style field     | Type   | Default              |
 | --------------- | ------ | -------------------- |
@@ -1064,20 +1078,24 @@ Style: `color` (default `"#FFFFFF"`)
 
 ### 14. `badge`
 
-Compact pill-shaped label with optional icon.
+Compact pill-shaped label with optional icon, dot indicator, pulse animation, and count badge.
 
 ```json
 {
   "type": "badge",
-  "text": "New",
-  "icon": "lucide:star",
+  "text": "Messages",
+  "icon": "lucide:mail",
   "variant": "solid",
-  "badge_size": "md",
+  "badge_size": "lg",
+  "dot": true,
+  "dot_color": "#22C55E",
+  "pulse": true,
+  "count": 12,
   "style": { "background": "#3B82F6" }
 }
 ```
 
-**Root fields:** `text` (required), `icon` (Iconify id), `variant` (solid/outline), `badge_size` (sm/md/lg)
+**Root fields:** `text` (required), `icon` (Iconify id), `variant` (solid/outline), `badge_size` (sm/md/lg), `dot` (bool — colored dot top-right), `dot_color` (hex, defaults to badge color), `pulse` (bool — animated pulse ring on dot), `count` (u32 — red count badge top-right, caps at "99+")
 
 Style: `background` (default `"#3B82F6"`) — badge color, `font-size`, `font-family`
 
@@ -1136,7 +1154,7 @@ Terminal window with colored lines and chrome.
 
 **Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `size`
 
-**Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance like the codeblock component.
+**Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance. In typewriter mode, a blinking cursor appears at the typing position.
 
 Line types: `"prompt"` ($ prefix in green), `"command"` (white), `"output"` (gray)
 
@@ -1144,39 +1162,100 @@ Style: `font-size` (default 14)
 
 ### 18. `table`
 
-Data table with headers and styled rows.
+Data table with headers, styled rows, configurable column widths and alignment.
 
 ```json
 {
   "type": "table",
-  "headers": ["Name", "Role"],
-  "rows": [["Alice", "Engineer"], ["Bob", "Designer"]],
-  "size": { "width": 600, "height": 200 },
-  "style": { "color": "#FFFFFF", "font-size": 14 }
+  "headers": ["Metric", "Value", "Change"],
+  "rows": [["Revenue", "1.2M", "+24%"], ["Users", "45K", "+12%"]],
+  "column_widths": [300, 200, 150],
+  "column_align": ["left", "right", "right"],
+  "cell_padding": 20,
+  "show_borders": true,
+  "size": { "width": 650, "height": 150 },
+  "style": { "color": "#E2E8F0", "font-size": 15, "border-radius": 12 }
 }
 ```
 
-**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating), `border_color` (#4B5563), `header_text_color`, `size`
+**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating array), `border_color` (#4B5563), `header_text_color`, `column_widths` (array of f32 — explicit pixel widths per column), `column_align` (array — `"left"` / `"center"` / `"right"` per column), `cell_padding` (f32, default 12), `show_borders` (bool, default true), `size`
 
 Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default 14), `font-family`, `border-radius`
 
 ### 19. `chart`
 
-Data visualization (bar/line/pie) with animation.
+Data visualization with animation. Supports 12 chart types.
 
 ```json
 {
   "type": "chart",
-  "chart_type": "bar",
+  "chart_type": "area",
   "data": [
-    { "value": 85, "label": "Q1" },
-    { "value": 120, "label": "Q2" }
+    { "value": 10, "label": "Jan" },
+    { "value": 25, "label": "Feb" },
+    { "value": 18, "label": "Mar" },
+    { "value": 42, "label": "Apr" }
   ],
-  "size": { "width": 400, "height": 300 }
+  "smooth": true,
+  "fill_opacity": 0.3,
+  "show_grid": true,
+  "show_x_labels": true,
+  "show_y_labels": true,
+  "size": { "width": 600, "height": 300 }
 }
 ```
 
-**Root fields:** `chart_type` (required — bar/line/pie), `data` (required — `[{ "value", "label"?, "color"? }]`), `size` (default 300x200), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
+**Chart types:** `bar`, `line`, `pie`, `donut`, `horizontal_bar`, `area`, `stacked_bar`, `radar`, `scatter`, `radial_bar`, `funnel`, `waterfall`
+
+**Root fields:** `chart_type` (required), `data` (`[{ "value", "label"?, "color"? }]`), `size` (default 300x200), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
+
+**Axes & grid (bar, line, area, stacked_bar, scatter, waterfall):** `show_grid`, `show_x_labels`, `show_y_labels`, `grid_color` (#FFFFFF15), `label_color` (#888888), `label_font_size` (12)
+
+**Type-specific fields:**
+
+| Field | Chart Types | Default | Description |
+| --- | --- | --- | --- |
+| `inner_radius` | donut | `0.6` | Hole size ratio (0.1–0.95) |
+| `fill_opacity` | area | `0.3` | Gradient fill opacity |
+| `smooth` | area | `false` | Catmull-Rom spline smoothing |
+| `show_labels` | horizontal_bar, funnel | `false` | Labels inside bars/segments |
+| `direction` | funnel | `"vertical"` | `"vertical"` or `"horizontal"` |
+| `categories` | stacked_bar | `[]` | X-axis category names |
+| `series` | stacked_bar | `[]` | `[{ "name", "data": [f64], "color"? }]` |
+| `axes` | radar | `[]` | Axis labels |
+| `radar_data` | radar | `[]` | `[{ "values": [f64], "color"? }]` |
+| `points` | scatter | `[]` | `[{ "x", "y", "size"?, "color"? }]` |
+
+**Stacked bar example:**
+```json
+{
+  "type": "chart",
+  "chart_type": "stacked_bar",
+  "categories": ["Q1", "Q2", "Q3", "Q4"],
+  "series": [
+    { "name": "Product A", "data": [30, 40, 35, 50], "color": "#3B82F6" },
+    { "name": "Product B", "data": [20, 15, 25, 30], "color": "#22C55E" }
+  ],
+  "show_grid": true, "show_x_labels": true, "show_y_labels": true
+}
+```
+
+**Funnel example (horizontal):**
+```json
+{
+  "type": "chart",
+  "chart_type": "funnel",
+  "direction": "horizontal",
+  "data": [
+    { "value": 10000, "label": "Visitors", "color": "#3B82F6" },
+    { "value": 6500, "label": "Leads", "color": "#6366F1" },
+    { "value": 3200, "label": "Qualified", "color": "#8B5CF6" }
+  ],
+  "show_labels": true
+}
+```
+
+**Waterfall** uses green for positive values, red for negative, with dashed connectors between bars.
 
 Default palette: `#3B82F6`, `#EF4444`, `#22C55E`, `#F59E0B`, `#8B5CF6`, `#EC4899`, `#06B6D4`, `#F97316`
 
@@ -1457,6 +1536,176 @@ Multi-styled text with individually styled spans on the same line. Inherits defa
 | `font-family`   | string | inherited   | Font family          |
 | `font-style`    | enum   | inherited   | `"normal"`, `"italic"`, `"oblique"` |
 | `letter-spacing`| f32    | inherited   | Letter spacing       |
+
+### 29. `progress`
+
+Progress bar with linear (default) or circular variant.
+
+```json
+{
+  "type": "progress",
+  "progress": 0.75,
+  "variant": "circular",
+  "width": 120,
+  "height": 120,
+  "fill_color": "#3B82F6",
+  "background_color": "#1E293B",
+  "track_width": 8,
+  "show_value": true
+}
+```
+
+**Root fields:** `progress` (0.0–1.0), `variant` (`"linear"` or `"circular"`), `width` (default 300), `height` (default 20 linear / same as width circular), `fill_color` (#4CAF50), `background_color` (#333333), `border_radius` (linear only), `track_width` (circular only, default 8), `show_value` (circular only — shows percentage text)
+
+### 30. `gauge`
+
+Semi-circular arc gauge for KPIs and dashboards.
+
+```json
+{
+  "type": "gauge",
+  "value": 72,
+  "max": 100,
+  "label": "Performance",
+  "fill_color": "#3B82F6",
+  "track_color": "#1E293B",
+  "track_width": 16,
+  "show_value": true,
+  "size": { "width": 200, "height": 140 }
+}
+```
+
+**Root fields:** `value` (required), `min` (0), `max` (100), `label`, `fill_color` (#3B82F6), `track_color` (#333333), `track_width` (16), `start_angle` (135), `end_angle` (405), `show_value` (true), `animated` (true), `animation_duration` (1.5s), `size` (default 200x140)
+
+### 31. `sparkline`
+
+Mini inline chart without axes — ideal inside cards next to counters.
+
+```json
+{
+  "type": "sparkline",
+  "data": [5, 12, 8, 20, 15, 25, 18, 30],
+  "color": "#22C55E",
+  "fill": true,
+  "fill_opacity": 0.2,
+  "stroke_width": 2,
+  "size": { "width": 120, "height": 40 }
+}
+```
+
+**Root fields:** `data` (required — array of f64), `color` (#22C55E), `fill` (false — gradient fill under line), `fill_opacity` (0.2), `stroke_width` (2.0), `animated` (true), `animation_duration` (1.0s), `size` (default 120x40)
+
+### 32. `stat`
+
+Composite KPI card: value + label + trend arrow + sparkline.
+
+```json
+{
+  "type": "stat",
+  "value": "45.2K",
+  "label": "Active Users",
+  "trend": { "value": "+12.5%", "direction": "up" },
+  "sparkline_data": [20, 25, 22, 30, 28, 35, 32, 40, 38, 45],
+  "sparkline_color": "#22C55E",
+  "size": { "width": 280, "height": 180 },
+  "style": { "background": "#1E293B", "border-radius": 16 }
+}
+```
+
+**Root fields:** `value` (required — display string), `label`, `trend` (`{ "value": string, "direction": "up"/"down"/"neutral", "color"? }`), `sparkline_data` (array of f64), `sparkline_color`, `value_font_size` (48), `label_font_size` (14), `value_color` (#FFFFFF), `label_color` (#94A3B8), `size` (default 240x140)
+
+Trend uses `lucide:trending-up` / `lucide:trending-down` icons. Direction `"down"` with a positive connotation (e.g. churn decreasing) can use `"color": "#22C55E"` to override the default red.
+
+### 33. `skeleton`
+
+Loading placeholder with animated shimmer effect. Three variants for different content types.
+
+```json
+{
+  "type": "skeleton",
+  "variant": "text",
+  "lines": 3,
+  "size": { "width": 300, "height": 68 }
+}
+```
+
+**Root fields:** `variant` (`"rectangle"` / `"circle"` / `"text"`), `base_color` (#1E293B), `shimmer_color` (#334155), `border_radius` (8), `speed` (1.5 — shimmer cycle duration), `lines` (3 — text variant only), `line_height` (16), `line_gap` (12), `size`
+
+Default sizes: rectangle 200x40, circle 48x48, text auto-computed from lines.
+
+### 34. `kbd`
+
+Visual keyboard key — for documenting shortcuts.
+
+```json
+{
+  "type": "kbd",
+  "key": "Cmd"
+}
+```
+
+**Root fields:** `key` (required — text displayed), `font_size` (14), `background_color` (#1E293B), `border_color` (#475569), `text_color` (#E2E8F0)
+
+Auto-sizes based on text content. Has a 3D depth effect (shadow below). Uses monospace font. Style overrides: `background`, `color`, `font-size`.
+
+### 35. `tooltip`
+
+Floating label with directional arrow — for annotations and callouts.
+
+```json
+{
+  "type": "tooltip",
+  "text": "Click to expand",
+  "arrow": "bottom",
+  "background_color": "#1E293B",
+  "text_color": "#E2E8F0",
+  "border_color": "#334155"
+}
+```
+
+**Root fields:** `text` (required), `arrow` (`"top"` / `"bottom"` / `"left"` / `"right"` / `"none"`, default `"bottom"`), `font_size` (13), `background_color` (#1E293B), `text_color` (#E2E8F0), `arrow_size` (8), `border_color` (optional)
+
+Style overrides: `background`, `color`, `font-size`, `border-radius` (8).
+
+### 36. `marquee`
+
+Continuous scrolling text — for tickers, breaking news, or decorative text bands.
+
+```json
+{
+  "type": "marquee",
+  "content": "Breaking news — rustmotion 2.0 released!",
+  "speed": 100,
+  "direction": "left",
+  "font_size": 24,
+  "color": "#3B82F6",
+  "size": { "width": 800, "height": 48 }
+}
+```
+
+**Root fields:** `content` (required), `speed` (100 — pixels/second), `direction` (`"left"` / `"right"`), `font_size` (24), `color` (#FFFFFF), `separator` (spacing between repeats, default 5 spaces), `size` (default 800 x font_size*2)
+
+### 37. `avatar_group`
+
+Stacked circular avatars with overlap and "+N" overflow badge.
+
+```json
+{
+  "type": "avatar_group",
+  "avatars": [
+    { "src": "user1.png" },
+    { "src": "user2.png" },
+    { "src": "user3.png" },
+    { "src": "user4.png" },
+    { "src": "user5.png" }
+  ],
+  "max_display": 3,
+  "overlap": 16,
+  "size": 48
+}
+```
+
+**Root fields:** `avatars` (required — `[{ "src": string }]`), `max_display` (optional — limit visible avatars), `size` (48 — diameter), `overlap` (16 — px overlap between avatars), `border_width` (3), `border_color` (#0f172a — ring color, match your background)
 
 ---
 
