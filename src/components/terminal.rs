@@ -346,7 +346,24 @@ impl Widget for Terminal {
                 let mut text_paint = paint_from_hex(color);
                 text_paint.set_anti_alias(true);
                 text_paint.set_alpha_f(opacity);
+                let text_w = crate::engine::renderer::measure_text_with_fallback(&draw_text, &font, &emoji_font, 0.0);
                 draw_text_with_fallback(canvas, &draw_text, &font, &emoji_font, 0.0, x, y, &text_paint);
+                x += text_w;
+            }
+
+            // Blinking cursor on the last visible line during typewriter reveal
+            if is_last_visible && self.reveal.is_some() && partial_chars.is_some() {
+                let blink = ((ctx.time * 2.0) as i32) % 2 == 0;
+                if blink {
+                    let cursor_w = font_size * 0.55;
+                    let cursor_h = font_size * 1.2;
+                    let cursor_y = y - font_size;
+                    let cursor_rect = Rect::from_xywh(x + 1.0, cursor_y, cursor_w, cursor_h);
+                    let mut cursor_paint = paint_from_hex(self.theme.command_color());
+                    cursor_paint.set_style(PaintStyle::Fill);
+                    cursor_paint.set_anti_alias(true);
+                    canvas.draw_rect(cursor_rect, &cursor_paint);
+                }
             }
 
             y_offset += self.line_height();

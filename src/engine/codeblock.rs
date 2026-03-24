@@ -674,6 +674,19 @@ pub fn render_codeblock(
             total_width - pad_left - pad_right,
         );
 
+        // Diff mode: draw colored backgrounds for +/- lines
+        if layer.diff {
+            draw_diff_backgrounds(
+                canvas,
+                &current_code,
+                x + pad_left,
+                code_y,
+                actual_line_height,
+                total_width - pad_left - pad_right,
+                visible_lines,
+            );
+        }
+
         draw_highlighted_lines(
             canvas,
             &highlighted,
@@ -1039,6 +1052,38 @@ fn compute_reveal(
 }
 
 // ─── Draw highlighted lines ──────────────────────────────────────────────────
+
+/// Draw colored backgrounds for diff lines: green for `+`, red for `-`.
+fn draw_diff_backgrounds(
+    canvas: &Canvas,
+    code: &str,
+    x: f32,
+    y: f32,
+    line_height: f32,
+    width: f32,
+    visible_lines: usize,
+) {
+    for (i, line) in code.lines().enumerate() {
+        if i >= visible_lines {
+            break;
+        }
+        let trimmed = line.trim_start();
+        let bg_color = if trimmed.starts_with('+') {
+            Some("#2D4F2D")
+        } else if trimmed.starts_with('-') {
+            Some("#4F2D2D")
+        } else {
+            None
+        };
+
+        if let Some(color) = bg_color {
+            let mut paint = paint_from_hex(color);
+            paint.set_anti_alias(false);
+            let rect = Rect::from_xywh(x, y + i as f32 * line_height, width, line_height);
+            canvas.draw_rect(rect, &paint);
+        }
+    }
+}
 
 fn draw_highlighted_lines(
     canvas: &Canvas,

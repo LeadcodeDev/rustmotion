@@ -1,0 +1,549 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "scenes": [
+    {
+      "duration": 4,
+      "background": "#0f172a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 24
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Data Visualization Showcase",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in_up", "duration": 0.8 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "New chart types, gauge, sparkline & more",
+          "style": {
+            "font-size": 24,
+            "color": "#94A3B8",
+            "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.8 }]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 5,
+      "background": "#0f172a",
+      "children": [
+        {
+          "type": "text",
+          "content": "Donut Chart",
+          "position": "absolute",
+          "x": 120,
+          "y": 60,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "donut",
+          "data": [
+            { "value": 40, "label": "Desktop", "color": "#3B82F6" },
+            { "value": 30, "label": "Mobile", "color": "#22C55E" },
+            { "value": 20, "label": "Tablet", "color": "#F59E0B" },
+            { "value": 10, "label": "Other", "color": "#8B5CF6" }
+          ],
+          "inner_radius": 0.6,
+          "size": { "width": 320, "height": 320 },
+          "position": "absolute",
+          "x": 120,
+          "y": 140
+        },
+        {
+          "type": "text",
+          "content": "Radar Chart",
+          "position": "absolute",
+          "x": 560,
+          "y": 60,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.2, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "radar",
+          "axes": ["Speed", "Power", "Range", "Defense", "Magic"],
+          "radar_data": [
+            { "values": [80, 60, 90, 40, 70], "color": "#3B82F680" },
+            { "values": [50, 85, 40, 75, 60], "color": "#EF444480" }
+          ],
+          "grid_color": "#FFFFFF20",
+          "label_color": "#94A3B8",
+          "size": { "width": 360, "height": 340 },
+          "position": "absolute",
+          "x": 560,
+          "y": 120
+        },
+        {
+          "type": "text",
+          "content": "Radial Bar",
+          "position": "absolute",
+          "x": 1040,
+          "y": 60,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.4, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "radial_bar",
+          "data": [
+            { "value": 80, "label": "Move", "color": "#EF4444" },
+            { "value": 65, "label": "Exercise", "color": "#22C55E" },
+            { "value": 90, "label": "Stand", "color": "#3B82F6" }
+          ],
+          "size": { "width": 320, "height": 320 },
+          "position": "absolute",
+          "x": 1040,
+          "y": 140
+        },
+        {
+          "type": "text",
+          "content": "Gauges",
+          "position": "absolute",
+          "x": 1480,
+          "y": 60,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.6, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "gauge",
+          "value": 72,
+          "max": 100,
+          "label": "CPU",
+          "fill_color": "#3B82F6",
+          "track_color": "#1E293B",
+          "track_width": 14,
+          "show_value": true,
+          "size": { "width": 180, "height": 130 },
+          "position": "absolute",
+          "x": 1480,
+          "y": 120
+        },
+        {
+          "type": "gauge",
+          "value": 45,
+          "max": 100,
+          "label": "Memory",
+          "fill_color": "#22C55E",
+          "track_color": "#1E293B",
+          "track_width": 14,
+          "show_value": true,
+          "size": { "width": 180, "height": 130 },
+          "position": "absolute",
+          "x": 1480,
+          "y": 300
+        },
+        {
+          "type": "text",
+          "content": "Sparklines",
+          "position": "absolute",
+          "x": 120,
+          "y": 520,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.8, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "sparkline",
+          "data": [5, 12, 8, 20, 15, 25, 18, 30, 22, 35],
+          "color": "#22C55E",
+          "fill": true,
+          "fill_opacity": 0.25,
+          "stroke_width": 2.5,
+          "size": { "width": 200, "height": 50 },
+          "position": "absolute",
+          "x": 120,
+          "y": 570,
+          "style": {
+            "animation": [{ "name": "fade_in", "delay": 1.0, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "sparkline",
+          "data": [30, 25, 28, 15, 20, 10, 18, 8, 12, 5],
+          "color": "#EF4444",
+          "fill": true,
+          "fill_opacity": 0.25,
+          "stroke_width": 2.5,
+          "size": { "width": 200, "height": 50 },
+          "position": "absolute",
+          "x": 360,
+          "y": 570,
+          "style": {
+            "animation": [{ "name": "fade_in", "delay": 1.1, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "sparkline",
+          "data": [10, 15, 12, 18, 22, 20, 28, 25, 32, 30],
+          "color": "#F59E0B",
+          "fill": true,
+          "fill_opacity": 0.25,
+          "stroke_width": 2.5,
+          "size": { "width": 200, "height": 50 },
+          "position": "absolute",
+          "x": 600,
+          "y": 570,
+          "style": {
+            "animation": [{ "name": "fade_in", "delay": 1.2, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "progress",
+          "progress": 0.75,
+          "variant": "circular",
+          "width": 100,
+          "height": 100,
+          "fill_color": "#8B5CF6",
+          "background_color": "#1E293B",
+          "track_width": 8,
+          "show_value": true,
+          "position": "absolute",
+          "x": 900,
+          "y": 530,
+          "style": {
+            "animation": [{ "name": "fade_in", "delay": 1.3, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "progress",
+          "progress": 0.42,
+          "variant": "circular",
+          "width": 100,
+          "height": 100,
+          "fill_color": "#06B6D4",
+          "background_color": "#1E293B",
+          "track_width": 8,
+          "show_value": true,
+          "position": "absolute",
+          "x": 1040,
+          "y": 530,
+          "style": {
+            "animation": [{ "name": "fade_in", "delay": 1.4, "duration": 0.5 }]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 5,
+      "background": "#0f172a",
+      "children": [
+        {
+          "type": "text",
+          "content": "Area Chart with Smooth Curves",
+          "position": "absolute",
+          "x": 80,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "area",
+          "data": [
+            { "value": 10, "label": "Jan" },
+            { "value": 25, "label": "Feb" },
+            { "value": 18, "label": "Mar" },
+            { "value": 42, "label": "Apr" },
+            { "value": 35, "label": "May" },
+            { "value": 55, "label": "Jun" },
+            { "value": 48, "label": "Jul" },
+            { "value": 62, "label": "Aug" }
+          ],
+          "smooth": true,
+          "fill_opacity": 0.35,
+          "show_grid": true,
+          "show_x_labels": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "label_font_size": 13,
+          "colors": ["#3B82F6"],
+          "size": { "width": 800, "height": 400 },
+          "position": "absolute",
+          "x": 80,
+          "y": 100
+        },
+        {
+          "type": "text",
+          "content": "Stacked Bar Chart",
+          "position": "absolute",
+          "x": 1000,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.2, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "stacked_bar",
+          "categories": ["Q1", "Q2", "Q3", "Q4"],
+          "series": [
+            { "name": "Product A", "data": [30, 40, 35, 50], "color": "#3B82F6" },
+            { "name": "Product B", "data": [20, 15, 25, 30], "color": "#22C55E" },
+            { "name": "Product C", "data": [10, 20, 15, 25], "color": "#F59E0B" }
+          ],
+          "show_grid": true,
+          "show_x_labels": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "label_font_size": 13,
+          "size": { "width": 800, "height": 400 },
+          "position": "absolute",
+          "x": 1000,
+          "y": 100
+        },
+        {
+          "type": "text",
+          "content": "Horizontal Bar",
+          "position": "absolute",
+          "x": 80,
+          "y": 560,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.4, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "horizontal_bar",
+          "data": [
+            { "value": 85, "label": "React", "color": "#61DAFB" },
+            { "value": 72, "label": "Vue", "color": "#42B883" },
+            { "value": 60, "label": "Angular", "color": "#DD0031" },
+            { "value": 55, "label": "Svelte", "color": "#FF3E00" }
+          ],
+          "show_labels": true,
+          "label_color": "#94A3B8",
+          "label_font_size": 14,
+          "size": { "width": 600, "height": 300 },
+          "position": "absolute",
+          "x": 80,
+          "y": 610
+        },
+        {
+          "type": "text",
+          "content": "Scatter Plot",
+          "position": "absolute",
+          "x": 1000,
+          "y": 560,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.6, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "scatter",
+          "points": [
+            { "x": 10, "y": 20, "size": 8, "color": "#3B82F6" },
+            { "x": 30, "y": 50, "size": 12, "color": "#3B82F6" },
+            { "x": 45, "y": 35, "size": 6, "color": "#EF4444" },
+            { "x": 60, "y": 70, "size": 10, "color": "#22C55E" },
+            { "x": 80, "y": 45, "size": 14, "color": "#F59E0B" },
+            { "x": 25, "y": 65, "size": 9, "color": "#8B5CF6" },
+            { "x": 55, "y": 85, "size": 11, "color": "#EC4899" },
+            { "x": 70, "y": 30, "size": 7, "color": "#06B6D4" }
+          ],
+          "show_grid": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "size": { "width": 600, "height": 300 },
+          "position": "absolute",
+          "x": 1000,
+          "y": 610
+        }
+      ]
+    },
+    {
+      "duration": 5,
+      "background": "#0f172a",
+      "children": [
+        {
+          "type": "text",
+          "content": "Terminal with Typing Animation",
+          "position": "absolute",
+          "x": 80,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "terminal",
+          "title": "rustmotion",
+          "lines": [
+            { "text": "cargo build --release", "line_type": "prompt" },
+            { "text": "   Compiling rustmotion v2.0.0", "line_type": "output" },
+            { "text": "   Compiling data-viz v1.0.0", "line_type": "output" },
+            { "text": "    Finished release [optimized] target(s) in 12.4s", "line_type": "output", "color": "#22C55E" }
+          ],
+          "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
+          "size": { "width": 700, "height": 260 },
+          "position": "absolute",
+          "x": 80,
+          "y": 100,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Codeblock Diff Mode",
+          "position": "absolute",
+          "x": 880,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.3, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "codeblock",
+          "language": "diff",
+          "diff": true,
+          "code": " fn render(&self, canvas: &Canvas) {\n-    let chart = BarChart::new();\n-    chart.draw(canvas);\n+    let chart = DonutChart::new();\n+    chart.set_inner_radius(0.6);\n+    chart.draw(canvas);\n }",
+          "theme": "base16-ocean.dark",
+          "size": { "width": 700, "height": 260 },
+          "chrome": { "enabled": true, "title": "chart.rs" },
+          "position": "absolute",
+          "x": 880,
+          "y": 100,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Bar Chart with Axes & Grid",
+          "position": "absolute",
+          "x": 80,
+          "y": 420,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.6, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "bar",
+          "data": [
+            { "value": 120, "label": "Mon", "color": "#3B82F6" },
+            { "value": 200, "label": "Tue", "color": "#3B82F6" },
+            { "value": 150, "label": "Wed", "color": "#3B82F6" },
+            { "value": 280, "label": "Thu", "color": "#22C55E" },
+            { "value": 220, "label": "Fri", "color": "#3B82F6" },
+            { "value": 180, "label": "Sat", "color": "#3B82F6" },
+            { "value": 90, "label": "Sun", "color": "#EF4444" }
+          ],
+          "show_grid": true,
+          "show_x_labels": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "label_font_size": 12,
+          "size": { "width": 700, "height": 350 },
+          "position": "absolute",
+          "x": 80,
+          "y": 475,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Line Chart with Grid",
+          "position": "absolute",
+          "x": 880,
+          "y": 420,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.7, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "line",
+          "data": [
+            { "value": 40, "label": "W1" },
+            { "value": 65, "label": "W2" },
+            { "value": 55, "label": "W3" },
+            { "value": 80, "label": "W4" },
+            { "value": 72, "label": "W5" },
+            { "value": 95, "label": "W6" }
+          ],
+          "show_grid": true,
+          "show_x_labels": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "colors": ["#8B5CF6"],
+          "size": { "width": 700, "height": 350 },
+          "position": "absolute",
+          "x": 880,
+          "y": 475,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ pub mod counter;
 pub mod cursor;
 pub mod divider;
 pub mod flex;
+pub mod gauge;
 pub mod gif;
 pub mod grid;
 pub mod icon;
@@ -25,6 +26,7 @@ pub mod progress;
 pub mod qrcode;
 pub mod rich_text;
 pub mod shape;
+pub mod sparkline;
 pub mod svg;
 pub mod table;
 pub mod terminal;
@@ -51,6 +53,7 @@ pub use counter::Counter;
 pub use cursor::Cursor;
 pub use divider::Divider;
 pub use flex::Flex;
+pub use gauge::Gauge;
 pub use gif::Gif;
 pub use grid::Grid;
 pub use icon::Icon;
@@ -64,6 +67,7 @@ pub use progress::Progress;
 pub use qrcode::QrCode;
 pub use rich_text::RichText;
 pub use shape::Shape;
+pub use sparkline::Sparkline;
 pub use svg::Svg;
 pub use table::Table;
 pub use terminal::Terminal;
@@ -191,6 +195,7 @@ pub enum Component {
     Callout(Callout),
     Chart(Chart),
     Divider(Divider),
+    Gauge(Gauge),
     Line(Line),
     Lottie(Lottie),
     Mockup(Mockup),
@@ -198,6 +203,7 @@ pub enum Component {
     #[serde(alias = "progress_bar")]
     Progress(Progress),
     QrCode(QrCode),
+    Sparkline(Sparkline),
     RichText(RichText),
     Table(Table),
     Terminal(Terminal),
@@ -236,12 +242,14 @@ impl Component {
             Component::Callout(c) => c,
             Component::Chart(c) => c,
             Component::Divider(c) => c,
+            Component::Gauge(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::Sparkline(c) => c,
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
@@ -275,12 +283,14 @@ impl Component {
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Gauge(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::Sparkline(c) => Some(c),
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
@@ -313,12 +323,14 @@ impl Component {
             Component::Callout(c) => Some(c),
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Gauge(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::Sparkline(c) => Some(c),
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
@@ -352,12 +364,14 @@ impl Component {
             Component::Callout(c) => c,
             Component::Chart(c) => c,
             Component::Divider(c) => c,
+            Component::Gauge(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::Sparkline(c) => c,
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,

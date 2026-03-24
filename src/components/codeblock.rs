@@ -29,6 +29,9 @@ pub struct Codeblock {
     pub reveal: Option<CodeblockReveal>,
     #[serde(default)]
     pub states: Vec<CodeblockState>,
+    /// Enable diff mode: lines starting with `+` get green background, `-` get red background.
+    #[serde(default)]
+    pub diff: bool,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
