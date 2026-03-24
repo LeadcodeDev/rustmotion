@@ -105,6 +105,9 @@ pub struct ChildComponent {
     pub x: Option<f32>,
     #[serde(default)]
     pub y: Option<f32>,
+    /// Rendering depth: higher values render on top. Default is 0.
+    #[serde(default, rename = "z-index")]
+    pub z_index: Option<i32>,
     /// Overlay components positioned relative to this component's bounds.
     #[serde(default)]
     pub overlays: Vec<Overlay>,

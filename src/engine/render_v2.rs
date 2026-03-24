@@ -507,10 +507,13 @@ pub fn render_children_with_stagger(
     ctx: &RenderContext,
     stagger: Option<f32>,
 ) -> Result<()> {
-    for (i, child) in children.iter().enumerate() {
-        if i >= layout.children.len() {
-            break;
-        }
+    let count = children.len().min(layout.children.len());
+    // Sort by z-index (stable sort preserves document order for equal z-index)
+    let mut render_order: Vec<usize> = (0..count).collect();
+    render_order.sort_by_key(|&i| children[i].z_index.unwrap_or(0));
+
+    for &i in &render_order {
+        let child = &children[i];
         let child_layout = &layout.children[i];
 
         let child_ctx = if let Some(stagger_val) = stagger {
