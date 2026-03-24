@@ -27,6 +27,8 @@ fn send_notification(title: &str, body: &str) {
     let title = title.to_string();
     let body = body.to_string();
     std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        let _ = notify_rust::set_application("com.apple.Finder");
         let _ = notify_rust::Notification::new()
             .summary(&title)
             .body(&body)
