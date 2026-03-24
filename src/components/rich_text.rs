@@ -111,7 +111,7 @@ impl Widget for RichText {
         let emoji_tf = emoji_typeface();
 
         // Prepare all spans with their fonts and measurements
-        let prepared: Vec<PreparedSpan> = self.spans.iter().map(|span| {
+        let mut prepared: Vec<PreparedSpan> = self.spans.iter().map(|span| {
             let size = span.font_size.unwrap_or(default_size);
             let family = span.font_family.as_deref().unwrap_or(default_family);
             let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
@@ -124,6 +124,34 @@ impl Widget for RichText {
 
             PreparedSpan { text: span.text.clone(), font, color, letter_spacing, width }
         }).collect();
+
+        // Typewriter animation: truncate spans based on visible_chars_progress
+        if _props.visible_chars_progress >= 0.0 {
+            let total_chars: usize = prepared.iter().map(|ps| ps.text.chars().count()).sum();
+            let visible = ((_props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
+            if visible == 0 {
+                return Ok(());
+            }
+            if visible < total_chars {
+                let mut remaining = visible;
+                let mut truncated = Vec::new();
+                for mut ps in prepared.into_iter() {
+                    let char_count = ps.text.chars().count();
+                    if remaining >= char_count {
+                        remaining -= char_count;
+                        truncated.push(ps);
+                    } else {
+                        let truncated_text: String = ps.text.chars().take(remaining).collect();
+                        let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), ps.font.size()));
+                        ps.width = measure_text_with_fallback(&truncated_text, &ps.font, &emoji_font, ps.letter_spacing);
+                        ps.text = truncated_text;
+                        truncated.push(ps);
+                        break;
+                    }
+                }
+                prepared = truncated;
+            }
+        }
 
         let wrap_width = if layout.width.is_finite() && layout.width > 0.0 {
             match self.max_width {
