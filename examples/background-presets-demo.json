@@ -1,0 +1,290 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 16
+      },
+      "background": {
+        "preset": "gradient_shift",
+        "gradient_shift": {
+          "colors": ["#0f172a", "#4c1d95", "#0f172a"],
+          "gradient_type": "radial"
+        },
+        "speed": 25,
+        "direction": "cw"
+      },
+      "children": [
+        {
+          "type": "icon",
+          "icon": "lucide:palette",
+          "size": { "width": 64, "height": 64 },
+          "style": {
+            "color": "#A78BFA",
+            "animation": [{ "name": "scale_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Gradient Shift",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Radial gradient rotating clockwise at 25 deg/s",
+          "style": {
+            "font-size": 28,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            ]
+          }
+        }
+      ],
+      "transition": { "type": "fade", "duration": 0.5 }
+    },
+    {
+      "duration": 4.0,
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 16
+      },
+      "background": {
+        "preset": "grid_dots",
+        "grid_dots": {
+          "color": "#6366F130",
+          "element_size": 5.0,
+          "spacing": 50.0
+        },
+        "speed": 20,
+        "direction": "up_right"
+      },
+      "children": [
+        {
+          "type": "icon",
+          "icon": "lucide:grid-3x3",
+          "size": { "width": 64, "height": 64 },
+          "style": {
+            "color": "#6366F1",
+            "animation": [{ "name": "scale_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Grid Dots",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Diagonal scroll (up-right) at 20 px/s",
+          "style": {
+            "font-size": 28,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            ]
+          }
+        }
+      ],
+      "transition": { "type": "fade", "duration": 0.5 }
+    },
+    {
+      "duration": 4.0,
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 16
+      },
+      "background": {
+        "preset": "heropattern",
+        "heropattern": {
+          "pattern": "topography",
+          "color": "#22D3EE",
+          "opacity": 0.08,
+          "scale": 0.6
+        },
+        "speed": 12,
+        "direction": "left"
+      },
+      "children": [
+        {
+          "type": "icon",
+          "icon": "lucide:mountain",
+          "size": { "width": 64, "height": 64 },
+          "style": {
+            "color": "#22D3EE",
+            "animation": [{ "name": "scale_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Heropattern: Topography",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "87 patterns from heropatterns.com \u2014 scrolling left at 12 px/s",
+          "style": {
+            "font-size": 28,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            ]
+          }
+        }
+      ],
+      "transition": { "type": "fade", "duration": 0.5 }
+    },
+    {
+      "duration": 4.0,
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 16
+      },
+      "background": {
+        "preset": "concentric_circles",
+        "concentric_circles": {
+          "color": "#F97316",
+          "element_size": 2.0,
+          "count": 6
+        },
+        "speed": 18
+      },
+      "children": [
+        {
+          "type": "icon",
+          "icon": "lucide:radio",
+          "size": { "width": 64, "height": 64 },
+          "style": {
+            "color": "#F97316",
+            "animation": [{ "name": "scale_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Concentric Circles",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "6 expanding circles at 18 px/s",
+          "style": {
+            "font-size": 28,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            ]
+          }
+        }
+      ],
+      "transition": { "type": "fade", "duration": 0.5 }
+    },
+    {
+      "duration": 4.0,
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 16
+      },
+      "background": {
+        "preset": "halo",
+        "halo": {
+          "zones": [
+            { "color": "#EC489960", "x": 0.25, "y": 0.4, "radius": 0.35 },
+            { "color": "#8B5CF660", "x": 0.75, "y": 0.6, "radius": 0.3 },
+            { "color": "#06B6D440", "x": 0.5, "y": 0.2, "radius": 0.25 }
+          ]
+        },
+        "speed": 0.8
+      },
+      "children": [
+        {
+          "type": "icon",
+          "icon": "lucide:sparkles",
+          "size": { "width": 64, "height": 64 },
+          "style": {
+            "color": "#EC4899",
+            "animation": [{ "name": "scale_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Halo Glow",
+          "style": {
+            "font-size": 56,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "3 breathing glow zones with unique colors",
+          "style": {
+            "font-size": 28,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              { "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

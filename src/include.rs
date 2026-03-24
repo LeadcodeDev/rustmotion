@@ -4,8 +4,9 @@ use anyhow::Result;
 
 use crate::error::RustmotionError;
 use crate::schema::{
-    AnimatedBackground, BackgroundEntry, BackgroundValue, EasingType, IncludeDirective,
-    ResolvedBackground, ResolvedScenario, ResolvedView, Scene, SceneEntry, Scenario, ViewType,
+    AnimatedBackground, BackgroundEntry, BackgroundPreset, BackgroundValue, EasingType,
+    IncludeDirective, ResolvedBackground, ResolvedScenario, ResolvedView, Scene, SceneEntry,
+    Scenario, ViewType,
 };
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
@@ -221,7 +222,21 @@ fn resolve_entry(
         serde_json::Value::Object(entry.overrides.clone())
     };
     let bg: AnimatedBackground = serde_json::from_value(base)?;
+    validate_animated_bg(&bg)?;
     Ok(bg)
+}
+
+/// Validate an AnimatedBackground after deserialization.
+fn validate_animated_bg(bg: &AnimatedBackground) -> Result<()> {
+    if let BackgroundPreset::Heropattern(cfg) = &bg.preset {
+        if crate::engine::heropatterns::find_pattern(&cfg.pattern).is_none() {
+            return Err(RustmotionError::UnknownHeropattern {
+                name: cfg.pattern.clone(),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Resolve a BackgroundValue + legacy animated_background into a ResolvedBackground.
@@ -253,6 +268,9 @@ fn resolve_background_value(
     }
 
     // Append legacy animated-background entries (backward compat)
+    for bg in legacy {
+        validate_animated_bg(bg)?;
+    }
     resolved.animated.extend_from_slice(legacy);
 
     Ok(resolved)

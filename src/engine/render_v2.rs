@@ -6,7 +6,7 @@ use super::renderer::color4f_from_hex;
 use crate::components::{ChildComponent, Overlay, OverlayAnchor};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{AnimatedBackground, Camera, GradientType, HaloZone, InnerShadow, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{AnimatedBackground, BackgroundPreset, Camera, ConcentricCirclesConfig, GradientShiftConfig, GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, InnerShadow, LayerStyle, Scene, SceneLayout, ScrollDirection, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
@@ -1234,66 +1234,130 @@ pub fn render_scene_fg_scaled(
 fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackground, t: f32) -> AnimatedBackground {
     let lerp = |x: f32, y: f32| x * (1.0 - t) + y * t;
 
-    // Interpolate colors (RGB lerp, paired by index)
-    let max_colors = a.colors.len().max(b.colors.len());
-    let mut colors = Vec::with_capacity(max_colors);
-    for i in 0..max_colors {
-        let ca = a.colors.get(i).map(|c| color4f_from_hex(c));
-        let cb = b.colors.get(i).map(|c| color4f_from_hex(c));
-        match (ca, cb) {
-            (Some(ca), Some(cb)) => {
-                let r = lerp(ca.r, cb.r);
-                let g = lerp(ca.g, cb.g);
-                let bl = lerp(ca.b, cb.b);
-                let al = lerp(ca.a, cb.a);
-                colors.push(format!("#{:02X}{:02X}{:02X}{:02X}",
-                    (r * 255.0) as u8, (g * 255.0) as u8, (bl * 255.0) as u8, (al * 255.0) as u8));
+    fn lerp_colors(a_colors: &[String], b_colors: &[String], lerp: impl Fn(f32, f32) -> f32) -> Vec<String> {
+        let max = a_colors.len().max(b_colors.len());
+        let mut out = Vec::with_capacity(max);
+        for i in 0..max {
+            let ca = a_colors.get(i).map(|c| color4f_from_hex(c));
+            let cb = b_colors.get(i).map(|c| color4f_from_hex(c));
+            match (ca, cb) {
+                (Some(ca), Some(cb)) => {
+                    out.push(format!("#{:02X}{:02X}{:02X}{:02X}",
+                        (lerp(ca.r, cb.r) * 255.0) as u8,
+                        (lerp(ca.g, cb.g) * 255.0) as u8,
+                        (lerp(ca.b, cb.b) * 255.0) as u8,
+                        (lerp(ca.a, cb.a) * 255.0) as u8));
+                }
+                (None, Some(_)) => out.push(b_colors[i].clone()),
+                (Some(_), None) => out.push(a_colors[i].clone()),
+                (None, None) => {}
             }
-            (None, Some(_)) => colors.push(b.colors[i].clone()),
-            (Some(_), None) => colors.push(a.colors[i].clone()),
-            (None, None) => {}
         }
+        out
     }
 
-    // Interpolate halo zones
-    let max_zones = a.zones.len().max(b.zones.len());
-    let mut zones = Vec::with_capacity(max_zones);
-    for i in 0..max_zones {
-        let za = a.zones.get(i);
-        let zb = b.zones.get(i);
-        match (za, zb) {
-            (Some(za), Some(zb)) => {
-                let ca = color4f_from_hex(&za.color);
-                let cb = color4f_from_hex(&zb.color);
-                let r = lerp(ca.r, cb.r);
-                let g = lerp(ca.g, cb.g);
-                let bl = lerp(ca.b, cb.b);
-                zones.push(HaloZone {
-                    color: format!("#{:02X}{:02X}{:02X}", (r * 255.0) as u8, (g * 255.0) as u8, (bl * 255.0) as u8),
-                    x: lerp(za.x, zb.x),
-                    y: lerp(za.y, zb.y),
-                    radius: lerp(za.radius, zb.radius),
-                });
+    fn lerp_zones(a_zones: &[HaloZone], b_zones: &[HaloZone], lerp: impl Fn(f32, f32) -> f32) -> Vec<HaloZone> {
+        let max = a_zones.len().max(b_zones.len());
+        let mut out = Vec::with_capacity(max);
+        for i in 0..max {
+            match (a_zones.get(i), b_zones.get(i)) {
+                (Some(za), Some(zb)) => {
+                    let ca = color4f_from_hex(&za.color);
+                    let cb = color4f_from_hex(&zb.color);
+                    out.push(HaloZone {
+                        color: format!("#{:02X}{:02X}{:02X}",
+                            (lerp(ca.r, cb.r) * 255.0) as u8,
+                            (lerp(ca.g, cb.g) * 255.0) as u8,
+                            (lerp(ca.b, cb.b) * 255.0) as u8),
+                        x: lerp(za.x, zb.x),
+                        y: lerp(za.y, zb.y),
+                        radius: lerp(za.radius, zb.radius),
+                    });
+                }
+                (None, Some(zb)) => out.push(zb.clone()),
+                (Some(za), None) => out.push(za.clone()),
+                (None, None) => {}
             }
-            (None, Some(zb)) => zones.push(zb.clone()),
-            (Some(za), None) => zones.push(za.clone()),
-            (None, None) => {}
         }
+        out
     }
+
+    // Interpolate preset — same type: interpolate fields, different type: snap at t >= 0.5
+    let preset = match (&a.preset, &b.preset) {
+        (BackgroundPreset::GradientShift(ac), BackgroundPreset::GradientShift(bc)) => {
+            BackgroundPreset::GradientShift(GradientShiftConfig {
+                colors: lerp_colors(&ac.colors, &bc.colors, &lerp),
+                gradient_type: bc.gradient_type.clone(),
+            })
+        }
+        (BackgroundPreset::GridDots(ac), BackgroundPreset::GridDots(bc)) => {
+            let ca = color4f_from_hex(&ac.color);
+            let cb = color4f_from_hex(&bc.color);
+            BackgroundPreset::GridDots(GridDotsConfig {
+                color: format!("#{:02X}{:02X}{:02X}{:02X}",
+                    (lerp(ca.r, cb.r) * 255.0) as u8,
+                    (lerp(ca.g, cb.g) * 255.0) as u8,
+                    (lerp(ca.b, cb.b) * 255.0) as u8,
+                    (lerp(ca.a, cb.a) * 255.0) as u8),
+                element_size: lerp(ac.element_size, bc.element_size),
+                spacing: lerp(ac.spacing, bc.spacing),
+            })
+        }
+        (BackgroundPreset::ConcentricCircles(ac), BackgroundPreset::ConcentricCircles(bc)) => {
+            let ca = color4f_from_hex(&ac.color);
+            let cb = color4f_from_hex(&bc.color);
+            BackgroundPreset::ConcentricCircles(ConcentricCirclesConfig {
+                color: format!("#{:02X}{:02X}{:02X}{:02X}",
+                    (lerp(ca.r, cb.r) * 255.0) as u8,
+                    (lerp(ca.g, cb.g) * 255.0) as u8,
+                    (lerp(ca.b, cb.b) * 255.0) as u8,
+                    (lerp(ca.a, cb.a) * 255.0) as u8),
+                element_size: lerp(ac.element_size, bc.element_size),
+                spacing: lerp(ac.spacing, bc.spacing),
+                count: bc.count,
+            })
+        }
+        (BackgroundPreset::Halo(ac), BackgroundPreset::Halo(bc)) => {
+            BackgroundPreset::Halo(HaloConfig {
+                zones: lerp_zones(&ac.zones, &bc.zones, &lerp),
+            })
+        }
+        _ => {
+            // Different preset types: snap to b at midpoint
+            if t >= 0.5 { b.preset.clone() } else { a.preset.clone() }
+        }
+    };
 
     AnimatedBackground {
-        colors,
+        preset,
+        x: lerp(a.x, b.x),
+        y: lerp(a.y, b.y),
         speed: lerp(a.speed, b.speed),
-        gradient_type: b.gradient_type.clone(),
-        preset: b.preset.clone(),
-        element_size: lerp(a.element_size, b.element_size),
-        spacing: lerp(a.spacing, b.spacing),
-        count: b.count,
-        zones,
+        direction: b.direction.clone(),
     }
 }
 
-/// Draw an animated background (gradient, concentric circles, or grid dots).
+/// Compute the scroll offset for tiled backgrounds based on direction + speed.
+fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
+    let speed = bg.speed;
+    if speed == 0.0 {
+        return (0.0, 0.0);
+    }
+    let (dx, dy) = match bg.direction.as_ref() {
+        Some(ScrollDirection::Up) => (0.0, -1.0),
+        Some(ScrollDirection::Down) => (0.0, 1.0),
+        Some(ScrollDirection::Left) => (-1.0, 0.0),
+        Some(ScrollDirection::Right) => (1.0, 0.0),
+        Some(ScrollDirection::UpLeft) => (-0.707, -0.707),
+        Some(ScrollDirection::UpRight) => (0.707, -0.707),
+        Some(ScrollDirection::DownLeft) => (-0.707, 0.707),
+        Some(ScrollDirection::DownRight) => (0.707, 0.707),
+        _ => (0.0, 0.0), // Cw/Ccw handled inside gradient_shift
+    };
+    (dx * speed * time, dy * speed * time)
+}
+
+/// Draw an animated background (gradient, concentric circles, grid dots, halo, or heropattern).
 fn draw_animated_background(
     canvas: &Canvas,
     bg: &AnimatedBackground,
@@ -1301,12 +1365,26 @@ fn draw_animated_background(
     width: f32,
     height: f32,
 ) {
-    match bg.preset.as_deref() {
-        Some("concentric_circles") => draw_bg_concentric_circles(canvas, bg, time, width, height),
-        Some("grid_dots") => draw_bg_grid_dots(canvas, bg, time, width, height),
-        Some("halo") => draw_bg_halo(canvas, bg, time, width, height),
-        _ => draw_bg_gradient_shift(canvas, bg, time, width, height),
+    // Compute scroll offset for tiled presets (gradient_shift handles rotation internally)
+    let (scroll_x, scroll_y) = compute_scroll_offset(bg, time);
+
+    canvas.save();
+    canvas.translate((bg.x + scroll_x, bg.y + scroll_y));
+
+    match &bg.preset {
+        BackgroundPreset::GradientShift(cfg) =>
+            draw_bg_gradient_shift(canvas, cfg, bg.speed, bg.direction.as_ref(), time, width, height),
+        BackgroundPreset::GridDots(cfg) =>
+            draw_bg_grid_dots(canvas, cfg, time, width, height),
+        BackgroundPreset::ConcentricCircles(cfg) =>
+            draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height),
+        BackgroundPreset::Halo(cfg) =>
+            draw_bg_halo(canvas, cfg, bg.speed, time, width, height),
+        BackgroundPreset::Heropattern(cfg) =>
+            draw_bg_heropattern(canvas, cfg, time, width, height),
     }
+
+    canvas.restore();
 }
 
 /// Draw animated background with camera parallax for world views.
@@ -1321,23 +1399,26 @@ fn draw_world_bg_with_parallax(
     cam_x: f32,
     cam_y: f32,
 ) {
-    match bg.preset.as_deref() {
-        Some("halo") => {
-            // Halo zones use normalized coordinates (0-1) relative to the drawn area.
-            // To make them scroll with the world, we translate by the full camera offset
-            // and draw on a surface large enough to cover the entire world extent.
-            // We use a large virtual surface so zones are spread across the world.
+    match &bg.preset {
+        BackgroundPreset::Halo(cfg) => {
             let world_w = width * 5.0;
             let world_h = height * 5.0;
             canvas.save();
             canvas.translate((-cam_x, -cam_y));
-            draw_bg_halo(canvas, bg, time, world_w, world_h);
+            draw_bg_halo(canvas, cfg, bg.speed, time, world_w, world_h);
             canvas.restore();
         }
         _ => {
-            // Grid-based backgrounds (grid_dots, concentric_circles, etc.)
-            // use modulo offset for seamless tiling.
-            let spacing = bg.spacing.max(20.0);
+            // Grid-based backgrounds: modulo offset for seamless tiling.
+            let spacing = match &bg.preset {
+                BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
+                BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
+                BackgroundPreset::Heropattern(cfg) => {
+                    let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
+                    def.map(|d| d.width * cfg.scale).unwrap_or(60.0).max(20.0)
+                }
+                _ => 60.0_f32.max(20.0),
+            };
             let offset_x = -(cam_x % spacing);
             let offset_y = -(cam_y % spacing);
             canvas.save();
@@ -1350,19 +1431,27 @@ fn draw_world_bg_with_parallax(
 
 fn draw_bg_gradient_shift(
     canvas: &Canvas,
-    bg: &AnimatedBackground,
+    cfg: &GradientShiftConfig,
+    speed: f32,
+    direction: Option<&ScrollDirection>,
     time: f32,
     width: f32,
     height: f32,
 ) {
     use skia_safe::{gradient_shader::GradientShaderColors, Point};
 
-    if bg.colors.len() < 2 {
+    if cfg.colors.len() < 2 {
         return;
     }
 
-    let base_colors: Vec<skia_safe::Color4f> = bg.colors.iter().map(|c| color4f_from_hex(c)).collect();
-    let angle = (bg.speed * time) % 360.0;
+    let base_colors: Vec<skia_safe::Color4f> = cfg.colors.iter().map(|c| color4f_from_hex(c)).collect();
+
+    // Direction determines rotation sense; default is cw
+    let sign = match direction {
+        Some(ScrollDirection::Ccw) => -1.0,
+        _ => 1.0,
+    };
+    let angle = (sign * speed * time) % 360.0;
     let rad = angle.to_radians();
 
     // Interpolate in linear color space to reduce banding on dark gradients
@@ -1371,7 +1460,7 @@ fn draw_bg_gradient_shift(
     // Subdivide color stops (16 intermediate steps between each pair) for smoother gradients
     let (colors, positions) = subdivide_gradient_stops(&base_colors, 16);
 
-    let shader = match bg.gradient_type {
+    let shader = match cfg.gradient_type {
         GradientType::Linear => {
             let cx = width / 2.0;
             let cy = height / 2.0;
@@ -1451,18 +1540,19 @@ fn subdivide_gradient_stops(
 /// Soft colored glow zones (halo preset).
 fn draw_bg_halo(
     canvas: &Canvas,
-    bg: &AnimatedBackground,
+    cfg: &HaloConfig,
+    speed: f32,
     time: f32,
     width: f32,
     height: f32,
 ) {
-    for (i, zone) in bg.zones.iter().enumerate() {
+    for (i, zone) in cfg.zones.iter().enumerate() {
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
         // Each particle gets a unique phase and slightly different frequency
         let phase = (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
-        let freq = bg.speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
+        let freq = speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
 
@@ -1482,32 +1572,32 @@ fn draw_bg_halo(
 /// Expanding concentric circles from center.
 fn draw_bg_concentric_circles(
     canvas: &Canvas,
-    bg: &AnimatedBackground,
+    cfg: &ConcentricCirclesConfig,
+    speed: f32,
     time: f32,
     width: f32,
     height: f32,
 ) {
     use skia_safe::PaintStyle;
 
-    let color_str = bg.colors.first().map(|s| s.as_str()).unwrap_or("#FFFFFF20");
-    let mut paint = super::renderer::paint_from_hex(color_str);
+    let mut paint = super::renderer::paint_from_hex(&cfg.color);
     paint.set_style(PaintStyle::Stroke);
-    paint.set_stroke_width(bg.element_size);
+    paint.set_stroke_width(cfg.element_size);
     paint.set_anti_alias(true);
 
     let cx = width / 2.0;
     let cy = height / 2.0;
     let max_radius = (width.powi(2) + height.powi(2)).sqrt() / 2.0;
-    let spacing = if let Some(count) = bg.count {
+    let spacing = if let Some(count) = cfg.count {
         if count > 0 {
             max_radius / count as f32
         } else {
-            bg.spacing.max(20.0)
+            cfg.spacing.max(20.0)
         }
     } else {
-        bg.spacing.max(20.0)
+        cfg.spacing.max(20.0)
     };
-    let offset = (time * bg.speed) % spacing;
+    let offset = (time * speed) % spacing;
 
     let mut r = offset;
     while r < max_radius {
@@ -1522,20 +1612,19 @@ fn draw_bg_concentric_circles(
 /// Animated dot grid pattern.
 fn draw_bg_grid_dots(
     canvas: &Canvas,
-    bg: &AnimatedBackground,
+    cfg: &GridDotsConfig,
     time: f32,
     width: f32,
     height: f32,
 ) {
-    let color_str = bg.colors.first().map(|s| s.as_str()).unwrap_or("#FFFFFF15");
-    let mut paint = super::renderer::paint_from_hex(color_str);
+    let mut paint = super::renderer::paint_from_hex(&cfg.color);
     paint.set_anti_alias(true);
 
-    let spacing = bg.spacing.max(20.0);
-    let dot_radius = bg.element_size / 2.0;
-    let offset_y = (time * bg.speed * 0.5) % spacing;
+    let spacing = cfg.spacing.max(20.0);
+    let dot_radius = cfg.element_size / 2.0;
 
-    let mut y = -spacing + offset_y;
+    // Scroll is now handled by compute_scroll_offset + canvas translate upstream.
+    let mut y = -spacing;
     while y < height + spacing {
         let mut x = 0.0_f32;
         while x < width + spacing {
@@ -1548,6 +1637,87 @@ fn draw_bg_grid_dots(
         }
         y += spacing;
     }
+}
+
+/// Tiled heropattern background.
+fn draw_bg_heropattern(
+    canvas: &Canvas,
+    cfg: &HeropatternConfig,
+    _time: f32,
+    width: f32,
+    height: f32,
+) {
+    let Some(def) = crate::engine::heropatterns::find_pattern(&cfg.pattern) else {
+        return;
+    };
+
+    let tile_w = def.width * cfg.scale;
+    let tile_h = def.height * cfg.scale;
+    if tile_w < 1.0 || tile_h < 1.0 {
+        return;
+    }
+
+    // Build the SVG source with color/opacity substituted
+    let svg_content = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">{}</svg>"#,
+        def.width, def.height, def.width, def.height,
+        def.svg_paths
+            .replace("{{color}}", &cfg.color)
+            .replace("{{opacity}}", &cfg.opacity.to_string()),
+    );
+
+    // Render one tile via usvg/resvg
+    let opt = usvg::Options::default();
+    let Ok(tree) = usvg::Tree::from_data(svg_content.as_bytes(), &opt) else {
+        return;
+    };
+
+    let pw = def.width.ceil() as u32;
+    let ph = def.height.ceil() as u32;
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
+        return;
+    };
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+
+    // Convert to Skia image
+    let info = ImageInfo::new(
+        (pw as i32, ph as i32),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let row_bytes = pw as usize * 4;
+    let Some(tile_image) = skia_safe::images::raster_from_data(
+        &info,
+        skia_safe::Data::new_copy(pixmap.data()),
+        row_bytes,
+    ) else {
+        return;
+    };
+
+    // Build a tiled shader from the tile image
+    let matrix = if cfg.scale != 1.0 {
+        Some(skia_safe::Matrix::scale((cfg.scale, cfg.scale)))
+    } else {
+        None
+    };
+    let Some(shader) = tile_image.to_shader(
+        (skia_safe::TileMode::Repeat, skia_safe::TileMode::Repeat),
+        skia_safe::SamplingOptions::default(),
+        matrix.as_ref(),
+    ) else {
+        return;
+    };
+
+    let mut paint = Paint::default();
+    paint.set_shader(shader);
+    paint.set_anti_alias(true);
+
+    let margin = tile_w.max(tile_h);
+    canvas.draw_rect(
+        skia_safe::Rect::from_xywh(-margin, -margin, width + margin * 2.0, height + margin * 2.0),
+        &paint,
+    );
 }
 
 /// Draw an inner (inset) shadow inside an element.

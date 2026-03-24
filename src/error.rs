@@ -85,6 +85,9 @@ pub enum RustmotionError {
     #[error("Unknown background template '{name}' referenced via $ref")]
     UnknownBackgroundTemplate { name: String },
 
+    #[error("Unknown heropattern '{name}' — see heropatterns.com for available patterns")]
+    UnknownHeropattern { name: String },
+
     // --- Variables ---
     #[error("Variable '${name}' is not defined in '{path}'")]
     UndefinedVariable { name: String, path: String },

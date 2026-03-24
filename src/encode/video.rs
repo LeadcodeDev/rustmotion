@@ -910,6 +910,18 @@ pub fn encode_with_ffmpeg(
     crf: Option<u8>,
     transparent: bool,
 ) -> Result<()> {
+    encode_with_ffmpeg_progress(scenario, output_path, quiet, codec, crf, transparent, None)
+}
+
+pub fn encode_with_ffmpeg_progress(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    codec: &str,
+    crf: Option<u8>,
+    transparent: bool,
+    on_progress: Option<&(dyn Fn(EncodeProgress) + Send + Sync)>,
+) -> Result<()> {
     let config = &scenario.video;
     let width = config.width;
     let height = config.height;
@@ -1037,8 +1049,12 @@ pub fn encode_with_ffmpeg(
             })
             .collect();
 
+        let rendered = counter.load(Ordering::Relaxed);
         if let Some(ref mut tui) = tui {
-            tui.set_progress(counter.load(Ordering::Relaxed));
+            tui.set_progress(rendered);
+        }
+        if let Some(cb) = &on_progress {
+            cb(EncodeProgress::Rendering(rendered, total_frames));
         }
 
         // Write RGBA sequentially to FFmpeg pipe (preserves frame order)
@@ -1060,6 +1076,10 @@ pub fn encode_with_ffmpeg(
 
     // Close stdin to signal end of input
     drop(stdin);
+
+    if let Some(cb) = &on_progress {
+        cb(EncodeProgress::Muxing);
+    }
 
     let status = child.wait()
         .map_err(|e| RustmotionError::FfmpegWait { reason: e.to_string() })?;

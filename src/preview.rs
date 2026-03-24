@@ -17,7 +17,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::encode::{self, video::FrameTask, video::encode_video_with_progress, EncodeProgress};
+use crate::encode::{self, video::FrameTask, video::encode_video_with_progress, encode_with_ffmpeg_progress, EncodeProgress};
 use crate::engine;
 use crate::engine::renderer::font_mgr;
 use crate::error::RustmotionError;
@@ -467,8 +467,36 @@ impl PreviewApp {
                     };
                     let _ = progress_sender.send((frac, label));
                 };
-                encode_video_with_progress(&scenario, &output_str, true, Some(&on_progress))
+                // Use FFmpeg if available (10-bit H.264), fall back to openh264
+                let ffmpeg_available = std::process::Command::new("ffmpeg")
+                    .arg("-version")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+
+                if ffmpeg_available {
+                    let codec = match scenario.video.codec {
+                        Some(crate::schema::VideoCodec::H265) => "h265",
+                        Some(crate::schema::VideoCodec::Vp9) => "vp9",
+                        Some(crate::schema::VideoCodec::Prores) => "prores",
+                        _ => "h264",
+                    };
+                    encode_with_ffmpeg_progress(
+                        &scenario,
+                        &output_str,
+                        true,
+                        codec,
+                        scenario.video.crf,
+                        false,
+                        Some(&on_progress),
+                    )
                     .map_err(|e| format!("Encode error: {}", e))?;
+                } else {
+                    encode_video_with_progress(&scenario, &output_str, true, Some(&on_progress))
+                        .map_err(|e| format!("Encode error: {}", e))?;
+                }
                 Ok(output_str)
             })();
             let _ = tx.send(result);
