@@ -151,8 +151,10 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Studio { file } => {
-            let scenario = load_scenario(&file)?;
-            preview::run_preview(scenario, Some(file), true)
+            match load_scenario(&file) {
+                Ok(scenario) => preview::run_preview(scenario, Some(file), true),
+                Err(e) => preview::run_preview_with_error(format!("{}", e), Some(file), true),
+            }
         }
         Commands::Render {
             file,

@@ -298,6 +298,9 @@ struct PreviewApp {
     cursor_x: f64,
     cursor_y: f64,
 
+    // Error overlay
+    error_message: Option<String>,
+
     // Export
     export_state: ExportState,
     export_done_rx: Option<Receiver<Result<String, String>>>,
@@ -382,6 +385,7 @@ impl PreviewApp {
         if let Some(ref path) = self.input_path {
             match crate::load_scenario(path) {
                 Ok(scenario) => {
+                    self.error_message = None;
                     if !scenario.fonts.is_empty() {
                         engine::renderer::load_custom_fonts(&scenario.fonts);
                     }
@@ -391,7 +395,10 @@ impl PreviewApp {
                     }
                     let _ = self.render_tx.send(RenderRequest::Reload(scenario));
                 }
-                Err(e) => eprintln!("Reload error: {}", e),
+                Err(e) => {
+                    eprintln!("Reload error: {}", e);
+                    self.error_message = Some(format!("{}", e));
+                }
             }
         }
     }
@@ -493,10 +500,13 @@ impl PreviewApp {
         let export_state = self.export_state;
 
         let ui_font = self.make_ui_font(11.0);
+        let error_message = self.error_message.clone();
         let export_progress = self.export_progress;
         let export_progress_label = self.export_progress_label.clone();
         let small_font = self.make_ui_font(10.0);
         let label_font = self.make_ui_font(11.0);
+        let error_title_font = self.make_ui_font(16.0);
+        let error_body_font = self.make_ui_font(13.0);
 
         let Some(surface) = &mut self.surface else {
             return;
@@ -767,6 +777,87 @@ impl PreviewApp {
                 let text_w = blob.bounds().width();
                 let x = layout.time_right_pos.0 - text_w;
                 canvas.draw_text_blob(&blob, (x, layout.time_right_pos.1), &tp);
+            }
+        }
+
+        // Error overlay
+        if let Some(ref err_msg) = error_message {
+            // Semi-transparent dark backdrop
+            let mut backdrop = Paint::default();
+            backdrop.set_color4f(Color4f::new(0.0, 0.0, 0.0, 0.75), None);
+            canvas.draw_rect(Rect::from_wh(w, h), &backdrop);
+
+            // Error box
+            let box_w = (w * 0.8).min(600.0);
+            let box_x = (w - box_w) / 2.0;
+            let box_y = h * 0.3;
+            let padding = 24.0;
+
+            // Title
+            let title = "Schema Error";
+            let mut title_paint = Paint::default();
+            title_paint.set_color4f(Color4f::new(1.0, 0.35, 0.35, 1.0), None);
+            title_paint.set_anti_alias(true);
+
+            // Background box (measure height based on text)
+            let mut bg_paint = Paint::default();
+            bg_paint.set_color4f(Color4f::new(0.12, 0.12, 0.12, 0.95), None);
+
+            // Word-wrap error message
+            let max_text_w = box_w - padding * 2.0;
+            let mut lines: Vec<String> = Vec::new();
+            for raw_line in err_msg.lines() {
+                let mut current = String::new();
+                for word in raw_line.split_whitespace() {
+                    let test = if current.is_empty() {
+                        word.to_string()
+                    } else {
+                        format!("{} {}", current, word)
+                    };
+                    if let Some(blob) = TextBlob::new(&test, &error_body_font) {
+                        if blob.bounds().width() > max_text_w && !current.is_empty() {
+                            lines.push(current);
+                            current = word.to_string();
+                        } else {
+                            current = test;
+                        }
+                    } else {
+                        current = test;
+                    }
+                }
+                if !current.is_empty() {
+                    lines.push(current);
+                }
+            }
+
+            let line_h = 18.0;
+            let title_h = 24.0;
+            let box_h = padding + title_h + 12.0 + lines.len() as f32 * line_h + padding;
+
+            let rrect = RRect::new_rect_xy(
+                Rect::from_xywh(box_x, box_y, box_w, box_h),
+                12.0, 12.0,
+            );
+            canvas.draw_rrect(rrect, &bg_paint);
+
+            // Draw title
+            if let Some(blob) = TextBlob::new(title, &error_title_font) {
+                canvas.draw_text_blob(&blob, (box_x + padding, box_y + padding + title_h * 0.7), &title_paint);
+            }
+
+            // Draw error lines
+            let mut body_paint = Paint::default();
+            body_paint.set_color4f(Color4f::new(0.9, 0.9, 0.9, 0.9), None);
+            body_paint.set_anti_alias(true);
+            let text_y_start = box_y + padding + title_h + 12.0;
+            for (i, line) in lines.iter().enumerate() {
+                if let Some(blob) = TextBlob::new(line, &error_body_font) {
+                    canvas.draw_text_blob(
+                        &blob,
+                        (box_x + padding, text_y_start + i as f32 * line_h + line_h * 0.7),
+                        &body_paint,
+                    );
+                }
             }
         }
 
@@ -1251,6 +1342,46 @@ pub fn run_preview(
     input_path: Option<PathBuf>,
     watch: bool,
 ) -> Result<()> {
+    run_preview_inner(scenario, input_path, watch, None)
+}
+
+pub fn run_preview_with_error(
+    initial_error: String,
+    input_path: Option<PathBuf>,
+    watch: bool,
+) -> Result<()> {
+    use crate::schema::{VideoConfig, ResolvedView, ViewType};
+    let scenario = ResolvedScenario {
+        video: VideoConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            background: "#000000".to_string(),
+            codec: None,
+            crf: None,
+        },
+        audio: vec![],
+        fonts: vec![],
+        views: vec![ResolvedView {
+            view_type: ViewType::Slide,
+            scenes: vec![],
+            transition: None,
+            background: None,
+            animated_background: vec![],
+            camera_easing: crate::schema::EasingType::Linear,
+            camera_pan_duration: 0.0,
+        }],
+        included_paths: vec![],
+    };
+    run_preview_inner(scenario, input_path, watch, Some(initial_error))
+}
+
+fn run_preview_inner(
+    scenario: ResolvedScenario,
+    input_path: Option<PathBuf>,
+    watch: bool,
+    initial_error: Option<String>,
+) -> Result<()> {
     // Prefetch assets
     for view in &scenario.views {
         engine::prefetch_icons(&view.scenes);
@@ -1339,6 +1470,7 @@ pub fn run_preview(
         timeline_dragging: false,
         cursor_x: 0.0,
         cursor_y: 0.0,
+        error_message: initial_error,
         export_state: ExportState::Idle,
         export_done_rx: None,
         export_progress: 0.0,
