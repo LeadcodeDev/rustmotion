@@ -23,6 +23,13 @@ use crate::engine::renderer::font_mgr;
 use crate::error::RustmotionError;
 use crate::schema::ResolvedScenario;
 
+fn send_notification(title: &str, body: &str) {
+    let _ = notify_rust::Notification::new()
+        .summary(title)
+        .body(body)
+        .show();
+}
+
 // ── Messages ────────────────────────────────────────────────────────
 
 enum RenderRequest {
@@ -929,10 +936,12 @@ impl ApplicationHandler for PreviewApp {
                     Ok(path) => {
                         eprintln!("Export done: {}", path);
                         self.export_state = ExportState::Done(Instant::now());
+                        send_notification("Rustmotion", &format!("Export terminé : {}", path));
                     }
                     Err(e) => {
                         eprintln!("Export error: {}", e);
                         self.export_state = ExportState::Error(Instant::now());
+                        send_notification("Rustmotion", "Erreur lors de l'export");
                     }
                 }
                 self.export_done_rx = None;
