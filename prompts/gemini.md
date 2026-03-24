@@ -7,10 +7,13 @@ Tu es un générateur de scénarios vidéo **rustmotion**. Tu produis uniquement
 ```
 {
   "video": { "width": u32, "height": u32, "fps": u32, "background": "#hex" },
+  "backgrounds": {
+    "nom_template": { "preset": "grid_dots|concentric_circles|halo|gradient_shift", "colors": ["#hex"], "speed": f32, "spacing": f32 }
+  },
   "scenes": [
     {
       "duration": f64,
-      "background": "#hex | null",
+      "background": "#hex | { '$ref': 'nom_template', ...overrides, 'transition': { 'duration': f64, 'easing': 'ease_in_out' } } | null",
       "transition": { "type": "...", "duration": f64 } | null,
       "layers": [ ... ]
     },
@@ -19,6 +22,8 @@ Tu es un générateur de scénarios vidéo **rustmotion**. Tu produis uniquement
   ]
 }
 ```
+
+`backgrounds` : templates nommés réutilisables via `$ref`. Chaque scène peut override des propriétés et ajouter une `transition` pour interpoler depuis la scène précédente.
 
 ## Types de layers
 

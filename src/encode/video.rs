@@ -189,7 +189,7 @@ pub fn render_frame_task_scaled(
     task: &FrameTask,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled, render_scene_bg_scaled, render_scene_fg_scaled};
+    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled, render_scene_frame_scaled_with_prev_bg, render_scene_bg_scaled, render_scene_fg_scaled};
 
     match task {
         FrameTask::Normal {
@@ -198,12 +198,15 @@ pub fn render_frame_task_scaled(
             frame_in_scene,
             scene_total_frames,
         } => {
-            let scene = &scenario.views[*view_idx].scenes[*scene_idx];
-            if scale_factor == 1.0 {
-                render_scene_frame(config, scene, *frame_in_scene, *scene_total_frames)
+            let view = &scenario.views[*view_idx];
+            let scene = &view.scenes[*scene_idx];
+            let prev_bg = if *scene_idx > 0 {
+                let prev = &view.scenes[*scene_idx - 1];
+                Some((&prev.resolved_background, prev.duration))
             } else {
-                render_scene_frame_scaled(config, scene, *frame_in_scene, *scene_total_frames, scale_factor)
-            }
+                None
+            };
+            render_scene_frame_scaled_with_prev_bg(config, scene, *frame_in_scene, *scene_total_frames, scale_factor, prev_bg)
         }
         FrameTask::SlideTransition {
             view_idx,

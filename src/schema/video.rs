@@ -44,6 +44,9 @@ pub struct Scenario {
     /// Config definitions for structural components. Each config entry has a type and default value.
     #[serde(default)]
     pub config: Option<HashMap<String, VariableDefinition>>,
+    /// Named background templates that scenes can reference via `$ref`.
+    #[serde(default)]
+    pub backgrounds: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -70,10 +73,11 @@ pub struct View {
     /// Transition entering this view (between views).
     #[serde(default)]
     pub transition: Option<Transition>,
-    /// (world) Shared background. Falls back to video.background.
-    #[serde(default)]
-    pub background: Option<String>,
-    /// (world) Shared animated backgrounds.
+    /// (world) Shared background: color string, animated entry, or array.
+    #[serde(default, deserialize_with = "deserialize_background_value")]
+    #[schemars(skip)]
+    pub background: Option<BackgroundValue>,
+    /// (world) Legacy shared animated backgrounds.
     #[serde(default, rename = "animated-background",
             deserialize_with = "deserialize_animated_backgrounds")]
     pub animated_background: Vec<AnimatedBackground>,
@@ -114,8 +118,7 @@ pub struct ResolvedView {
     pub view_type: ViewType,
     pub scenes: Vec<Scene>,
     pub transition: Option<Transition>,
-    pub background: Option<String>,
-    pub animated_background: Vec<AnimatedBackground>,
+    pub background: ResolvedBackground,
     pub camera_easing: EasingType,
     pub camera_pan_duration: f64,
 }
@@ -205,8 +208,10 @@ pub struct WorldPosition {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Scene {
     pub duration: f64,
-    #[serde(default)]
-    pub background: Option<String>,
+    /// Unified background: color string, animated entry (with optional $ref), or array.
+    #[serde(default, deserialize_with = "deserialize_background_value")]
+    #[schemars(skip)]
+    pub background: Option<BackgroundValue>,
     #[serde(default)]
     pub children: Vec<crate::components::ChildComponent>,
     #[serde(default)]
@@ -216,7 +221,7 @@ pub struct Scene {
     /// Flex layout for automatic layer positioning
     #[serde(default)]
     pub layout: Option<SceneLayout>,
-    /// Animated background gradient (single object or array of layered backgrounds)
+    /// Legacy animated background (kept for backward compat)
     #[serde(default, rename = "animated-background", deserialize_with = "deserialize_animated_backgrounds")]
     pub animated_background: Vec<AnimatedBackground>,
     /// Virtual camera with animatable x, y, zoom, rotation.
@@ -228,6 +233,10 @@ pub struct Scene {
     /// (world) Keep this scene visible after its time window ends.
     #[serde(default)]
     pub persist: bool,
+    /// Post-resolution background (populated by include.rs, ignored by serde).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_background: ResolvedBackground,
 }
 
 /// Virtual camera for pan/zoom/rotation effects at the scene level.
@@ -319,6 +328,53 @@ pub struct HaloZone {
     /// Radius as fraction of max(width, height).
     #[serde(default = "default_halo_radius")]
     pub radius: f32,
+}
+
+/// Transition configuration for background interpolation between scenes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BackgroundTransition {
+    pub duration: f64,
+    #[serde(default = "default_transition_easing")]
+    pub easing: EasingType,
+}
+
+/// A background entry with optional template reference and transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundEntry {
+    #[serde(rename = "$ref", default)]
+    pub template_ref: Option<String>,
+    #[serde(default)]
+    pub transition: Option<BackgroundTransition>,
+    #[serde(flatten)]
+    pub overrides: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The unified background field: color string, single entry, or multiple entries.
+#[derive(Debug, Clone)]
+pub enum BackgroundValue {
+    Color(String),
+    Single(BackgroundEntry),
+    Multiple(Vec<BackgroundEntry>),
+}
+
+impl Serialize for BackgroundValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: serde::Serializer {
+        match self {
+            BackgroundValue::Color(s) => serializer.serialize_str(s),
+            BackgroundValue::Single(entry) => entry.serialize(serializer),
+            BackgroundValue::Multiple(entries) => entries.serialize(serializer),
+        }
+    }
+}
+
+/// Resolved background after template expansion — ready for rendering.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ResolvedBackground {
+    pub color: Option<String>,
+    pub animated: Vec<AnimatedBackground>,
+    /// Transition for interpolation from the previous scene's background.
+    pub transition: Option<BackgroundTransition>,
 }
 
 fn default_half() -> f32 {
@@ -902,6 +958,62 @@ where
     }
 
     deserializer.deserialize_any(OneOrMany)
+}
+
+/// Deserialize `background` as a color string, a single BackgroundEntry object, or an array.
+fn deserialize_background_value<'de, D>(deserializer: D) -> Result<Option<BackgroundValue>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct BgVisitor;
+
+    impl<'de> de::Visitor<'de> for BgVisitor {
+        type Value = Option<BackgroundValue>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a color string, a background object, or an array of background objects")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where E: de::Error {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where E: de::Error {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where E: de::Error {
+            Ok(Some(BackgroundValue::Color(v.to_string())))
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where E: de::Error {
+            Ok(Some(BackgroundValue::Color(v)))
+        }
+
+        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+        where
+            M: de::MapAccess<'de>,
+        {
+            let entry = BackgroundEntry::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            Ok(Some(BackgroundValue::Single(entry)))
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let entries = Vec::<BackgroundEntry>::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            Ok(Some(BackgroundValue::Multiple(entries)))
+        }
+    }
+
+    deserializer.deserialize_any(BgVisitor)
 }
 
 // --- Unified LayerStyle ---

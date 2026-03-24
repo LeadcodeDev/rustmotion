@@ -562,13 +562,19 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
             }
             ViewType::Slide => {
                 // Slide view: each scene is independent
-                for scene in &view.scenes {
+                for (scene_idx, scene) in view.scenes.iter().enumerate() {
                     let scene_frames = (scene.duration * fps as f64).round() as u32;
                     if frame_num < frame_offset + scene_frames {
                         let local_frame = frame_num - frame_offset;
+                        let prev_bg = if scene_idx > 0 {
+                            let prev = &view.scenes[scene_idx - 1];
+                            Some((&prev.resolved_background, prev.duration))
+                        } else {
+                            None
+                        };
 
-                        let rgba = engine::render_v2::render_scene_frame(
-                            config, scene, local_frame, scene_frames,
+                        let rgba = engine::render_v2::render_scene_frame_scaled_with_prev_bg(
+                            config, scene, local_frame, scene_frames, 1.0, prev_bg,
                         )?;
 
                         let img = image::RgbaImage::from_raw(config.width, config.height, rgba)

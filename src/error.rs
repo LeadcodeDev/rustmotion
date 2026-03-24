@@ -82,6 +82,9 @@ pub enum RustmotionError {
     #[error("Scenario cannot have both top-level 'scenes' and 'composition' — use one or the other")]
     CompositionAndScenesConflict,
 
+    #[error("Unknown background template '{name}' referenced via $ref")]
+    UnknownBackgroundTemplate { name: String },
+
     // --- Variables ---
     #[error("Variable '${name}' is not defined in '{path}'")]
     UndefinedVariable { name: String, path: String },

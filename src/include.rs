@@ -4,8 +4,8 @@ use anyhow::Result;
 
 use crate::error::RustmotionError;
 use crate::schema::{
-    EasingType, IncludeDirective, ResolvedScenario, ResolvedView, Scene, SceneEntry, Scenario,
-    ViewType,
+    AnimatedBackground, BackgroundEntry, BackgroundValue, EasingType, IncludeDirective,
+    ResolvedBackground, ResolvedScenario, ResolvedView, Scene, SceneEntry, Scenario, ViewType,
 };
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
@@ -29,17 +29,22 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         return Err(RustmotionError::CompositionAndScenesConflict.into());
     }
 
+    let templates = &scenario.backgrounds;
+
     let views = if let Some(composition) = scenario.composition {
         // New format: composition with views
         let mut views = Vec::with_capacity(composition.len());
         for view in composition {
-            let scenes = resolve_entries(view.scenes, source, 0, &mut audio, &mut included_paths)?;
+            let mut scenes = resolve_entries(view.scenes, source, 0, &mut audio, &mut included_paths)?;
+            for scene in &mut scenes {
+                resolve_scene_background(scene, templates)?;
+            }
+            let view_bg = resolve_background_value(view.background.as_ref(), &view.animated_background, templates)?;
             views.push(ResolvedView {
                 view_type: view.view_type,
                 scenes,
                 transition: view.transition,
-                background: view.background,
-                animated_background: view.animated_background,
+                background: view_bg,
                 camera_easing: view.camera_easing,
                 camera_pan_duration: view.camera_pan_duration,
             });
@@ -47,13 +52,15 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         views
     } else {
         // Backward compat: wrap top-level scenes in a single slide view
-        let scenes = resolve_entries(scenario.scenes, source, 0, &mut audio, &mut included_paths)?;
+        let mut scenes = resolve_entries(scenario.scenes, source, 0, &mut audio, &mut included_paths)?;
+        for scene in &mut scenes {
+            resolve_scene_background(scene, templates)?;
+        }
         vec![ResolvedView {
             view_type: ViewType::Slide,
             scenes,
             transition: None,
-            background: None,
-            animated_background: Vec::new(),
+            background: ResolvedBackground::default(),
             camera_easing: EasingType::EaseInOut,
             camera_pan_duration: 0.8,
         }]
@@ -192,4 +199,93 @@ fn fetch_remote(url: &str) -> Result<String> {
         .read_to_string()
         .map_err(|e| RustmotionError::IncludeRemoteFetch { url: url.to_string(), reason: e.to_string() })?;
     Ok(body)
+}
+
+// --- Background template resolution ---
+
+use std::collections::HashMap;
+
+/// Resolve a single BackgroundEntry against the template map.
+fn resolve_entry(
+    entry: &BackgroundEntry,
+    templates: &HashMap<String, serde_json::Value>,
+) -> Result<AnimatedBackground> {
+    let base = if let Some(ref name) = entry.template_ref {
+        let tmpl = templates.get(name).ok_or_else(|| {
+            RustmotionError::UnknownBackgroundTemplate { name: name.clone() }
+        })?;
+        let mut base = tmpl.clone();
+        deep_merge(&mut base, &serde_json::Value::Object(entry.overrides.clone()));
+        base
+    } else {
+        serde_json::Value::Object(entry.overrides.clone())
+    };
+    let bg: AnimatedBackground = serde_json::from_value(base)?;
+    Ok(bg)
+}
+
+/// Resolve a BackgroundValue + legacy animated_background into a ResolvedBackground.
+fn resolve_background_value(
+    bg_value: Option<&BackgroundValue>,
+    legacy: &[AnimatedBackground],
+    templates: &HashMap<String, serde_json::Value>,
+) -> Result<ResolvedBackground> {
+    let mut resolved = ResolvedBackground::default();
+
+    if let Some(bg) = bg_value {
+        match bg {
+            BackgroundValue::Color(s) => {
+                resolved.color = Some(s.clone());
+            }
+            BackgroundValue::Single(entry) => {
+                resolved.animated.push(resolve_entry(entry, templates)?);
+                resolved.transition = entry.transition.clone();
+            }
+            BackgroundValue::Multiple(entries) => {
+                for entry in entries {
+                    resolved.animated.push(resolve_entry(entry, templates)?);
+                    if resolved.transition.is_none() {
+                        resolved.transition = entry.transition.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    // Append legacy animated-background entries (backward compat)
+    resolved.animated.extend_from_slice(legacy);
+
+    Ok(resolved)
+}
+
+/// Resolve the background for a scene and store it in `resolved_background`.
+fn resolve_scene_background(
+    scene: &mut Scene,
+    templates: &HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    scene.resolved_background = resolve_background_value(
+        scene.background.as_ref(),
+        &scene.animated_background,
+        templates,
+    )?;
+    Ok(())
+}
+
+/// Deep-merge overlay into base (overlay values win). Skips `$ref` and `transition` keys.
+fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+    if let (serde_json::Value::Object(b), serde_json::Value::Object(o)) = (base, overlay) {
+        for (k, v) in o {
+            if k == "$ref" || k == "transition" {
+                continue;
+            }
+            match b.get_mut(k) {
+                Some(existing) if existing.is_object() && v.is_object() => {
+                    deep_merge(existing, v);
+                }
+                _ => {
+                    b.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
 }

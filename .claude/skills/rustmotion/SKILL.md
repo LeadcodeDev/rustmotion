@@ -1494,30 +1494,43 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 
 Scenes can have animated gradient backgrounds. Gradients are interpolated in **linear color space** with subdivided color stops for smooth dark transitions. Use `concentric_circles` for a subtle, professional look (dark arc rings radiating from center). Use `gradient_shift` for color-shifting gradients.
 
+The `background` field on a scene accepts a color string, an animated background object (inline or via `$ref`), or an array of layered backgrounds. The legacy `animated-background` field is still supported.
+
+**Prefer `$ref` templates** when the same background is reused across scenes — define once in `backgrounds`, reference everywhere.
+
 ```json
 {
-  "duration": 5.0,
-  "animated-background": {
-    "colors": ["#0F0E2A", "#1a1145", "#0F0E2A"],
-    "speed": 15,
-    "gradient_type": "radial",
-    "preset": "concentric_circles",
-    "element_size": 1.5,
-    "count": 4
+  "backgrounds": {
+    "circles": { "preset": "concentric_circles", "colors": ["#0F0E2A", "#1a1145", "#0F0E2A"], "speed": 15, "element_size": 1.5, "count": 4, "gradient_type": "radial" }
   },
-  "children": [...]
+  "scenes": [
+    {
+      "duration": 5.0,
+      "background": { "$ref": "circles" },
+      "children": [...]
+    },
+    {
+      "duration": 5.0,
+      "background": { "$ref": "circles", "colors": ["#1a0a2e", "#2d1b69", "#1a0a2e"], "transition": { "duration": 1.0, "easing": "ease_in_out" } },
+      "children": [...]
+    }
+  ]
 }
 ```
+
+With `transition`, background properties (colors, speed, spacing, element_size, zones) interpolate smoothly from the previous scene's values.
 
 | Field          | Type   | Default           | Description                                   |
 | -------------- | ------ | ----------------- | --------------------------------------------- |
 | `colors`       | array  | `[]`              | Gradient colors (hex)                         |
 | `speed`        | f32    | `30.0`            | Animation speed (degrees/sec or pixels/sec)   |
 | `gradient_type`| enum   | `"linear"`        | `"linear"` or `"radial"`                      |
-| `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"` |
+| `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"` |
 | `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots; stroke width for concentric_circles |
 | `spacing`      | f32    | `60.0`            | Element spacing for grid_dots/concentric_circles |
 | `count`        | u32    | `null`            | Number of circles for concentric_circles (overrides spacing) |
+| `$ref`         | string | `null`            | Reference to a named template in `backgrounds` |
+| `transition`   | object | `null`            | `{ "duration": f64, "easing": "ease_in_out" }` — interpolates from prev scene |
 
 ---
 

@@ -1332,6 +1332,45 @@ Scenes support a virtual camera with animatable pan, zoom, and rotation.
 
 Scenes can have animated gradient backgrounds. Gradients are interpolated in linear color space with subdivided color stops for smooth dark transitions.
 
+The `background` field on a scene accepts:
+- **String**: `"#000000"` (solid color, backward compat)
+- **Object**: `{ "preset": "grid_dots", ... }` (inline animated background)
+- **Object with `$ref`**: `{ "$ref": "dots", ... }` (named template + overrides + transition)
+- **Array**: `[{ ... }, { ... }]` (multiple layered backgrounds)
+
+The legacy `animated-background` field is still supported.
+
+#### Background Templates
+
+Define reusable backgrounds at the scenario level and reference them via `$ref`:
+
+```json
+{
+  "backgrounds": {
+    "dots": { "preset": "grid_dots", "colors": ["#FF00FF"], "speed": 30, "spacing": 60 }
+  },
+  "scenes": [
+    {
+      "duration": 3,
+      "background": { "$ref": "dots", "colors": ["#00FFFF"] }
+    },
+    {
+      "duration": 3,
+      "background": {
+        "$ref": "dots",
+        "colors": ["#FF0000"],
+        "speed": 50,
+        "transition": { "duration": 1.0, "easing": "ease_in_out" }
+      }
+    }
+  ]
+}
+```
+
+When `transition` is specified, background properties interpolate smoothly from the previous scene's values over the given duration.
+
+#### Inline Animated Background
+
 ```json
 {
   "duration": 5.0,
@@ -1349,10 +1388,18 @@ Scenes can have animated gradient backgrounds. Gradients are interpolated in lin
 | `colors` | `string[]` | `[]` | Gradient colors (hex) |
 | `speed` | `f32` | `30.0` | Animation speed |
 | `gradient_type` | `string` | `"linear"` | `"linear"` or `"radial"` |
-| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"` |
+| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"` |
 | `element_size` | `f32` | `4.0` | Dot size for grid_dots; stroke width for concentric_circles |
 | `spacing` | `f32` | `60.0` | Element spacing for grid_dots/concentric_circles |
 | `count` | `u32` | | Number of circles for concentric_circles (overrides spacing) |
+
+**Background transition fields** (inside `$ref` entries):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `$ref` | `string` | | Name of a background template defined in `backgrounds` |
+| `transition.duration` | `f64` | | Interpolation duration in seconds from previous scene |
+| `transition.easing` | `string` | `"ease_in_out"` | Easing function for the interpolation |
 
 ---
 

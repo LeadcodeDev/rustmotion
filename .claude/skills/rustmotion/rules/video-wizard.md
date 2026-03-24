@@ -17,8 +17,8 @@ Guidelines for the assisted video creation wizard flow.
    - **Corporate** → subtle animations (fade_in, slide_in_up), neutral backgrounds, clean layouts
    - **Playful** → bouncy presets (bounce_in, scale_in with overshoot), bright colors, particles
    - **Minimal** → few elements per scene, lots of whitespace, char animations only
-   - **Tech/Dark** → dark gradients, concentric_circles, glow effects, monospace fonts
-   - **Colorful** → multi-color gradients, confetti particles, varied icon colors
+   - **Tech/Dark** → dark gradients, concentric_circles, glow effects, monospace fonts; use `$ref` templates with `transition` for smooth bg evolution
+   - **Colorful** → multi-color gradients, confetti particles, varied icon colors; use `$ref` templates to keep consistent bg across scenes
 
 6. **Suggest previews for complex scenes.** When a scene has overlapping elements, custom positioning, or intricate layouts, render a single frame with `--frame` so the user can verify placement before moving on.
 

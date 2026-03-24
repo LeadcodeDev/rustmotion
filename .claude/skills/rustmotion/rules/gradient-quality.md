@@ -18,7 +18,7 @@ Dark gradients are prone to color banding (visible steps instead of smooth trans
 **GOOD:** Use `gradient_type: "radial"` with at least 3 colors for smooth transitions:
 ```json
 {
-  "animated-background": {
+  "background": {
     "colors": ["#0f172a", "#1e1b4b", "#0f172a"],
     "speed": 20,
     "gradient_type": "radial"
@@ -26,10 +26,22 @@ Dark gradients are prone to color banding (visible steps instead of smooth trans
 }
 ```
 
+Or use a named template with `$ref` for reuse across scenes:
+```json
+{
+  "backgrounds": {
+    "dark_radial": { "colors": ["#0f172a", "#1e1b4b", "#0f172a"], "speed": 20, "gradient_type": "radial" }
+  },
+  "scenes": [
+    { "duration": 5, "background": { "$ref": "dark_radial" } }
+  ]
+}
+```
+
 **BAD:** Only 2 very similar dark colors (minimal contrast = worst banding):
 ```json
 {
-  "animated-background": {
+  "background": {
     "colors": ["#0a0a0a", "#0b0b0b"],
     "gradient_type": "radial"
   }

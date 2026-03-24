@@ -6,7 +6,7 @@ use super::renderer::color4f_from_hex;
 use crate::components::{ChildComponent, Overlay, OverlayAnchor};
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{AnimatedBackground, Camera, GradientType, InnerShadow, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{AnimatedBackground, Camera, GradientType, HaloZone, InnerShadow, LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::{Container, RenderContext, Styled};
 
 /// Render a single v2 ChildComponent with full animation/transform support.
@@ -628,12 +628,16 @@ pub fn render_frame_v2(
     root_children: &[ChildComponent],
     root_layout: &LayoutNode,
 ) -> Result<Vec<u8>> {
-    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, root_layout, 1.0)
+    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, root_layout, 1.0, None)
+
 }
 
 /// Render a frame with an optional scale factor for higher-resolution output.
 /// The layout is computed at video dimensions; the surface and rendering are
 /// scaled up so text and vector graphics remain sharp.
+///
+/// `prev_bg` is the resolved background of the previous scene (for transition interpolation).
+/// `prev_scene_duration` is the duration of the previous scene (for continuous animation time).
 pub fn render_frame_v2_scaled(
     config: &VideoConfig,
     scene: &Scene,
@@ -642,6 +646,7 @@ pub fn render_frame_v2_scaled(
     root_children: &[ChildComponent],
     root_layout: &LayoutNode,
     scale_factor: f32,
+    prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
@@ -672,12 +677,79 @@ pub fn render_frame_v2_scaled(
     }
 
     // Fill background
-    let bg = scene.background.as_deref().unwrap_or(&config.background);
+    let bg = scene.resolved_background.color.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
 
-    // Animated background gradient(s)
-    for anim_bg in &scene.animated_background {
-        draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+    // Animated background gradient(s) — with optional transition crossfade
+    let cur_bg = &scene.resolved_background;
+    if let (Some(ref transition), Some((prev, prev_duration))) = (&cur_bg.transition, prev_bg) {
+        let t_elapsed = time;
+        // Continuous time: add prev scene duration so animation doesn't jump at scene boundary
+        let continuous_time = (prev_duration + time) as f32;
+        if t_elapsed < transition.duration && !prev.animated.is_empty() {
+            let progress = super::animator::ease(
+                (t_elapsed / transition.duration).clamp(0.0, 1.0),
+                &transition.easing,
+            ) as f32;
+            let w = config.width as f32;
+            let h = config.height as f32;
+
+            // Crossfade: draw prev bg (fading out) then current bg (fading in) on separate layers.
+            // This avoids artifacts from interpolating speed/spacing directly.
+            if progress < 1.0 {
+                // Draw previous background with fading alpha
+                let bg_info = ImageInfo::new(
+                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                );
+                if let Some(mut prev_surface) = surfaces::raster(&bg_info, None, None) {
+                    let prev_canvas = prev_surface.canvas();
+                    if scale_factor != 1.0 { prev_canvas.scale((scale_factor, scale_factor)); }
+                    prev_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+                    for anim_bg in &prev.animated {
+                        draw_animated_background(prev_canvas, anim_bg, continuous_time, w, h);
+                    }
+                    let snapshot = prev_surface.image_snapshot();
+                    let mut paint = Paint::default();
+                    paint.set_alpha_f(1.0 - progress);
+                    canvas.save();
+                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
+                    canvas.restore();
+                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+                }
+            }
+            if progress > 0.0 {
+                // Draw current background with growing alpha
+                let bg_info = ImageInfo::new(
+                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                );
+                if let Some(mut cur_surface) = surfaces::raster(&bg_info, None, None) {
+                    let cur_canvas = cur_surface.canvas();
+                    if scale_factor != 1.0 { cur_canvas.scale((scale_factor, scale_factor)); }
+                    cur_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+                    for anim_bg in &cur_bg.animated {
+                        draw_animated_background(cur_canvas, anim_bg, continuous_time, w, h);
+                    }
+                    let snapshot = cur_surface.image_snapshot();
+                    let mut paint = Paint::default();
+                    paint.set_alpha_f(progress);
+                    canvas.save();
+                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
+                    canvas.restore();
+                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+                }
+            }
+        } else {
+            // Transition ended — keep using continuous time for the rest of the scene
+            for anim_bg in &cur_bg.animated {
+                draw_animated_background(canvas, anim_bg, continuous_time, config.width as f32, config.height as f32);
+            }
+        }
+    } else {
+        for anim_bg in &cur_bg.animated {
+            draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+        }
     }
 
     // Build render context
@@ -817,7 +889,21 @@ pub fn render_scene_frame_scaled(
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor)
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor, None)
+}
+
+/// Like `render_scene_frame_scaled` but with the previous scene's resolved background for transition interpolation.
+/// `prev_bg` is (resolved_background, prev_scene_duration).
+pub fn render_scene_frame_scaled_with_prev_bg(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_in_scene: u32,
+    scene_total_frames: u32,
+    scale_factor: f32,
+    prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
+) -> Result<Vec<u8>> {
+    let (children, layout) = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, children, &layout, scale_factor, prev_bg)
 }
 
 /// Render a single frame of a world view: shared background, camera translation, visible scenes.
@@ -848,7 +934,7 @@ pub fn render_world_frame_scaled(
     let vh = config.height as f32;
 
     // 1. Draw base background (view-level or video-level)
-    let bg_color = view.background.as_deref().unwrap_or(&config.background);
+    let bg_color = view.background.color.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg_color));
 
     // Pre-compute camera position for background parallax
@@ -869,10 +955,10 @@ pub fn render_world_frame_scaled(
 
     if let Some(active_idx) = active_scene_idx {
         let active_scene = &view.scenes[active_idx];
-        let active_bgs = if active_scene.animated_background.is_empty() {
-            &view.animated_background
+        let active_bgs = if active_scene.resolved_background.animated.is_empty() {
+            &view.background.animated
         } else {
-            &active_scene.animated_background
+            &active_scene.resolved_background.animated
         };
 
         // Check if we're during a camera pan (two non-persisted scenes visible)
@@ -887,15 +973,15 @@ pub fn render_world_frame_scaled(
             let scene_a = &view.scenes[scene_a_idx];
             let scene_b = &view.scenes[scene_b_idx];
 
-            let bgs_a = if scene_a.animated_background.is_empty() {
-                &view.animated_background
+            let bgs_a = if scene_a.resolved_background.animated.is_empty() {
+                &view.background.animated
             } else {
-                &scene_a.animated_background
+                &scene_a.resolved_background.animated
             };
-            let bgs_b = if scene_b.animated_background.is_empty() {
-                &view.animated_background
+            let bgs_b = if scene_b.resolved_background.animated.is_empty() {
+                &view.background.animated
             } else {
-                &scene_b.animated_background
+                &scene_b.resolved_background.animated
             };
 
             // Calculate crossfade progress based on camera pan position
@@ -946,7 +1032,7 @@ pub fn render_world_frame_scaled(
         }
     } else {
         // No active scene — draw view-level backgrounds
-        for bg in &view.animated_background {
+        for bg in &view.background.animated {
             draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
         }
     }
@@ -1074,9 +1160,9 @@ pub fn render_scene_bg_scaled(
     let canvas = surface.canvas();
     if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
 
-    let bg = scene.background.as_deref().unwrap_or(&config.background);
+    let bg = scene.resolved_background.color.as_deref().unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
-    for anim_bg in &scene.animated_background {
+    for anim_bg in &scene.resolved_background.animated {
         draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
     }
 
@@ -1141,6 +1227,70 @@ pub fn render_scene_fg_scaled(
     surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
         .then_some(()).ok_or(RustmotionError::PixelRead)?;
     Ok(pixels)
+}
+
+/// Interpolate two AnimatedBackground structs. `t` goes from 0.0 (fully `a`) to 1.0 (fully `b`).
+#[allow(dead_code)]
+fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackground, t: f32) -> AnimatedBackground {
+    let lerp = |x: f32, y: f32| x * (1.0 - t) + y * t;
+
+    // Interpolate colors (RGB lerp, paired by index)
+    let max_colors = a.colors.len().max(b.colors.len());
+    let mut colors = Vec::with_capacity(max_colors);
+    for i in 0..max_colors {
+        let ca = a.colors.get(i).map(|c| color4f_from_hex(c));
+        let cb = b.colors.get(i).map(|c| color4f_from_hex(c));
+        match (ca, cb) {
+            (Some(ca), Some(cb)) => {
+                let r = lerp(ca.r, cb.r);
+                let g = lerp(ca.g, cb.g);
+                let bl = lerp(ca.b, cb.b);
+                let al = lerp(ca.a, cb.a);
+                colors.push(format!("#{:02X}{:02X}{:02X}{:02X}",
+                    (r * 255.0) as u8, (g * 255.0) as u8, (bl * 255.0) as u8, (al * 255.0) as u8));
+            }
+            (None, Some(_)) => colors.push(b.colors[i].clone()),
+            (Some(_), None) => colors.push(a.colors[i].clone()),
+            (None, None) => {}
+        }
+    }
+
+    // Interpolate halo zones
+    let max_zones = a.zones.len().max(b.zones.len());
+    let mut zones = Vec::with_capacity(max_zones);
+    for i in 0..max_zones {
+        let za = a.zones.get(i);
+        let zb = b.zones.get(i);
+        match (za, zb) {
+            (Some(za), Some(zb)) => {
+                let ca = color4f_from_hex(&za.color);
+                let cb = color4f_from_hex(&zb.color);
+                let r = lerp(ca.r, cb.r);
+                let g = lerp(ca.g, cb.g);
+                let bl = lerp(ca.b, cb.b);
+                zones.push(HaloZone {
+                    color: format!("#{:02X}{:02X}{:02X}", (r * 255.0) as u8, (g * 255.0) as u8, (bl * 255.0) as u8),
+                    x: lerp(za.x, zb.x),
+                    y: lerp(za.y, zb.y),
+                    radius: lerp(za.radius, zb.radius),
+                });
+            }
+            (None, Some(zb)) => zones.push(zb.clone()),
+            (Some(za), None) => zones.push(za.clone()),
+            (None, None) => {}
+        }
+    }
+
+    AnimatedBackground {
+        colors,
+        speed: lerp(a.speed, b.speed),
+        gradient_type: b.gradient_type.clone(),
+        preset: b.preset.clone(),
+        element_size: lerp(a.element_size, b.element_size),
+        spacing: lerp(a.spacing, b.spacing),
+        count: b.count,
+        zones,
+    }
 }
 
 /// Draw an animated background (gradient, concentric circles, or grid dots).
