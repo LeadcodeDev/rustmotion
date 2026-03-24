@@ -1,0 +1,515 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "scenes": [
+    {
+      "duration": 6,
+      "background": "#0f172a",
+      "children": [
+        {
+          "type": "text",
+          "content": "Funnel Chart",
+          "position": "absolute",
+          "x": 80,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "funnel",
+          "data": [
+            { "value": 10000, "label": "Visitors", "color": "#3B82F6" },
+            { "value": 6500, "label": "Leads", "color": "#6366F1" },
+            { "value": 3200, "label": "Qualified", "color": "#8B5CF6" },
+            { "value": 1800, "label": "Proposals", "color": "#A855F7" },
+            { "value": 900, "label": "Closed", "color": "#C084FC" }
+          ],
+          "show_labels": true,
+          "label_font_size": 16,
+          "size": { "width": 600, "height": 450 },
+          "position": "absolute",
+          "x": 80,
+          "y": 100
+        },
+        {
+          "type": "text",
+          "content": "Horizontal Funnel",
+          "position": "absolute",
+          "x": 1540,
+          "y": 40,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.3, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "funnel",
+          "direction": "horizontal",
+          "data": [
+            { "value": 10000, "label": "Visitors", "color": "#3B82F6" },
+            { "value": 6500, "label": "Leads", "color": "#6366F1" },
+            { "value": 3200, "label": "Qualified", "color": "#8B5CF6" },
+            { "value": 1800, "label": "Proposals", "color": "#A855F7" },
+            { "value": 900, "label": "Closed", "color": "#C084FC" }
+          ],
+          "show_labels": true,
+          "label_font_size": 13,
+          "size": { "width": 300, "height": 450 },
+          "position": "absolute",
+          "x": 1540,
+          "y": 100
+        },
+        {
+          "type": "text",
+          "content": "Waterfall Chart",
+          "position": "absolute",
+          "x": 780,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.2, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "chart",
+          "chart_type": "waterfall",
+          "data": [
+            { "value": 100, "label": "Revenue" },
+            { "value": -25, "label": "COGS" },
+            { "value": -15, "label": "Opex" },
+            { "value": 10, "label": "Other" },
+            { "value": -8, "label": "Tax" },
+            { "value": 5, "label": "Interest" }
+          ],
+          "show_grid": true,
+          "show_x_labels": true,
+          "show_y_labels": true,
+          "grid_color": "#FFFFFF10",
+          "label_color": "#64748B",
+          "label_font_size": 13,
+          "size": { "width": 700, "height": 450 },
+          "position": "absolute",
+          "x": 780,
+          "y": 100
+        },
+        {
+          "type": "text",
+          "content": "Stat / KPI Cards",
+          "position": "absolute",
+          "x": 80,
+          "y": 600,
+          "style": {
+            "font-size": 28,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.4, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "45.2K",
+          "label": "Active Users",
+          "trend": { "value": "+12.5%", "direction": "up" },
+          "sparkline_data": [20, 25, 22, 30, 28, 35, 32, 40, 38, 45],
+          "sparkline_color": "#22C55E",
+          "size": { "width": 280, "height": 180 },
+          "position": "absolute",
+          "x": 80,
+          "y": 660,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "2.4M",
+          "label": "Revenue",
+          "trend": { "value": "+8.3%", "direction": "up" },
+          "sparkline_data": [40, 38, 42, 45, 43, 48, 50, 52, 55, 58],
+          "sparkline_color": "#3B82F6",
+          "size": { "width": 280, "height": 180 },
+          "position": "absolute",
+          "x": 400,
+          "y": 660,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.6, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "3.2%",
+          "label": "Churn Rate",
+          "trend": { "value": "-0.5%", "direction": "down", "color": "#22C55E" },
+          "sparkline_data": [5.2, 4.8, 4.5, 4.2, 3.9, 3.8, 3.5, 3.4, 3.3, 3.2],
+          "sparkline_color": "#F59E0B",
+          "size": { "width": 280, "height": 180 },
+          "position": "absolute",
+          "x": 720,
+          "y": 660,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.7, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "99.9%",
+          "label": "Uptime",
+          "trend": { "value": "Stable", "direction": "neutral" },
+          "sparkline_data": [99.8, 99.9, 99.95, 99.9, 99.85, 99.9, 99.95, 99.9, 99.92, 99.9],
+          "sparkline_color": "#8B5CF6",
+          "size": { "width": 280, "height": 180 },
+          "position": "absolute",
+          "x": 1040,
+          "y": 660,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Keyboard Shortcuts",
+          "position": "absolute",
+          "x": 1540,
+          "y": 600,
+          "style": {
+            "font-size": 22,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.8, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "kbd",
+          "key": "Cmd",
+          "font_size": 16,
+          "position": "absolute",
+          "x": 1540,
+          "y": 650,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.4 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "+",
+          "position": "absolute",
+          "x": 1600,
+          "y": 650,
+          "style": { "font-size": 18, "color": "#64748B" }
+        },
+        {
+          "type": "kbd",
+          "key": "K",
+          "font_size": 16,
+          "position": "absolute",
+          "x": 1625,
+          "y": 650,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.1, "duration": 0.4 }]
+          }
+        },
+        {
+          "type": "kbd",
+          "key": "Ctrl",
+          "font_size": 16,
+          "position": "absolute",
+          "x": 1540,
+          "y": 700,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.2, "duration": 0.4 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "+",
+          "position": "absolute",
+          "x": 1608,
+          "y": 700,
+          "style": { "font-size": 18, "color": "#64748B" }
+        },
+        {
+          "type": "kbd",
+          "key": "Shift",
+          "font_size": 16,
+          "position": "absolute",
+          "x": 1633,
+          "y": 700,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.3, "duration": 0.4 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "+",
+          "position": "absolute",
+          "x": 1720,
+          "y": 700,
+          "style": { "font-size": 18, "color": "#64748B" }
+        },
+        {
+          "type": "kbd",
+          "key": "P",
+          "font_size": 16,
+          "position": "absolute",
+          "x": 1745,
+          "y": 700,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 1.4, "duration": 0.4 }]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 5,
+      "background": "#0f172a",
+      "children": [
+        {
+          "type": "text",
+          "content": "Skeleton Loading Placeholders",
+          "position": "absolute",
+          "x": 80,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "skeleton",
+          "variant": "circle",
+          "size": { "width": 64, "height": 64 },
+          "position": "absolute",
+          "x": 80,
+          "y": 120
+        },
+        {
+          "type": "skeleton",
+          "variant": "text",
+          "lines": 2,
+          "line_height": 16,
+          "line_gap": 10,
+          "size": { "width": 300, "height": 42 },
+          "position": "absolute",
+          "x": 170,
+          "y": 125
+        },
+        {
+          "type": "skeleton",
+          "variant": "rectangle",
+          "size": { "width": 500, "height": 200 },
+          "border_radius": 12,
+          "position": "absolute",
+          "x": 80,
+          "y": 220
+        },
+        {
+          "type": "skeleton",
+          "variant": "rectangle",
+          "size": { "width": 500, "height": 40 },
+          "border_radius": 8,
+          "position": "absolute",
+          "x": 80,
+          "y": 440
+        },
+        {
+          "type": "skeleton",
+          "variant": "rectangle",
+          "size": { "width": 350, "height": 40 },
+          "border_radius": 8,
+          "position": "absolute",
+          "x": 80,
+          "y": 500
+        },
+        {
+          "type": "skeleton",
+          "variant": "text",
+          "lines": 4,
+          "line_height": 14,
+          "line_gap": 10,
+          "size": { "width": 500, "height": 92 },
+          "position": "absolute",
+          "x": 80,
+          "y": 570
+        },
+        {
+          "type": "text",
+          "content": "Tooltips & Annotations",
+          "position": "absolute",
+          "x": 700,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.3, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "tooltip",
+          "text": "Click to expand",
+          "arrow": "bottom",
+          "arrow_size": 10,
+          "background_color": "#1E293B",
+          "text_color": "#E2E8F0",
+          "border_color": "#334155",
+          "font_size": 14,
+          "position": "absolute",
+          "x": 700,
+          "y": 120,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "tooltip",
+          "text": "Performance: 98.5%",
+          "arrow": "left",
+          "arrow_size": 10,
+          "background_color": "#22C55E",
+          "text_color": "#FFFFFF",
+          "font_size": 14,
+          "position": "absolute",
+          "x": 700,
+          "y": 200,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.6, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "tooltip",
+          "text": "Warning: High memory usage",
+          "arrow": "top",
+          "arrow_size": 10,
+          "background_color": "#F59E0B",
+          "text_color": "#000000",
+          "font_size": 14,
+          "position": "absolute",
+          "x": 700,
+          "y": 290,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.7, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "tooltip",
+          "text": "Error: Connection timeout",
+          "arrow": "right",
+          "arrow_size": 10,
+          "background_color": "#EF4444",
+          "text_color": "#FFFFFF",
+          "font_size": 14,
+          "position": "absolute",
+          "x": 700,
+          "y": 380,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.8, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "tooltip",
+          "text": "No arrow tooltip",
+          "arrow": "none",
+          "background_color": "#6366F1",
+          "text_color": "#FFFFFF",
+          "font_size": 14,
+          "position": "absolute",
+          "x": 700,
+          "y": 460,
+          "style": {
+            "animation": [{ "name": "fade_in_up", "delay": 0.9, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "More Stat Cards",
+          "position": "absolute",
+          "x": 1100,
+          "y": 40,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "animation": [{ "name": "fade_in", "delay": 0.4, "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "128",
+          "label": "Deployments",
+          "trend": { "value": "+23 this week", "direction": "up" },
+          "sparkline_data": [8, 12, 10, 15, 18, 14, 20, 22, 19, 25, 28, 24],
+          "sparkline_color": "#06B6D4",
+          "value_font_size": 42,
+          "size": { "width": 350, "height": 180 },
+          "position": "absolute",
+          "x": 1100,
+          "y": 100,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.6, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "12ms",
+          "label": "Avg Response Time",
+          "trend": { "value": "-3ms", "direction": "down", "color": "#22C55E" },
+          "sparkline_data": [18, 16, 15, 14, 13, 14, 12, 13, 12, 11, 12, 12],
+          "sparkline_color": "#EC4899",
+          "value_font_size": 42,
+          "size": { "width": 350, "height": 180 },
+          "position": "absolute",
+          "x": 1100,
+          "y": 320,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 0.8, "duration": 0.6 }]
+          }
+        },
+        {
+          "type": "stat",
+          "value": "4.8",
+          "label": "Customer Satisfaction",
+          "trend": { "value": "Stable", "direction": "neutral" },
+          "value_font_size": 42,
+          "size": { "width": 350, "height": 140 },
+          "position": "absolute",
+          "x": 1100,
+          "y": 540,
+          "style": {
+            "background": "#1E293B",
+            "border-radius": 16,
+            "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }]
+          }
+        }
+      ]
+    }
+  ]
+}

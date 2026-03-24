@@ -28,6 +28,8 @@ pub enum ChartType {
     Radar,
     Scatter,
     RadialBar,
+    Funnel,
+    Waterfall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -110,6 +112,11 @@ pub struct Chart {
     // Scatter
     #[serde(default)]
     pub points: Vec<ScatterPoint>,
+
+    // Funnel direction
+    /// Direction for funnel chart: "vertical" (default) or "horizontal".
+    #[serde(default)]
+    pub direction: Option<String>,
 
     // Axes, grid, labels
     #[serde(default)]
@@ -210,7 +217,7 @@ impl Chart {
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.match_family_style("sans-serif", font_style))
-            .unwrap_or_else(|| fm.match_family_style("", font_style).unwrap());
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
         skia_safe::Font::from_typeface(typeface, self.label_font_size)
     }
 
@@ -358,6 +365,18 @@ impl Widget for Chart {
                     return Ok(());
                 }
                 self.render_radial_bar(canvas, w, h, progress)
+            }
+            ChartType::Funnel => {
+                if self.data.is_empty() {
+                    return Ok(());
+                }
+                self.render_funnel(canvas, w, h, progress)
+            }
+            ChartType::Waterfall => {
+                if self.data.is_empty() {
+                    return Ok(());
+                }
+                self.render_waterfall(canvas, w, h, progress)
             }
         }
     }
@@ -1080,6 +1099,250 @@ impl Chart {
             fill_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
             fill_paint.set_anti_alias(true);
             canvas.draw_arc(oval, -90.0, sweep, false, &fill_paint);
+        }
+
+        Ok(())
+    }
+
+    fn render_funnel(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+        let horizontal = self
+            .direction
+            .as_deref()
+            .map(|d| d == "horizontal")
+            .unwrap_or(false);
+
+        if horizontal {
+            self.render_funnel_horizontal(canvas, w, h, progress)
+        } else {
+            self.render_funnel_vertical(canvas, w, h, progress)
+        }
+    }
+
+    fn render_funnel_vertical(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+        let n = self.data.len();
+        let max_val = self
+            .data
+            .iter()
+            .map(|d| d.value)
+            .fold(0.0_f64, f64::max)
+            .max(0.001);
+
+        let gap = 4.0;
+        let total_gap = gap * (n.saturating_sub(1)) as f32;
+        let seg_h = (h - total_gap) / n as f32;
+
+        let font = self.make_label_font();
+        let emoji_font =
+            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+        let (_, metrics) = font.metrics();
+        let ascent = -metrics.ascent;
+
+        for (i, dp) in self.data.iter().enumerate() {
+            let ratio = (dp.value / max_val) as f32 * progress;
+            let next_ratio = if i + 1 < n {
+                (self.data[i + 1].value / max_val) as f32 * progress
+            } else {
+                ratio * 0.6
+            };
+
+            let top_w = w * ratio;
+            let bot_w = w * next_ratio;
+            let top_x = (w - top_w) / 2.0;
+            let bot_x = (w - bot_w) / 2.0;
+            let y_top = i as f32 * (seg_h + gap);
+            let y_bot = y_top + seg_h;
+
+            let color = dp.color.as_deref().unwrap_or_else(|| self.get_color(i));
+            let mut paint = paint_from_hex(color);
+            paint.set_style(PaintStyle::Fill);
+            paint.set_anti_alias(true);
+
+            let mut path = Path::new();
+            path.move_to((top_x, y_top));
+            path.line_to((top_x + top_w, y_top));
+            path.line_to((bot_x + bot_w, y_bot));
+            path.line_to((bot_x, y_bot));
+            path.close();
+            canvas.draw_path(&path, &paint);
+
+            if self.show_labels {
+                if let Some(label) = &dp.label {
+                    let contrast = contrast_text_color(color);
+                    let mut label_paint = paint_from_hex(&contrast);
+                    label_paint.set_anti_alias(true);
+                    let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
+                    let lx = (w - label_w) / 2.0;
+                    let ly = y_top + seg_h / 2.0 + ascent / 2.0;
+                    draw_text_with_fallback(
+                        canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn render_funnel_horizontal(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+        let n = self.data.len();
+        let max_val = self
+            .data
+            .iter()
+            .map(|d| d.value)
+            .fold(0.0_f64, f64::max)
+            .max(0.001);
+
+        let gap = 4.0;
+        let total_gap = gap * (n.saturating_sub(1)) as f32;
+        let seg_w = (w - total_gap) / n as f32;
+
+        let font = self.make_label_font();
+        let emoji_font =
+            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+        let (_, metrics) = font.metrics();
+        let ascent = -metrics.ascent;
+
+        for (i, dp) in self.data.iter().enumerate() {
+            let ratio = (dp.value / max_val) as f32 * progress;
+            let next_ratio = if i + 1 < n {
+                (self.data[i + 1].value / max_val) as f32 * progress
+            } else {
+                ratio * 0.6
+            };
+
+            let left_h = h * ratio;
+            let right_h = h * next_ratio;
+            let left_y = (h - left_h) / 2.0;
+            let right_y = (h - right_h) / 2.0;
+            let x_left = i as f32 * (seg_w + gap);
+            let x_right = x_left + seg_w;
+
+            let color = dp.color.as_deref().unwrap_or_else(|| self.get_color(i));
+            let mut paint = paint_from_hex(color);
+            paint.set_style(PaintStyle::Fill);
+            paint.set_anti_alias(true);
+
+            let mut path = Path::new();
+            path.move_to((x_left, left_y));
+            path.line_to((x_right, right_y));
+            path.line_to((x_right, right_y + right_h));
+            path.line_to((x_left, left_y + left_h));
+            path.close();
+            canvas.draw_path(&path, &paint);
+
+            if self.show_labels {
+                if let Some(label) = &dp.label {
+                    let contrast = contrast_text_color(color);
+                    let mut label_paint = paint_from_hex(&contrast);
+                    label_paint.set_anti_alias(true);
+                    let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
+                    let lx = x_left + (seg_w - label_w) / 2.0;
+                    let ly = h / 2.0 + ascent / 2.0;
+                    draw_text_with_fallback(
+                        canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint,
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn render_waterfall(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+        let (mt, mr, mb, ml) = self.chart_margins();
+        let chart_w = w - ml - mr;
+        let chart_h = h - mt - mb;
+
+        // Calculate cumulative values and find range
+        let mut cumulative = Vec::with_capacity(self.data.len());
+        let mut running = 0.0_f64;
+        for dp in &self.data {
+            let prev = running;
+            running += dp.value;
+            cumulative.push((prev, running));
+        }
+
+        let all_vals: Vec<f64> = cumulative
+            .iter()
+            .flat_map(|(a, b)| vec![*a, *b])
+            .chain(std::iter::once(0.0))
+            .collect();
+        let min_val = all_vals.iter().fold(f64::MAX, |a, &b| a.min(b));
+        let max_val = all_vals.iter().fold(f64::MIN, |a, &b| a.max(b));
+        let range = (max_val - min_val).max(0.001);
+
+        let x_labels: Vec<String> = self
+            .data
+            .iter()
+            .filter_map(|d| d.label.clone())
+            .collect();
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels);
+
+        let n = self.data.len();
+        let gap = 6.0;
+        let bar_w = (chart_w - gap * (n + 1) as f32) / n as f32;
+
+        // Zero baseline
+        let _zero_y = mt + chart_h - ((0.0 - min_val) / range) as f32 * chart_h;
+
+        for (i, dp) in self.data.iter().enumerate() {
+            let (start_val, end_val) = cumulative[i];
+            let y_start = mt + chart_h - ((start_val - min_val) / range) as f32 * chart_h;
+            let y_end = mt + chart_h - ((end_val - min_val) / range) as f32 * chart_h;
+
+            let bar_top = y_start.min(y_end);
+            let bar_bottom = y_start.max(y_end);
+            let bar_h = (bar_bottom - bar_top) * progress;
+            let x = ml + gap + i as f32 * (bar_w + gap);
+
+            // Green for positive, red for negative
+            let color = dp.color.as_deref().unwrap_or_else(|| {
+                if dp.value >= 0.0 {
+                    "#22C55E"
+                } else {
+                    "#EF4444"
+                }
+            });
+
+            let mut paint = paint_from_hex(color);
+            paint.set_style(PaintStyle::Fill);
+            paint.set_anti_alias(true);
+
+            // Animate from the start position
+            let animated_top = if dp.value >= 0.0 {
+                y_start - bar_h
+            } else {
+                y_start
+            };
+
+            let rect = Rect::from_xywh(x, animated_top, bar_w, bar_h);
+            let radius = (bar_w * 0.1).min(4.0);
+            let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
+            canvas.draw_rrect(rrect, &paint);
+
+            // Connector line to next bar
+            if i + 1 < n {
+                let next_x = ml + gap + (i + 1) as f32 * (bar_w + gap);
+                let connector_y = if dp.value >= 0.0 {
+                    animated_top
+                } else {
+                    animated_top + bar_h
+                };
+                let mut connector_paint = paint_from_hex("#FFFFFF30");
+                connector_paint.set_style(PaintStyle::Stroke);
+                connector_paint.set_stroke_width(1.0);
+                connector_paint.set_anti_alias(true);
+                // Dashed
+                let intervals = [4.0_f32, 4.0];
+                if let Some(effect) = skia_safe::PathEffect::dash(&intervals, 0.0) {
+                    connector_paint.set_path_effect(effect);
+                }
+                canvas.draw_line(
+                    (x + bar_w, connector_y),
+                    (next_x, connector_y),
+                    &connector_paint,
+                );
+            }
         }
 
         Ok(())

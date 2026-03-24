@@ -17,6 +17,7 @@ pub mod gauge;
 pub mod gif;
 pub mod grid;
 pub mod icon;
+pub mod kbd;
 pub mod line;
 pub mod lottie;
 pub mod marquee;
@@ -28,12 +29,15 @@ pub mod progress;
 pub mod qrcode;
 pub mod rich_text;
 pub mod shape;
+pub mod skeleton;
 pub mod sparkline;
+pub mod stat;
 pub mod svg;
 pub mod table;
 pub mod terminal;
 pub mod text;
 pub mod timeline;
+pub mod tooltip;
 pub mod video;
 
 use schemars::JsonSchema;
@@ -61,6 +65,7 @@ pub use gif::Gif;
 pub use grid::Grid;
 pub use icon::Icon;
 pub use image::Image;
+pub use kbd::Kbd;
 pub use line::Line;
 pub use lottie::Lottie;
 pub use marquee::Marquee;
@@ -71,12 +76,15 @@ pub use progress::Progress;
 pub use qrcode::QrCode;
 pub use rich_text::RichText;
 pub use shape::Shape;
+pub use skeleton::Skeleton;
 pub use sparkline::Sparkline;
+pub use stat::Stat;
 pub use svg::Svg;
 pub use table::Table;
 pub use terminal::Terminal;
 pub use text::Text;
 pub use timeline::Timeline;
+pub use tooltip::Tooltip;
 pub use video::Video;
 
 // --- Position mode ---
@@ -201,6 +209,7 @@ pub enum Component {
     Chart(Chart),
     Divider(Divider),
     Gauge(Gauge),
+    Kbd(Kbd),
     Line(Line),
     Lottie(Lottie),
     Marquee(Marquee),
@@ -209,11 +218,14 @@ pub enum Component {
     #[serde(alias = "progress_bar")]
     Progress(Progress),
     QrCode(QrCode),
+    Skeleton(Skeleton),
     Sparkline(Sparkline),
+    Stat(Stat),
     RichText(RichText),
     Table(Table),
     Terminal(Terminal),
     Timeline(Timeline),
+    Tooltip(Tooltip),
     // Container components
     Positioned(Positioned),
     Flex(Flex),
@@ -250,6 +262,7 @@ impl Component {
             Component::Chart(c) => c,
             Component::Divider(c) => c,
             Component::Gauge(c) => c,
+            Component::Kbd(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
             Component::Marquee(c) => c,
@@ -257,11 +270,14 @@ impl Component {
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::Skeleton(c) => c,
             Component::Sparkline(c) => c,
+            Component::Stat(c) => c,
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Timeline(c) => c,
+            Component::Tooltip(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,
@@ -293,6 +309,7 @@ impl Component {
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::Gauge(c) => Some(c),
+            Component::Kbd(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
             Component::Marquee(c) => Some(c),
@@ -300,11 +317,14 @@ impl Component {
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::Skeleton(c) => Some(c),
             Component::Sparkline(c) => Some(c),
+            Component::Stat(c) => Some(c),
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Timeline(c) => Some(c),
+            Component::Tooltip(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -335,6 +355,7 @@ impl Component {
             Component::Chart(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::Gauge(c) => Some(c),
+            Component::Kbd(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
             Component::Marquee(c) => Some(c),
@@ -342,11 +363,14 @@ impl Component {
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::Skeleton(c) => Some(c),
             Component::Sparkline(c) => Some(c),
+            Component::Stat(c) => Some(c),
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Timeline(c) => Some(c),
+            Component::Tooltip(c) => Some(c),
             Component::Flex(c) => Some(c),
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
@@ -378,6 +402,7 @@ impl Component {
             Component::Chart(c) => c,
             Component::Divider(c) => c,
             Component::Gauge(c) => c,
+            Component::Kbd(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
             Component::Marquee(c) => c,
@@ -385,11 +410,14 @@ impl Component {
             Component::Particle(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::Skeleton(c) => c,
             Component::Sparkline(c) => c,
+            Component::Stat(c) => c,
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::Terminal(c) => c,
             Component::Timeline(c) => c,
+            Component::Tooltip(c) => c,
             Component::Positioned(c) => c,
             Component::Flex(c) => c,
             Component::Grid(c) => c,

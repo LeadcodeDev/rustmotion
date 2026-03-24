@@ -165,7 +165,7 @@ impl Progress {
                 .match_family_style("Inter", font_style)
                 .or_else(|| fm.match_family_style("Helvetica", font_style))
                 .or_else(|| fm.match_family_style("Arial", font_style))
-                .unwrap_or_else(|| fm.match_family_style("", font_style).unwrap());
+                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
             let font = skia_safe::Font::from_typeface(typeface, font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));

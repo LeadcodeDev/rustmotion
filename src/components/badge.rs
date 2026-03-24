@@ -290,7 +290,7 @@ impl Widget for Badge {
                 .match_family_style("Inter", skia_safe::FontStyle::bold())
                 .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::bold()))
                 .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::bold()))
-                .unwrap_or_else(|| fm.match_family_style("", skia_safe::FontStyle::bold()).unwrap());
+                .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_safe::FontStyle::bold()).unwrap());
             let count_font = skia_safe::Font::from_typeface(count_typeface, count_fs);
             let count_emoji = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));
 
