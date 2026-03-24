@@ -1,5 +1,6 @@
 pub mod arrow;
 pub mod avatar;
+pub mod avatar_group;
 pub mod badge;
 pub mod callout;
 pub mod caption;
@@ -18,6 +19,7 @@ pub mod grid;
 pub mod icon;
 pub mod line;
 pub mod lottie;
+pub mod marquee;
 pub mod image;
 pub mod mockup;
 pub mod particle;
@@ -41,6 +43,7 @@ use crate::traits::{Animatable, Container, Styled, Timed, Widget};
 
 pub use arrow::Arrow;
 pub use avatar::Avatar;
+pub use avatar_group::AvatarGroup;
 pub use badge::Badge;
 pub use callout::Callout;
 pub use caption::Caption;
@@ -60,6 +63,7 @@ pub use icon::Icon;
 pub use image::Image;
 pub use line::Line;
 pub use lottie::Lottie;
+pub use marquee::Marquee;
 pub use mockup::Mockup;
 pub use particle::Particle;
 pub use positioned::Positioned;
@@ -190,6 +194,7 @@ pub enum Component {
     Codeblock(Codeblock),
     Connector(Connector),
     Avatar(Avatar),
+    AvatarGroup(AvatarGroup),
     Arrow(Arrow),
     Badge(Badge),
     Callout(Callout),
@@ -198,6 +203,7 @@ pub enum Component {
     Gauge(Gauge),
     Line(Line),
     Lottie(Lottie),
+    Marquee(Marquee),
     Mockup(Mockup),
     Particle(Particle),
     #[serde(alias = "progress_bar")]
@@ -236,6 +242,7 @@ impl Component {
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
+            Component::AvatarGroup(c) => c,
             Component::Arrow(c) => c,
             Component::Connector(c) => c,
             Component::Badge(c) => c,
@@ -245,6 +252,7 @@ impl Component {
             Component::Gauge(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
+            Component::Marquee(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,
@@ -277,6 +285,7 @@ impl Component {
             Component::Caption(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
+            Component::AvatarGroup(c) => Some(c),
             Component::Arrow(c) => Some(c),
             Component::Connector(c) => Some(c),
             Component::Badge(c) => Some(c),
@@ -286,6 +295,7 @@ impl Component {
             Component::Gauge(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
+            Component::Marquee(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -317,6 +327,7 @@ impl Component {
             Component::Cursor(c) => Some(c),
             Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
+            Component::AvatarGroup(c) => Some(c),
             Component::Arrow(c) => Some(c),
             Component::Connector(c) => Some(c),
             Component::Badge(c) => Some(c),
@@ -326,6 +337,7 @@ impl Component {
             Component::Gauge(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Lottie(c) => Some(c),
+            Component::Marquee(c) => Some(c),
             Component::Mockup(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -358,6 +370,7 @@ impl Component {
             Component::Caption(c) => c,
             Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
+            Component::AvatarGroup(c) => c,
             Component::Arrow(c) => c,
             Component::Connector(c) => c,
             Component::Badge(c) => c,
@@ -367,6 +380,7 @@ impl Component {
             Component::Gauge(c) => c,
             Component::Line(c) => c,
             Component::Lottie(c) => c,
+            Component::Marquee(c) => c,
             Component::Mockup(c) => c,
             Component::Particle(c) => c,
             Component::Progress(c) => c,

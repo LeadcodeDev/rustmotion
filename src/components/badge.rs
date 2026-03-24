@@ -56,6 +56,18 @@ pub struct Badge {
     pub variant: BadgeVariant,
     #[serde(default)]
     pub badge_size: BadgeSize,
+    /// Show a small colored dot indicator.
+    #[serde(default)]
+    pub dot: bool,
+    /// Dot color (defaults to the badge background color).
+    #[serde(default)]
+    pub dot_color: Option<String>,
+    /// Animate the dot with a pulse effect.
+    #[serde(default)]
+    pub pulse: bool,
+    /// Show a numeric count badge (e.g. notification count).
+    #[serde(default)]
+    pub count: Option<u32>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -123,7 +135,7 @@ impl Widget for Badge {
         &self,
         canvas: &Canvas,
         layout: &LayoutNode,
-        _ctx: &RenderContext,
+        ctx: &RenderContext,
         _props: &crate::engine::animator::AnimatedProperties,
     ) -> Result<()> {
         let color = self.style.background.as_deref().unwrap_or("#3B82F6");
@@ -238,6 +250,73 @@ impl Widget for Badge {
         let text_y = (h - cap_h) / 2.0 + cap_h;
 
         draw_text_with_fallback(canvas, &self.text, &font, &emoji_font, 0.0, x_offset, text_y, &text_paint);
+
+        // Dot indicator (top-right)
+        if self.dot {
+            let dot_r = font_size * 0.3;
+            let dot_cx = w - dot_r * 0.5;
+            let dot_cy = dot_r * 0.5;
+            let dot_color = self.dot_color.as_deref().unwrap_or(color);
+
+            // Pulse ring animation
+            if self.pulse {
+                let phase = (ctx.time * 2.0).fract() as f32;
+                let pulse_r = dot_r * (1.0 + phase * 1.5);
+                let pulse_alpha = (1.0 - phase).max(0.0) * 0.5;
+                let mut pulse_paint = paint_from_hex(dot_color);
+                pulse_paint.set_style(PaintStyle::Fill);
+                pulse_paint.set_anti_alias(true);
+                pulse_paint.set_alpha_f(pulse_alpha);
+                canvas.draw_circle((dot_cx, dot_cy), pulse_r, &pulse_paint);
+            }
+
+            let mut dot_paint = paint_from_hex(dot_color);
+            dot_paint.set_style(PaintStyle::Fill);
+            dot_paint.set_anti_alias(true);
+            canvas.draw_circle((dot_cx, dot_cy), dot_r, &dot_paint);
+        }
+
+        // Count badge (top-right, outside bounds)
+        if let Some(count) = self.count {
+            let count_text = if count > 99 {
+                "99+".to_string()
+            } else {
+                count.to_string()
+            };
+
+            let count_fs = font_size * 0.65;
+            let fm = font_mgr();
+            let count_typeface = fm
+                .match_family_style("Inter", skia_safe::FontStyle::bold())
+                .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::bold()))
+                .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::bold()))
+                .unwrap_or_else(|| fm.match_family_style("", skia_safe::FontStyle::bold()).unwrap());
+            let count_font = skia_safe::Font::from_typeface(count_typeface, count_fs);
+            let count_emoji = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));
+
+            let count_w = measure_text_with_fallback(&count_text, &count_font, &count_emoji, 0.0);
+            let badge_pad = count_fs * 0.4;
+            let badge_w = (count_w + badge_pad * 2.0).max(count_fs * 1.3);
+            let badge_h = count_fs * 1.4;
+            let badge_x = w - badge_w * 0.5;
+            let badge_y = -badge_h * 0.3;
+
+            // Red background pill
+            let badge_rect = Rect::from_xywh(badge_x, badge_y, badge_w, badge_h);
+            let badge_rrect = RRect::new_rect_xy(badge_rect, badge_h / 2.0, badge_h / 2.0);
+            let mut count_bg = paint_from_hex("#EF4444");
+            count_bg.set_style(PaintStyle::Fill);
+            count_bg.set_anti_alias(true);
+            canvas.draw_rrect(badge_rrect, &count_bg);
+
+            // Count text
+            let mut count_paint = paint_from_hex("#FFFFFF");
+            count_paint.set_anti_alias(true);
+            let (_, count_metrics) = count_font.metrics();
+            let cx = badge_x + (badge_w - count_w) / 2.0;
+            let cy = badge_y + (badge_h + (-count_metrics.ascent)) / 2.0;
+            draw_text_with_fallback(canvas, &count_text, &count_font, &count_emoji, 0.0, cx, cy, &count_paint);
+        }
 
         Ok(())
     }
