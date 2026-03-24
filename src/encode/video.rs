@@ -62,6 +62,15 @@ pub enum FrameTask {
 }
 
 pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Result<()> {
+    encode_video_with_progress(scenario, output_path, quiet, None)
+}
+
+pub fn encode_video_with_progress(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    on_progress: Option<&(dyn Fn(EncodeProgress) + Send + Sync)>,
+) -> Result<()> {
     let config = &scenario.video;
     let width = config.width;
     let height = config.height;
@@ -112,8 +121,12 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
             })
             .collect();
 
+        let rendered = counter.load(Ordering::Relaxed);
         if let Some(ref mut tui) = tui {
-            tui.set_progress(counter.load(Ordering::Relaxed));
+            tui.set_progress(rendered);
+        }
+        if let Some(cb) = &on_progress {
+            cb(EncodeProgress::Rendering(rendered, total_frames));
         }
 
         // Encode sequentially (H.264 requires frame order)
@@ -144,6 +157,9 @@ pub fn encode_video(scenario: &Scenario, output_path: &str, quiet: bool) -> Resu
     // Mux
     if let Some(ref mut tui) = tui {
         tui.set_status("Muxing to MP4");
+    }
+    if let Some(cb) = &on_progress {
+        cb(EncodeProgress::Muxing);
     }
     let file = File::create(output_path)?;
     let writer = BufWriter::new(file);

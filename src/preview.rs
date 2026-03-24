@@ -17,17 +17,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::encode::{self, video::FrameTask};
+use crate::encode::{self, video::FrameTask, video::encode_video_with_progress, EncodeProgress};
 use crate::engine;
 use crate::engine::renderer::font_mgr;
 use crate::error::RustmotionError;
 use crate::schema::ResolvedScenario;
 
 fn send_notification(title: &str, body: &str) {
-    let _ = notify_rust::Notification::new()
-        .summary(title)
-        .body(body)
-        .show();
+    let title = title.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let _ = notify_rust::Notification::new()
+            .summary(&title)
+            .body(&body)
+            .show();
+    });
 }
 
 // ── Messages ────────────────────────────────────────────────────────
@@ -295,6 +299,9 @@ struct PreviewApp {
     // Export
     export_state: ExportState,
     export_done_rx: Option<Receiver<Result<String, String>>>,
+    export_progress: f32,
+    export_progress_label: String,
+    export_progress_rx: Option<Receiver<(f32, String)>>,
 }
 
 impl PreviewApp {
@@ -417,10 +424,14 @@ impl PreviewApp {
         };
 
         self.export_state = ExportState::Exporting;
+        self.export_progress = 0.0;
+        self.export_progress_label = String::new();
         let input = input_path.clone();
         let output_str = output_path.to_string_lossy().to_string();
         let (tx, rx) = mpsc::channel();
+        let (progress_tx, progress_rx) = mpsc::channel();
         self.export_done_rx = Some(rx);
+        self.export_progress_rx = Some(progress_rx);
         std::thread::spawn(move || {
             let result = (|| -> Result<String, String> {
                 let scenario = crate::load_scenario(&input)
@@ -432,7 +443,22 @@ impl PreviewApp {
                     crate::engine::prefetch_icons(&view.scenes);
                     crate::engine::preextract_video_frames(&view.scenes, scenario.video.fps);
                 }
-                crate::encode::video::encode_video(&scenario, &output_str, true)
+                let progress_sender = progress_tx;
+                let on_progress = move |p: EncodeProgress| {
+                    let (frac, label) = match p {
+                        EncodeProgress::Rendering(cur, total) => {
+                            (cur as f32 / total as f32, format!("Rendering {}/{}", cur, total))
+                        }
+                        EncodeProgress::Encoding(cur, total) => {
+                            (cur as f32 / total as f32, format!("Encoding {}/{}", cur, total))
+                        }
+                        EncodeProgress::Muxing => {
+                            (1.0, "Muxing…".to_string())
+                        }
+                    };
+                    let _ = progress_sender.send((frac, label));
+                };
+                encode_video_with_progress(&scenario, &output_str, true, Some(&on_progress))
                     .map_err(|e| format!("Encode error: {}", e))?;
                 Ok(output_str)
             })();
@@ -465,6 +491,10 @@ impl PreviewApp {
         let export_state = self.export_state;
 
         let ui_font = self.make_ui_font(11.0);
+        let export_progress = self.export_progress;
+        let export_progress_label = self.export_progress_label.clone();
+        let small_font = self.make_ui_font(10.0);
+        let label_font = self.make_ui_font(11.0);
 
         let Some(surface) = &mut self.surface else {
             return;
@@ -584,22 +614,56 @@ impl PreviewApp {
                 draw_export_icon(canvas, &layout.export_btn, &icon_paint);
             }
             ExportState::Exporting => {
-                // Spinning arc indicator
                 let ecx = layout.export_btn.center_x();
                 let ecy = layout.export_btn.center_y();
                 let r = BUTTON_ICON_SIZE / 2.0;
-                let angle = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() % 1000) as f32 / 1000.0 * 360.0;
-                let mut spinner_paint = Paint::default();
-                spinner_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
-                spinner_paint.set_anti_alias(true);
-                spinner_paint.set_style(skia_safe::PaintStyle::Stroke);
-                spinner_paint.set_stroke_width(2.0);
-                spinner_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+
+                // Background track (dim circle)
+                let mut track_paint = Paint::default();
+                track_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.2), None);
+                track_paint.set_anti_alias(true);
+                track_paint.set_style(skia_safe::PaintStyle::Stroke);
+                track_paint.set_stroke_width(2.0);
                 let oval = Rect::from_xywh(ecx - r, ecy - r, r * 2.0, r * 2.0);
-                canvas.draw_arc(oval, angle, 270.0, false, &spinner_paint);
+                canvas.draw_arc(oval, 0.0, 360.0, false, &track_paint);
+
+                // Progress arc
+                let sweep = export_progress * 360.0;
+                let mut progress_paint = Paint::default();
+                progress_paint.set_color4f(Color4f::new(0.3, 0.7, 1.0, 0.9), None);
+                progress_paint.set_anti_alias(true);
+                progress_paint.set_style(skia_safe::PaintStyle::Stroke);
+                progress_paint.set_stroke_width(2.0);
+                progress_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
+                canvas.draw_arc(oval, -90.0, sweep, false, &progress_paint);
+
+                // Percentage text
+                let pct = (export_progress * 100.0).round() as u32;
+                let pct_text = format!("{}%", pct);
+                let mut text_paint = Paint::default();
+                text_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
+                text_paint.set_anti_alias(true);
+                if let Some(blob) = TextBlob::new(&pct_text, &small_font) {
+                    let bounds = blob.bounds();
+                    canvas.draw_text_blob(
+                        &blob,
+                        (ecx - bounds.width() / 2.0, ecy + bounds.height() / 2.0 - 1.0),
+                        &text_paint,
+                    );
+                }
+
+                // Progress label below the controls bar
+                if !export_progress_label.is_empty() {
+                    let mut label_paint = Paint::default();
+                    label_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.7), None);
+                    label_paint.set_anti_alias(true);
+                    if let Some(blob) = TextBlob::new(&export_progress_label, &label_font) {
+                        let bounds = blob.bounds();
+                        let lx = layout.bar_rect.center_x() - bounds.width() / 2.0;
+                        let ly = layout.bar_rect.bottom() + 20.0;
+                        canvas.draw_text_blob(&blob, (lx, ly), &label_paint);
+                    }
+                }
             }
             ExportState::Done(_) => {
                 // Checkmark icon
@@ -929,6 +993,14 @@ impl ApplicationHandler for PreviewApp {
             }
         }
 
+        // Poll export progress
+        if let Some(ref rx) = self.export_progress_rx {
+            while let Ok((progress, label)) = rx.try_recv() {
+                self.export_progress = progress;
+                self.export_progress_label = label;
+            }
+        }
+
         // Poll export completion
         if let Some(ref rx) = self.export_done_rx {
             if let Ok(result) = rx.try_recv() {
@@ -945,6 +1017,9 @@ impl ApplicationHandler for PreviewApp {
                     }
                 }
                 self.export_done_rx = None;
+                self.export_progress_rx = None;
+                self.export_progress = 0.0;
+                self.export_progress_label.clear();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1264,6 +1339,9 @@ pub fn run_preview(
         cursor_y: 0.0,
         export_state: ExportState::Idle,
         export_done_rx: None,
+        export_progress: 0.0,
+        export_progress_label: String::new(),
+        export_progress_rx: None,
     };
 
     event_loop
