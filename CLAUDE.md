@@ -13,10 +13,10 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 - Sans ffmpeg, le fallback openh264 intégré encode en 8-bit
 - Pour les vidéos avec des gradients sombres, recommander `--codec prores` pour une qualité maximale
 
-## Composants disponibles (37)
+## Composants disponibles (51)
 
 ### Basiques
-`text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`
+`text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
 
 ### Conteneurs
 `card`, `flex`, `grid`, `container`, `positioned`
@@ -26,6 +26,9 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 - `gauge` — jauge semi-circulaire pour KPIs
 - `sparkline` — mini-chart inline sans axes
 - `stat` — carte KPI composite (valeur + label + tendance + sparkline)
+- `heatmap` — grille colorée type GitHub contributions
+- `treemap` — rectangles proportionnels (slice-and-dice)
+- `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng
 - `progress` — barre linéaire ou circulaire
 - `counter` — compteur animé (standalone uniquement, pas dans les cards)
 - `table` — tableau avec column_widths, column_align, cell_padding, show_borders
@@ -33,10 +36,20 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 ### UI Components
 - `badge` — pill avec icon, dot indicator, pulse animation, count badge
 - `avatar` / `avatar_group` — avatar circulaire / groupe empilé avec "+N"
+- `switch` — toggle animé on/off avec toggle_at
+- `slider` — curseur horizontal animé avec animate_to/animate_at
+- `rating` — étoiles avec remplissage partiel animé
 - `kbd` — touche clavier visuelle (effet 3D)
 - `tooltip` — label flottant avec flèche directionnelle
+- `notification` — toast fade-in/out avec stack push (info/success/warning/error)
+- `pill_nav` — tabs avec pill indicator animé entre onglets
+- `list` — liste bullet/numbered/checklist avec icônes
+- `stepper` — étapes numérotées connectées avec progression animée
+- `comparison` — vue avant/après avec divider animé
+- `countdown` — timer digital flip-clock style
 - `marquee` — texte défilant continu
 - `skeleton` — placeholder de chargement avec shimmer (rectangle/circle/text)
+- `tag_cloud` — nuage de mots avec tailles pondérées
 - `callout` — bulle avec flèche
 - `divider` — séparateur visuel
 

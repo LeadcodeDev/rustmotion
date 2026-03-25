@@ -152,6 +152,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/chart-types.md](rules/chart-types.md) - Chart type selection guide (12 types: bar, line, area, donut, funnel, waterfall, radar, scatter, etc.)
 - [rules/stat-cards.md](rules/stat-cards.md) - Stat/KPI cards best practices (trend, sparkline, dashboard layout)
 - [rules/data-viz-components.md](rules/data-viz-components.md) - Data visualization component selection (gauge vs progress, sparkline vs chart, skeleton patterns)
+- [rules/ui-controls.md](rules/ui-controls.md) - Switch, slider, rating: animated interactive control patterns
+- [rules/notification-stacking.md](rules/notification-stacking.md) - Notification stacking: push_at, wait_for_push, variant colors
+- [rules/dot-map-coordinates.md](rules/dot-map-coordinates.md) - Dot map: use real lat/lng coordinates, common city reference table
 
 ---
 
@@ -544,7 +547,7 @@ Default duration: `0.5` seconds.
 
 ---
 
-### Component Types (37 total)
+### Component Types (51 total)
 
 All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
@@ -1706,6 +1709,293 @@ Stacked circular avatars with overlap and "+N" overflow badge.
 ```
 
 **Root fields:** `avatars` (required — `[{ "src": string }]`), `max_display` (optional — limit visible avatars), `size` (48 — diameter), `overlap` (16 — px overlap between avatars), `border_width` (3), `border_color` (#0f172a — ring color, match your background)
+
+### 38. `switch`
+
+Animated toggle switch that flips state at a configurable time.
+
+```json
+{
+  "type": "switch",
+  "value": false,
+  "toggle_at": 1.5,
+  "label": "Dark Mode",
+  "width": 52,
+  "height": 28,
+  "track_color_on": "#4CAF50",
+  "track_color_off": "#CCCCCC"
+}
+```
+
+**Root fields:** `value` (bool, default false), `toggle_at` (time to flip), `label`, `width` (52), `height` (28), `track_color_on` (#4CAF50), `track_color_off` (#CCCCCC), `thumb_color` (#FFFFFF), `transition_duration` (0.3)
+
+### 39. `slider`
+
+Horizontal slider that animates to a target value.
+
+```json
+{
+  "type": "slider",
+  "value": 0.3,
+  "animate_to": 0.85,
+  "animate_at": 1.0,
+  "animation_duration": 2.0,
+  "width": 300,
+  "fill_color": "#3B82F6",
+  "show_value": true
+}
+```
+
+**Root fields:** `value` (0.0–1.0), `animate_to`, `animate_at` (time to start), `animation_duration` (1.0), `width` (300), `height` (8), `track_color` (#333333), `fill_color` (#3B82F6), `thumb_size` (20), `thumb_color` (#FFFFFF), `show_value` (false)
+
+### 40. `rating`
+
+Star rating display with animated fill.
+
+```json
+{
+  "type": "rating",
+  "value": 4.5,
+  "max": 5,
+  "size": 32,
+  "filled_color": "#F59E0B"
+}
+```
+
+**Root fields:** `value` (f64), `max` (5), `size` (32 — star diameter), `gap` (4), `filled_color` (#F59E0B), `empty_color` (#374151), `animated` (true), `animation_duration` (1.0)
+
+### 41. `gradient_text`
+
+Text with animated gradient fill.
+
+```json
+{
+  "type": "gradient_text",
+  "content": "Build Faster",
+  "colors": ["#3B82F6", "#8B5CF6", "#EC4899"],
+  "angle": 90,
+  "animate_angle": true,
+  "speed": 0.3,
+  "style": { "font-size": 72, "font-weight": "bold" }
+}
+```
+
+**Root fields:** `content` (required), `colors` (array of hex, default ["#3B82F6", "#8B5CF6"]), `angle` (90 — gradient angle in degrees), `animate_angle` (false — rotate gradient over time), `speed` (0.5 — rotations/sec when animate_angle), `size`
+
+Style: `font-size`, `font-weight`, `font-family`
+
+### 42. `list`
+
+Feature list with bullet, numbered, or checklist items.
+
+```json
+{
+  "type": "list",
+  "items": [
+    { "text": "Unlimited projects", "icon": "lucide:check" },
+    { "text": "Priority support", "icon": "lucide:check" },
+    { "text": "Advanced analytics", "icon": "lucide:x" }
+  ],
+  "variant": "checklist",
+  "icon_color": "#22C55E",
+  "unchecked_color": "#EF4444",
+  "gap": 16,
+  "width": 400,
+  "style": { "font-size": 18, "color": "#E2E8F0" }
+}
+```
+
+**Root fields:** `items` (required — `[{ "text", "icon"?, "checked"? }]`), `variant` (`"bullet"` / `"numbered"` / `"checklist"`), `gap` (16), `icon_size` (20), `icon_color` (#22C55E), `unchecked_color` (#6B7280), `width` (400)
+
+### 43. `pill_nav`
+
+Horizontal tab navigation with animated pill indicator.
+
+```json
+{
+  "type": "pill_nav",
+  "items": ["Overview", "Analytics", "Settings"],
+  "active_index": 0,
+  "transitions": [
+    { "to": 1, "at": 2.0 },
+    { "to": 2, "at": 4.0 }
+  ],
+  "pill_color": "#3B82F6",
+  "height": 44
+}
+```
+
+**Root fields:** `items` (required — array of strings), `active_index` (0), `transitions` (`[{ "to": u32, "at": f64 }]`), `pill_color` (#3B82F6), `text_color` (#FFFFFF), `inactive_text_color` (#9CA3AF), `background_color` (#1E293B), `height` (44), `border_radius` (22), `gap` (4), `transition_duration` (0.3)
+
+### 44. `notification`
+
+Toast notification with fade-in/out and stack push animation.
+
+```json
+{
+  "type": "notification",
+  "title": "Deployment Complete",
+  "message": "v2.4.1 deployed to production",
+  "variant": "success",
+  "width": 380,
+  "slide_in_at": 0.8,
+  "slide_out_at": 4.5,
+  "push_at": [1.5],
+  "position": "absolute",
+  "x": 500,
+  "y": 100
+}
+```
+
+**Root fields:** `title` (required), `message`, `icon` (Iconify id), `variant` (info/success/warning/error), `width` (360), `slide_in_at` (0.5 — fade-in time), `slide_out_at` (fade-out time), `slide_duration` (0.15 — fade speed), `accent_color` (override variant color), `push_at` (array of timestamps — when to push down one slot), `stack_gap` (12), `wait_for_push` (bool — delay fade-in until push animation finishes)
+
+**Stacking notifications:** Place all at the same x/y. The first notification gets `push_at: [1.5]` (time when second appears). The second gets `wait_for_push: true`. This makes the first slide down, then the second fades in above it.
+
+### 45. `stepper`
+
+Step indicator with connected nodes and animated progression.
+
+```json
+{
+  "type": "stepper",
+  "steps": [
+    { "label": "Sign Up" },
+    { "label": "Configure" },
+    { "label": "Deploy" }
+  ],
+  "active_step": 0,
+  "animate_to": 2,
+  "animate_at": 1.0,
+  "size": { "width": 600, "height": 80 }
+}
+```
+
+**Root fields:** `steps` (required — `[{ "label", "description"? }]`), `active_step` (0), `animate_to` (target step), `animate_at` (time), `transition_duration` (0.5), `orientation` ("horizontal"), `active_color` (#3B82F6), `completed_color` (#22C55E), `pending_color` (#6B7280), `node_size` (32), `size`
+
+### 46. `comparison`
+
+Before/after split view with animated divider.
+
+```json
+{
+  "type": "comparison",
+  "left_color": "#1E293B",
+  "right_color": "#3B82F6",
+  "left_label": "Before",
+  "right_label": "After",
+  "divider_position": 0.5,
+  "animate_from": 0.2,
+  "animate_to": 0.8,
+  "animate_at": 1.0,
+  "animation_duration": 2.0,
+  "size": { "width": 600, "height": 300 },
+  "border_radius": 16
+}
+```
+
+**Root fields:** `left_color`, `right_color`, `left_label`, `right_label`, `divider_position` (0.5), `animate_from`, `animate_to`, `animate_at`, `animation_duration` (2.0), `divider_color` (#FFFFFF), `divider_width` (3), `border_radius` (12), `size`
+
+### 47. `countdown`
+
+Digital countdown timer with flip-clock style digit boxes.
+
+```json
+{
+  "type": "countdown",
+  "seconds": 3723,
+  "digit_size": 48,
+  "digit_color": "#FFFFFF",
+  "digit_background": "#1E293B",
+  "size": { "width": 400, "height": 80 }
+}
+```
+
+**Root fields:** `seconds` (total countdown, counts down from ctx.time), `show_hours` (true), `show_minutes` (true), `show_seconds` (true), `digit_size` (64), `digit_color` (#FFFFFF), `digit_background` (#1E293B), `separator_color` (#6B7280), `gap` (12), `border_radius` (12), `size`
+
+### 48. `heatmap`
+
+Grid of colored cells (GitHub contribution style).
+
+```json
+{
+  "type": "heatmap",
+  "data": [
+    [0.1, 0.5, 0.9, 0.3, 0.7],
+    [0.4, 0.8, 0.2, 0.6, 0.5]
+  ],
+  "cell_size": 20,
+  "cell_gap": 3,
+  "cell_radius": 4,
+  "size": { "width": 400, "height": 200 }
+}
+```
+
+**Root fields:** `data` (required — 2D array of f64, values 0.0–1.0), `color_scale` (array of hex, default GitHub green scale), `cell_size` (14), `cell_gap` (3), `cell_radius` (2), `animated` (true), `animation_duration` (1.5), `size`
+
+### 49. `treemap`
+
+Space-filling rectangles proportional to values.
+
+```json
+{
+  "type": "treemap",
+  "data": [
+    { "label": "React", "value": 45, "color": "#61DAFB" },
+    { "label": "Vue", "value": 25, "color": "#42B883" },
+    { "label": "Angular", "value": 20, "color": "#DD0031" }
+  ],
+  "show_labels": true,
+  "gap": 3,
+  "border_radius": 6,
+  "size": { "width": 500, "height": 300 }
+}
+```
+
+**Root fields:** `data` (required — `[{ "label"?, "value", "color"? }]`), `gap` (3), `border_radius` (6), `show_labels` (true), `show_values` (false), `animated` (true), `animation_duration` (1.0), `size`
+
+### 50. `tag_cloud`
+
+Word cloud with weighted font sizes.
+
+```json
+{
+  "type": "tag_cloud",
+  "tags": [
+    { "text": "Rust", "weight": 10 },
+    { "text": "TypeScript", "weight": 8 },
+    { "text": "Python", "weight": 7 }
+  ],
+  "min_font_size": 14,
+  "max_font_size": 64,
+  "size": { "width": 500, "height": 300 }
+}
+```
+
+**Root fields:** `tags` (required — `[{ "text", "weight", "color"? }]`), `min_font_size` (14), `max_font_size` (64), `colors` (custom palette), `animated` (true), `animation_duration` (1.5), `size`
+
+### 51. `dot_map`
+
+World map in dot-pattern with data points at geographic coordinates.
+
+```json
+{
+  "type": "dot_map",
+  "points": [
+    { "lat": 40.71, "lng": -74.01, "label": "NYC", "size": 12, "color": "#3B82F6", "pulse": true },
+    { "lat": 35.68, "lng": 139.69, "label": "Tokyo", "size": 14, "color": "#EF4444", "pulse": true },
+    { "lat": -33.87, "lng": 151.21, "label": "Sydney", "size": 10, "color": "#EC4899" }
+  ],
+  "show_world": true,
+  "world_dot_color": "#334155",
+  "dot_spacing": 10,
+  "dot_radius": 2,
+  "size": { "width": 800, "height": 500 }
+}
+```
+
+**Root fields:** `points` (required — `[{ "lat", "lng", "label"?, "size"?, "color"?, "pulse"? }]`), `show_world` (true — show world map background), `world_dot_color` (#334155), `dot_spacing` (8 — grid spacing px), `dot_radius` (1.5), `background_color` (#0F172A), `animated` (true), `animation_duration` (1.5), `size`
+
+Points use real geographic coordinates (lat/lng). The world map is rendered as a dot grid using a 180×90 land bitmap. Points with `pulse: true` show expanding concentric rings.
 
 ---
 
