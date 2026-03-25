@@ -570,6 +570,7 @@ mod tests {
             position: None,
             x: None,
             y: None,
+            z_index: None,
             overlays: vec![],
         }
     }
@@ -817,6 +818,7 @@ mod tests {
                 position: None,
                 x: None,
                 y: None,
+                z_index: None,
                 overlays: vec![],
             },
             shape_child(100.0, 40.0),

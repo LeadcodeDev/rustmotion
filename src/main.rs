@@ -13,6 +13,8 @@ mod macros;
 mod components;
 mod layout;
 mod traits;
+#[cfg(test)]
+mod tests;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -549,7 +551,7 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
                 let view_frames = timeline.total_frames(fps);
                 if frame_num < frame_offset + view_frames {
                     let frame_in_view = frame_num - frame_offset;
-                    let rgba = engine::render_v2::render_world_frame_scaled(
+                    let rgba = engine::render::render_world_frame_scaled(
                         config, view, &timeline, frame_in_view, 1.0,
                     )?;
 
@@ -573,7 +575,7 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
                             None
                         };
 
-                        let rgba = engine::render_v2::render_scene_frame_scaled_with_prev_bg(
+                        let rgba = engine::render::render_scene_frame_scaled_with_prev_bg(
                             config, scene, local_frame, scene_frames, 1.0, prev_bg,
                         )?;
 
@@ -844,7 +846,7 @@ fn cmd_still(
             let frame_index = (local_time * fps as f64).round() as u32;
             let scene_frames = (scene.duration * fps as f64).round() as u32;
 
-            let rgba = engine::render_v2::render_scene_frame(
+            let rgba = engine::render::render_scene_frame(
                 config, scene, frame_index.min(scene_frames.saturating_sub(1)), scene_frames,
             )?;
 

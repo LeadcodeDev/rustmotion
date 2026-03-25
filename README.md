@@ -1842,6 +1842,43 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
 - **JSON Schema:** schemars (auto-generated from Rust types)
 - **Parallelism:** rayon (multi-threaded frame rendering)
 
+## Architecture
+
+rustmotion uses a Flutter-inspired **measure → layout → paint** pipeline built on Skia:
+
+```
+src/
+├── components/              # 51 components (each implements Widget trait)
+│   ├── chart/               # Chart sub-modules (bar, line, pie, radar, etc.)
+│   └── *.rs                 # One file per component
+├── engine/
+│   ├── render/              # Render pipeline (component, scene, background, transforms)
+│   ├── codeblock/           # Codeblock rendering (highlight, chrome, reveal, diff)
+│   ├── animator.rs          # Animation resolver, easing, spring solver
+│   └── renderer.rs          # Skia drawing primitives
+├── schema/                  # Data models
+│   ├── scenario.rs          # Scenario, View, Scene, VideoConfig
+│   ├── style.rs             # LayerStyle, FontWeight, layout types
+│   ├── background.rs        # Animated backgrounds
+│   ├── animation.rs         # EasingType, presets
+│   └── video.rs             # AnimationEffect, shapes, fills
+├── layout/                  # Flex/grid layout engines
+├── traits/                  # Widget, Styled, Animatable, Timed, Container
+└── macros.rs                # impl_traits! macro
+```
+
+Every component implements the `Widget` trait:
+
+```rust
+trait Widget {
+    fn paint(&self, canvas: &Canvas, ctx: &PaintContext) -> Result<()>;
+    fn measure(&self, constraints: &Constraints) -> (f32, f32);
+    fn layout(&self, constraints: &Constraints) -> LayoutNode;
+}
+```
+
+`PaintContext` provides timing, layout dimensions, parent info, and resolved animated properties in a single struct.
+
 ## License
 
 MIT

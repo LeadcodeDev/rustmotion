@@ -189,7 +189,7 @@ pub fn render_frame_task_scaled(
     task: &FrameTask,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::{render_scene_frame, render_scene_frame_scaled, render_scene_frame_scaled_with_prev_bg, render_scene_bg_scaled, render_scene_fg_scaled};
+    use crate::engine::render::{render_scene_frame, render_scene_frame_scaled, render_scene_frame_scaled_with_prev_bg, render_scene_bg_scaled, render_scene_fg_scaled};
 
     match task {
         FrameTask::Normal {
@@ -273,7 +273,7 @@ pub fn render_frame_task_scaled(
             use crate::engine::world::WorldTimeline;
             let view = &scenario.views[*view_idx];
             let timeline = WorldTimeline::build(view, config.fps, config.width, config.height);
-            crate::engine::render_v2::render_world_frame_scaled(
+            crate::engine::render::render_world_frame_scaled(
                 config, view, &timeline, *frame_in_view, scale_factor,
             )
         }
@@ -316,7 +316,7 @@ fn render_last_frame_of_view(
     fps: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::render_scene_frame_scaled;
+    use crate::engine::render::render_scene_frame_scaled;
     match view.view_type {
         ViewType::Slide => {
             if let Some(last_scene) = view.scenes.last() {
@@ -329,7 +329,7 @@ fn render_last_frame_of_view(
         ViewType::World => {
             let timeline = crate::engine::world::WorldTimeline::build(view, fps, config.width, config.height);
             let total_frames = timeline.total_frames(fps);
-            crate::engine::render_v2::render_world_frame_scaled(
+            crate::engine::render::render_world_frame_scaled(
                 config, view, &timeline, total_frames.saturating_sub(1), scale_factor,
             )
         }
@@ -343,7 +343,7 @@ fn render_first_frame_of_view(
     fps: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    use crate::engine::render_v2::render_scene_frame_scaled;
+    use crate::engine::render::render_scene_frame_scaled;
     match view.view_type {
         ViewType::Slide => {
             if let Some(first_scene) = view.scenes.first() {
@@ -355,7 +355,7 @@ fn render_first_frame_of_view(
         }
         ViewType::World => {
             let timeline = crate::engine::world::WorldTimeline::build(view, fps, config.width, config.height);
-            crate::engine::render_v2::render_world_frame_scaled(
+            crate::engine::render::render_world_frame_scaled(
                 config, view, &timeline, 0, scale_factor,
             )
         }
@@ -880,7 +880,7 @@ pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
             let scene_frames = (scene.duration * fps as f64).round() as u32;
 
             for local_frame in 0..scene_frames {
-                let rgba = crate::engine::render_v2::render_scene_frame(
+                let rgba = crate::engine::render::render_scene_frame(
                     config, scene, local_frame, scene_frames,
                 )?;
                 stdout.write_all(&rgba)?;

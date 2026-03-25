@@ -1,7 +1,7 @@
 pub mod animator;
 pub mod codeblock;
 pub mod heropatterns;
-pub mod render_v2;
+pub mod render;
 pub mod renderer;
 pub mod transition;
 pub mod world;

@@ -156,7 +156,7 @@ impl Widget for Card {
         }
 
         // 4. Render children with animation support (with optional stagger)
-        crate::engine::render_v2::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)?;
+        crate::engine::render::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)?;
 
         if should_clip {
             canvas.restore();

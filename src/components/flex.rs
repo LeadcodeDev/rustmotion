@@ -151,7 +151,7 @@ impl Widget for Flex {
         canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
 
         // 4. Render children with animation support (with optional stagger)
-        crate::engine::render_v2::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)?;
+        crate::engine::render::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)?;
 
         canvas.restore();
 

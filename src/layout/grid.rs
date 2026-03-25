@@ -367,6 +367,7 @@ mod tests {
             position: None,
             x: None,
             y: None,
+            z_index: None,
             overlays: vec![],
         }
     }

@@ -103,7 +103,7 @@ impl crate::traits::Clipped for ContainerComponent {
 impl Widget for ContainerComponent {
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
         // No background, no border, no shadow, no clip — just render children
-        crate::engine::render_v2::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)
+        crate::engine::render::render_children_with_stagger(canvas, &self.children, layout, ctx, self.style.stagger)
     }
 
     fn measure(&self, constraints: &Constraints) -> (f32, f32) {

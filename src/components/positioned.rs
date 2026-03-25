@@ -35,7 +35,7 @@ impl Widget for Positioned {
     }
 
     fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &crate::engine::animator::AnimatedProperties) -> Result<()> {
-        crate::engine::render_v2::render_children(canvas, &self.children, layout, ctx)?;
+        crate::engine::render::render_children(canvas, &self.children, layout, ctx)?;
         Ok(())
     }
 

@@ -156,6 +156,11 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/notification-stacking.md](rules/notification-stacking.md) - Notification stacking: push_at, wait_for_push, variant colors
 - [rules/dot-map-coordinates.md](rules/dot-map-coordinates.md) - Dot map: use real lat/lng coordinates, common city reference table
 
+### Architecture (pour contribuer au code)
+
+- [rules/paint-context.md](rules/paint-context.md) - Widget::paint() API avec PaintContext (Flutter-inspired)
+- [rules/module-structure.md](rules/module-structure.md) - Structure des modules: schema/, chart/, render/, codeblock/ splits
+
 ---
 
 ## Complete Examples

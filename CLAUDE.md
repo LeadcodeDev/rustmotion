@@ -62,3 +62,82 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 
 ### Média
 `mockup`, `lottie`, `cursor`, `particle`, `qrcode`
+
+## Architecture
+
+### Render Pipeline (Flutter-like)
+
+Chaque composant suit un cycle **measure → layout → paint** inspiré de Flutter :
+
+1. `widget.measure(constraints)` → `(width, height)` — calcule la taille souhaitée
+2. `widget.layout(constraints)` → `LayoutNode` — calcule l'arbre de layout (récursif pour les conteneurs)
+3. `widget.paint(canvas, ctx)` → dessine sur le canvas Skia
+
+La méthode `paint()` reçoit un `PaintContext` riche contenant :
+- **Timing** : `ctx.time`, `ctx.scene_duration`, `ctx.fps`, `ctx.frame_index`
+- **Layout** : `ctx.layout` (LayoutNode complet), `ctx.width()`, `ctx.height()`
+- **Parent info** : `ctx.parent_size`, `ctx.absolute_position`, `ctx.depth`
+- **Animation** : `ctx.props` (AnimatedProperties résolues), `ctx.stagger_offset`
+- **Vidéo** : `ctx.video_width`, `ctx.video_height`
+
+Pour les conteneurs qui appellent `render_children`, utiliser `ctx.as_render_context()` pour convertir vers le pipeline de rendu.
+
+### Structure des modules
+
+```
+src/
+├── components/           # 51 composants (chacun implémente Widget)
+│   ├── mod.rs            # Enum Component + dispatch (as_widget, as_animatable, etc.)
+│   ├── chart/            # 10 fichiers (mod + bar/line/pie/radar/scatter/radial/funnel/waterfall/axes)
+│   └── *.rs              # Un fichier par composant
+├── engine/
+│   ├── render/           # Pipeline de rendu (5 fichiers)
+│   │   ├── mod.rs        # render_component, render_children, render_overlays
+│   │   ├── scene.rs      # render_frame_v2, render_scene_frame, compute_root_layout
+│   │   ├── background.rs # draw_animated_background, gradients, halo, grid dots
+│   │   └── transforms.rs # draw_3d_shadow, draw_inner_shadow
+│   ├── codeblock/        # Rendu codeblock (6 fichiers)
+│   │   ├── mod.rs        # render_codeblock, render_codeblock_v2
+│   │   ├── highlight.rs  # Syntect, thèmes, highlight_code
+│   │   ├── chrome.rs     # Barre titre macOS
+│   │   ├── reveal.rs     # Typewriter, line-by-line
+│   │   ├── diff.rs       # State transitions, word diff
+│   │   └── dimensions.rs # compute_code_dimensions
+│   ├── animator.rs       # Résolution animations, easing, spring solver
+│   └── renderer.rs       # Primitives de dessin Skia
+├── schema/               # Modèles de données (5 fichiers)
+│   ├── scenario.rs       # Scenario, View, Scene, VideoConfig
+│   ├── style.rs          # LayerStyle, Spacing, FontWeight, CardDirection
+│   ├── background.rs     # AnimatedBackground, BackgroundPreset
+│   ├── animation.rs      # EasingType, AnimationPreset, PresetConfig
+│   ├── codeblock_types.rs # CodeblockChrome, CodeblockState
+│   └── video.rs          # AnimationEffect, Size, ShapeType, Fill
+├── layout/               # Moteurs de layout flex/grid
+│   ├── flex.rs           # CSS flexbox
+│   ├── grid.rs           # CSS grid
+│   ├── tree.rs           # LayoutNode
+│   └── constraints.rs    # Constraints (Flutter-style)
+├── traits/               # Traits des composants
+│   ├── widget.rs         # Widget trait (paint/measure/layout) + PaintContext + RenderContext
+│   ├── styled.rs         # Styled + StyledExt (builder pattern)
+│   ├── container.rs      # Container, FlexContainer, GridContainer
+│   ├── animatable.rs     # Animatable trait
+│   └── timed.rs          # Timed trait + TimingConfig
+└── macros.rs             # impl_traits! macro
+```
+
+### Ajouter un nouveau composant
+
+1. Créer `src/components/mon_composant.rs` avec struct + `impl Widget` (`paint`, `measure`)
+2. Ajouter `crate::impl_traits!(MonComposant { Animatable => style, Timed => timing, Styled => style });`
+3. Ajouter le variant dans l'enum `Component` dans `src/components/mod.rs`
+4. Ajouter les match arms dans les 5 méthodes de dispatch (`as_widget`, `as_animatable`, `as_timed`, `as_styled`, `as_container`)
+5. Ajouter `pub mod mon_composant;` et `pub use mon_composant::MonComposant;` dans `mod.rs`
+
+### Tests
+
+```bash
+cargo test                    # 31 tests (layout + variables + smoke)
+cargo check                   # Vérification compilation
+rustmotion validate file.json # Validation scénario
+```
