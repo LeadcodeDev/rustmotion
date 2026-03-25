@@ -1,5 +1,4 @@
 mod background;
-mod effects;
 mod scene;
 mod transforms;
 

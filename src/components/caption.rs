@@ -37,7 +37,8 @@ impl Widget for Caption {
             .match_family_style(font_family, FontStyle::bold())
             .or_else(|| fm.match_family_style("Helvetica", FontStyle::bold()))
             .or_else(|| fm.match_family_style("Arial", FontStyle::bold()))
-            .unwrap_or_else(|| fm.match_family_style("sans-serif", FontStyle::bold()).unwrap());
+            .or_else(|| fm.match_family_style("sans-serif", FontStyle::bold()))
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, FontStyle::bold()).expect("No fallback font"));
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));

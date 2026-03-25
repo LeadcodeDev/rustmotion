@@ -144,7 +144,8 @@ impl Widget for Counter {
             .match_family_style(font_family, skia_font_style)
             .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
             .or_else(|| fm.match_family_style("Arial", skia_font_style))
-            .unwrap_or_else(|| fm.match_family_style("sans-serif", skia_font_style).unwrap());
+            .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
         let display = format_counter_value(self.to, self.decimals, &self.separator, &self.prefix, &self.suffix);

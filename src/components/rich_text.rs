@@ -69,7 +69,7 @@ fn make_font(
         .or_else(|| fm.match_family_style("Arial", skia_style))
         .or_else(|| fm.match_family_style("sans-serif", skia_style))
         .unwrap_or_else(|| {
-            fm.match_family_style(&fm.family_name(0), skia_style).unwrap()
+            fm.legacy_make_typeface(None, skia_style).expect("No fallback font")
         });
     Font::from_typeface(typeface, size)
 }

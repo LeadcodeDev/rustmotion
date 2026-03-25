@@ -104,7 +104,8 @@ impl Widget for Timeline {
         let typeface = fm.match_family_style("Inter", FontStyle::normal())
             .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
             .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
-            .unwrap_or_else(|| fm.match_family_style("sans-serif", FontStyle::normal()).unwrap());
+            .or_else(|| fm.match_family_style("sans-serif", FontStyle::normal()))
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, FontStyle::normal()).expect("No fallback font"));
         let font = Font::from_typeface(&typeface, self.font_size);
         let icon_font = Font::from_typeface(&typeface, self.node_radius * 0.8);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.node_radius * 0.8));
