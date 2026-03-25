@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use minimp4::Mp4Muxer;
 use openh264::encoder::{Encoder, EncoderConfig};
 use openh264::formats::YUVBuffer;
@@ -1032,7 +1032,7 @@ pub fn encode_with_ffmpeg_progress(
     // Render frames in parallel batches, pipe RGBA sequentially to FFmpeg
     let batch_size = (rayon::current_num_threads() * 2).max(4);
     let counter = AtomicU32::new(0);
-    let mut pipe_error: Option<anyhow::Error> = None;
+    let mut pipe_error: Option<RustmotionError> = None;
 
     for batch in tasks.chunks(batch_size) {
         if pipe_error.is_some() {
@@ -1062,7 +1062,7 @@ pub fn encode_with_ffmpeg_progress(
             match result {
                 Ok(rgba) => {
                     if let Err(e) = stdin.write_all(&rgba) {
-                        pipe_error = Some(RustmotionError::FfmpegWrite { reason: e.to_string() }.into());
+                        pipe_error = Some(RustmotionError::FfmpegWrite { reason: e.to_string() });
                         break;
                     }
                 }

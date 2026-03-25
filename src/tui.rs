@@ -40,7 +40,7 @@ impl TuiProgress {
         height: u32,
         fps: u32,
         codec: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> crate::error::Result<Self> {
         let backend = CrosstermBackend::new(io::stderr());
         let terminal = Terminal::with_options(
             backend,
@@ -91,7 +91,7 @@ impl TuiProgress {
         );
     }
 
-    fn draw(&mut self) -> anyhow::Result<()> {
+    fn draw(&mut self) -> crate::error::Result<()> {
         let state = &self.state;
 
         let ratio = if state.total > 0 {
@@ -227,7 +227,7 @@ impl TuiWatch {
         height: u32,
         fps: u32,
         codec: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> crate::error::Result<Self> {
         let backend = CrosstermBackend::new(io::stderr());
         let terminal = Terminal::with_options(
             backend,
@@ -279,7 +279,7 @@ impl TuiWatch {
         self.set_phase(WatchPhase::Watching);
     }
 
-    fn draw(&mut self) -> anyhow::Result<()> {
+    fn draw(&mut self) -> crate::error::Result<()> {
         let state = &self.state;
 
         let elapsed = state.start_time.elapsed();

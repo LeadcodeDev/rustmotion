@@ -15,7 +15,7 @@ pub use scene::{
     prepare_scene,
 };
 
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint, M44, V3};
 
 use super::animator::{apply_orbits, apply_wiggles, extract_effects, resolve_animations, AnimatedProperties};

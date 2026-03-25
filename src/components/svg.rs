@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};

@@ -4,7 +4,7 @@ mod dimensions;
 mod highlight;
 mod reveal;
 
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::{Canvas, Rect};
 
 use super::renderer::paint_from_hex;

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
 
 use crate::engine::renderer::{paint_from_hex, parse_hex_color};

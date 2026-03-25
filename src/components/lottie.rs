@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::{Result, RustmotionError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
@@ -59,11 +59,11 @@ impl Lottie {
     fn parse_metadata(&self) -> Result<(f64, usize, f64, f32, f32)> {
         let json_str = if let Some(ref src) = self.src {
             std::fs::read_to_string(src)
-                .map_err(|e| anyhow::anyhow!("Failed to read Lottie file '{}': {}", src, e))?
+                .map_err(|e| RustmotionError::LottieRead { path: src.clone(), reason: e.to_string() })?
         } else if let Some(ref data) = self.data {
             data.clone()
         } else {
-            return Err(anyhow::anyhow!("Lottie component requires either 'src' or 'data'"));
+            return Err(RustmotionError::LottieMissingSrc);
         };
 
         let json: serde_json::Value = serde_json::from_str(&json_str)?;
@@ -88,10 +88,10 @@ impl Lottie {
     fn load_frame_from_dir(&self, frames_dir: &str, frame: usize) -> Result<skia_safe::Image> {
         let frame_path = format!("{}/{:04}.png", frames_dir, frame);
         let data = std::fs::read(&frame_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read frame '{}': {}", frame_path, e))?;
+            .map_err(|e| RustmotionError::LottieFrameRead { path: frame_path.clone(), reason: e.to_string() })?;
 
         let img = image::load_from_memory(&data)
-            .map_err(|e| anyhow::anyhow!("Failed to decode frame '{}': {}", frame_path, e))?;
+            .map_err(|e| RustmotionError::LottieFrameDecode { path: frame_path.clone(), reason: e.to_string() })?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
 
@@ -104,7 +104,7 @@ impl Lottie {
         );
 
         skia_safe::images::raster_from_data(&img_info, img_data, w as usize * 4)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create Skia image from frame"))
+            .ok_or(RustmotionError::SkiaImageCreation { target: "lottie frame".to_string() })
     }
 }
 
@@ -141,11 +141,10 @@ impl Widget for Lottie {
             cache.insert(cache_key, img.clone());
             img
         } else {
-            return Err(anyhow::anyhow!(
-                "Lottie component requires 'frames_dir' pointing to pre-rendered PNG frames.\n\
-                 You can generate frames using: npx lottie-to-frames <lottie.json> --output <dir>\n\
-                 Or use puppeteer/lottie-web to render frames."
-            ));
+            return Err(RustmotionError::LottieRender {
+                reason: "Lottie component requires 'frames_dir' pointing to pre-rendered PNG frames. \
+                         You can generate frames using: npx lottie-to-frames <lottie.json> --output <dir>".to_string(),
+            });
         };
 
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);

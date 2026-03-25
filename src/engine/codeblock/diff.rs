@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use similar::{ChangeTag, TextDiff};
 use skia_safe::{Canvas, Font, PaintStyle, Rect};
 use syntect::highlighting::Theme;

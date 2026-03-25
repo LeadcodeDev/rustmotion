@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use crate::error::Result;
 
 use crate::error::RustmotionError;
 use crate::schema::{

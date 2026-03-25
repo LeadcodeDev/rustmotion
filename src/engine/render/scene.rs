@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
 
 use super::background::draw_animated_background;

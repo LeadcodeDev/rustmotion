@@ -14,6 +14,25 @@ cargo install rustmotion
 
 **Requirements:** Rust toolchain + C++ compiler (for openh264). **Recommended:** `ffmpeg` CLI for 10-bit H.264 and H.265/VP9/ProRes/WebM/GIF output.
 
+### Shell Completions
+
+Generate and install completions for your shell:
+
+```bash
+# Zsh (add to ~/.zshrc)
+rustmotion completions zsh > ~/.zfunc/_rustmotion
+# then add to .zshrc:  fpath=(~/.zfunc $fpath) && autoload -Uz compinit && compinit
+
+# Or one-liner for Oh My Zsh:
+rustmotion completions zsh > ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/rustmotion/_rustmotion
+
+# Bash (add to ~/.bashrc)
+rustmotion completions bash > ~/.local/share/bash-completion/completions/rustmotion
+
+# Fish
+rustmotion completions fish > ~/.config/fish/completions/rustmotion.fish
+```
+
 ## Quick Start
 
 ```bash
@@ -41,6 +60,30 @@ rustmotion schema -o schema.json
 # Show scenario info
 rustmotion info scenario.json
 ```
+
+## Claude Code Skills
+
+rustmotion ships with built-in [Claude Code](https://claude.ai/claude-code) skills — 30 rules and best practices for generating video scenarios with AI. After installing rustmotion, run:
+
+```bash
+# Install skills in your video project (recommended)
+cd my-video-project/
+rustmotion skills install
+# → .claude/skills/rustmotion/  (SKILL.md + 29 rules)
+# → CLAUDE.md                   (project instructions)
+
+# Or install globally (available in all projects)
+rustmotion skills install --global
+# → ~/.claude/skills/rustmotion/
+
+# Browse available rules
+rustmotion skills list
+
+# Read a specific rule
+rustmotion skills show hex-colors
+```
+
+Once installed, Claude Code automatically loads the skills when you work in that directory. It will know how to generate valid rustmotion JSON scenarios, pick the right components, and follow all layout/animation constraints.
 
 ## CLI Reference
 

@@ -4,6 +4,7 @@ mod error;
 mod include;
 mod preview;
 mod schema;
+mod skills;
 mod tui;
 mod variables;
 
@@ -16,8 +17,8 @@ mod traits;
 #[cfg(test)]
 mod tests;
 
-use anyhow::Result;
-use clap::{Parser, Subcommand};
+use crate::error::Result;
+use clap::{CommandFactory, Parser, Subcommand};
 use components::{ChildComponent, Component};
 use error::RustmotionError;
 use schema::{CardDisplay, ResolvedScenario, Scenario};
@@ -133,6 +134,42 @@ enum Commands {
         #[arg(short, long)]
         file: PathBuf,
     },
+
+    /// Manage Claude Code skills for rustmotion
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// Install skills to current project or globally
+    Install {
+        /// Install to ~/.claude/skills/ instead of ./.claude/skills/
+        #[arg(long)]
+        global: bool,
+    },
+    /// Remove all rustmotion skills from current project or globally
+    Uninstall {
+        /// Remove from ~/.claude/skills/ instead of ./.claude/skills/
+        #[arg(long)]
+        global: bool,
+    },
+    /// List all available skills and rules
+    List,
+    /// Show the content of a specific rule
+    Show {
+        /// Rule name (e.g. "hex-colors", "paint-context")
+        name: String,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -185,6 +222,21 @@ fn main() -> Result<()> {
         Commands::Validate { file } => cmd_validate(&file),
         Commands::Schema { output } => cmd_schema(output.as_deref()),
         Commands::Info { file } => cmd_info(&file),
+        Commands::Skills { action } => match action {
+            SkillsAction::Install { global } => skills::install(global),
+            SkillsAction::Uninstall { global } => skills::uninstall(global),
+            SkillsAction::List => { skills::list(); Ok(()) }
+            SkillsAction::Show { name } => skills::show(&name),
+        },
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "rustmotion",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
     }
 }
 
@@ -425,7 +477,7 @@ fn cmd_watch(
 
     let (tx, rx) = mpsc::channel();
 
-    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+    let mut watcher = notify::recommended_watcher(move |res: std::result::Result<notify::Event, notify::Error>| {
         if let Ok(event) = res {
             if event.kind.is_modify() || event.kind.is_create() {
                 let _ = tx.send(());
@@ -598,7 +650,7 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
         .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
 
     // Parse as raw Value first for variable processing
-    let json_value: Result<serde_json::Value, _> = serde_json::from_str(&json_str);
+    let json_value: std::result::Result<serde_json::Value, _> = serde_json::from_str(&json_str);
     let mut json_value = match json_value {
         Ok(v) => v,
         Err(e) => {
@@ -626,7 +678,7 @@ fn cmd_validate(input: &PathBuf) -> Result<()> {
     }
 
     // Parse JSON into Scenario
-    let scenario: Result<Scenario, _> = serde_json::from_value(json_value);
+    let scenario: std::result::Result<Scenario, _> = serde_json::from_value(json_value);
 
     match scenario {
         Ok(scenario) => {

@@ -4,7 +4,6 @@
 mod component_smoke {
     use crate::components::Component;
     use crate::layout::Constraints;
-    use crate::traits::Widget;
 
     /// Minimal JSON for each component type.
     const COMPONENT_JSONS: &[(&str, &str)] = &[
@@ -17,37 +16,88 @@ mod component_smoke {
         ("codeblock", r#"{"type":"codeblock","code":"fn main() {}"}"#),
         ("badge", r#"{"type":"badge","text":"New"}"#),
         ("callout", r#"{"type":"callout","text":"Hello"}"#),
-        ("chart", r#"{"type":"chart","chart_type":"bar","data":[{"value":10}]}"#),
+        (
+            "chart",
+            r#"{"type":"chart","chart_type":"bar","data":[{"value":10}]}"#,
+        ),
         ("countdown", r#"{"type":"countdown","seconds":60}"#),
         ("divider", r#"{"type":"divider"}"#),
         ("gauge", r#"{"type":"gauge","value":50}"#),
-        ("gradient_text", r##"{"type":"gradient_text","content":"hello","colors":["#FF0000","#0000FF"]}"##),
+        (
+            "gradient_text",
+            r##"{"type":"gradient_text","content":"hello","colors":["#FF0000","#0000FF"]}"##,
+        ),
         ("heatmap", r#"{"type":"heatmap","data":[[1,2],[3,4]]}"#),
         ("kbd", r#"{"type":"kbd","key":"Ctrl+C"}"#),
-        ("list", r#"{"type":"list","items":[{"text":"one"},{"text":"two"}]}"#),
+        (
+            "list",
+            r#"{"type":"list","items":[{"text":"one"},{"text":"two"}]}"#,
+        ),
         ("marquee", r#"{"type":"marquee","content":"scrolling"}"#),
-        ("particle", r#"{"type":"particle","particle_type":"confetti"}"#),
+        (
+            "particle",
+            r#"{"type":"particle","particle_type":"confetti"}"#,
+        ),
         ("progress", r#"{"type":"progress","value":0.5}"#),
-        ("qr_code", r#"{"type":"qr_code","content":"https://example.com"}"#),
+        (
+            "qr_code",
+            r#"{"type":"qr_code","content":"https://example.com"}"#,
+        ),
         ("rating", r#"{"type":"rating","value":3.5}"#),
         ("skeleton", r#"{"type":"skeleton"}"#),
         ("slider", r#"{"type":"slider","value":50}"#),
         ("sparkline", r#"{"type":"sparkline","data":[1,2,3,4,5]}"#),
         ("stat", r#"{"type":"stat","value":"42","label":"Users"}"#),
-        ("stepper", r#"{"type":"stepper","steps":[{"label":"Step 1"},{"label":"Step 2"}]}"#),
+        (
+            "stepper",
+            r#"{"type":"stepper","steps":[{"label":"Step 1"},{"label":"Step 2"}]}"#,
+        ),
         ("switch", r#"{"type":"switch"}"#),
-        ("rich_text", r#"{"type":"rich_text","spans":[{"text":"hello"}]}"#),
-        ("table", r#"{"type":"table","headers":["A","B"],"rows":[["1","2"]]}"#),
-        ("tag_cloud", r#"{"type":"tag_cloud","tags":[{"text":"rust","weight":1.0}]}"#),
-        ("terminal", r#"{"type":"terminal","lines":[{"text":"$ echo hello"}]}"#),
-        ("timeline", r#"{"type":"timeline","steps":[{"label":"Start"}]}"#),
-        ("treemap", r#"{"type":"treemap","data":[{"value":10,"label":"A"}]}"#),
+        (
+            "rich_text",
+            r#"{"type":"rich_text","spans":[{"text":"hello"}]}"#,
+        ),
+        (
+            "table",
+            r#"{"type":"table","headers":["A","B"],"rows":[["1","2"]]}"#,
+        ),
+        (
+            "tag_cloud",
+            r#"{"type":"tag_cloud","tags":[{"text":"rust","weight":1.0}]}"#,
+        ),
+        (
+            "terminal",
+            r#"{"type":"terminal","lines":[{"text":"$ echo hello"}]}"#,
+        ),
+        (
+            "timeline",
+            r#"{"type":"timeline","steps":[{"label":"Start"}]}"#,
+        ),
+        (
+            "treemap",
+            r#"{"type":"treemap","data":[{"value":10,"label":"A"}]}"#,
+        ),
         // Containers
-        ("flex", r#"{"type":"flex","children":[{"type":"text","content":"hi"}]}"#),
-        ("grid", r#"{"type":"grid","children":[{"type":"text","content":"hi"}]}"#),
-        ("card", r#"{"type":"card","children":[{"type":"text","content":"hi"}]}"#),
-        ("container", r#"{"type":"container","children":[{"type":"text","content":"hi"}]}"#),
-        ("positioned", r#"{"type":"positioned","children":[{"type":"text","content":"hi","x":0,"y":0}]}"#),
+        (
+            "flex",
+            r#"{"type":"flex","children":[{"type":"text","content":"hi"}]}"#,
+        ),
+        (
+            "grid",
+            r#"{"type":"grid","children":[{"type":"text","content":"hi"}]}"#,
+        ),
+        (
+            "card",
+            r#"{"type":"card","children":[{"type":"text","content":"hi"}]}"#,
+        ),
+        (
+            "container",
+            r#"{"type":"container","children":[{"type":"text","content":"hi"}]}"#,
+        ),
+        (
+            "positioned",
+            r#"{"type":"positioned","children":[{"type":"text","content":"hi","x":0,"y":0}]}"#,
+        ),
     ];
 
     #[test]

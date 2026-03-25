@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::{
     surfaces, AlphaType, Color4f, ColorType, Font, FontStyle, ImageInfo, Paint, Path, RRect, Rect,
     TextBlob,
@@ -303,7 +303,7 @@ struct PreviewApp {
 
     // Export
     export_state: ExportState,
-    export_done_rx: Option<Receiver<Result<String, String>>>,
+    export_done_rx: Option<Receiver<std::result::Result<String, String>>>,
     export_progress: f32,
     export_progress_label: String,
     export_progress_rx: Option<Receiver<(f32, String)>>,
@@ -442,7 +442,7 @@ impl PreviewApp {
         self.export_done_rx = Some(rx);
         self.export_progress_rx = Some(progress_rx);
         std::thread::spawn(move || {
-            let result = (|| -> Result<String, String> {
+            let result = (|| -> std::result::Result<String, String> {
                 let scenario = crate::load_scenario(&input)
                     .map_err(|e| format!("Load error: {}", e))?;
                 if !scenario.fonts.is_empty() {
@@ -1441,7 +1441,7 @@ fn run_preview_inner(
             std::thread::spawn(move || {
                 use notify::{RecursiveMode, Watcher};
                 let mut watcher = notify::recommended_watcher(
-                    move |res: Result<notify::Event, notify::Error>| {
+                    move |res: std::result::Result<notify::Event, notify::Error>| {
                         if let Ok(event) = res {
                             if event.kind.is_modify() || event.kind.is_create() {
                                 let _ = tx.send(());

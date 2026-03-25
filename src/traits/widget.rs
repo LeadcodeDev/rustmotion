@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use skia_safe::Canvas;
 
 use crate::engine::animator::AnimatedProperties;

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use crate::error::Result;
 use serde_json::Value;
 
 use crate::error::RustmotionError;

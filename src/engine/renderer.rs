@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use anyhow::Result;
+use crate::error::Result;
 use dashmap::DashMap;
 use skia_safe::{
     Canvas, Color4f, ColorType, Font, FontMgr, FontStyle,

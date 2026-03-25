@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+/// Crate-wide result type using `RustmotionError`.
+pub type Result<T> = std::result::Result<T, RustmotionError>;
+
 #[derive(Debug, Error)]
 pub enum RustmotionError {
     // --- IO / File errors ---
@@ -180,4 +183,47 @@ pub enum RustmotionError {
     // --- Preview ---
     #[error("Failed to create preview window: {reason}")]
     PreviewWindow { reason: String },
+
+    // --- Lottie ---
+    #[error("Failed to read Lottie file '{path}': {reason}")]
+    LottieRead { path: String, reason: String },
+
+    #[error("Lottie component requires either 'src' or 'data'")]
+    LottieMissingSrc,
+
+    #[error("Failed to read Lottie frame '{path}': {reason}")]
+    LottieFrameRead { path: String, reason: String },
+
+    #[error("Failed to decode Lottie frame '{path}': {reason}")]
+    LottieFrameDecode { path: String, reason: String },
+
+    #[error("Lottie render failed: {reason}")]
+    LottieRender { reason: String },
+
+    // --- Skills ---
+    #[error("Unknown skill or rule: '{name}'. Run `rustmotion skills list` to see available rules.")]
+    UnknownSkill { name: String },
+
+    // --- IO ---
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+
+    // --- External library errors ---
+    #[error("OpenH264 error: {0}")]
+    OpenH264(#[from] openh264::Error),
+
+    #[error("Image processing error: {0}")]
+    Image(#[from] image::ImageError),
+
+    #[error("File watcher error: {0}")]
+    Notify(#[from] notify::Error),
+
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<String> for RustmotionError {
+    fn from(s: String) -> Self {
+        RustmotionError::Other(s)
+    }
 }
