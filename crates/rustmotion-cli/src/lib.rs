@@ -159,6 +159,8 @@ enum SkillsAction {
 enum CompletionsAction {
     /// Install completions to the current shell config
     Install,
+    /// Remove installed completions
+    Uninstall,
     /// Print completions to stdout
     Generate {
         /// Shell to generate completions for
@@ -232,6 +234,7 @@ pub fn run() -> Result<()> {
                 Ok(())
             }
             CompletionsAction::Install => install_completions(),
+            CompletionsAction::Uninstall => uninstall_completions(),
         }
     }
 }
@@ -302,5 +305,57 @@ fn install_completions() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn uninstall_completions() -> Result<()> {
+    let shell = detect_shell().ok_or_else(|| {
+        RustmotionError::Generic("Could not detect shell.".into())
+    })?;
+
+    let home = dirs::home_dir().ok_or_else(|| RustmotionError::Generic("Could not find home directory".into()))?;
+
+    match shell {
+        clap_complete::Shell::Zsh => {
+            let path = home.join(".zfunc/_rustmotion");
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+                eprintln!("Removed {}", path.display());
+            }
+
+            // Remove fpath lines from .zshrc
+            let zshrc = home.join(".zshrc");
+            if zshrc.exists() {
+                let content = std::fs::read_to_string(&zshrc)?;
+                let filtered: Vec<&str> = content.lines().filter(|line| {
+                    let trimmed = line.trim();
+                    trimmed != "# rustmotion completions"
+                        && !(trimmed.contains(".zfunc") && trimmed.starts_with("fpath="))
+                        && !(trimmed.contains("compinit") && trimmed.starts_with("autoload"))
+                }).collect();
+                std::fs::write(&zshrc, filtered.join("\n") + "\n")?;
+                eprintln!("Cleaned ~/.zshrc");
+            }
+        }
+        clap_complete::Shell::Bash => {
+            let path = home.join(".local/share/bash-completion/completions/rustmotion");
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+                eprintln!("Removed {}", path.display());
+            }
+        }
+        clap_complete::Shell::Fish => {
+            let path = home.join(".config/fish/completions/rustmotion.fish");
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+                eprintln!("Removed {}", path.display());
+            }
+        }
+        _ => {
+            return Err(RustmotionError::Generic(format!("Unsupported shell: {:?}", shell)).into());
+        }
+    }
+
+    eprintln!("Completions uninstalled. Restart your shell.");
     Ok(())
 }
