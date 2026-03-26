@@ -1,0 +1,371 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use std::collections::HashMap;
+
+use super::animation::EasingType;
+use super::background::{
+    deserialize_animated_backgrounds, deserialize_background_value, AnimatedBackground,
+    BackgroundValue, ResolvedBackground,
+};
+use super::style::{CardAlign, CardDirection, CardJustify};
+
+/// Definition of a variable in a structural component.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VariableDefinition {
+    #[serde(rename = "type")]
+    pub var_type: VariableType,
+    pub default: serde_json::Value,
+    /// Optional description for documentation/schema.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Supported variable types.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VariableType {
+    String,
+    Number,
+    Boolean,
+    Object,
+    Array,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Scenario {
+    #[serde(default = "default_version")]
+    pub version: String,
+    pub video: VideoConfig,
+    #[serde(default)]
+    pub audio: Vec<AudioTrack>,
+    #[serde(default)]
+    pub fonts: Vec<FontEntry>,
+    #[serde(default)]
+    pub scenes: Vec<SceneEntry>,
+    /// Composition: a sequence of views (slide or world). Mutually exclusive with top-level `scenes`.
+    #[serde(default)]
+    pub composition: Option<Vec<View>>,
+    /// Config definitions for structural components. Each config entry has a type and default value.
+    #[serde(default)]
+    pub config: Option<HashMap<String, VariableDefinition>>,
+    /// Named background templates that scenes can reference via `$ref`.
+    #[serde(default)]
+    pub backgrounds: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewType {
+    Slide,
+    World,
+}
+
+fn default_view_type() -> ViewType {
+    ViewType::Slide
+}
+
+fn default_camera_pan_duration() -> f64 {
+    0.8
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct View {
+    #[serde(rename = "type", default = "default_view_type")]
+    pub view_type: ViewType,
+    #[serde(default)]
+    pub scenes: Vec<SceneEntry>,
+    /// Transition entering this view (between views).
+    #[serde(default)]
+    pub transition: Option<Transition>,
+    /// (world) Shared background: color string, animated entry, or array.
+    #[serde(default, deserialize_with = "deserialize_background_value")]
+    #[schemars(skip)]
+    pub background: Option<BackgroundValue>,
+    /// (world) Legacy shared animated backgrounds.
+    #[serde(default, rename = "animated-background",
+            deserialize_with = "deserialize_animated_backgrounds")]
+    pub animated_background: Vec<AnimatedBackground>,
+    /// (world) Easing for camera pan between scenes.
+    #[serde(default = "default_transition_easing")]
+    pub camera_easing: EasingType,
+    /// (world) Duration of camera pan between scenes (default 0.8s).
+    #[serde(default = "default_camera_pan_duration")]
+    pub camera_pan_duration: f64,
+}
+
+/// A scenario with all includes expanded — safe to pass to the rendering pipeline.
+#[derive(Debug)]
+pub struct ResolvedScenario {
+    pub video: VideoConfig,
+    pub audio: Vec<AudioTrack>,
+    pub fonts: Vec<FontEntry>,
+    pub views: Vec<ResolvedView>,
+    /// Local file paths that were included during resolution (for watch mode).
+    pub included_paths: Vec<std::path::PathBuf>,
+}
+
+impl ResolvedScenario {
+    /// Iterate over all scenes across all views (for prefetch, validation, etc.)
+    pub fn all_scenes(&self) -> impl Iterator<Item = &Scene> {
+        self.views.iter().flat_map(|v| v.scenes.iter())
+    }
+
+    /// Collect all scenes into a flat Vec (for indexed access)
+    #[allow(dead_code)]
+    pub fn all_scenes_vec(&self) -> Vec<&Scene> {
+        self.all_scenes().collect()
+    }
+}
+
+#[derive(Debug)]
+pub struct ResolvedView {
+    pub view_type: ViewType,
+    pub scenes: Vec<Scene>,
+    pub transition: Option<Transition>,
+    pub background: ResolvedBackground,
+    pub camera_easing: EasingType,
+    pub camera_pan_duration: f64,
+}
+
+/// An entry in the `scenes` array: either a concrete scene or an include directive.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SceneEntry {
+    /// A regular scene defined inline.
+    Scene(Scene),
+    /// A reference to an external scenario file whose scenes will be injected here.
+    Include(IncludeDirective),
+}
+
+/// Directive to inject scenes from an external scenario file.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct IncludeDirective {
+    /// Path (relative to parent file) or URL (http/https) to a scenario JSON file.
+    pub include: String,
+    /// Only include scenes at these 0-based indices. When absent, all scenes are included.
+    #[serde(default)]
+    pub scenes: Option<Vec<usize>>,
+    /// Config overrides to pass to the included structural component.
+    #[serde(default)]
+    pub config: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Font file to load at startup
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FontEntry {
+    pub path: String,
+    pub family: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AudioTrack {
+    pub src: String,
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: Option<f64>,
+    #[serde(default = "default_volume")]
+    pub volume: f32,
+    #[serde(default)]
+    pub fade_in: Option<f64>,
+    #[serde(default)]
+    pub fade_out: Option<f64>,
+    #[serde(default)]
+    pub volume_keyframes: Vec<VolumeKeyframe>,
+}
+
+/// Dynamic volume control point
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VolumeKeyframe {
+    pub time: f64,
+    pub volume: f32,
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+fn default_volume() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct VideoConfig {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "default_fps")]
+    pub fps: u32,
+    #[serde(default = "default_background")]
+    pub background: String,
+    #[serde(default)]
+    pub codec: Option<VideoCodec>,
+    #[serde(default)]
+    pub crf: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WorldPosition {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Scene {
+    pub duration: f64,
+    /// Unified background: color string, animated entry (with optional $ref), or array.
+    #[serde(default, deserialize_with = "deserialize_background_value")]
+    #[schemars(skip)]
+    pub background: Option<BackgroundValue>,
+    #[serde(default)]
+    pub children: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub transition: Option<Transition>,
+    #[serde(default)]
+    pub freeze_at: Option<f64>,
+    /// Flex layout for automatic layer positioning
+    #[serde(default)]
+    pub layout: Option<SceneLayout>,
+    /// Legacy animated background (kept for backward compat)
+    #[serde(default, rename = "animated-background", deserialize_with = "deserialize_animated_backgrounds")]
+    pub animated_background: Vec<AnimatedBackground>,
+    /// Virtual camera with animatable x, y, zoom, rotation.
+    #[serde(default)]
+    pub camera: Option<Camera>,
+    /// Position of this scene in the 2D world (used by world views).
+    #[serde(default, rename = "world-position")]
+    pub world_position: Option<WorldPosition>,
+    /// (world) Keep this scene visible after its time window ends.
+    #[serde(default)]
+    pub persist: bool,
+    /// Post-resolution background (populated by include.rs, ignored by serde).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_background: ResolvedBackground,
+}
+
+/// Virtual camera for pan/zoom/rotation effects at the scene level.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Camera {
+    /// Camera center X offset from scene center (pixels). Default: 0.
+    #[serde(default)]
+    pub x: f32,
+    /// Camera center Y offset from scene center (pixels). Default: 0.
+    #[serde(default)]
+    pub y: f32,
+    /// Zoom factor. 1.0 = no zoom, 2.0 = 2x zoom in, 0.5 = zoom out.
+    #[serde(default = "default_camera_zoom")]
+    pub zoom: f32,
+    /// Rotation in degrees around the scene center. Default: 0.
+    #[serde(default)]
+    pub rotation: f32,
+    /// Keyframe animations for camera properties.
+    #[serde(default)]
+    pub keyframes: Vec<CameraKeyframe>,
+}
+
+/// A keyframe for a camera property.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CameraKeyframe {
+    /// The camera property to animate: "x", "y", "zoom", "rotation".
+    pub property: String,
+    /// Time-value pairs for the animation.
+    pub values: Vec<CameraKeyframePoint>,
+    /// Easing function for interpolation.
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+/// A single time-value point in a camera keyframe.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CameraKeyframePoint {
+    /// Time in seconds (relative to scene start).
+    pub time: f64,
+    /// Value at this time.
+    pub value: f32,
+}
+
+fn default_camera_zoom() -> f32 {
+    1.0
+}
+
+/// Scene-level flex layout configuration
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SceneLayout {
+    #[serde(default)]
+    pub direction: Option<CardDirection>,
+    #[serde(default)]
+    pub gap: Option<f32>,
+    #[serde(default)]
+    pub align_items: Option<CardAlign>,
+    #[serde(default)]
+    pub justify_content: Option<CardJustify>,
+    #[serde(default)]
+    pub padding: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Transition {
+    #[serde(rename = "type")]
+    pub transition_type: TransitionType,
+    #[serde(default = "default_transition_duration")]
+    pub duration: f64,
+    #[serde(default = "default_transition_easing")]
+    pub easing: EasingType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionType {
+    Fade,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    ZoomIn,
+    ZoomOut,
+    Flip,
+    ClockWipe,
+    Iris,
+    Slide,
+    Dissolve,
+    CameraPan,
+    None,
+}
+
+fn default_transition_duration() -> f64 {
+    0.5
+}
+
+pub(crate) fn default_transition_easing() -> EasingType {
+    EasingType::EaseInOut
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoCodec {
+    H264,
+    H265,
+    Vp9,
+    Prores,
+}
+
+impl Default for VideoCodec {
+    fn default() -> Self {
+        Self::H264
+    }
+}
+
+// --- Default functions ---
+
+fn default_version() -> String {
+    "1.0".to_string()
+}
+
+fn default_fps() -> u32 {
+    30
+}
+
+fn default_background() -> String {
+    "#000000".to_string()
+}

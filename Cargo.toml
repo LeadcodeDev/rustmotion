@@ -1,39 +1,9 @@
-[package]
-name = "rustmotion"
-version = "0.6.0"
-edition = "2021"
-description = "A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary."
-license = "MIT"
-repository = "https://github.com/LeadcodeDev/rustmotion"
-
-[dependencies]
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-skia-safe = "0.82"
-openh264 = "0.6"
-minimp4 = { version = "0.1", features = ["aac"] }
-symphonia = { version = "0.5", features = ["mp3", "wav", "ogg", "flac", "aac"] }
-schemars = "0.8"
-ratatui = "0.29"
-crossterm = "0.28"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-rayon = "1"
-thiserror = "2"
-resvg = "0.44"
-usvg = "0.44"
-tiny-skia = "0.11"
-gif = "0.13"
-syntect = { version = "5", default-features = false, features = ["default-fancy"] }
-similar = "2"
-dashmap = "6"
-rubato = "0.16"
-notify = "7"
-ureq = "3"
-qrcode = "0.14"
-winit = "0.30"
-softbuffer = "0.4"
-rfd = "0.15"
-notify-rust = "4"
-dirs = "6.0.0"
-clap_complete = "4.6.0"
+[workspace]
+resolver = "2"
+members = [
+    "crates/rustmotion-core",
+    "crates/rustmotion-components",
+    "crates/rustmotion",
+    "crates/rustmotion-cli",
+    "crates/rustmotion-studio",
+]

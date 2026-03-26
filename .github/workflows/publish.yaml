@@ -18,7 +18,7 @@ jobs:
 
       - name: Verify tag matches Cargo.toml version
         run: |
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(grep '^version' crates/rustmotion/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           TAG_VERSION=${GITHUB_REF#refs/tags/}
           if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
             echo "Tag $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
@@ -26,7 +26,39 @@ jobs:
           fi
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --workspace
+
+      - name: Publish rustmotion-core
+        run: cargo publish -p rustmotion-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for rustmotion-core on crates.io
+        run: |
+          VERSION=$(grep '^version' crates/rustmotion-core/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          for i in $(seq 1 30); do
+            if curl -sf "https://crates.io/api/v1/crates/rustmotion-core/$VERSION" > /dev/null; then
+              echo "rustmotion-core $VERSION available"
+              exit 0
+            fi
+            echo "Waiting... ($i)"
+            sleep 5
+          done
+          echo "Timeout waiting for rustmotion-core" && exit 1
+
+      - name: Publish rustmotion-components
+        run: cargo publish -p rustmotion-components --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for rustmotion-components on crates.io
+        run: |
+          VERSION=$(grep '^version' crates/rustmotion-components/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          for i in $(seq 1 30); do
+            if curl -sf "https://crates.io/api/v1/crates/rustmotion-components/$VERSION" > /dev/null; then
+              echo "rustmotion-components $VERSION available"
+              exit 0
+            fi
+            echo "Waiting... ($i)"
+            sleep 5
+          done
+          echo "Timeout waiting for rustmotion-components" && exit 1
 
       - name: Publish rustmotion
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p rustmotion --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

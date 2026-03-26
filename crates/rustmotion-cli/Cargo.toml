@@ -1,0 +1,25 @@
+[package]
+name = "rustmotion-cli"
+version = "0.6.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustmotion"
+path = "src/bin/main.rs"
+
+[dependencies]
+rustmotion = { path = "../rustmotion" }
+rustmotion-studio = { path = "../rustmotion-studio" }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4.6.0"
+ratatui = "0.29"
+crossterm = "0.28"
+notify = "7"
+serde_json = "1"
+dirs = "6.0.0"
+rayon = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
