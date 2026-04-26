@@ -146,6 +146,7 @@ impl Terminal {
             .or_else(|| fm.match_family_style("Courier New", font_style))
             .or_else(|| fm.match_family_style("monospace", font_style))
             .or_else(|| fm.match_family_style("Courier", font_style))
+            .or_else(|| fm.legacy_make_typeface(None, font_style))
             .expect(&RustmotionError::FontNotFound.to_string());
 
         let size = self.style.font_size.unwrap_or(FONT_SIZE);

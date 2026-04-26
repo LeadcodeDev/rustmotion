@@ -4,6 +4,8 @@ mod render;
 mod schema;
 mod still;
 mod validate;
+mod validate_schema;
+pub mod validation;
 
 pub use info::cmd_info;
 pub use render::{cmd_render, cmd_watch};

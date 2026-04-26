@@ -1,11 +1,33 @@
 use rustmotion::encode;
 use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
-use rustmotion::schema::{ResolvedScenario, ViewType};
-use rustmotion::loader::load_scenario;
+use rustmotion::schema::ResolvedScenario;
 use crate::tui;
 use crate::OutputFormat;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::commands::validation::{self, ValidationSource};
+
+/// Load + validate a scenario for watch mode. On validation failure prints the
+/// report and returns the typed error so the caller can decide how to handle it.
+fn load_for_watch(
+    input: &Path,
+    no_validate: bool,
+    lenient: bool,
+    strict_anim: bool,
+) -> Result<ResolvedScenario> {
+    let loaded = validation::load(ValidationSource::File(input))?;
+    if !no_validate {
+        let report = validation::run_checks(&loaded, strict_anim);
+        if !report.is_clean() {
+            validation::print_report(&report, &input.display().to_string());
+        }
+        if report.is_blocking(lenient) {
+            return Err(report.to_error());
+        }
+    }
+    Ok(loaded.scenario)
+}
 
 pub fn cmd_render(
     scenario: ResolvedScenario,
@@ -52,7 +74,9 @@ pub fn cmd_render(
         });
 
         let config = &scenario.video;
-        let output_str = output.to_str().unwrap();
+        let output_str = output.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
+            path: output.to_string_lossy().into_owned(),
+        })?;
 
         // Helper: create TUI and wrap encode call with progress
         let make_tui = |codec_label: &str| -> Option<tui::TuiProgress> {
@@ -135,7 +159,7 @@ pub fn cmd_render(
     if let Some(OutputFormat::Json) = output_format {
         let result = serde_json::json!({
             "status": "success",
-            "output": output.to_str().unwrap(),
+            "output": output.to_string_lossy(),
             "duration_ms": elapsed.as_millis(),
         });
         println!("{}", serde_json::to_string(&result)?);
@@ -154,6 +178,9 @@ pub fn cmd_watch(
     crf: Option<u8>,
     format: Option<String>,
     transparent: bool,
+    no_validate: bool,
+    lenient: bool,
+    strict_anim: bool,
 ) -> Result<()> {
     use notify::{Watcher, RecursiveMode};
     use std::sync::mpsc;
@@ -171,6 +198,10 @@ pub fn cmd_watch(
         && !matches!(fmt, "png-seq" | "gif" | "raw")
         && !use_ffmpeg;
 
+    let output_str = output.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
+        path: output.to_string_lossy().into_owned(),
+    })?.to_string();
+
     // State for incremental rendering
     let mut prev_segments: Option<Vec<encode::SceneSegment>> = None;
     let mut prev_config_hash: Option<u64> = None;
@@ -183,7 +214,7 @@ pub fn cmd_watch(
     let mut initial_includes: Vec<PathBuf> = Vec::new();
 
     // Initial render
-    match load_scenario(input) {
+    match load_for_watch(input, no_validate, lenient, strict_anim) {
         Ok(scenario) => {
             initial_includes = scenario.included_paths.clone();
 
@@ -224,7 +255,7 @@ pub fn cmd_watch(
                         }
                     }
                 };
-                match encode::encode_video_incremental(&scenario, output.to_str().unwrap(), quiet, None, Some(&mut cb)) {
+                match encode::encode_video_incremental(&scenario, &output_str, quiet, None, Some(&mut cb)) {
                     Ok(segments) => {
                         prev_segments = Some(segments);
                         prev_config_hash = Some(config_hash);
@@ -266,6 +297,9 @@ pub fn cmd_watch(
     }
 
     // Debounce: wait for changes, then re-render
+    let mut last_err_repr: Option<String> = None;
+    let mut consecutive_err_count: u32 = 0;
+    let mut suppressed = false;
     loop {
         // Block until a change event
         rx.recv().map_err(|_| RustmotionError::WatcherClosed)?;
@@ -274,8 +308,15 @@ pub fn cmd_watch(
         std::thread::sleep(std::time::Duration::from_millis(100));
         while rx.try_recv().is_ok() {}
 
-        match load_scenario(input) {
+        match load_for_watch(input, no_validate, lenient, strict_anim) {
             Ok(scenario) => {
+                // Reset error backoff on a successful load
+                if consecutive_err_count > 0 && suppressed {
+                    eprintln!("Recovered from previous errors.");
+                }
+                last_err_repr = None;
+                consecutive_err_count = 0;
+                suppressed = false;
                 // Update watched includes: unwatch old, watch new
                 for old in &watched_includes {
                     let _ = watcher.unwatch(old.as_ref());
@@ -334,7 +375,7 @@ pub fn cmd_watch(
                             }
                         }
                     };
-                    match encode::encode_video_incremental(&scenario, output.to_str().unwrap(), quiet, use_prev, Some(&mut cb)) {
+                    match encode::encode_video_incremental(&scenario, &output_str, quiet, use_prev, Some(&mut cb)) {
                         Ok(segments) => {
                             prev_segments = Some(segments);
                             prev_config_hash = Some(config_hash);
@@ -354,63 +395,44 @@ pub fn cmd_watch(
                     }
                 }
             }
-            Err(e) => eprintln!("Load error: {}", e),
+            Err(e) => {
+                let repr = e.to_string();
+                if last_err_repr.as_deref() == Some(&repr) {
+                    consecutive_err_count += 1;
+                    if consecutive_err_count > 3 {
+                        if !suppressed {
+                            eprintln!("Load error: {} (further identical errors suppressed)", repr);
+                            suppressed = true;
+                        }
+                    } else {
+                        eprintln!("Load error: {}", repr);
+                    }
+                } else {
+                    eprintln!("Load error: {}", repr);
+                    last_err_repr = Some(repr);
+                    consecutive_err_count = 1;
+                    suppressed = false;
+                }
+            }
         }
     }
 }
 
 fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
+    // Use the same task pipeline as the encoder so `--frame N` always shows
+    // exactly what frame N of the rendered MP4 contains. Summing scene
+    // durations directly would skip transition overlaps and drift the
+    // numbering by `transition_duration * fps` per scene boundary.
     let config = &scenario.video;
-    let fps = config.fps;
+    let tasks = encode::build_frame_tasks(scenario);
+    let total = tasks.len() as u32;
+    let task = tasks
+        .get(frame_num as usize)
+        .ok_or(RustmotionError::FrameOutOfRange { frame: frame_num, total })?;
 
-    // Find which view and frame this belongs to
-    let mut frame_offset = 0u32;
-    for view in &scenario.views {
-        match view.view_type {
-            ViewType::World => {
-                // World view: all scenes share a single continuous timeline
-                let timeline = engine::world::WorldTimeline::build(view, fps, config.width, config.height);
-                let view_frames = timeline.total_frames(fps);
-                if frame_num < frame_offset + view_frames {
-                    let frame_in_view = frame_num - frame_offset;
-                    let rgba = engine::render::render_world_frame_scaled(
-                        config, view, &timeline, frame_in_view, 1.0,
-                    )?;
-
-                    let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
-                        .ok_or(RustmotionError::PixelImage)?;
-                    img.save(output)?;
-                    return Ok(());
-                }
-                frame_offset += view_frames;
-            }
-            ViewType::Slide => {
-                // Slide view: each scene is independent
-                for (scene_idx, scene) in view.scenes.iter().enumerate() {
-                    let scene_frames = (scene.duration * fps as f64).round() as u32;
-                    if frame_num < frame_offset + scene_frames {
-                        let local_frame = frame_num - frame_offset;
-                        let prev_bg = if scene_idx > 0 {
-                            let prev = &view.scenes[scene_idx - 1];
-                            Some((&prev.resolved_background, prev.duration))
-                        } else {
-                            None
-                        };
-
-                        let rgba = engine::render::render_scene_frame_scaled_with_prev_bg(
-                            config, scene, local_frame, scene_frames, 1.0, prev_bg,
-                        )?;
-
-                        let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
-                            .ok_or(RustmotionError::PixelImage)?;
-                        img.save(output)?;
-                        return Ok(());
-                    }
-                    frame_offset += scene_frames;
-                }
-            }
-        }
-    }
-
-    Err(RustmotionError::FrameOutOfRange { frame: frame_num, total: frame_offset }.into())
+    let rgba = encode::render_frame_task_scaled(config, scenario, task, 1.0)?;
+    let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
+        .ok_or(RustmotionError::PixelImage)?;
+    img.save(output)?;
+    Ok(())
 }

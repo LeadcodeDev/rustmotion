@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Rect};
 
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
 use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
@@ -76,14 +76,9 @@ impl Widget for Marquee {
         let h = layout.height;
 
         let fs = self.style.font_size.unwrap_or(self.font_size);
-        let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+        let typeface = typeface_with_fallback(family, font_style)?;
         let font = skia_safe::Font::from_typeface(typeface, fs);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
 

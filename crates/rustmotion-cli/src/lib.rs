@@ -4,7 +4,7 @@ pub mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
-use rustmotion::loader::{load_scenario, load_scenario_from_source};
+use rustmotion::loader::load_scenario;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -73,6 +73,21 @@ enum Commands {
         /// Watch the input file for changes and re-render automatically
         #[arg(short, long)]
         watch: bool,
+
+        /// Skip the implicit validation pass (schema + geometry + variables).
+        /// Use only when the scenario was validated upstream (e.g. CI).
+        #[arg(long)]
+        no_validate: bool,
+
+        /// Treat geometry violations as warnings instead of errors during the
+        /// implicit validation pass.
+        #[arg(long)]
+        lenient: bool,
+
+        /// Sample animated frames and apply renderer transforms to detect
+        /// per-frame viewport overflow during the implicit validation pass.
+        #[arg(long)]
+        strict_anim: bool,
     },
 
     /// Export a single frame as a still image (PNG, JPEG, WebP)
@@ -213,13 +228,52 @@ pub fn run() -> Result<()> {
         Commands::Render {
             file, json, output, frame, output_format,
             codec, crf, format, transparent, watch,
+            no_validate, lenient, strict_anim,
         } => {
+            // Validate codec / CRF up-front so we never spawn an encoder with bad args.
+            commands::validation::check_codec(codec.as_deref())?;
+            commands::validation::check_crf(crf)?;
+
             if watch {
                 let input_path = file.ok_or(RustmotionError::WatchRequiresFile)?;
-                commands::cmd_watch(&input_path, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+                commands::cmd_watch(
+                    &input_path, &output, frame, output_format.as_ref(),
+                    cli.quiet, codec, crf, format, transparent,
+                    no_validate, lenient, strict_anim,
+                )
             } else {
-                let scenario = load_scenario_from_source(file.as_ref(), json.as_deref())?;
-                commands::cmd_render(scenario, &output, frame, output_format.as_ref(), cli.quiet, codec, crf, format, transparent)
+                let source = match (file.as_ref(), json.as_deref()) {
+                    (Some(_), Some(_)) => return Err(RustmotionError::ConflictingInput),
+                    (Some(p), None) => commands::validation::ValidationSource::File(p),
+                    (None, Some(j)) => commands::validation::ValidationSource::Inline(j),
+                    (None, None) => return Err(RustmotionError::MissingInput),
+                };
+
+                let loaded = commands::validation::load(source)?;
+
+                if !cli.quiet {
+                    commands::validation::warn_on_silent_defaults(&loaded);
+                }
+
+                if !no_validate {
+                    let report = commands::validation::run_checks(&loaded, strict_anim);
+                    if !report.is_clean() {
+                        let label = loaded
+                            .source_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "<inline>".to_string());
+                        commands::validation::print_report(&report, &label);
+                    }
+                    if report.is_blocking(lenient) {
+                        return Err(report.to_error());
+                    }
+                }
+
+                commands::cmd_render(
+                    loaded.scenario, &output, frame, output_format.as_ref(),
+                    cli.quiet, codec, crf, format, transparent,
+                )
             }
         }
         Commands::Still { file, output, time, format, quality } => {

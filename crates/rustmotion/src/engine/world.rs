@@ -1,4 +1,4 @@
-use crate::engine::animator::ease;
+use crate::engine::animator::{ease, safe_div};
 use crate::schema::{EasingType, ResolvedView, Scene};
 
 /// Timeline for a world view: scene time windows and camera waypoints.
@@ -44,7 +44,10 @@ impl WorldTimeline {
     /// Camera pans are centered on scene boundaries, taking `camera_pan_duration` seconds.
     /// During a pan, both scenes are visible.
     pub fn build(view: &ResolvedView, _fps: u32, video_width: u32, video_height: u32) -> Self {
-        let pan_dur = view.camera_pan_duration;
+        // Clamp the pan duration to a non-negative value. A negative value
+        // would invert pan_start/pan_end and silently scramble the camera
+        // interpolation; a zero is fine (handled downstream by safe_div).
+        let pan_dur = view.camera_pan_duration.max(0.0);
         let scenes = &view.scenes;
 
         if scenes.is_empty() {
@@ -132,11 +135,7 @@ impl WorldTimeline {
 
             // During this pan → interpolate between wp_a and wp_b
             if time <= pan_end {
-                let raw_progress = if pan_end > pan_start {
-                    ((time - pan_start) / (pan_end - pan_start)).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
+                let raw_progress = safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0);
                 let t = ease(raw_progress, easing) as f32;
                 let x = wp_a.x + (wp_b.x - wp_a.x) * t;
                 let y = wp_a.y + (wp_b.y - wp_a.y) * t;
@@ -202,11 +201,12 @@ impl WorldTimeline {
 
                     if i > 0 && time >= in_pan_start.max(0.0) && time < in_pan_end {
                         // Fading in: opacity goes 0 → 1 during incoming pan
-                        let progress = ((time - in_pan_start.max(0.0)) / (in_pan_end - in_pan_start.max(0.0))).clamp(0.0, 1.0);
+                        let denom = in_pan_end - in_pan_start.max(0.0);
+                        let progress = safe_div(time - in_pan_start.max(0.0), denom, 1.0).clamp(0.0, 1.0);
                         progress as f32
                     } else if i < self.scene_windows.len() - 1 && time >= out_pan_start && time <= out_pan_end {
                         // Fading out: opacity goes 1 → 0 during outgoing pan
-                        let progress = ((time - out_pan_start) / (out_pan_end - out_pan_start)).clamp(0.0, 1.0);
+                        let progress = safe_div(time - out_pan_start, out_pan_end - out_pan_start, 1.0).clamp(0.0, 1.0);
                         1.0 - progress as f32
                     } else {
                         1.0

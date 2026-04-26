@@ -97,6 +97,7 @@ impl Table {
             .match_family_style(family, font_style)
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
+            .or_else(|| fm.legacy_make_typeface(None, font_style))
             .expect(&RustmotionError::FontNotFound.to_string());
 
         skia_safe::Font::from_typeface(typeface, self.font_size())

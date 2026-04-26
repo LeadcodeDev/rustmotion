@@ -103,14 +103,18 @@ fn layout_flex_inner<L: LayoutItem>(
         f32::INFINITY
     };
 
-    // Separate flow and absolute children
-    // In force_flow mode (world scenes), skip decorative children (particles) entirely
+    // Separate flow and absolute children.
+    // Decorative children (particles) are always treated as fullscreen overlays
+    // — they never participate in flex flow, otherwise they would consume all
+    // remaining cross-axis space and push siblings off-screen.
     let flow_indices: Vec<usize> = children
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            if force_flow {
-                !c.is_decorative()
+            if c.is_decorative() {
+                false
+            } else if force_flow {
+                true
             } else {
                 c.is_flow()
             }
@@ -172,6 +176,9 @@ fn layout_flex_inner<L: LayoutItem>(
         if !force_flow {
             layout_absolute_children(children, &child_sizes, &mut child_nodes, pl, pt);
         }
+
+        // Decorative overlays (particles) cover the full container regardless of mode.
+        layout_decorative_children(children, &mut child_nodes, container_w, container_h);
 
         let flat = LayoutNode::new(0.0, 0.0, container_w, container_h).with_children(child_nodes);
         return enrich_child_layouts(flat, children);
@@ -264,7 +271,7 @@ fn layout_flex_inner<L: LayoutItem>(
     }
 
     // Fill remaining None entries with zero-sized nodes
-    let final_nodes: Vec<LayoutNode> = child_nodes
+    let mut final_nodes: Vec<LayoutNode> = child_nodes
         .into_iter()
         .map(|n| n.unwrap_or_default())
         .collect();
@@ -287,6 +294,9 @@ fn layout_flex_inner<L: LayoutItem>(
     } else {
         (cross_offset - gap + pt + pb).min(constraints.max_height)
     };
+
+    // Decorative overlays cover the full wrapped container.
+    layout_decorative_children(children, &mut final_nodes, container_w, container_h);
 
     let flat = LayoutNode::new(0.0, 0.0, container_w, container_h).with_children(final_nodes);
     enrich_child_layouts(flat, children)
@@ -512,6 +522,22 @@ fn build_child_nodes<L: LayoutItem>(
 }
 
 /// Position absolute children at their declared coordinates.
+/// Decorative children (e.g. particles) cover the entire container. They never
+/// participate in flex flow — instead they sit at the parent origin with the
+/// parent's full size, similar to a `position: absolute; inset: 0;` overlay.
+fn layout_decorative_children<L: LayoutItem>(
+    children: &[L],
+    child_nodes: &mut [LayoutNode],
+    container_w: f32,
+    container_h: f32,
+) {
+    for (i, child) in children.iter().enumerate() {
+        if child.is_decorative() {
+            child_nodes[i] = LayoutNode::new(0.0, 0.0, container_w, container_h);
+        }
+    }
+}
+
 fn layout_absolute_children<L: LayoutItem>(
     children: &[L],
     child_sizes: &[(f32, f32)],

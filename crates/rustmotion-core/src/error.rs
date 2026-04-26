@@ -114,8 +114,8 @@ pub enum RustmotionError {
     #[error("Failed to run ffmpeg: {reason}. Is ffmpeg installed?")]
     FfmpegSpawn { reason: String },
 
-    #[error("FFmpeg encoding failed")]
-    FfmpegFailed,
+    #[error("FFmpeg encoding failed{}", .stderr.as_ref().map(|s| format!(": {}", s)).unwrap_or_default())]
+    FfmpegFailed { stderr: Option<String> },
 
     #[error("Failed to open FFmpeg stdin pipe")]
     FfmpegPipe,
@@ -182,6 +182,25 @@ pub enum RustmotionError {
 
     #[error("File watcher channel closed")]
     WatcherClosed,
+
+    #[error("Validation failed: {schema_errors} schema error(s), {geometry_violations} geometry violation(s), {unresolved_vars} unresolved variable(s). Run `rustmotion validate -f <file>` to see details.")]
+    ValidationFailed {
+        schema_errors: usize,
+        geometry_violations: usize,
+        unresolved_vars: usize,
+    },
+
+    #[error("Incremental encoding unsupported: {reason}")]
+    IncrementalUnsupported { reason: String },
+
+    #[error("Invalid CRF value {value}: must be between 0 and 51")]
+    InvalidCrf { value: u8 },
+
+    #[error("Unknown codec '{codec}'. Supported: h264, h265, vp9, prores")]
+    UnknownCodec { codec: String },
+
+    #[error("Path is not valid UTF-8: '{path}'")]
+    NonUtf8Path { path: String },
 
     // --- Preview ---
     #[error("Failed to create preview window: {reason}")]

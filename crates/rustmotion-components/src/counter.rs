@@ -88,11 +88,28 @@ impl Widget for Counter {
 
         let advance_width = measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
 
-        let x = match align {
+        // For center/right alignment, anchor positioning on the same `absmax`
+        // width that `measure()` reserved. This keeps the right edge (or
+        // bounding box midpoint) of the counter stable across frames instead
+        // of letting it shift sub-pixel as the digit count changes.
+        let stable_width = if matches!(align, TextAlign::Center | TextAlign::Right) {
+            let absmax = self.from.abs().max(self.to.abs());
+            let signed = if self.from < 0.0 || self.to < 0.0 { -absmax } else { absmax };
+            let display = format_counter_value(signed, self.decimals, &self.separator, &self.prefix, &self.suffix);
+            measure_text_with_fallback(&display, &font, &emoji_font, letter_spacing)
+        } else {
+            advance_width
+        };
+
+        let raw_x = match align {
             TextAlign::Left => 0.0,
-            TextAlign::Center => (layout.width - advance_width) / 2.0,
+            TextAlign::Center => (layout.width - stable_width) / 2.0
+                + (stable_width - advance_width) / 2.0,
             TextAlign::Right => layout.width - advance_width,
         };
+        // Snap to whole pixels to eliminate the sub-pixel jitter that the
+        // glyph rasterizer would otherwise introduce on a moving counter.
+        let x = raw_x.round();
         let (_, metrics) = font.metrics();
         let line_height = font_size * 1.3;
         let ascent = -metrics.ascent;

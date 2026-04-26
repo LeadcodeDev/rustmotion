@@ -56,6 +56,7 @@ pub(super) struct PreviewApp {
     pub frame_cache: HashMap<u32, Vec<u8>>,
     pub rendered_width: u32,
     pub rendered_height: u32,
+    pub last_displayed_frame: Option<u32>,
 
     // Render thread
     pub render_tx: Sender<RenderRequest>,
@@ -362,13 +363,18 @@ impl PreviewApp {
         let h = height as f32;
 
         // ── Video frame ────────────────────────────────────────────
+        // When the requested frame isn't cached yet, keep showing the last
+        // frame we successfully displayed instead of snapping to whatever
+        // happens to be the nearest cached frame. The "nearest" fallback
+        // produced visible glitches during scrubbing/playback (a transient
+        // unrelated frame would flash on screen until the requested one
+        // finished rendering).
         let display_frame = if self.frame_cache.contains_key(&current_frame) {
+            self.last_displayed_frame = Some(current_frame);
             Some(current_frame)
         } else {
-            self.frame_cache
-                .keys()
-                .min_by_key(|&&k| (k as i64 - current_frame as i64).unsigned_abs())
-                .copied()
+            self.last_displayed_frame
+                .filter(|f| self.frame_cache.contains_key(f))
         };
 
         if let Some(frame_id) = display_frame {
@@ -847,6 +853,7 @@ impl ApplicationHandler for PreviewApp {
                     self.video_height = height;
                     self.frame_duration = Duration::from_secs_f64(1.0 / fps.max(1) as f64);
                     self.frame_cache.clear();
+                    self.last_displayed_frame = None;
                     if self.current_frame >= total_frames {
                         self.current_frame = total_frames.saturating_sub(1);
                     }

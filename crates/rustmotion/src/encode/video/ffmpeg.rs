@@ -98,9 +98,12 @@ pub fn encode_with_ffmpeg(
     if let Some(ref pcm) = pcm_data {
         let audio_path = audio_tmp_dir.as_ref().unwrap().join("audio.raw");
         std::fs::write(&audio_path, pcm)?;
+        let audio_path_str = audio_path.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
+            path: audio_path.to_string_lossy().into_owned(),
+        })?;
         cmd.args([
             "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
-            audio_path.to_str().unwrap(),
+            audio_path_str,
             "-c:a", "aac", "-b:a", "128k",
         ]);
     }
@@ -108,7 +111,10 @@ pub fn encode_with_ffmpeg(
     cmd.arg(output_path);
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(if quiet { std::process::Stdio::null() } else { std::process::Stdio::inherit() });
+    // Always capture stderr so failures surface a useful diagnostic. We tee to
+    // the user terminal in non-quiet mode below by reading the captured buffer
+    // only on failure.
+    cmd.stderr(std::process::Stdio::piped());
 
     let mut child = cmd
         .spawn()
@@ -116,6 +122,7 @@ pub fn encode_with_ffmpeg(
 
     let mut stdin = child.stdin.take()
         .ok_or(RustmotionError::FfmpegPipe)?;
+    let stderr_handle = child.stderr.take();
 
     // Render frames in parallel batches, pipe RGBA sequentially
     let batch_size = (rayon::current_num_threads() * 2).max(4);
@@ -166,16 +173,45 @@ pub fn encode_with_ffmpeg(
     let status = child.wait()
         .map_err(|e| RustmotionError::FfmpegWait { reason: e.to_string() })?;
 
+    // Drain stderr (best effort)
+    let stderr_text = stderr_handle.map(|mut h| {
+        use std::io::Read;
+        let mut s = String::new();
+        let _ = h.read_to_string(&mut s);
+        s
+    });
+
     if let Some(ref tmp_dir) = audio_tmp_dir {
         let _ = std::fs::remove_dir_all(tmp_dir);
     }
 
     if let Some(e) = pipe_error {
+        if !quiet {
+            if let Some(ref text) = stderr_text {
+                if !text.trim().is_empty() {
+                    eprintln!("{}", text);
+                }
+            }
+        }
         return Err(e);
     }
 
     if !status.success() {
-        return Err(RustmotionError::FfmpegFailed.into());
+        // Extract the last few lines of stderr — ffmpeg's actual error message
+        // typically appears in the final 5-10 lines.
+        let stderr_summary = stderr_text.as_ref().map(|s| {
+            let lines: Vec<&str> = s.lines().rev().take(8).collect();
+            lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+        }).filter(|s| !s.trim().is_empty());
+
+        if !quiet {
+            if let Some(ref text) = stderr_text {
+                if !text.trim().is_empty() {
+                    eprintln!("{}", text);
+                }
+            }
+        }
+        return Err(RustmotionError::FfmpegFailed { stderr: stderr_summary }.into());
     }
 
     Ok(())

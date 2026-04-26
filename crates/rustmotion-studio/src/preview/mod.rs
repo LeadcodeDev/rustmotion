@@ -138,6 +138,7 @@ fn run_preview_inner(
         frame_cache: HashMap::new(),
         rendered_width: video_width,
         rendered_height: video_height,
+        last_displayed_frame: None,
         render_tx: req_tx,
         render_rx: resp_rx,
         reload_rx: reload_resp_rx,

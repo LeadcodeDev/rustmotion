@@ -204,6 +204,8 @@ impl Widget for Callout {
         let typeface = fm
             .match_family_style("Inter", skia_safe::FontStyle::normal())
             .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::normal()))
+            .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::normal()))
+            .or_else(|| fm.legacy_make_typeface(None, skia_safe::FontStyle::normal()))
             .expect(&RustmotionError::FontNotFound.to_string());
         let font = skia_safe::Font::from_typeface(typeface, font_size);
         let text_w = font.measure_str(&self.text, None).0;

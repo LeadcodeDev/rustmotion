@@ -100,16 +100,30 @@ pub fn encode_video_incremental(
     let height = config.height;
     let fps = config.fps;
 
+    if scenario.views.is_empty() {
+        return Err(RustmotionError::IncrementalUnsupported {
+            reason: "scenario has no views".to_string(),
+        });
+    }
+    if scenario.views.len() > 1 {
+        return Err(RustmotionError::IncrementalUnsupported {
+            reason: "incremental encoding requires a single slide view (composition has multiple views)".to_string(),
+        });
+    }
+    if !matches!(scenario.views[0].view_type, crate::schema::ViewType::Slide) {
+        return Err(RustmotionError::IncrementalUnsupported {
+            reason: "incremental encoding requires slide view (got world view)".to_string(),
+        });
+    }
+
     for view in &scenario.views {
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
 
-    let num_scenes = scenario.views.get(0).map(|v| v.scenes.len()).unwrap_or(0);
+    let num_scenes = scenario.views[0].scenes.len();
 
-    let scene_hashes: Vec<u64> = scenario.views.get(0)
-        .map(|v| v.scenes.iter().map(hash_scene).collect())
-        .unwrap_or_default();
+    let scene_hashes: Vec<u64> = scenario.views[0].scenes.iter().map(hash_scene).collect();
 
     // Determine which scenes need re-rendering
     let mut needs_render = vec![true; num_scenes];

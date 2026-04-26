@@ -26,8 +26,10 @@ impl Default for CardDirection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CardAlign {
+    #[serde(alias = "flex-start", alias = "flex_start")]
     Start,
     Center,
+    #[serde(alias = "flex-end", alias = "flex_end")]
     End,
     Stretch,
 }
@@ -41,11 +43,16 @@ impl Default for CardAlign {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CardJustify {
+    #[serde(alias = "flex-start", alias = "flex_start")]
     Start,
     Center,
+    #[serde(alias = "flex-end", alias = "flex_end")]
     End,
+    #[serde(alias = "space-between")]
     SpaceBetween,
+    #[serde(alias = "space-around")]
     SpaceAround,
+    #[serde(alias = "space-evenly")]
     SpaceEvenly,
 }
 

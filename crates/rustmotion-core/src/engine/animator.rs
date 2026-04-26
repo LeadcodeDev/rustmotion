@@ -3,6 +3,21 @@ use crate::schema::{
     KeyframeValue, OrbitConfig, PresetConfig, SpringConfig, TextAnimGranularity, WiggleConfig,
 };
 
+/// Safe division that returns `fallback` when the denominator is too small to
+/// produce a meaningful result (within 1e-9). Use this for any calculation
+/// where a zero-or-near-zero duration could otherwise produce NaN/∞ that
+/// silently propagates into transforms or opacity.
+#[inline]
+pub fn safe_div(num: f64, denom: f64, fallback: f64) -> f64 {
+    if denom.abs() < 1e-9 { fallback } else { num / denom }
+}
+
+/// Same as `safe_div` but for f32. Useful in render-side hot paths.
+#[inline]
+pub fn safe_div_f32(num: f32, denom: f32, fallback: f32) -> f32 {
+    if denom.abs() < 1e-6 { fallback } else { num / denom }
+}
+
 // ─── Effect extraction ──────────────────────────────────────────────────────
 
 /// Resolved char animation config ready for the text renderer.

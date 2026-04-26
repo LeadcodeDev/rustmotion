@@ -5,6 +5,7 @@ use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
 use super::{render_children, render_component, render_overlays};
 use crate::components::ChildComponent;
+use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
 use crate::layout::{Constraints, LayoutNode};
@@ -106,11 +107,14 @@ pub fn render_frame_v2_scaled(
                     let snapshot = prev_surface.image_snapshot();
                     let mut paint = Paint::default();
                     paint.set_alpha_f(1.0 - progress);
+                    // Draw the pre-scaled snapshot in surface (post-scale) coords.
+                    // save()/restore() bracket the matrix change so the scale
+                    // factor returns to its prior value after restore — adding
+                    // another canvas.scale() afterwards would compound it.
                     canvas.save();
                     if scale_factor != 1.0 { canvas.reset_matrix(); }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
-                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
                 }
             }
             if progress > 0.0 {
@@ -132,7 +136,6 @@ pub fn render_frame_v2_scaled(
                     if scale_factor != 1.0 { canvas.reset_matrix(); }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
-                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
                 }
             }
         } else {
@@ -159,13 +162,17 @@ pub fn render_frame_v2_scaled(
     };
 
     // Apply virtual camera transform
-    let has_camera = scene.camera.is_some();
-    if let Some(ref camera) = scene.camera {
+    let camera_guard = if let Some(ref camera) = scene.camera {
+        let g = super::CanvasGuard::new(canvas);
         apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
-    }
+        Some(g)
+    } else {
+        None
+    };
 
-    // Clip scene content to viewport dimensions so scaled elements don't overflow
-    canvas.save();
+    // Clip scene content to viewport dimensions so scaled elements don't overflow.
+    // Both guards drop in reverse order on early-return, restoring the canvas.
+    let clip_guard = super::CanvasGuard::new(canvas);
     canvas.clip_rect(
         Rect::from_wh(config.width as f32, config.height as f32),
         ClipOp::Intersect,
@@ -175,13 +182,8 @@ pub fn render_frame_v2_scaled(
     // Render component tree
     render_children(canvas, root_children, root_layout, &ctx)?;
 
-    // Restore viewport clip
-    canvas.restore();
-
-    // Restore camera transform
-    if has_camera {
-        canvas.restore();
-    }
+    drop(clip_guard);
+    drop(camera_guard);
 
     // Read pixels at scaled dimensions
     let row_bytes = scaled_w as usize * 4;
@@ -247,9 +249,22 @@ pub fn compute_root_layout_all_flow(
 }
 
 /// Deserialize a scene's raw JSON children into typed ChildComponents.
+///
+/// Children that fail to deserialize are skipped, but a warning is emitted
+/// to stderr so the user knows why a card or row went missing instead of
+/// staring at a blank scene. (Render must remain best-effort: dropping a
+/// single broken child should not nuke the whole frame.)
 pub fn deserialize_children(scene: &Scene) -> Vec<ChildComponent> {
     scene.children.iter()
-        .filter_map(|v| serde_json::from_value::<ChildComponent>(v.clone()).ok())
+        .enumerate()
+        .filter_map(|(i, v)| match serde_json::from_value::<ChildComponent>(v.clone()) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                eprintln!("warning: scene child #{i} (type={kind}) failed to deserialize: {e} — child will not be rendered");
+                None
+            }
+        })
         .collect()
 }
 
@@ -383,11 +398,7 @@ pub fn render_world_frame_scaled(
             let (_, _scene_b_start) = timeline.scene_windows[scene_b_idx];
             let pan_start = timeline.scene_windows[scene_b_idx].0 - pan_half;
             let pan_end = timeline.scene_windows[scene_b_idx].0 + pan_half;
-            let crossfade = if pan_end > pan_start {
-                ((time - pan_start) / (pan_end - pan_start)).clamp(0.0, 1.0) as f32
-            } else {
-                1.0
-            };
+            let crossfade = safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0) as f32;
 
             // Draw scene A backgrounds with fading alpha
             if crossfade < 1.0 {
@@ -411,11 +422,12 @@ pub fn render_world_frame_scaled(
                     let snapshot = bg_surface.image_snapshot();
                     let mut paint = skia_safe::Paint::default();
                     paint.set_alpha_f(crossfade);
+                    // save()/restore() already bracket the matrix change; an
+                    // extra canvas.scale() after restore would compound it.
                     canvas.save();
                     if scale_factor != 1.0 { canvas.reset_matrix(); }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
-                    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
                 }
             }
         } else {

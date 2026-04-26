@@ -1,6 +1,9 @@
 mod background;
+mod canvas_guard;
 mod scene;
 mod transforms;
+
+pub(crate) use canvas_guard::CanvasGuard;
 
 // Re-export everything publicly so external code can use crate::engine::render::*
 #[allow(unused_imports)]
