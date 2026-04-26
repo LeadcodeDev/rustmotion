@@ -125,6 +125,14 @@ Reference: Tailwind CSS default spacing (4px base unit).
 - **Desktop**: Can use horizontal rows with 3–5 items. Cards at 50–70% width. Tighter gaps. Scene padding optional (24px).
 - **Square**: Hybrid — 2–3 items per row, 85–95% width cards. Scene padding 36–48px.
 
+## Viewport overflow safety
+
+Sizing rules above are guidelines — `rustmotion validate` is the source of truth. It refuses any scenario whose layout tree leaves the device viewport. See [geometry-safety.md](geometry-safety.md):
+
+- `text` wraps automatically at the parent's max width — leave `style.wrap` at its default (`true`) unless you have a finite `max-width`.
+- `codeblock` / `terminal` auto-scroll when content exceeds their `size` — leave `auto_scroll: true` (default).
+- Long single-line content that should bleed must use `marquee`, never `text` with `wrap: false`.
+
 ## BAD: Using desktop sizes on mobile
 
 ```json

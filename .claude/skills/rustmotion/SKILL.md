@@ -17,10 +17,12 @@ rustmotion is a CLI tool that renders motion design videos from JSON scenario fi
 
 **Essential CLI:**
 ```bash
-rustmotion validate scenario.json          # Validate without rendering
-rustmotion render scenario.json -o out.mp4 # Render to MP4
-rustmotion render scenario.json -o f.png --frame 0  # Single frame
-rustmotion schema                          # Print JSON Schema
+rustmotion validate -f scenario.json                # Validate (schema + geometry)
+rustmotion validate -f scenario.json --fix          # Auto-fix safe overflows
+rustmotion validate -f scenario.json --report r.json  # JSON report
+rustmotion render -f scenario.json -o out.mp4       # Render to MP4
+rustmotion render -f scenario.json -o f.png --frame 0  # Single frame
+rustmotion schema                                   # Print JSON Schema
 ```
 
 **JSON skeleton:**
@@ -129,6 +131,7 @@ For each scene in the validated plan:
 Read individual rule files for detailed explanations, GOOD/BAD examples, and constraints:
 
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
+- [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `wrap`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
 - [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
@@ -653,6 +656,8 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 | `text-shadow`     | object   | `null` — `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
 | `stroke`          | object   | `null` — `{ "color": "#000", "width": 2 }` |
 | `text-background` | object   | `null` — `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
+| `wrap`            | bool     | `true` — when `true`, text wraps to parent's max width or `max_width`, whichever is smaller. Set `false` only when a finite `max-width` + small enough `font-size` guarantee a single line. The validator emits `unwrappable_text_overflow` otherwise. See [rules/geometry-safety.md](rules/geometry-safety.md). |
+| `overflow`        | enum     | `"visible"` — CSS-like: `"visible"` (default, children may bleed) or `"hidden"` (clip at the box). Validator only checks the **viewport**, never a `visible` parent. |
 
 **Per-character / per-word animation (char animation presets):**
 
@@ -1041,7 +1046,7 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 }
 ```
 
-**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background)
+**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background), `auto_scroll` (bool, default `true` — when content overflows the box vertically, scrolls so the last revealed line stays visible; font is never reduced. See [rules/geometry-safety.md](rules/geometry-safety.md))
 
 **Diff mode example:**
 ```json
@@ -1160,7 +1165,7 @@ Terminal window with colored lines and chrome.
 }
 ```
 
-**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `size`
+**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `size`, `auto_scroll` (bool, default `true` — vertical scroll when content > box, font never shrinks. See [rules/geometry-safety.md](rules/geometry-safety.md))
 
 **Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance. In typewriter mode, a blinking cursor appears at the typing position.
 
@@ -2307,8 +2312,12 @@ rustmotion render scenario.json -o output.mp4
 # Render from inline JSON
 rustmotion render --json '{ ... }' -o output.mp4
 
-# Validate a scenario without rendering
-rustmotion validate scenario.json
+# Validate a scenario (schema + geometry)
+rustmotion validate -f scenario.json
+rustmotion validate -f scenario.json --fix              # auto-fix safe overflows
+rustmotion validate -f scenario.json --report r.json    # JSON report
+rustmotion validate -f scenario.json --strict-anim      # per-frame check
+rustmotion validate -f scenario.json --lenient          # warnings only
 
 # Print the JSON Schema
 rustmotion schema
@@ -2342,4 +2351,6 @@ Before presenting a generated scenario to the user, verify:
 - [ ] All scenes have `"layout": {"align_items": "center", "justify_content": "center"}` for centered composition
 - [ ] `concentric_circles` animated-background on at least 4 scenes for visual depth
 - [ ] No `end_at` on counters (makes them disappear — use `start_at` only)
-- [ ] `rustmotion validate scenario.json` passes before presenting
+- [ ] No text uses `style.wrap: false` unless a finite `max-width` keeps it inside the viewport (use `marquee` for intentional bleeding)
+- [ ] Long codeblocks/terminals leave `auto_scroll` at its default (`true`) — never set `false` unless content is guaranteed to fit
+- [ ] `rustmotion validate -f scenario.json` passes (zero schema **and** geometry violations) before presenting

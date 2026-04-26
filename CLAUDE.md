@@ -5,7 +5,24 @@ See .claude/skills/ for detailed instructions on generating rustmotion scenarios
 
 ## Règle obligatoire
 
-Tout JSON de scénario généré doit être validé avec `rustmotion validate` avant d'être présenté à l'utilisateur.
+Tout JSON de scénario généré doit être validé avec `rustmotion validate` avant d'être présenté à l'utilisateur. Le validateur fait deux passes : **schema** et **geometry** (détection de débordement viewport). Les deux doivent passer.
+
+## Sécurité géométrique (viewport)
+
+Aucun contenu textuel ne doit dépasser du device. Trois propriétés contrôlent ce comportement :
+
+- `style.wrap` (default `true`) sur `text` : laisse-le à `true` pour wrapper sur la largeur du parent. `wrap: false` est légitime uniquement si un `max-width` finit + `font-size` raisonnable garantissent que la ligne tient. Le validateur émet `unwrappable_text_overflow` sinon.
+- `auto_scroll` (default `true`) sur `codeblock` et `terminal` : quand le contenu dépasse la hauteur du `size`, le moteur scrolle (clip + translate) sans réduire la `font-size`. `auto_scroll: false` → `auto_scroll_disabled_overflow`.
+- `style.overflow` (default `visible`) sur les conteneurs : sémantique CSS. `hidden` clippe au bord du parent. Le validateur ne se plaint que si le contenu sort du **viewport**, pas d'un parent `visible`.
+
+`marquee` et `cursor` sont exemptés (leur rôle est de bleed).
+
+CLI :
+- `rustmotion validate -f file.json` — schema + geometry
+- `--fix` — auto-fix sûr (`wrap: true`, `auto_scroll: true`)
+- `--report r.json` — rapport JSON
+- `--strict-anim` — vérification frame par frame
+- `--lenient` — warnings au lieu d'errors
 
 ## Encodage
 
