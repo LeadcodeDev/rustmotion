@@ -129,7 +129,7 @@ impl Widget for Counter {
         Ok(())
     }
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
+    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
         let font_size = self.style.font_size_or(48.0);
         let font_family = self.style.font_family_or("Inter");
         let font_weight = self.style.font_weight_or(FontWeight::Normal);
@@ -148,9 +148,16 @@ impl Widget for Counter {
             .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        let display = format_counter_value(self.to, self.decimals, &self.separator, &self.prefix, &self.suffix);
+        // Reserve space for the largest absolute value the counter will display
+        // (between `from` and `to`) so layout never reflows during animation.
+        let absmax = self.from.abs().max(self.to.abs());
+        let signed = if self.from < 0.0 || self.to < 0.0 { -absmax } else { absmax };
+        let display = format_counter_value(signed, self.decimals, &self.separator, &self.prefix, &self.suffix);
         let text_width = measure_text_with_fallback(&display, &font, &emoji_font, 0.0);
         let line_height = font_size * 1.3;
-        (text_width, line_height)
+        // Counter is atomic: it does not wrap. We still constrain so the layout
+        // engine never assigns more than the parent allows; the geometry
+        // validator will detect the natural-size overflow separately.
+        constraints.constrain(text_width, line_height)
     }
 }

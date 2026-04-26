@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "background": "#000000"
+  },
+  "scenes": [
+    {
+      "duration": 3,
+      "background": "#000000",
+      "children": [
+        {
+          "type": "text",
+          "content": "ThisIsADeliberatelyLongUnbreakableTokenThatCannotWrapAnywhereSoItOverflowsTheCardWidthOnPurpose",
+          "position": "absolute",
+          "x": 60,
+          "y": 60,
+          "style": {
+            "font-size": 36,
+            "color": "#FFFFFF",
+            "wrap": false,
+            "max-width": 400
+          }
+        },
+        {
+          "type": "text",
+          "content": "Way out of bounds",
+          "position": "absolute",
+          "x": 1500,
+          "y": 200,
+          "style": {
+            "font-size": 24,
+            "color": "#FF8888"
+          }
+        },
+        {
+          "type": "codeblock",
+          "language": "rust",
+          "auto_scroll": false,
+          "size": { "width": 600, "height": 120 },
+          "position": "absolute",
+          "x": 60,
+          "y": 300,
+          "code": "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\nfn five() {}\nfn six() {}\nfn seven() {}\nfn eight() {}\nfn nine() {}\nfn ten() {}"
+        }
+      ]
+    }
+  ]
+}

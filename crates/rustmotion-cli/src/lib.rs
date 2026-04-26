@@ -103,6 +103,24 @@ enum Commands {
         /// Path to the JSON scenario file
         #[arg(short, long)]
         file: PathBuf,
+
+        /// Write a machine-readable JSON report of all violations to this path
+        #[arg(long)]
+        report: Option<PathBuf>,
+
+        /// Auto-fix safe violations in place (clamp positions, set wrap=true,
+        /// enable auto_scroll). The original file is rewritten.
+        #[arg(long)]
+        fix: bool,
+
+        /// Sample animated frames and reapply renderer transforms to detect
+        /// per-frame viewport overflow (slower).
+        #[arg(long)]
+        strict_anim: bool,
+
+        /// Treat geometry violations as warnings instead of errors.
+        #[arg(long)]
+        lenient: bool,
     },
 
     /// Print the JSON Schema for scenario files
@@ -208,7 +226,9 @@ pub fn run() -> Result<()> {
             let scenario = load_scenario(&file)?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
-        Commands::Validate { file } => commands::cmd_validate(&file),
+        Commands::Validate { file, report, fix, strict_anim, lenient } => {
+            commands::cmd_validate(&file, report.as_deref(), fix, strict_anim, lenient)
+        }
         Commands::Schema { output } => commands::cmd_schema(output.as_deref()),
         Commands::Info { file } => commands::cmd_info(&file),
         Commands::Skills { action } => match action {

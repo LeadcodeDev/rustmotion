@@ -227,6 +227,23 @@ impl Default for VerticalAlign {
     }
 }
 
+/// CSS-like overflow: controls whether children that exceed this container's
+/// bounds are clipped (`hidden`) or allowed to bleed out (`visible`, default).
+/// Validation only fails when content escapes the *viewport*; escaping a
+/// `visible` parent is legitimate (e.g. a badge sticking out of a card).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Overflow {
+    Visible,
+    Hidden,
+}
+
+impl Default for Overflow {
+    fn default() -> Self {
+        Self::Visible
+    }
+}
+
 /// Size dimension: fixed px, "auto", or "50%" (percent of parent)
 #[derive(Debug, Clone, JsonSchema)]
 pub enum SizeDimension {
@@ -420,6 +437,17 @@ pub struct LayerStyle {
     // Motion path: SVG path string that elements follow
     #[serde(default, rename = "motion-path")]
     pub motion_path: Option<String>,
+    /// Wrap text content at the available width. None = use sensible default
+    /// per component (true for paragraphs, false for atomic labels like counter,
+    /// kbd, badge). Explicit `false` makes the geometry validator fail if the
+    /// natural width exceeds the constraint.
+    #[serde(default)]
+    pub wrap: Option<bool>,
+    /// CSS-like overflow on containers: `visible` (default) lets children bleed
+    /// out, `hidden` clips them. Viewport overflow is always a validation error
+    /// regardless of this property.
+    #[serde(default)]
+    pub overflow: Option<Overflow>,
     // Stagger: automatic delay offset per child in a container (seconds)
     #[serde(default)]
     pub stagger: Option<f32>,
@@ -482,6 +510,8 @@ impl Default for LayerStyle {
             stagger: None,
             animation: Vec::new(),
             timeline: Vec::new(),
+            wrap: None,
+            overflow: None,
         }
     }
 }

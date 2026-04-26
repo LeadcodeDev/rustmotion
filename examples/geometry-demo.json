@@ -1,0 +1,234 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "background": "#0b0d12"
+  },
+  "scenes": [
+    {
+      "duration": 4,
+      "background": "#0b0d12",
+      "children": [
+        {
+          "type": "text",
+          "content": "Scene 1 — text wrap = true",
+          "position": "absolute",
+          "x": 60,
+          "y": 50,
+          "style": {
+            "font-size": 36,
+            "color": "#FFFFFF",
+            "font-weight": "bold"
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 60,
+          "y": 130,
+          "style": {
+            "width": 480,
+            "background": "#1f2937",
+            "padding": 24,
+            "border-radius": 12
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Even a deliberately-long sentence with no manual line breaks now stays inside the card because measure() is constraint-aware and wraps to the parent's max width.",
+              "style": {
+                "font-size": 22,
+                "color": "#E5E7EB",
+                "line-height": 1.4
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Counter reserves max-digit width",
+          "position": "absolute",
+          "x": 700,
+          "y": 130,
+          "style": {
+            "font-size": 22,
+            "color": "#9CA3AF"
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 700,
+          "y": 180,
+          "style": {
+            "width": 480,
+            "background": "#1f2937",
+            "padding": 24,
+            "border-radius": 12,
+            "align-items": "center"
+          },
+          "children": [
+            {
+              "type": "counter",
+              "from": 0,
+              "to": 999999,
+              "decimals": 0,
+              "separator": ",",
+              "style": {
+                "font-size": 64,
+                "color": "#34D399",
+                "font-weight": "bold"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 6,
+      "background": "#0b0d12",
+      "children": [
+        {
+          "type": "text",
+          "content": "Scene 2 — codeblock auto_scroll",
+          "position": "absolute",
+          "x": 60,
+          "y": 50,
+          "style": {
+            "font-size": 36,
+            "color": "#FFFFFF",
+            "font-weight": "bold"
+          }
+        },
+        {
+          "type": "text",
+          "content": "Many lines, fixed-height box → keeps tail visible without shrinking font.",
+          "position": "absolute",
+          "x": 60,
+          "y": 100,
+          "style": {
+            "font-size": 18,
+            "color": "#9CA3AF"
+          }
+        },
+        {
+          "type": "codeblock",
+          "language": "rust",
+          "theme": "Solarized (dark)",
+          "show_line_numbers": true,
+          "auto_scroll": true,
+          "size": { "width": 1160, "height": 480 },
+          "position": "absolute",
+          "x": 60,
+          "y": 160,
+          "chrome": { "enabled": true, "title": "main.rs" },
+          "reveal": { "kind": "line", "duration": 5.0 },
+          "code": "use rustmotion::engine::render;\nuse rustmotion::layout::{Constraints, LayoutNode};\n\nfn main() {\n    let scenario = load();\n    let viewport = (1280, 720);\n    for view in scenario.views.iter() {\n        for scene in view.scenes.iter() {\n            let children = render::deserialize_children(scene);\n            let layout = render::compute_root_layout(\n                &children,\n                &scenario.video,\n                scene.layout.as_ref(),\n            );\n            walk_tree(&layout, viewport);\n        }\n    }\n    println!(\"validation complete\");\n}\n\nfn walk_tree(node: &LayoutNode, vp: (u32, u32)) {\n    if node.x + node.width > vp.0 as f32 {\n        eprintln!(\"viewport overflow on x\");\n    }\n    for child in &node.children {\n        walk_tree(child, vp);\n    }\n}\n\nfn load() -> Scenario {\n    serde_json::from_str(SRC).unwrap()\n}"
+        }
+      ]
+    },
+    {
+      "duration": 5,
+      "background": "#0b0d12",
+      "children": [
+        {
+          "type": "text",
+          "content": "Scene 3 — terminal auto_scroll + marquee exempt",
+          "position": "absolute",
+          "x": 60,
+          "y": 50,
+          "style": {
+            "font-size": 32,
+            "color": "#FFFFFF",
+            "font-weight": "bold"
+          }
+        },
+        {
+          "type": "terminal",
+          "size": { "width": 760, "height": 380 },
+          "position": "absolute",
+          "x": 60,
+          "y": 130,
+          "title": "build.log",
+          "show_chrome": true,
+          "auto_scroll": true,
+          "reveal": { "kind": "line", "duration": 4.0 },
+          "lines": [
+            { "type": "command", "content": "cargo build --release" },
+            { "type": "output", "content": "   Compiling rustmotion-core v0.6.0" },
+            { "type": "output", "content": "   Compiling rustmotion-components v0.6.0" },
+            { "type": "output", "content": "   Compiling rustmotion v0.6.0" },
+            { "type": "output", "content": "   Compiling rustmotion-cli v0.6.0" },
+            { "type": "output", "content": "   Compiling rustmotion-studio v0.6.0" },
+            { "type": "output", "content": "    Finished release [optimized] target(s) in 42.13s" },
+            { "type": "command", "content": "rustmotion validate examples/geometry-demo.json" },
+            { "type": "output", "content": "Valid scenario: 3 scene(s) in 1 view(s)" },
+            { "type": "output", "content": "  Resolution: 1280x720 @ 30fps" },
+            { "type": "output", "content": "  Duration: 15.0s" },
+            { "type": "command", "content": "rustmotion render -f examples/geometry-demo.json -o demo.mp4" },
+            { "type": "output", "content": "Rendered 450 frames" }
+          ]
+        },
+        {
+          "type": "marquee",
+          "content": "marquee bleeds outside on purpose — the validator exempts it • text wrap • counter max width • auto_scroll • viewport bounds checked",
+          "speed": 100,
+          "direction": "left",
+          "font_size": 22,
+          "color": "#60A5FA",
+          "size": { "width": 1280, "height": 56 },
+          "position": "absolute",
+          "x": 0,
+          "y": 580
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 850,
+          "y": 130,
+          "style": {
+            "width": 380,
+            "background": "#111827",
+            "padding": 24,
+            "border-radius": 12,
+            "direction": "column",
+            "gap": 12
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Validator catches",
+              "style": {
+                "font-size": 22,
+                "color": "#FFFFFF",
+                "font-weight": "bold"
+              }
+            },
+            {
+              "type": "text",
+              "content": "wrap=false text overflow",
+              "style": { "font-size": 18, "color": "#A7F3D0" }
+            },
+            {
+              "type": "text",
+              "content": "auto_scroll=false content overflow",
+              "style": { "font-size": 18, "color": "#A7F3D0" }
+            },
+            {
+              "type": "text",
+              "content": "Absolute positions outside viewport",
+              "style": { "font-size": 18, "color": "#A7F3D0" }
+            },
+            {
+              "type": "text",
+              "content": "marquee + cursor are exempt",
+              "style": { "font-size": 18, "color": "#FBBF24" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

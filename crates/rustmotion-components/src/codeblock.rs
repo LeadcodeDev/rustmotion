@@ -32,11 +32,19 @@ pub struct Codeblock {
     /// Enable diff mode: lines starting with `+` get green background, `-` get red background.
     #[serde(default)]
     pub diff: bool,
+    /// When the rendered content overflows the box vertically, scroll up so the
+    /// last revealed line stays visible. Default: `true`. Set to `false` to
+    /// require that all content fits — the geometry validator will fail
+    /// otherwise. Font size is never reduced.
+    #[serde(default = "default_auto_scroll")]
+    pub auto_scroll: bool,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: LayerStyle,
 }
+
+fn default_auto_scroll() -> bool { true }
 
 rustmotion_core::impl_traits!(Codeblock {
     Animatable => style,

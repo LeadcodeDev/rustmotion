@@ -1,3 +1,4 @@
+mod geometry;
 mod info;
 mod render;
 mod schema;

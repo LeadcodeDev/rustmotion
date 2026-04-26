@@ -103,6 +103,12 @@ pub struct Terminal {
     pub reveal: Option<CodeblockReveal>,
     #[serde(default)]
     pub size: Option<Size>,
+    /// When rendered content overflows the box vertically, scroll up so the
+    /// last revealed line stays visible. Default: `true`. Set to `false` to
+    /// require all lines fit — the geometry validator will fail otherwise.
+    /// Font size is never reduced.
+    #[serde(default = "default_auto_scroll")]
+    pub auto_scroll: bool,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -110,6 +116,10 @@ pub struct Terminal {
 }
 
 fn default_show_chrome() -> bool {
+    true
+}
+
+fn default_auto_scroll() -> bool {
     true
 }
 
@@ -238,6 +248,11 @@ impl Widget for Terminal {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(bg_rrect, &bg_paint);
 
+        // Always clip content to the rounded box so scrolled lines fade
+        // cleanly at the edges and never escape the device viewport.
+        canvas.save();
+        canvas.clip_rrect(bg_rrect, skia_safe::ClipOp::Intersect, true);
+
         let mut y_offset = 0.0;
 
         // Chrome (title bar)
@@ -290,6 +305,26 @@ impl Widget for Terminal {
         let ascent = -metrics.ascent;
 
         y_offset += PADDING;
+
+        // auto_scroll: when the rendered content is taller than the box,
+        // translate the lines upward so the latest revealed line stays in
+        // view. We open a nested clip below the chrome so scrolled lines
+        // never bleed onto the title bar.
+        let chrome_h = if self.show_chrome { CHROME_HEIGHT } else { 0.0 };
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, chrome_h, w, h - chrome_h),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
+        if self.auto_scroll {
+            let line_h = self.line_height();
+            let content_h = visible_lines as f32 * line_h + PADDING * 2.0 + chrome_h;
+            let overflow = content_h - h;
+            if overflow > 0.0 {
+                canvas.translate((0.0, -overflow));
+            }
+        }
 
         for (i, line) in self.lines.iter().enumerate() {
             if i >= visible_lines {
@@ -370,6 +405,8 @@ impl Widget for Terminal {
             y_offset += self.line_height();
         }
 
+        canvas.restore(); // close inner content clip
+        canvas.restore(); // close outer rrect clip
         Ok(())
     }
 

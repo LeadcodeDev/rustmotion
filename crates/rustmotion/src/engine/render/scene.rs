@@ -1,5 +1,5 @@
 use crate::error::Result;
-use skia_safe::{surfaces, Canvas, ColorType, ImageInfo, Paint};
+use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
@@ -164,8 +164,19 @@ pub fn render_frame_v2_scaled(
         apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
     }
 
+    // Clip scene content to viewport dimensions so scaled elements don't overflow
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_wh(config.width as f32, config.height as f32),
+        ClipOp::Intersect,
+        true,
+    );
+
     // Render component tree
     render_children(canvas, root_children, root_layout, &ctx)?;
+
+    // Restore viewport clip
+    canvas.restore();
 
     // Restore camera transform
     if has_camera {
@@ -600,7 +611,17 @@ pub fn render_scene_fg_scaled(
     if let Some(ref camera) = scene.camera {
         apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
     }
+
+    // Clip scene content to viewport dimensions so scaled elements don't overflow
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_wh(config.width as f32, config.height as f32),
+        ClipOp::Intersect,
+        true,
+    );
     render_children(canvas, &children, &layout, &ctx)?;
+    canvas.restore();
+
     if has_camera { canvas.restore(); }
 
     let row_bytes = scaled_w as usize * 4;

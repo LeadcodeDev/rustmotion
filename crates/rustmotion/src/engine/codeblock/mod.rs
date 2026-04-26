@@ -69,8 +69,10 @@ pub fn render_codeblock(
         0.0 // will be computed per-code below
     };
 
-    // Compute dimensions — interpolate during transitions
-    let (total_width, total_height, gutter_width) = if let Some(ref trans) = transition {
+    // Compute dimensions — interpolate during transitions.
+    // `natural_height` is the height the content would take if unconstrained;
+    // we use it later to decide whether to auto-scroll inside an explicit box.
+    let (total_width, total_height, gutter_width, natural_height) = if let Some(ref trans) = transition {
         let dims_a = compute_code_dimensions(&trans.code_a, &font, &padding, chrome_height, layer);
         let dims_b = compute_code_dimensions(&trans.code_b, &font, &padding, chrome_height, layer);
         let p = trans.progress as f32;
@@ -79,12 +81,14 @@ pub fn render_codeblock(
         } else {
             f32::max(dims_a.gutter_width, dims_b.gutter_width)
         };
+        let natural = lerp(dims_a.total_height, dims_b.total_height, p);
         match &layer.size {
-            Some(s) => (s.width, s.height, gutter),
+            Some(s) => (s.width, s.height, gutter, natural),
             None => (
                 lerp(dims_a.total_width, dims_b.total_width, p),
-                lerp(dims_a.total_height, dims_b.total_height, p),
+                natural,
                 gutter,
+                natural,
             ),
         }
     } else {
@@ -95,8 +99,8 @@ pub fn render_codeblock(
             dims.gutter_width
         };
         match &layer.size {
-            Some(s) => (s.width, s.height, gutter),
-            None => (dims.total_width, dims.total_height, gutter),
+            Some(s) => (s.width, s.height, gutter, dims.total_height),
+            None => (dims.total_width, dims.total_height, gutter, dims.total_height),
         }
     };
 
@@ -129,6 +133,25 @@ pub fn render_codeblock(
     // Code area
     let code_x = x + pad_left + gutter_width;
     let code_y = y + chrome_height + pad_top;
+
+    // auto_scroll: nest a clip below the chrome and translate the code area
+    // upward when the natural content is taller than the box. Font size is
+    // never reduced — the user picks the size, the engine just keeps the
+    // tail visible.
+    let scroll_offset = if layer.auto_scroll && natural_height > total_height + 0.5 {
+        natural_height - total_height
+    } else {
+        0.0
+    };
+    canvas.save();
+    canvas.clip_rect(
+        Rect::from_xywh(x, y + chrome_height, total_width, total_height - chrome_height),
+        skia_safe::ClipOp::Intersect,
+        true,
+    );
+    if scroll_offset > 0.0 {
+        canvas.translate((0.0, -scroll_offset));
+    }
 
     if let Some(ref trans) = transition {
         render_diff_transition(
@@ -196,7 +219,8 @@ pub fn render_codeblock(
         );
     }
 
-    canvas.restore();
+    canvas.restore(); // close inner content clip
+    canvas.restore(); // close outer rrect clip
     Ok(())
 }
 

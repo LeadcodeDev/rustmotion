@@ -427,7 +427,7 @@ impl Widget for Text {
         Ok(())
     }
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
+    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
         let font_size = self.style.font_size_or(48.0);
         let font_family = self.style.font_family_or("Inter");
         let font_weight = self.style.font_weight_or(FontWeight::Normal);
@@ -453,7 +453,29 @@ impl Widget for Text {
             .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, self.max_width);
+
+        // Constraint-aware wrap: when `wrap` is not explicitly false, the
+        // effective max_width is the smaller of the user `max_width` and
+        // `constraints.max_width`. This makes the measured size always
+        // satisfy the parent's bounds.
+        let wrap_enabled = self.style.wrap.unwrap_or(true);
+        let parent_cap = if constraints.has_bounded_width() {
+            Some(constraints.max_width)
+        } else {
+            None
+        };
+        let effective_max_width = if wrap_enabled {
+            match (self.max_width, parent_cap) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        } else {
+            self.max_width
+        };
+
+        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, effective_max_width);
         let line_height_val = resolve_line_height(self.style.line_height, font_size);
         let mut max_w = lines.iter().map(|l| {
             measure_text_with_fallback(l, &font, &emoji_font, 0.0)
@@ -466,6 +488,8 @@ impl Widget for Text {
             h += bg.padding;
         }
 
+        // Final constrain — guarantees the contract that returned size <= constraints.max
+        let (max_w, h) = constraints.constrain(max_w, h);
         (max_w, h)
     }
 }
