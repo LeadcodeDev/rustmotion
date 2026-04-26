@@ -496,7 +496,7 @@ pub fn render_world_frame_scaled(
         };
         let scene_layout = scene.layout.as_ref().unwrap_or(&world_default_layout);
         let scene_children = deserialize_children(scene);
-        let layout = compute_root_layout_all_flow(&scene_children, config, Some(scene_layout));
+        let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
         // Render: decorative children get fullscreen layout, content children get flex layout
         for (i, child) in scene_children.iter().enumerate() {
