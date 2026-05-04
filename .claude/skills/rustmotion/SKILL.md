@@ -50,28 +50,35 @@ Ask the user **3-5 questions** using `AskUserQuestion` to understand the project
 2. **Target duration** — Short (15-30s), Medium (30-60s), or Long (60s+)?
 3. **Tone/style** — Corporate, Playful, Minimal, Tech/Dark, Colorful?
 4. **Key content** — What text, data, features, or CTA should appear?
-5. **Color palette** — Brand colors, or should we suggest one?
+5. **Color palette** — Brand colors? If not, pick a tone: (A) Dark Tech — navy + indigo, (B) Corporate — white + blue, (C) Playful — dark + amber/pink, (D) Minimal — white + black. Exact hex values: see [rules/color-palettes.md](rules/color-palettes.md).
 
 Skip questions where the answer is already obvious from context.
 
 ### Phase 2: Scene plan with component suggestions
 
-Based on the brief, propose a **textual scene plan** that maps the user's ideas to concrete rustmotion components. Format:
+Based on the brief, propose a **structured scene plan** using the table format below. This commits palette, sizes, and animation budgets before any JSON is written — so the user can catch mismatches early.
 
+**Header block:**
 ```
-Scene 1 (3s) : Intro
-  → icon (lucide:rocket) + text (tagline) with char_scale_in
-  → animated-background radial gradient (#0f172a → #1e1b4b)
-  → particle stars for ambiance
+## Plan vidéo — [titre]
+Device: [Mobile 9:16 / Desktop 16:9 / Square] | Durée totale: [Xs] | Ton: [Corporate/Playful/…]
+Palette: BG [#hex] | Texte [#hex] | Accent [#hex] | Cards [#hex]
+  → See rules/color-palettes.md for the 4 ready-to-use palettes.
+Style animations: [e.g. "fade_in_up entrances, stagger 0.2s, ease_out — no exit animations"]
+```
 
-Scene 2 (4s) : The Problem
-  → badge "Pain Point" + main text with char_fade_in (granularity: word)
-  → 3x card in row with icons (stagger 0.2s)
-  → dark red background with concentric_circles
-```
+**Scene table (one row per scene):**
+
+| # | Durée | Nom | Composants | Tailles texte clés | Budget animation |
+|---|---|---|---|---|---|
+| 1 | 3.5s | Intro hero | icon hero (180px) + text titre + animated-bg radial | titre: 108px bold | fade_in_up: 0+0.6 → 0.6s ✓ |
+| 2 | 5.5s | Features | 3× card(row, stagger 0.2s) + icon feature (80px) + text body | body: 54px | stagger: 0+0.2+0.4 + 0.6 → 1.0s ✓ |
+| 3 | 3.0s | CTA | badge + text titre + glow | titre: 108px | fade_in_up 0.3+0.6 → 0.9s ✓ |
+
+**Validation column "Budget animation":** compute `last_delay + last_duration` and mark ✓ if ≤ scene duration, ✗ if not. See [rules/animation-completion-budget.md](rules/animation-completion-budget.md).
 
 Each scene must include:
-- **Concrete components** (text, card, icon, shape, badge, counter, etc.)
+- **Concrete components** (text, card, icon, shape, badge, counter, etc.) with explicit sizes for the target device
 - **Recommended animations** (presets, char animations, glow, wiggle)
 - **Adapted background** (gradient, particles, concentric_circles)
 - **Suggested icons** (lucide:xxx, simple-icons:xxx)
@@ -89,13 +96,20 @@ Each scene must include:
 | Pricing | `card` with `counter` + `text` |
 | Partner logos | `flex` row + `icon` (simple-icons:xxx) |
 | CTA / call to action | `badge` + glow + `particle` confetti |
-| Hero / intro | `text` with `char_scale_in` + main `icon` |
+| Hero / intro | `text` with `char_scale_in` + main `icon` (hero role: 160-200px mobile / 80-100px desktop) |
 | Transition / ambiance | `particle` stars/confetti + `animated-background` |
 | Grouped transforms | `container` wrapping children + shared `timeline` scale/fade |
 
 The user validates or adjusts the plan before proceeding.
 
 ### Phase 3: Iterative scene-by-scene construction
+
+**Pre-generation checklist** — verify before writing each scene's JSON:
+1. All font sizes meet the floor for the target device (see [rules/typography-readability.md](rules/typography-readability.md))
+2. `start_at + delay + duration ≤ scene_duration` for every animation (see [rules/animation-completion-budget.md](rules/animation-completion-budget.md))
+3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
+4. No `counter` component inside a card (see [rules/counter-standalone.md](rules/counter-standalone.md))
+5. Scene duration ≥ reading time of all text (`word_count ÷ 2.5`) (see [rules/scene-pacing.md](rules/scene-pacing.md))
 
 For each scene in the validated plan:
 1. Generate the JSON for the scene
@@ -116,13 +130,17 @@ For each scene in the validated plan:
 
 ### Design guidelines
 
-- **Scene duration:** 3-5s per scene is the sweet spot. Intro/outro can be shorter (2-3s).
+- **Scene duration:** Use `max(animation_budget + 0.5s_dwell, word_count ÷ 2.5)`. Never use "3-5s" as a flat default — text-heavy scenes need more. See [rules/scene-pacing.md](rules/scene-pacing.md) for the lookup table.
+- **Typography floor:** Title ≥ 90px (mobile) / 45px (desktop). Body ≥ 48px (mobile) / 24px (desktop). `line-height: 1.4–1.6` on multi-line text. White text on dark bg; dark text on light bg. See [rules/typography-readability.md](rules/typography-readability.md).
+- **Animation budget:** `start_at + delay + duration ≤ scene_duration` for every animated component. See [rules/animation-completion-budget.md](rules/animation-completion-budget.md).
+- **Color palette:** Pick one of the 4 pre-built palettes (Dark Tech / Corporate / Playful / Minimal) in Phase 2 and never deviate. See [rules/color-palettes.md](rules/color-palettes.md).
 - **Animation patterns:** Stagger entrances within a scene (0.1-0.3s delays). Use fade/slide transitions between scenes.
 - **Backgrounds:** Radial gradient for dark themes, concentric_circles for tech feel, particles for ambiance.
 - **Visual hierarchy:** Title (large font) → subtitle (medium) → body (smaller). Use color contrast to guide the eye.
-- **Consistency:** Keep the same color palette and animation style across all scenes.
-- **Pacing:** Alternate between dense scenes (multiple elements) and breathing scenes (single focal point).
-- **Device-aware sizing:** All component sizes (font-size, icon size, card width, padding, gaps) MUST be scaled to the target device. Use the Tailwind 4 type scale as reference, multiplied by the device factor (×3 for mobile, ×1.5 for desktop, ×2.5 for square). See [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md). A title on mobile should be `text-4xl` equivalent = 108px, NOT 48px.
+- **Consistency:** Same color palette and animation style across all scenes.
+- **Pacing:** Never place two dense scenes back-to-back — insert a breathing scene (1.5-2.5s) between them. See [rules/scene-pacing.md](rules/scene-pacing.md).
+- **Icons:** Use the 3-role hierarchy (hero 160-200px / card 72-96px / inline 48-60px on mobile). See [rules/icon-sizing-hierarchy.md](rules/icon-sizing-hierarchy.md).
+- **Device-aware sizing:** All component sizes MUST be scaled to the target device (×3 for mobile, ×1.5 for desktop, ×2.5 for square). A title on mobile = 108px, NOT 48px. See [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md).
 
 ---
 
@@ -158,6 +176,14 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/ui-controls.md](rules/ui-controls.md) - Switch, slider, rating: animated interactive control patterns
 - [rules/notification-stacking.md](rules/notification-stacking.md) - Notification stacking: push_at, wait_for_push, variant colors
 - [rules/dot-map-coordinates.md](rules/dot-map-coordinates.md) - Dot map: use real lat/lng coordinates, common city reference table
+
+### Design quality (nouvelles règles)
+
+- [rules/animation-completion-budget.md](rules/animation-completion-budget.md) - **CRITICAL:** Animation budget formula — every animation must complete within its scene duration
+- [rules/typography-readability.md](rules/typography-readability.md) - **CRITICAL:** Minimum font sizes per device/role, line-height rules, contrast hard rules
+- [rules/scene-pacing.md](rules/scene-pacing.md) - Scene duration formula (reading time + animation budget), density limits, dense/breathing alternation
+- [rules/color-palettes.md](rules/color-palettes.md) - 4 ready-to-use palettes (Dark Tech / Corporate / Playful / Minimal), consistency rules
+- [rules/icon-sizing-hierarchy.md](rules/icon-sizing-hierarchy.md) - Icon sizing (hero/card/inline roles), card spacing minimums, row layout by device
 
 ### Architecture (pour contribuer au code)
 

@@ -85,6 +85,7 @@ fn write_report(path: &Path, report: &ValidationReport) -> Result<()> {
         "schema_errors": report.schema_errors,
         "geometry_violations": report.geom_violations,
         "unresolved_vars": report.unresolved_vars,
+        "warnings": report.warnings,
     });
     let pretty = serde_json::to_string_pretty(&json)
         .map_err(|e| RustmotionError::Generic(format!("serialize report: {}", e)))?;

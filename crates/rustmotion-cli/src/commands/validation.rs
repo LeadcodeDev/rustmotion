@@ -40,6 +40,8 @@ pub struct ValidationReport {
     pub schema_errors: Vec<String>,
     pub geom_violations: Vec<GeometryViolation>,
     pub unresolved_vars: Vec<String>,
+    /// Non-blocking advisory messages (do not prevent rendering).
+    pub warnings: Vec<String>,
 }
 
 impl ValidationReport {
@@ -110,10 +112,12 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     if strict_anim {
         geom_violations.extend(validate_geometry_animated(&loaded.scenario));
     }
+    let (schema_errors, warnings) = validate_scenario(&loaded.scenario);
     ValidationReport {
-        schema_errors: validate_scenario(&loaded.scenario),
+        schema_errors,
         geom_violations,
         unresolved_vars: variables::find_unresolved(&loaded.raw),
+        warnings,
     }
 }
 
@@ -163,6 +167,9 @@ pub fn check_crf(crf: Option<u8>) -> Result<()> {
 pub fn print_report(report: &ValidationReport, source_label: &str) {
     use super::geometry::format_violation;
 
+    for w in &report.warnings {
+        eprintln!("Warning: {}", w);
+    }
     for name in &report.unresolved_vars {
         eprintln!(
             "Warning: unresolved variable reference '${}' in '{}'",
