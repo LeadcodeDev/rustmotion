@@ -347,6 +347,8 @@ fn component_size(c: &Component) -> Option<(SizeDimension, SizeDimension)> {
         Svg(c) => c.size.as_ref().map(size_pair),
         Video(c) => Some(size_pair(&c.size)),
         Gif(c) => c.size.as_ref().map(size_pair),
+        Lottie(c) => c.size.as_ref().map(size_pair),
+        Mockup(c) => c.size.as_ref().map(size_pair),
         QrCode(c) => Some((SizeDimension::Fixed(c.size), SizeDimension::Fixed(c.size))),
         Card(c) => c.size.as_ref().map(flex_size_to_dim),
         Flex(c) => c.size.as_ref().map(flex_size_to_dim),
