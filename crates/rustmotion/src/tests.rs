@@ -614,6 +614,98 @@ mod component_smoke {
         );
     }
 
+    /// X centroid of lit pixels, weighted by red intensity.
+    /// Returns None when no pixels are lit.
+    fn red_centroid_x(buf: &[u8], width: u32) -> Option<f64> {
+        let mut sum_wx = 0.0_f64;
+        let mut sum_w = 0.0_f64;
+        for (i, p) in buf.chunks_exact(4).enumerate() {
+            let x = (i as u32 % width) as f64;
+            let w = p[0] as f64;
+            sum_wx += w * x;
+            sum_w += w;
+        }
+        if sum_w == 0.0 { None } else { Some(sum_wx / sum_w) }
+    }
+
+    #[test]
+    fn scale_in_grows_lit_area_in_new_pipeline() {
+        // ScaleIn animates `scale` from 0.0 → 1.08 → 1.0 and opacity 0 → 1.
+        // At t=0.05 the shape is microscopic; at t=0.95 it's at full size.
+        // This exercises the transform: scale(...) path of the CSS bridge.
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "size": { "width": 100, "height": 80 },
+            "style": {
+                "fill": "#ff3366",
+                "animation": [{ "name": "scale_in", "duration": 1.0 }]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 150.0, y: 110.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
+        let late = render_new_at(&scene, 400, 300, 0.95, 1.0);
+        let early_lit = nonzero_pixels(&early);
+        let late_lit = nonzero_pixels(&late);
+        // At t=0.95 the box is ~100x80 = 8000 px. At t=0.05, scale<0.1 and
+        // opacity<0.2, so almost nothing is drawn. The bridge is doing its
+        // job if the late frame fills out an order of magnitude more area.
+        assert!(
+            late_lit > early_lit * 10,
+            "ScaleIn did not grow over time (early_lit={early_lit}, late_lit={late_lit})"
+        );
+        assert!(late_lit > 5000, "ScaleIn final frame too small: {late_lit}");
+    }
+
+    #[test]
+    fn slide_in_left_translates_centroid_in_new_pipeline() {
+        // SlideInLeft animates position.x from -200 → 0 (relative to the
+        // shape's anchor). The new pipeline must turn that into
+        // transform: translateX(...) so the rendered centroid moves
+        // rightward with time.
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "size": { "width": 60, "height": 60 },
+            "style": {
+                "fill": "#ff3366",
+                "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 250.0, y: 120.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let early = render_new_at(&scene, 500, 300, 0.05, 1.0);
+        let late = render_new_at(&scene, 500, 300, 0.95, 1.0);
+        let early_cx = red_centroid_x(&early, 500).expect("early frame has lit pixels");
+        let late_cx = red_centroid_x(&late, 500).expect("late frame has lit pixels");
+        // EaseOutCubic at t=0.05 leaves the shape close to the start (-200
+        // offset → centroid near x≈80). At t=0.95 it's near origin
+        // (centroid ≈ 280). A delta of at least 100 px guarantees the
+        // translate is being honoured by paint_pass.
+        let dx = late_cx - early_cx;
+        assert!(
+            dx > 100.0,
+            "SlideInLeft centroid did not move right (early_cx={early_cx:.1}, late_cx={late_cx:.1}, dx={dx:.1})"
+        );
+    }
+
     #[test]
     fn all_components_measure() {
         let constraints = Constraints::loose(1920.0, 1080.0);
