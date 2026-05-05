@@ -629,6 +629,47 @@ mod component_smoke {
     }
 
     #[test]
+    fn legacy_and_new_agree_on_fade_in_at_mid_frame() {
+        // Same scene through both pipelines at the same frame. The CSS
+        // bridge must produce an opacity equivalent to what the legacy
+        // animator+canvas-alpha-layer applies. A 15% lit-pixel band is
+        // enough headroom for AA differences and still tight enough to
+        // catch an opacity off-by-much-more-than-rounding.
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "size": { "width": 100, "height": 80 },
+            "style": {
+                "fill": "#ff3366",
+                "animation": [{ "name": "fade_in", "duration": 1.0 }]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        // render_legacy and render_new both sample at t=0.5, scene_duration=1.0
+        let legacy = render_legacy(&scene, 400, 300);
+        let new = render_new(&scene, 400, 300);
+        let red_sum: fn(&[u8]) -> u64 = |buf| buf.chunks_exact(4).map(|p| p[0] as u64).sum();
+        let legacy_red = red_sum(&legacy);
+        let new_red = red_sum(&new);
+        assert!(legacy_red > 0, "legacy fade_in produced no red");
+        assert!(new_red > 0, "new fade_in produced no red");
+        let ratio = new_red as f64 / legacy_red as f64;
+        assert!(
+            (0.85..1.15).contains(&ratio),
+            "fade_in red sums diverged: legacy={legacy_red} new={new_red} ratio={ratio:.3}"
+        );
+    }
+
+    #[test]
     fn scale_in_grows_lit_area_in_new_pipeline() {
         // ScaleIn animates `scale` from 0.0 → 1.08 → 1.0 and opacity 0 → 1.
         // At t=0.05 the shape is microscopic; at t=0.95 it's at full size.
