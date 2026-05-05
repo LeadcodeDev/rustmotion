@@ -400,9 +400,8 @@ impl Component {
         }
     }
 
-    /// Returns the Painter trait if this component has been migrated to
-    /// the new pipeline. `None` means the dispatcher should fall back to
-    /// `Widget::render`. Migration is incremental.
+    /// Returns the Painter trait. All 51 components are migrated to the new
+    /// pipeline; the dispatcher always uses Painter::paint_content.
     pub fn as_painter(&self) -> Option<&dyn Painter> {
         match self {
             Component::Card(c) => Some(c),
@@ -457,7 +456,9 @@ impl Component {
             Component::Codeblock(c) => Some(c),
             Component::Terminal(c) => Some(c),
             Component::Chart(c) => Some(c),
-            _ => None,
+            Component::Line(c) => Some(c),
+            Component::Arrow(c) => Some(c),
+            Component::Connector(c) => Some(c),
         }
     }
 

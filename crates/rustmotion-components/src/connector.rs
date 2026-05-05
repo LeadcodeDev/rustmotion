@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 /// Connector component that draws a routed line between two points.
 /// Supports straight, curved (bezier), and elbow (right-angle) routing.
@@ -149,17 +151,8 @@ impl Connector {
         arrow_paint.set_stroke_cap(skia_safe::PaintCap::Round);
         canvas.draw_path(&arrow_path, &arrow_paint);
     }
-}
 
-impl Widget for Connector {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+    fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
         let path = self.build_path();
 
         let mut paint = paint_from_hex(&self.color);
@@ -169,7 +162,6 @@ impl Widget for Connector {
         paint.set_stroke_cap(skia_safe::PaintCap::Round);
         paint.set_stroke_join(skia_safe::PaintJoin::Round);
 
-        // Dashed style
         if let Some(ref intervals) = self.dashed {
             if intervals.len() >= 2 {
                 if let Some(dash) = skia_safe::PathEffect::dash(intervals, 0.0) {
@@ -178,7 +170,6 @@ impl Widget for Connector {
             }
         }
 
-        // Draw progress (stroke reveal)
         if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
             let mut measure = PathMeasure::new(&path, false, None);
             let total_len = measure.length();
@@ -193,7 +184,6 @@ impl Widget for Connector {
 
         canvas.draw_path(&path, &paint);
 
-        // Arrowheads (only when stroke reveal is complete or not animated)
         let show_arrows = props.draw_progress < 0.0 || props.draw_progress >= 0.95;
         if show_arrows {
             if self.arrow_end {
@@ -203,7 +193,19 @@ impl Widget for Connector {
                 Self::draw_arrowhead(canvas, &path, false, self.arrow_size, &paint);
             }
         }
+    }
+}
 
+impl Widget for Connector {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        _ctx: &RenderContext,
+        props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, props);
         Ok(())
     }
 
@@ -211,5 +213,17 @@ impl Widget for Connector {
         let w = (self.to.x - self.from.x).abs().max(1.0);
         let h = (self.to.y - self.from.y).abs().max(1.0);
         (w, h)
+    }
+}
+
+impl Painter for Connector {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, props);
     }
 }
