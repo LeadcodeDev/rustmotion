@@ -411,6 +411,11 @@ impl Component {
             Component::Grid(c) => Some(c),
             Component::Positioned(c) => Some(c),
             Component::Divider(c) => Some(c),
+            Component::Shape(c) => Some(c),
+            Component::Image(c) => Some(c),
+            Component::Icon(c) => Some(c),
+            Component::Svg(c) => Some(c),
+            Component::QrCode(c) => Some(c),
             _ => None,
         }
     }

@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_qr_size() -> f32 {
     200.0
@@ -90,5 +92,48 @@ impl Widget for QrCode {
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         (self.size, self.size)
+    }
+}
+
+impl Painter for QrCode {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        use qrcode::QrCode as QrCodeLib;
+
+        let Ok(code) = QrCodeLib::new(self.content.as_bytes()) else { return };
+
+        let modules = code.to_colors();
+        let module_count = code.width() as f32;
+        let module_size = self.size / module_count;
+
+        let mut bg_paint = skia_safe::Paint::new(color4f_from_hex(&self.background_color), None);
+        bg_paint.set_style(PaintStyle::Fill);
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, self.size, self.size),
+            &bg_paint,
+        );
+
+        let mut fg_paint = skia_safe::Paint::new(color4f_from_hex(&self.foreground_color), None);
+        fg_paint.set_style(PaintStyle::Fill);
+        fg_paint.set_anti_alias(false);
+
+        for (idx, &color) in modules.iter().enumerate() {
+            if color == qrcode::Color::Dark {
+                let col = (idx % code.width()) as f32;
+                let row = (idx / code.width()) as f32;
+                let rect = Rect::from_xywh(
+                    col * module_size,
+                    row * module_size,
+                    module_size,
+                    module_size,
+                );
+                canvas.draw_rect(rect, &fg_paint);
+            }
+        }
     }
 }
