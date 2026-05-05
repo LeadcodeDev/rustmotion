@@ -23,9 +23,9 @@ When you give a `codeblock` or `terminal` a fixed `size` smaller than its natura
 ```json
 {
   "type": "codeblock",
-  "size": { "width": 1160, "height": 480 },
   "auto_scroll": true,
-  "code": "<long code, more lines than the box can hold>"
+  "code": "<long code, more lines than the box can hold>",
+  "style": { "width": 1160, "height": 480 }
 }
 ```
 

@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::schema::{AnimationEffect, TimelineStep as AnimTimelineStep};
+use rustmotion_core::schema::TimelineStep as AnimTimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A horizontal or vertical pipeline/timeline component.
@@ -48,8 +48,6 @@ pub struct Timeline {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<AnimTimelineStep>,
     #[serde(default)]

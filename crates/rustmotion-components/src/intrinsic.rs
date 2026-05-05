@@ -145,7 +145,13 @@ pub struct GradientTextIntrinsic(TextIntrinsic);
 
 impl GradientTextIntrinsic {
     pub fn from_gradient_text(t: &GradientText) -> Self {
-        let max_width = t.size.as_ref().map(|s| s.width);
+        // max_width comes from CSS style.width if set as a fixed pixel value
+        use rustmotion_core::css::style::Size as CSize;
+        use rustmotion_core::css::units::LengthPercentage;
+        let max_width = match &t.style.width {
+            Some(CSize::Length(LengthPercentage::Px(v))) => Some(*v),
+            _ => None,
+        };
         Self(TextIntrinsic::from_parts(&t.content, &t.style, max_width))
     }
 }
@@ -346,7 +352,6 @@ mod tests {
             max_width: None,
             timing: Default::default(),
             style: CssStyle { font_size: Some(Length::Px(32.0)), ..Default::default() },
-            animation: Vec::new(),
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,
@@ -369,7 +374,6 @@ mod tests {
             max_width: None,
             timing: Default::default(),
             style: CssStyle { font_size: Some(Length::Px(20.0)), ..Default::default() },
-            animation: Vec::new(),
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,
@@ -400,7 +404,6 @@ mod tests {
             max_width: None,
             timing: Default::default(),
             style: CssStyle { font_size: Some(Length::Px(24.0)), ..Default::default() },
-            animation: Vec::new(),
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,

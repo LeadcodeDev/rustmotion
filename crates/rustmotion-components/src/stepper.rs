@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_active_step() -> u32 {
@@ -66,8 +66,6 @@ pub struct Stepper {
     /// Layout direction: "horizontal" or "vertical".
     #[serde(default = "default_orientation")]
     pub orientation: String,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Color of the active step node.
     #[serde(default = "default_active_color")]
     pub active_color: String,
@@ -84,8 +82,6 @@ pub struct Stepper {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

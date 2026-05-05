@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::parse_hex_color;
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_cell_size() -> f32 {
@@ -55,8 +55,6 @@ pub struct Heatmap {
     /// Corner radius of each cell.
     #[serde(default = "default_cell_radius")]
     pub cell_radius: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Whether the heatmap animates in.
     #[serde(default = "default_animated")]
     pub animated: bool,
@@ -67,8 +65,6 @@ pub struct Heatmap {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

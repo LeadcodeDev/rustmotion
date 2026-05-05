@@ -10,7 +10,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_speed() -> f32 {
@@ -45,8 +45,6 @@ pub struct Marquee {
     pub speed: f32,
     #[serde(default)]
     pub direction: MarqueeDirection,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     #[serde(default = "default_color")]
@@ -57,8 +55,6 @@ pub struct Marquee {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

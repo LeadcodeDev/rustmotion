@@ -8,7 +8,7 @@ use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_max() -> f64 {
@@ -53,8 +53,6 @@ pub struct Gauge {
     pub max: f64,
     #[serde(default)]
     pub label: Option<String>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_track_color")]
     pub track_color: String,
     #[serde(default = "default_fill_color")]
@@ -75,8 +73,6 @@ pub struct Gauge {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

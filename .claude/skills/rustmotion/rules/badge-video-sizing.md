@@ -26,14 +26,14 @@
   "position": "absolute",
   "x": 270,
   "y": 580,
-  "animation": [
-    { "name": "scale_in", "delay": 0.4, "duration": 0.5 },
-    { "name": "wiggle", "property": "translate_y", "amplitude": 11, "frequency": 1.2, "seed": 42 }
-  ],
   "style": {
     "font-size": 40,
     "z-index": 2,
-    "box-shadow": [{ "color": "#6366F1A0", "offset-y": 0, "blur": 60 }]
+    "box-shadow": [{ "color": "#6366F1A0", "offset-y": 0, "blur": 60 }],
+    "animation": [
+      { "name": "scale_in", "delay": 0.4, "duration": 0.5 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 11, "frequency": 1.2, "seed": 42 }
+    ]
   }
 }
 ```

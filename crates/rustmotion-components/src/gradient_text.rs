@@ -10,7 +10,7 @@ use rustmotion_core::engine::renderer::{
     emoji_typeface, font_mgr, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_colors() -> Vec<String> {
@@ -36,14 +36,10 @@ pub struct GradientText {
     pub animate_angle: bool,
     #[serde(default = "default_speed")]
     pub speed: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

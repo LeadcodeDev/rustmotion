@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::renderer::font_mgr;
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 mod axes;
@@ -87,8 +87,6 @@ pub struct Chart {
     pub chart_type: ChartType,
     #[serde(default)]
     pub data: Vec<ChartDataPoint>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_animated")]
     pub animated: bool,
     #[serde(default = "default_animation_duration")]
@@ -147,8 +145,6 @@ pub struct Chart {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

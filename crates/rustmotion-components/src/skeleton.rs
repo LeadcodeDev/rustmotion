@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_base_color() -> String {
@@ -43,8 +43,6 @@ impl Default for SkeletonVariant {
 pub struct Skeleton {
     #[serde(default)]
     pub variant: SkeletonVariant,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_base_color")]
     pub base_color: String,
     #[serde(default = "default_shimmer_color")]
@@ -66,8 +64,6 @@ pub struct Skeleton {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

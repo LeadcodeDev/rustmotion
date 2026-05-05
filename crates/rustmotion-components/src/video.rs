@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{extract_video_frame, find_closest_frame, video_frame_cache};
-use rustmotion_core::schema::{AnimationEffect, ImageFit, Size, TimelineStep};
+use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_volume() -> f32 { 1.0 }
@@ -14,7 +14,6 @@ fn default_volume() -> f32 { 1.0 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Video {
     pub src: String,
-    pub size: Size,
     #[serde(default)]
     pub trim_start: Option<f64>,
     #[serde(default)]
@@ -31,8 +30,6 @@ pub struct Video {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

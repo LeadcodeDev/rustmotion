@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::units::{Length, LengthPercentage};
+use crate::schema::{AnimationEffect, deserialize_animation_effects};
 
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
 /// and lets the cascade fill in inherited / initial values.
@@ -96,6 +97,10 @@ pub struct CssStyle {
     pub overflow_y: Option<Overflow>,
     pub z_index: Option<i32>,
     pub visibility: Option<Visibility>,
+
+    // ---- Animation ----
+    #[serde(default, deserialize_with = "deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
 }
 
 // ---- Painter convenience accessors ----

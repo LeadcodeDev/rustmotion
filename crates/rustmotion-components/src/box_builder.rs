@@ -16,13 +16,11 @@
 use std::sync::Arc;
 
 use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
-use rustmotion_core::css::{apply_animated_props, Length as CLength, LengthPercentage as CLP};
+use rustmotion_core::css::{apply_animated_props, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
-use rustmotion_core::schema::SizeDimension;
 
 use crate::divider::DividerDirection;
-use crate::flex::FlexSize;
 use crate::timeline::TimelineDirection;
 use crate::{ChildComponent, Component};
 
@@ -251,16 +249,6 @@ fn container_children<'a>(
 /// for components that carry a fixed size.
 fn component_css(component: &Component) -> CssStyle {
     let mut css = component_style(component).clone();
-
-    if let Some((w, h)) = component_size(component) {
-        if let Some(s) = size_to_css(&w) {
-            css.width = Some(s);
-        }
-        if let Some(s) = size_to_css(&h) {
-            css.height = Some(s);
-        }
-    }
-
     apply_default_display(component, &mut css);
     apply_intrinsic_overrides(component, &mut css);
     css
@@ -369,6 +357,123 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::String("100%".into())));
             }
         }
+        Switch(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.height)));
+            }
+        }
+        Slider(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.height)));
+            }
+        }
+        Progress(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.height)));
+            }
+        }
+        List(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                let font_size = c.style.font_size_px_or(16.0);
+                let line_height = font_size * 1.3;
+                let n = c.items.len() as f32;
+                let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        Timeline(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                let r = c.node_radius;
+                let h = match c.direction {
+                    TimelineDirection::Horizontal => r * 2.0 + c.font_size * 2.5 + 24.0,
+                    TimelineDirection::Vertical => {
+                        let n = c.steps.len().max(1) as f32;
+                        n * (r * 2.0 + 64.0)
+                    }
+                };
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        Notification(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.width)));
+            }
+            if css.height.is_none() {
+                let h = if c.message.is_some() { 96.0 } else { 64.0 };
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        Rating(c) => {
+            if css.width.is_none() {
+                let count = c.max as f32;
+                let w = count * c.size + (count - 1.0).max(0.0) * c.gap;
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.size)));
+            }
+        }
+        Avatar(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.size)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.size)));
+            }
+        }
+        AvatarGroup(c) => {
+            if css.width.is_none() {
+                let visible = c.visible_count() as f32;
+                let extra = if c.overflow_count() > 0 { 1.0 } else { 0.0 };
+                let total = visible + extra;
+                let step = (c.size - c.overlap).max(0.0);
+                let w = if total <= 0.0 { 0.0 } else { c.size + (total - 1.0) * step };
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.size)));
+            }
+        }
+        QrCode(c) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(c.size)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(c.size)));
+            }
+        }
+        Countdown(c) => {
+            if css.width.is_none() || css.height.is_none() {
+                let visible = [c.show_hours, c.show_minutes, c.show_seconds]
+                    .iter()
+                    .filter(|v| **v)
+                    .count() as f32;
+                let box_w = c.digit_size * 0.75;
+                let box_h = c.digit_size * 1.2;
+                let w = (visible * 2.0 * box_w) + ((visible - 1.0).max(0.0) * c.gap);
+                if css.width.is_none() {
+                    css.width = Some(CSize::Length(CLP::Px(w)));
+                }
+                if css.height.is_none() {
+                    css.height = Some(CSize::Length(CLP::Px(box_h)));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -435,133 +540,21 @@ fn component_style(c: &Component) -> &CssStyle {
     }
 }
 
-/// Extract intrinsic width/height for components that carry a `size`.
-/// Used to seed CSS `width`/`height` so taffy can lay them out without an
-/// intrinsic measurer.
-fn component_size(c: &Component) -> Option<(SizeDimension, SizeDimension)> {
-    use Component::*;
-    match c {
-        Shape(c) => Some((SizeDimension::Fixed(c.size.width), SizeDimension::Fixed(c.size.height))),
-        Image(c) => c.size.as_ref().map(size_pair),
-        Icon(c) => c.size.as_ref().map(size_pair),
-        Svg(c) => c.size.as_ref().map(size_pair),
-        Video(c) => Some(size_pair(&c.size)),
-        Gif(c) => c.size.as_ref().map(size_pair),
-        Lottie(c) => c.size.as_ref().map(size_pair),
-        Mockup(c) => c.size.as_ref().map(size_pair),
-        QrCode(c) => Some((SizeDimension::Fixed(c.size), SizeDimension::Fixed(c.size))),
-        Card(c) => c.size.as_ref().map(flex_size_to_dim),
-        Flex(c) => c.size.as_ref().map(flex_size_to_dim),
-        Grid(c) => c.size.as_ref().map(flex_size_to_dim),
-        Container(c) => c.size.as_ref().map(flex_size_to_dim),
-        Stepper(c) => c.size.as_ref().map(size_pair),
-        Comparison(c) => c.size.as_ref().map(size_pair),
-        Skeleton(c) => c.size.as_ref().map(size_pair),
-        Switch(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
-        Slider(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
-        Avatar(c) => Some((SizeDimension::Fixed(c.size), SizeDimension::Fixed(c.size))),
-        // Vague 5 — specialized: every one carries Option<Size> except chart-mod
-        // (size: Option<Size>), gauge (size: Option<Size>), progress (separate
-        // width/height), and counter (no explicit size — depends on font).
-        Codeblock(c) => c.size.as_ref().map(size_pair),
-        Terminal(c) => c.size.as_ref().map(size_pair),
-        Chart(c) => c.size.as_ref().map(size_pair),
-        Gauge(c) => c.size.as_ref().map(size_pair),
-        Sparkline(c) => c.size.as_ref().map(size_pair),
-        Stat(c) => c.size.as_ref().map(size_pair),
-        Heatmap(c) => c.size.as_ref().map(size_pair),
-        Treemap(c) => c.size.as_ref().map(size_pair),
-        DotMap(c) => c.size.as_ref().map(size_pair),
-        Table(c) => c.size.as_ref().map(size_pair),
-        Countdown(c) => Some(c.size.as_ref().map(size_pair).unwrap_or_else(|| {
-            let visible = [c.show_hours, c.show_minutes, c.show_seconds]
-                .iter()
-                .filter(|v| **v)
-                .count() as f32;
-            let box_w = c.digit_size * 0.75;
-            let box_h = c.digit_size * 1.2;
-            let w = (visible * 2.0 * box_w) + ((visible - 1.0).max(0.0) * c.gap);
-            (SizeDimension::Fixed(w), SizeDimension::Fixed(box_h))
-        })),
-        Progress(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
-        Marquee(c) => c.size.as_ref().map(size_pair),
-        Callout(c) => c.size.as_ref().map(size_pair),
-        TagCloud(c) => c.size.as_ref().map(size_pair),
-        List(c) => {
-            let font_size = c.style.font_size_px_or(16.0);
-            let line_height = font_size * 1.3;
-            let n = c.items.len() as f32;
-            let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
-            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
-        }
-        Timeline(c) => {
-            let r = c.node_radius;
-            let h = match c.direction {
-                TimelineDirection::Horizontal => r * 2.0 + c.font_size * 2.5 + 24.0,
-                TimelineDirection::Vertical => {
-                    let n = c.steps.len().max(1) as f32;
-                    n * (r * 2.0 + 64.0)
-                }
-            };
-            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
-        }
-        Notification(c) => {
-            let h = if c.message.is_some() { 96.0 } else { 64.0 };
-            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
-        }
-        Rating(c) => {
-            let count = c.max as f32;
-            let w = count * c.size + (count - 1.0).max(0.0) * c.gap;
-            Some((SizeDimension::Fixed(w), SizeDimension::Fixed(c.size)))
-        }
-        AvatarGroup(c) => {
-            let visible = c.visible_count() as f32;
-            let extra = if c.overflow_count() > 0 { 1.0 } else { 0.0 };
-            let total = visible + extra;
-            let step = (c.size - c.overlap).max(0.0);
-            let w = if total <= 0.0 { 0.0 } else { c.size + (total - 1.0) * step };
-            Some((SizeDimension::Fixed(w), SizeDimension::Fixed(c.size)))
-        }
-        _ => None,
-    }
-}
-
-fn size_pair(s: &rustmotion_core::schema::Size) -> (SizeDimension, SizeDimension) {
-    (SizeDimension::Fixed(s.width), SizeDimension::Fixed(s.height))
-}
-
-fn flex_size_to_dim(s: &FlexSize) -> (SizeDimension, SizeDimension) {
-    (s.width.clone(), s.height.clone())
-}
-
-fn size_to_css(s: &SizeDimension) -> Option<CSize> {
-    match s {
-        SizeDimension::Fixed(v) => Some(CSize::Length(CLP::Px(*v))),
-        SizeDimension::Percent(p) => Some(CSize::Length(CLP::String(format!("{}%", p)))),
-        SizeDimension::Auto => Some(CSize::Auto(rustmotion_core::css::style::AutoKw::Auto)),
-    }
-}
-
-// Silence unused `Length` import (kept for future intrinsic measurement work).
-#[allow(dead_code)]
-fn _silence(_: CLength) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flex::FlexSize;
-    use rustmotion_core::css::style::{CssStyle, Display, Edges, FlexDirection, Gap};
+    use rustmotion_core::css::style::{CssStyle, Display, Edges, FlexDirection, Gap, Size as CSize};
     use rustmotion_core::css::units::LengthPercentage;
+    use rustmotion_core::css::units::LengthPercentage as CLP;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
 
-    fn make_card(children: Vec<ChildComponent>, style: CssStyle, size: Option<FlexSize>) -> Component {
+    fn make_card(children: Vec<ChildComponent>, style: CssStyle) -> Component {
         Component::Card(crate::card::Card {
             children,
-            size,
             timing: Default::default(),
             style,
-            animation: Vec::new(),
             timeline: Vec::new(),
             stagger: None,
         })
@@ -571,11 +564,13 @@ mod tests {
         ChildComponent {
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
-                size: rustmotion_core::schema::Size { width, height },
                 text: None,
                 timing: Default::default(),
-                style: CssStyle::default(),
-                animation: Vec::new(),
+                style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(width))),
+                    height: Some(CSize::Length(CLP::Px(height))),
+                    ..Default::default()
+                },
                 timeline: Vec::new(),
                 stagger: None,
                 fill: None,
@@ -604,12 +599,10 @@ mod tests {
                 flex_direction: Some(FlexDirection::Column),
                 gap: Some(Gap::Uniform(LengthPercentage::Px(10.0))),
                 padding: Some(Edges::Uniform(LengthPercentage::Px(20.0))),
+                width: Some(CSize::Length(CLP::Px(300.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
                 ..Default::default()
             },
-            Some(FlexSize {
-                width: SizeDimension::Fixed(300.0),
-                height: SizeDimension::Fixed(200.0),
-            }),
         );
         let scene = vec![ChildComponent {
             component: card,
@@ -646,11 +639,13 @@ mod tests {
         let scene = vec![ChildComponent {
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
-                size: rustmotion_core::schema::Size { width: 100.0, height: 80.0 },
                 text: None,
                 timing: Default::default(),
-                style: CssStyle::default(),
-                animation: Vec::new(),
+                style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(100.0))),
+                    height: Some(CSize::Length(CLP::Px(80.0))),
+                    ..Default::default()
+                },
                 timeline: Vec::new(),
                 stagger: None,
                 fill: None,
@@ -681,7 +676,6 @@ mod tests {
                 length: None,
                 timing: Default::default(),
                 style: CssStyle::default(),
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -718,7 +712,6 @@ mod tests {
                     font_size: Some(Length::Px(40.0)),
                     ..Default::default()
                 },
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
                 text_shadow: None,
@@ -734,7 +727,6 @@ mod tests {
         let card = ChildComponent {
             component: Component::Card(Card {
                 children: vec![text],
-                size: None,
                 timing: Default::default(),
                 style: CssStyle {
                     display: Some(Display::Flex),
@@ -742,7 +734,6 @@ mod tests {
                     padding: Some(Edges::Uniform(LengthPercentage::Px(20.0))),
                     ..Default::default()
                 },
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -801,7 +792,6 @@ mod tests {
                 dashed: None,
                 timing: Default::default(),
                 style: CssStyle::default(),
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -835,7 +825,6 @@ mod tests {
                 dashed: None,
                 timing: Default::default(),
                 style: CssStyle::default(),
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -874,7 +863,6 @@ mod tests {
                     font_size: Some(Length::Px(64.0)),
                     ..Default::default()
                 },
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
                 text_shadow: None,
@@ -918,7 +906,6 @@ mod tests {
                 count: None,
                 timing: Default::default(),
                 style: CssStyle::default(),
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -954,7 +941,6 @@ mod tests {
                 dashed: None,
                 timing: Default::default(),
                 style: CssStyle::default(),
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),

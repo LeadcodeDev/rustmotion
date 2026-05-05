@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -15,14 +15,10 @@ pub struct Svg {
     pub src: Option<String>,
     #[serde(default)]
     pub data: Option<String>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
@@ -43,10 +39,8 @@ impl Painter for Svg {
         _props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        let (target_w_opt, target_h_opt) = match &self.size {
-            Some(size) => (Some(size.width as u32), Some(size.height as u32)),
-            None => (None, None),
-        };
+        let target_w_opt: Option<u32> = if layout.width > 0.0 { Some(layout.width as u32) } else { None };
+        let target_h_opt: Option<u32> = if layout.height > 0.0 { Some(layout.height as u32) } else { None };
 
         let cache_key = if let Some(ref src) = self.src {
             format!("svg:{}:{}x{}", src, target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))

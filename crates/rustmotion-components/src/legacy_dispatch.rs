@@ -129,19 +129,22 @@ mod tests {
     use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::box_tree::BoxKind;
     use rustmotion_core::engine::layout_pass::run_layout;
-    use rustmotion_core::css::style::CssStyle;
-    use rustmotion_core::schema::{ShapeType, Size};
+    use rustmotion_core::css::style::{CssStyle, Size as CSize};
+    use rustmotion_core::css::units::LengthPercentage as CLP;
+    use rustmotion_core::schema::ShapeType;
     use std::sync::Arc;
 
     fn shape_child(w: f32, h: f32, x: f32, y: f32) -> ChildComponent {
         ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
-                size: Size { width: w, height: h },
                 text: None,
                 timing: Default::default(),
-                style: CssStyle::default(),
-                animation: Vec::new(),
+                style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(w))),
+                    height: Some(CSize::Length(CLP::Px(h))),
+                    ..Default::default()
+                },
                 timeline: Vec::new(),
                 stagger: None,
                 fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
@@ -215,19 +218,19 @@ mod tests {
         // Card 100×80 at (40,30), green background, contains a red 30×20 shape
         // absolutely positioned at (10,10) inside the card.
         use crate::card::Card;
-        use crate::flex::FlexSize;
-        use rustmotion_core::schema::SizeDimension;
 
         use rustmotion_core::css::style::{Background, Color};
 
         let red_shape = ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
-                size: Size { width: 30.0, height: 20.0 },
                 text: None,
                 timing: Default::default(),
-                style: CssStyle::default(),
-                animation: Vec::new(),
+                style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(30.0))),
+                    height: Some(CSize::Length(CLP::Px(20.0))),
+                    ..Default::default()
+                },
                 timeline: Vec::new(),
                 stagger: None,
                 fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
@@ -242,16 +245,13 @@ mod tests {
         let card = ChildComponent {
             component: Component::Card(Card {
                 children: vec![red_shape],
-                size: Some(FlexSize {
-                    width: SizeDimension::Fixed(100.0),
-                    height: SizeDimension::Fixed(80.0),
-                }),
                 timing: Default::default(),
                 style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(100.0))),
+                    height: Some(CSize::Length(CLP::Px(80.0))),
                     background: Some(Background::Color(Color::String("#00ff00".into()))),
                     ..Default::default()
                 },
-                animation: Vec::new(),
                 timeline: Vec::new(),
                 stagger: None,
             }),
@@ -325,22 +325,25 @@ mod tests {
         // The dispatcher must wire animator output into the canvas alpha,
         // otherwise both samples render fully opaque and the test fails.
         use crate::shape::Shape;
-        use rustmotion_core::schema::{AnimationEffect, AnimationTiming, ShapeType, Size};
+        use rustmotion_core::schema::{AnimationEffect, AnimationTiming, ShapeType};
 
         let make_scene = || {
             let shape = ChildComponent {
                 component: Component::Shape(Shape {
                     shape: ShapeType::Rect,
-                    size: Size { width: 100.0, height: 100.0 },
                     text: None,
                     timing: Default::default(),
-                    style: CssStyle::default(),
-                    animation: vec![AnimationEffect::FadeIn(AnimationTiming {
-                        duration: 0.5,
-                        delay: 0.0,
-                        repeat: false,
-                        overshoot: None,
-                    })],
+                    style: CssStyle {
+                        width: Some(CSize::Length(CLP::Px(100.0))),
+                        height: Some(CSize::Length(CLP::Px(100.0))),
+                        animation: vec![AnimationEffect::FadeIn(AnimationTiming {
+                            duration: 0.5,
+                            delay: 0.0,
+                            repeat: false,
+                            overshoot: None,
+                        })],
+                        ..Default::default()
+                    },
                     timeline: Vec::new(),
                     stagger: None,
                     fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),

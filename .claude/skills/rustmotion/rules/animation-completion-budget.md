@@ -29,7 +29,7 @@ delay_first + (N-1) × stagger + animation.duration ≤ scene_duration
 
 **Component with start_at delay:**
 ```json
-{ "start_at": 1.0, "animation": [{ "delay": 0.3, "duration": 0.6 }], "style": {} }
+{ "start_at": 1.0, "style": { "animation": [{ "delay": 0.3, "duration": 0.6 }] } }
 ```
 Total budget used: `1.0 + 0.3 + 0.6 = 1.9s` → scene must be at least **2.4s** (+ dwell).
 
@@ -57,10 +57,10 @@ Since `char_count` is unknown at planning time, use a conservative estimate: if 
 {
   "duration": 2.0,
   "children": [
-    { "type": "text", "content": "First",  "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Second", "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Third",  "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Fourth", "animation": [{ "name": "fade_in_up", "delay": 1.5, "duration": 0.6 }], "style": {} }
+    { "type": "text", "content": "First",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }] } },
+    { "type": "text", "content": "Second", "style": { "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }] } },
+    { "type": "text", "content": "Third",  "style": { "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }] } },
+    { "type": "text", "content": "Fourth", "style": { "animation": [{ "name": "fade_in_up", "delay": 1.5, "duration": 0.6 }] } }
   ]
 }
 ```
@@ -72,10 +72,10 @@ Last animation finishes at `1.5 + 0.6 = 2.1s > 2.0s` (scene duration). Fourth el
 {
   "duration": 3.5,
   "children": [
-    { "type": "text", "content": "First",  "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Second", "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Third",  "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }], "style": {} },
-    { "type": "text", "content": "Fourth", "animation": [{ "name": "fade_in_up", "delay": 1.5, "duration": 0.6 }], "style": {} }
+    { "type": "text", "content": "First",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }] } },
+    { "type": "text", "content": "Second", "style": { "animation": [{ "name": "fade_in_up", "delay": 0.5, "duration": 0.6 }] } },
+    { "type": "text", "content": "Third",  "style": { "animation": [{ "name": "fade_in_up", "delay": 1.0, "duration": 0.6 }] } },
+    { "type": "text", "content": "Fourth", "style": { "animation": [{ "name": "fade_in_up", "delay": 1.5, "duration": 0.6 }] } }
   ]
 }
 ```

@@ -11,7 +11,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::schema::{AnimationEffect, CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign, TextAnimGranularity, TextBackground, TextShadow, TimelineStep};
+use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign, TextAnimGranularity, TextBackground, TextShadow, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -23,8 +23,6 @@ pub struct Text {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

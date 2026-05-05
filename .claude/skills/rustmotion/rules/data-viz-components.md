@@ -23,9 +23,9 @@
 
 Use skeleton variants to match the content they replace:
 ```json
-{ "type": "skeleton", "variant": "circle", "size": { "width": 64, "height": 64 } }
+{ "type": "skeleton", "variant": "circle", "style": { "width": 64, "height": 64 } }
 { "type": "skeleton", "variant": "text", "lines": 3 }
-{ "type": "skeleton", "variant": "rectangle", "size": { "width": 400, "height": 200 } }
+{ "type": "skeleton", "variant": "rectangle", "style": { "width": 400, "height": 200 } }
 ```
 
 ## Combining components for dashboards

@@ -4,19 +4,60 @@
 
 ---
 
-## animation — always at root, never inside style
+## The new schema: size and animation live inside style
 
-**BAD (component silently dropped):**
+`width`, `height`, and `animation` are all part of `style`. There is no root-level `size` object and no root-level `animation` array.
+
+**BAD (old schema — component silently dropped):**
 ```json
-{ "type": "text", "style": { "font-size": 72, "animation": [{ "name": "fade_in_up" }] } }
+{
+  "type": "card",
+  "size": { "width": 860, "height": 500 },
+  "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
+  "style": { "background": "#1e293b" }
+}
 ```
 
 **GOOD:**
 ```json
-{ "type": "text", "animation": [{ "name": "fade_in_up", "duration": 0.6 }], "style": { "font-size": 72 } }
+{
+  "type": "card",
+  "style": {
+    "width": 860,
+    "height": 500,
+    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
+    "background": "#1e293b"
+  }
+}
 ```
 
 This applies to ALL components: `text`, `card`, `badge`, `icon`, `shape`, `image`, `codeblock`, etc.
+
+### width / height
+
+Plain numbers (pixels) or CSS strings:
+- `"width": 860` — 860px
+- `"width": "50%"` — 50% of parent
+- `"width": "auto"` — intrinsic
+
+### animation inside style
+
+`animation` is an array of animation objects placed directly inside `style`:
+```json
+{ "style": { "animation": [{ "name": "fade_in_up", "duration": 0.6, "delay": 0.2 }] } }
+```
+
+Multiple animations (entrance + continuous) are combined in the same array:
+```json
+{
+  "style": {
+    "animation": [
+      { "name": "scale_in", "duration": 0.7 },
+      { "name": "float_3d", "loop": true }
+    ]
+  }
+}
+```
 
 ---
 
@@ -60,12 +101,12 @@ BoxShadow fields (all kebab-case): `color`, `offset-x`, `offset-y`, `blur`, `spr
 
 | Field | Location | Example |
 |---|---|---|
-| `animation` | Root | `{ "animation": [...], "style": {...} }` |
+| `width`, `height` | `style` | `{ "style": { "width": 860, "height": 500 } }` |
+| `animation` | `style` | `{ "style": { "animation": [...] } }` |
 | `fill` (shape) | Root | `{ "fill": { "type": "radial", ... } }` |
 | `stroke` (shape) | Root | `{ "stroke": { "color": "#fff", "width": 2 } }` |
 | `timeline` | Root | `{ "timeline": [{ "at": 1.0, ... }] }` |
 | `stagger` | Root | `{ "stagger": 0.15 }` |
-| `size` | Root | `{ "size": { "width": 860, "height": 500 } }` |
 | `position`, `x`, `y` | Root | `{ "position": "absolute", "x": 100, "y": 200 }` |
 | `background` | `style` | `{ "style": { "background": "#1e293b" } }` |
 | `border-radius` | `style` | `{ "style": { "border-radius": 24 } }` |

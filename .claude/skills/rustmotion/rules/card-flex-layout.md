@@ -30,7 +30,7 @@ Key patterns:
 - **Horizontal row:** `"flex-direction": "row"` + `"gap"`
 - **Vertical stack:** `"flex-direction": "column"` (default) + `"gap"`
 - **Centered content:** `"align-items": "center"` + `"justify-content": "center"`
-- **Auto-height:** `"size": { "width": 800, "height": "auto" }`
+- **Auto-height:** `"style": { "width": 800, "height": "auto" }`
 - **Grid:** `"display": "grid"` + `"grid-template-columns"`
 
 Children flow in the flexbox. Use `positioned` container for absolute positioning.
@@ -41,8 +41,9 @@ Children flow in the flexbox. Use `positioned` container for absolute positionin
 ```json
 {
   "type": "card",
-  "size": { "width": 800, "height": "auto" },
   "style": {
+    "width": 800,
+    "height": "auto",
     "flex-direction": "row",
     "align-items": "center",
     "gap": 16,
@@ -51,7 +52,7 @@ Children flow in the flexbox. Use `positioned` container for absolute positionin
     "border-radius": 16
   },
   "children": [
-    { "type": "icon", "icon": "lucide:check-circle", "size": { "width": 48, "height": 48 }, "style": { "color": "#22C55E" } },
+    { "type": "icon", "icon": "lucide:check-circle", "style": { "width": 48, "height": 48, "color": "#22C55E" } },
     { "type": "text", "content": "Feature enabled", "style": { "font-size": 32, "color": "#FFFFFF" } }
   ]
 }

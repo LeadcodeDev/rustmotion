@@ -7,7 +7,7 @@ use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
-use rustmotion_core::schema::{AnimationEffect, CodeblockReveal, RevealMode, Size, TimelineStep};
+use rustmotion_core::schema::{CodeblockReveal, RevealMode, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -101,8 +101,6 @@ pub struct Terminal {
     pub show_chrome: bool,
     #[serde(default)]
     pub reveal: Option<CodeblockReveal>,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// When rendered content overflows the box vertically, scroll up so the
     /// last revealed line stays visible. Default: `true`. Set to `false` to
     /// require all lines fit — the geometry validator will fail otherwise.
@@ -113,8 +111,6 @@ pub struct Terminal {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

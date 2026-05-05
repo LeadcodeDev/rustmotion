@@ -9,7 +9,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{AnimationEffect, EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep};
+use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -30,8 +30,6 @@ pub struct Counter {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

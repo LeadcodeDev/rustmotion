@@ -85,7 +85,7 @@ If you exceed the limit: group related components into a `container` with a sing
 {
   "duration": 9.0,
   "children": [
-    { "type": "text", "content": "Automate your entire workflow in minutes. No code required. Works with 200+ integrations out of the box.", "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }], "style": { "font-size": 54 } }
+    { "type": "text", "content": "Automate your entire workflow in minutes. No code required. Works with 200+ integrations out of the box.", "style": { "font-size": 54, "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.8 }] } }
   ]
 }
 ```

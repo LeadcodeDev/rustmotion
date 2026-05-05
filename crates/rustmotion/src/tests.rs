@@ -231,10 +231,8 @@ mod component_smoke {
             let card_child = ChildComponent {
                 component: Component::Card(Card {
                     children: vec![inner],
-                    size: None,
                     timing: Default::default(),
                     style: card_style,
-                    animation: Vec::new(),
                     timeline: Vec::new(),
                     stagger: None,
                 }),
@@ -367,9 +365,12 @@ mod component_smoke {
         let json = serde_json::json!({
             "type": "shape",
             "shape": "rect",
-            "size": { "width": 100, "height": 80 },
             "fill": "#ff3366",
-            "animation": [{ "name": "fade_in", "duration": 1.0 }]
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "animation": [{ "name": "fade_in", "duration": 1.0 }]
+            }
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
@@ -415,9 +416,12 @@ mod component_smoke {
         let json = serde_json::json!({
             "type": "shape",
             "shape": "rect",
-            "size": { "width": 100, "height": 80 },
             "fill": "#ff3366",
-            "animation": [{ "name": "scale_in", "duration": 1.0 }]
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "animation": [{ "name": "scale_in", "duration": 1.0 }]
+            }
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
@@ -451,9 +455,12 @@ mod component_smoke {
         let json = serde_json::json!({
             "type": "shape",
             "shape": "rect",
-            "size": { "width": 60, "height": 60 },
             "fill": "#ff3366",
-            "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
+            "style": {
+                "width": "60px",
+                "height": "60px",
+                "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
+            }
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {

@@ -61,8 +61,7 @@ These are **hard minimums**. Below these values, cards visually merge and conten
 {
   "type": "icon",
   "icon": "lucide:rocket",
-  "size": { "width": 48, "height": 48 },
-  "style": { "color": "#6366F1" }
+  "style": { "width": 48, "height": 48, "color": "#6366F1" }
 }
 ```
 48px ÷ 3 = 16px CSS → postage stamp. Invisible as a hero element.
@@ -73,9 +72,12 @@ These are **hard minimums**. Below these values, cards visually merge and conten
 {
   "type": "icon",
   "icon": "lucide:rocket",
-  "size": { "width": 180, "height": 180 },
-  "animation": [{ "name": "scale_in", "duration": 0.6 }],
-  "style": { "color": "#6366F1" }
+  "style": {
+    "width": 180,
+    "height": 180,
+    "color": "#6366F1",
+    "animation": [{ "name": "scale_in", "duration": 0.6 }]
+  }
 }
 ```
 180px ÷ 3 = 60px CSS → prominent, visible, impactful. ✓
@@ -87,10 +89,10 @@ These are **hard minimums**. Below these values, cards visually merge and conten
   "type": "card",
   "style": { "flex-direction": "row", "gap": 16 },
   "children": [
-    { "type": "card", "size": { "width": 230 }, ... },
-    { "type": "card", "size": { "width": 230 }, ... },
-    { "type": "card", "size": { "width": 230 }, ... },
-    { "type": "card", "size": { "width": 230 }, ... }
+    { "type": "card", "style": { "width": 230 }, ... },
+    { "type": "card", "style": { "width": 230 }, ... },
+    { "type": "card", "style": { "width": 230 }, ... },
+    { "type": "card", "style": { "width": 230 }, ... }
   ]
 }
 ```
@@ -101,13 +103,12 @@ Each card is 230px = 77px CSS → icon and text completely unreadable.
 ```json
 {
   "type": "card",
-  "size": { "width": 984 },
-  "style": { "display": "grid", "grid-template-columns": "1fr 1fr", "gap": 24 },
+  "style": { "width": 984, "display": "grid", "grid-template-columns": "1fr 1fr", "gap": 24 },
   "children": [
-    { "type": "card", "size": { "width": 480 }, "style": { "padding": 40 }, "children": [...] },
-    { "type": "card", "size": { "width": 480 }, "style": { "padding": 40 }, "children": [...] },
-    { "type": "card", "size": { "width": 480 }, "style": { "padding": 40 }, "children": [...] },
-    { "type": "card", "size": { "width": 480 }, "style": { "padding": 40 }, "children": [...] }
+    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
+    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
+    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
+    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] }
   ]
 }
 ```

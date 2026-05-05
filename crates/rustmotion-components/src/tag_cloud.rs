@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 const DEFAULT_PALETTE: &[&str] = &[
@@ -44,8 +44,6 @@ pub struct TagItem {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TagCloud {
     pub tags: Vec<TagItem>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_min_font_size")]
     pub min_font_size: f32,
     #[serde(default = "default_max_font_size")]
@@ -60,8 +58,6 @@ pub struct TagCloud {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

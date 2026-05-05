@@ -27,29 +27,32 @@ Each element gets a different `seed`. Because seeds produce different noise curv
 [
   {
     "type": "shape",
-    "animation": [
-      { "name": "fade_in", "duration": 0.6 },
-      { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 0.4, "seed": 7 },
-      { "name": "wiggle", "property": "translate_x", "amplitude": 3, "frequency": 0.3, "seed": 91 }
-    ],
-    "style": {}
+    "style": {
+      "animation": [
+        { "name": "fade_in", "duration": 0.6 },
+        { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 0.4, "seed": 7 },
+        { "name": "wiggle", "property": "translate_x", "amplitude": 3, "frequency": 0.3, "seed": 91 }
+      ]
+    }
   },
   {
     "type": "card",
-    "animation": [
-      { "name": "fade_in_up", "duration": 0.6 },
-      { "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.7, "seed": 42 }
-    ],
-    "style": {}
+    "style": {
+      "animation": [
+        { "name": "fade_in_up", "duration": 0.6 },
+        { "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.7, "seed": 42 }
+      ]
+    }
   },
   {
     "type": "badge",
-    "animation": [
-      { "name": "scale_in", "delay": 0.3, "duration": 0.5 },
-      { "name": "wiggle", "property": "translate_y", "amplitude": 8, "frequency": 1.2, "seed": 13 },
-      { "name": "wiggle", "property": "scale", "amplitude": 0.04, "frequency": 0.8, "seed": 55 }
-    ],
-    "style": {}
+    "style": {
+      "animation": [
+        { "name": "scale_in", "delay": 0.3, "duration": 0.5 },
+        { "name": "wiggle", "property": "translate_y", "amplitude": 8, "frequency": 1.2, "seed": 13 },
+        { "name": "wiggle", "property": "scale", "amplitude": 0.04, "frequency": 0.8, "seed": 55 }
+      ]
+    }
   }
 ]
 ```
@@ -65,15 +68,16 @@ Each element gets a different `seed`. Because seeds produce different noise curv
 ```json
 {
   "type": "card",
-  "size": { "width": 800, "height": 480 },
-  "animation": [
-    { "name": "scale_in", "duration": 0.7, "easing": "ease_out" },
-    { "name": "float_3d", "loop": true }
-  ],
   "style": {
+    "width": 800,
+    "height": 480,
     "background": "#1E293B",
     "border-radius": 28,
-    "box-shadow": [{ "color": "#00000060", "offset-y": 40, "blur": 80 }]
+    "box-shadow": [{ "color": "#00000060", "offset-y": 40, "blur": 80 }],
+    "animation": [
+      { "name": "scale_in", "duration": 0.7, "easing": "ease_out" },
+      { "name": "float_3d", "loop": true }
+    ]
   }
 }
 ```
@@ -130,9 +134,10 @@ This is the "dynamism level 2" recipe for a hero scene on portrait 9:16 (1080×1
     {
       "type": "shape",
       "shape": "circle",
-      "size": { "width": 800, "height": 800 },
+      "fill": "#6366F118",
       "style": {
-        "fill": "#6366F118",
+        "width": 800,
+        "height": 800,
         "z-index": 0,
         "animation": [
           { "name": "fade_in", "duration": 1.2 },
@@ -143,8 +148,9 @@ This is the "dynamism level 2" recipe for a hero scene on portrait 9:16 (1080×1
     },
     {
       "type": "card",
-      "size": { "width": 900, "height": 540 },
       "style": {
+        "width": 900,
+        "height": 540,
         "background": "#1E293B",
         "border-radius": 32,
         "box-shadow": [{ "color": "#00000070", "offset-y": 48, "blur": 100 }],
@@ -180,9 +186,9 @@ This is the "dynamism level 2" recipe for a hero scene on portrait 9:16 (1080×1
 
 ```json
 [
-  { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.0 }] },
-  { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.33 }] },
-  { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.67 }] }
+  { "style": { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.0 }] } },
+  { "style": { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.33 }] } },
+  { "style": { "animation": [{ "name": "orbit", "radius_x": 40, "radius_y": 24, "speed": 0.3, "depth": 0.12, "tilt": 15, "phase": 0.67 }] } }
 ]
 ```
 
@@ -204,8 +210,8 @@ Phase steps: evenly distributed (`0`, `1/N`, `2/N`, ...). Same speed + different
 ## BAD: Same seed on every element
 
 ```json
-{ "animation": [{ "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.8, "seed": 0 }] },
-{ "animation": [{ "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.8, "seed": 0 }] }
+{ "style": { "animation": [{ "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.8, "seed": 0 }] } },
+{ "style": { "animation": [{ "name": "wiggle", "property": "translate_y", "amplitude": 6, "frequency": 0.8, "seed": 0 }] } }
 ```
 Identical seed + frequency → elements move in perfect sync → no parallax, looks like a group animation bug. ✗
 

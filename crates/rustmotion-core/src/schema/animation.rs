@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Animation {
     pub property: String,
     pub keyframes: Vec<Keyframe>,
@@ -11,7 +11,7 @@ pub struct Animation {
     pub spring: Option<SpringConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Keyframe {
     pub time: f64,
     pub value: KeyframeValue,
@@ -20,7 +20,7 @@ pub struct Keyframe {
     pub easing: Option<EasingType>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum KeyframeValue {
     Number(f64),
@@ -36,7 +36,7 @@ impl KeyframeValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EasingType {
     #[default]
@@ -70,7 +70,7 @@ fn default_easing() -> EasingType {
     EasingType::EaseOut
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SpringConfig {
     #[serde(default = "default_damping")]
     pub damping: f64,

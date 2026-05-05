@@ -18,9 +18,16 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     ) {
         match &child.component {
             Component::Icon(icon) => {
-                let (w, h) = match &icon.size {
-                    Some(size) => (size.width as u32, size.height as u32),
-                    None => (24, 24),
+                // Size now comes from CSS style; at preload time we use a reasonable default.
+                use rustmotion_core::css::style::Size as CSize;
+                use rustmotion_core::css::units::LengthPercentage;
+                let w = match &icon.style.width {
+                    Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
+                    _ => 24,
+                };
+                let h = match &icon.style.height {
+                    Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
+                    _ => 24,
                 };
                 seen.insert((icon.icon.clone(), icon.style_config().color_str_or("#FFFFFF").to_string(), w, h));
             }
@@ -117,10 +124,19 @@ pub fn preextract_video_frames(
 ) {
     fn collect_videos(child: &ChildComponent, scene_frames: u32, fps: u32) {
         if let Component::Video(video) = &child.component {
+            use rustmotion_core::css::style::Size as CSize;
+            use rustmotion_core::css::units::LengthPercentage;
+            // Size now comes from CSS style; skip preload if not set as fixed px.
+            let width = match &video.style.width {
+                Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
+                _ => return,
+            };
+            let height = match &video.style.height {
+                Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
+                _ => return,
+            };
             let rate = video.playback_rate.unwrap_or(1.0);
             let trim_start = video.trim_start.unwrap_or(0.0);
-            let width = video.size.width as u32;
-            let height = video.size.height as u32;
 
             let cache_key = format!("{}:{}x{}", video.src, width, height);
             let cache = video_frame_cache();

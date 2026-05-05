@@ -5,9 +5,9 @@ To create sequential entrance effects (items appearing one by one), use `animati
 **GOOD:**
 ```json
 [
-  { "type": "text", "content": "First",  "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }], "style": { "font-size": 48, "color": "#FFFFFF" } },
-  { "type": "text", "content": "Second", "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }], "style": { "font-size": 48, "color": "#FFFFFF" } },
-  { "type": "text", "content": "Third",  "animation": [{ "name": "fade_in_up", "delay": 0.4, "duration": 0.6 }], "style": { "font-size": 48, "color": "#FFFFFF" } }
+  { "type": "text", "content": "First",  "style": { "font-size": 48, "color": "#FFFFFF", "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }] } },
+  { "type": "text", "content": "Second", "style": { "font-size": 48, "color": "#FFFFFF", "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }] } },
+  { "type": "text", "content": "Third",  "style": { "font-size": 48, "color": "#FFFFFF", "animation": [{ "name": "fade_in_up", "delay": 0.4, "duration": 0.6 }] } }
 ]
 ```
 

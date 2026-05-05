@@ -39,8 +39,9 @@ Adding `rotate_x`/`rotate_y` tilts an element so it reads as facing a direction 
 ```json
 {
   "type": "card",
-  "size": { "width": 700, "height": 420 },
   "style": {
+    "width": 700,
+    "height": 420,
     "background": "#1E293B",
     "border-radius": 24,
     "box-shadow": [{ "color": "#00000060", "offset-x": 0, "offset-y": 32, "blur": 80 }],
@@ -136,15 +137,19 @@ The further an element is from the "ground", the longer and softer its shadow.
     {
       "type": "shape",
       "shape": "circle",
-      "size": { "width": 600, "height": 600 },
       "fill": { "type": "solid", "color": "#6366F120" },
-      "animation": [{ "name": "wiggle", "property": "scale", "amplitude": 0.04, "frequency": 0.3, "seed": 7 }],
-      "style": { "z-index": 0 }
+      "style": {
+        "width": 600,
+        "height": 600,
+        "z-index": 0,
+        "animation": [{ "name": "wiggle", "property": "scale", "amplitude": 0.04, "frequency": 0.3, "seed": 7 }]
+      }
     },
     {
       "type": "card",
-      "size": { "width": 720, "height": 400 },
       "style": {
+        "width": 720,
+        "height": 400,
         "background": "#1E293B",
         "border-radius": 24,
         "box-shadow": [{ "color": "#00000050", "offset-y": 24, "blur": 48 }],
@@ -154,10 +159,10 @@ The further an element is from the "ground", the longer and softer its shadow.
     },
     {
       "type": "badge",
-      "animation": [{ "name": "float_3d", "loop": true }],
       "style": {
         "z-index": 2,
-        "box-shadow": [{ "color": "#6366F180", "offset-y": 8, "blur": 24 }]
+        "box-shadow": [{ "color": "#6366F180", "offset-y": 8, "blur": 24 }],
+        "animation": [{ "name": "float_3d", "loop": true }]
       }
     }
   ]

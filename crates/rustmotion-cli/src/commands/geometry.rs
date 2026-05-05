@@ -712,7 +712,7 @@ mod tests {
                 "children": [{
                     "type": "shape",
                     "shape": "rect",
-                    "size": { "width": 400, "height": 100 },
+                    "style": { "width": "400px", "height": "100px" },
                     "position": "absolute",
                     "x": 1700, "y": 100,
                     "fill": "#ff0000"
@@ -739,9 +739,8 @@ mod tests {
                 "duration": 1.0,
                 "children": [{
                     "type": "card",
-                    "size": { "width": 200, "height": 200 },
                     "x": 100, "y": 100,
-                    "style": { "background": "#222244" },
+                    "style": { "width": "200px", "height": "200px", "background": "#222244" },
                     "children": [{
                         "type": "text",
                         "content": "this string is too long to fit",

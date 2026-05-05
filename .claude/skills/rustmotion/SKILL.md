@@ -215,8 +215,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "shape",
           "shape": "rounded_rect",
-          "size": { "width": 900, "height": 520 },
           "style": {
+            "width": 900,
+            "height": 520,
             "fill": {
               "type": "linear",
               "colors": ["#6366f1", "#8b5cf6"],
@@ -229,8 +230,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "icon",
           "icon": "lucide:rocket",
-          "size": { "width": 80, "height": 80 },
           "style": {
+            "width": 80,
+            "height": 80,
             "color": "#FFFFFF",
             "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
           }
@@ -290,11 +292,10 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "code": "fn main() {\n    println!(\"Hello, world!\");\n}",
           "language": "rust",
           "theme": "tokyo-night",
-          "size": { "width": 1400, "height": 400 },
           "show_line_numbers": true,
           "chrome": { "enabled": true, "title": "src/main.rs" },
           "reveal": { "mode": "typewriter", "start": 0.5, "duration": 3.0 },
-          "style": { "font-size": 22, "padding": 24, "border-radius": 16 },
+          "style": { "width": 1400, "height": 400, "font-size": 22, "padding": 24, "border-radius": 16 },
           "states": [
             {
               "code": "fn main() {\n    let name = \"rustmotion\";\n    println!(\"Hello, {}!\", name);\n}",
@@ -364,8 +365,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         },
         {
           "type": "card",
-          "size": { "width": 900, "height": "auto" },
           "style": {
+            "width": 900,
+            "height": "auto",
             "flex-direction": "row",
             "gap": 16,
             "padding": 24,
@@ -377,8 +379,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
             {
               "type": "icon",
               "icon": "lucide:trending-up",
-              "size": { "width": 48, "height": 48 },
-              "style": { "color": "#22C55E" }
+              "style": { "width": 48, "height": 48, "color": "#22C55E" }
             },
             {
               "type": "text",
@@ -407,8 +408,9 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "icon",
           "icon": "lucide:heart",
-          "size": { "width": 64, "height": 64 },
           "style": {
+            "width": 64,
+            "height": 64,
             "color": "#F43F5E",
             "animation": [
               { "name": "fade_in", "delay": 0.5 },
@@ -604,6 +606,8 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 
 | Style field | Type | Default | Description |
 | --- | --- | --- | --- |
+| `width` | number or string | `null` | Component width in px, or CSS string (`"50%"`, `"auto"`) |
+| `height` | number or string | `null` | Component height in px, or CSS string (`"50%"`, `"auto"`) |
 | `opacity` | f32 | `1.0` | 0.0 to 1.0 |
 | `padding` | f32 or {top,right,bottom,left} | `null` | Inner spacing |
 | `margin` | f32 or {top,right,bottom,left} | `null` | Outer spacing |
@@ -738,8 +742,9 @@ Animates each character or word independently with staggered timing. Use `char_*
 {
   "type": "shape",
   "shape": "rounded_rect",
-  "size": { "width": 200, "height": 100 },
   "style": {
+    "width": 200,
+    "height": 100,
     "fill": "#FF5733",
     "border-radius": 16,
     "stroke": { "color": "#FFFFFF", "width": 2 }
@@ -747,7 +752,7 @@ Animates each character or word independently with staggered timing. Use `char_*
 }
 ```
 
-**Root fields:** `shape` (required), `size`, `text`
+**Root fields:** `shape` (required), `text`
 
 | Style field     | Type               | Default     |
 | --------------- | ------------------ | ----------- |
@@ -794,17 +799,18 @@ Types: `linear`, `radial`.
 {
   "type": "image",
   "src": "path/to/image.png",
-  "size": { "width": 400, "height": 300 },
-  "fit": "cover"
+  "fit": "cover",
+  "style": { "width": 400, "height": 300 }
 }
 ```
 
-| Field      | Type              | Default                                                         |
-| ---------- | ----------------- | --------------------------------------------------------------- |
-| `src`      | string            | required — path to image file                                   |
-| `position` | `{x, y}`          | `{0, 0}`                                                        |
-| `size`     | `{width, height}` | `null` (uses image dimensions)                                  |
-| `fit`      | enum              | `"cover"` — options: `"cover"`, `"contain"`, `"fill"`, `"none"` |
+| Field      | Type   | Default                                                         |
+| ---------- | ------ | --------------------------------------------------------------- |
+| `src`      | string | required — path to image file                                   |
+| `position` | `{x, y}` | `{0, 0}`                                                      |
+| `fit`      | enum   | `"cover"` — options: `"cover"`, `"contain"`, `"fill"`, `"none"` |
+
+Style: `width`, `height` (default: uses image dimensions)
 
 ### 4. `svg`
 
@@ -812,16 +818,17 @@ Types: `linear`, `radial`.
 {
   "type": "svg",
   "data": "<svg>...</svg>",
-  "size": { "width": 200, "height": 200 }
+  "style": { "width": 200, "height": 200 }
 }
 ```
 
-| Field      | Type              | Default                                                     |
-| ---------- | ----------------- | ----------------------------------------------------------- |
-| `src`      | string            | `null` — path to SVG file (either `src` or `data` required) |
-| `data`     | string            | `null` — inline SVG markup                                  |
-| `position` | `{x, y}`          | `{0, 0}`                                                    |
-| `size`     | `{width, height}` | `null`                                                      |
+| Field      | Type     | Default                                                     |
+| ---------- | -------- | ----------------------------------------------------------- |
+| `src`      | string   | `null` — path to SVG file (either `src` or `data` required) |
+| `data`     | string   | `null` — inline SVG markup                                  |
+| `position` | `{x, y}` | `{0, 0}`                                                    |
+
+Style: `width`, `height` (default: intrinsic SVG dimensions)
 
 ### 5. `icon`
 
@@ -831,18 +838,16 @@ Renders an icon from the **Iconify** open-source framework (200,000+ icons from 
 {
   "type": "icon",
   "icon": "lucide:home",
-  "size": { "width": 64, "height": 64 },
-  "style": { "color": "#38bdf8" }
+  "style": { "width": 64, "height": 64, "color": "#38bdf8" }
 }
 ```
 
-| Field      | Type              | Default                                                  |
-| ---------- | ----------------- | -------------------------------------------------------- |
-| `icon`     | string            | required — Iconify id `"prefix:name"` (e.g. `"lucide:home"`) |
-| `position` | `{x, y}`          | `{0, 0}`                                                 |
-| `size`     | `{width, height}` | `{24, 24}`                                               |
+| Field      | Type     | Default                                                      |
+| ---------- | -------- | ------------------------------------------------------------ |
+| `icon`     | string   | required — Iconify id `"prefix:name"` (e.g. `"lucide:home"`) |
+| `position` | `{x, y}` | `{0, 0}`                                                     |
 
-Style: `color` (default `"#FFFFFF"`)
+Style: `width`, `height` (default `24`), `color` (default `"#FFFFFF"`)
 
 Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), `tabler`, `simple-icons` (brand logos), `devicon` (dev tools)
 
@@ -852,23 +857,24 @@ Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), 
 {
   "type": "video",
   "src": "path/to/video.mp4",
-  "size": { "width": 1920, "height": 1080 },
   "trim_start": 2.0,
-  "trim_end": 10.0
+  "trim_end": 10.0,
+  "style": { "width": 1920, "height": 1080 }
 }
 ```
 
-| Field           | Type              | Default   |
-| --------------- | ----------------- | --------- |
-| `src`           | string            | required  |
-| `position`      | `{x, y}`          | `{0, 0}`  |
-| `size`          | `{width, height}` | required  |
-| `trim_start`    | f64               | `null`    |
-| `trim_end`      | f64               | `null`    |
-| `playback_rate` | f64               | `null`    |
-| `fit`           | enum              | `"cover"` |
-| `volume`        | f32               | `1.0`     |
-| `loop_video`    | bool              | `null`    |
+| Field           | Type     | Default   |
+| --------------- | -------- | --------- |
+| `src`           | string   | required  |
+| `position`      | `{x, y}` | `{0, 0}`  |
+| `trim_start`    | f64      | `null`    |
+| `trim_end`      | f64      | `null`    |
+| `playback_rate` | f64      | `null`    |
+| `fit`           | enum     | `"cover"` |
+| `volume`        | f32      | `1.0`     |
+| `loop_video`    | bool     | `null`    |
+
+Style: `width`, `height` (required)
 
 ### 7. `gif`
 
@@ -876,17 +882,18 @@ Common prefixes: `lucide` (UI), `mdi` (Material), `heroicons`, `ph` (Phosphor), 
 {
   "type": "gif",
   "src": "path/to/animation.gif",
-  "size": { "width": 200, "height": 200 }
+  "style": { "width": 200, "height": 200 }
 }
 ```
 
-| Field      | Type              | Default   |
-| ---------- | ----------------- | --------- |
-| `src`      | string            | required  |
-| `position` | `{x, y}`          | `{0, 0}`  |
-| `size`     | `{width, height}` | `null`    |
-| `fit`      | enum              | `"cover"` |
-| `loop_gif` | bool              | `true`    |
+| Field      | Type     | Default   |
+| ---------- | -------- | --------- |
+| `src`      | string   | required  |
+| `position` | `{x, y}` | `{0, 0}`  |
+| `fit`      | enum     | `"cover"` |
+| `loop_gif` | bool     | `true`    |
+
+Style: `width`, `height` (default: intrinsic GIF dimensions)
 
 ### 8. `caption`
 
@@ -947,11 +954,10 @@ To place children at fixed absolute coordinates, use a `card` with transparent b
 ```json
 {
   "type": "card",
-  "size": { "width": 1920, "height": 1080 },
-  "style": { "background": "#00000000", "padding": 0 },
+  "style": { "width": 1920, "height": 1080, "background": "#00000000", "padding": 0 },
   "children": [
-    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "size": { "width": 400, "height": 300 }, "style": { "fill": "#1E293B", "border-radius": 16 } },
-    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "size": { "width": 64, "height": 64 }, "style": { "color": "#FFFFFF" } }
+    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "style": { "width": 400, "height": 300, "fill": "#1E293B", "border-radius": 16 } },
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "width": 64, "height": 64, "color": "#FFFFFF" } }
   ]
 }
 ```
@@ -960,18 +966,17 @@ To place children at fixed absolute coordinates, use a `card` with transparent b
 
 Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. See Rule 8.
 
-Each dimension of `size` can be a number or `"auto"`.
+Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 
 **Flex example:**
 ```json
 {
   "type": "card",
-  "size": { "width": 800, "height": 100 },
-  "style": { "flex-direction": "row", "gap": 16 },
+  "style": { "width": 800, "height": 100, "flex-direction": "row", "gap": 16 },
   "children": [
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#FF0000" } },
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#00FF00", "flex-grow": 1 } },
-    { "type": "shape", "shape": "rect", "size": { "width": 100, "height": 100 }, "style": { "fill": "#0000FF" } }
+    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#FF0000" } },
+    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#00FF00", "flex-grow": 1 } },
+    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#0000FF" } }
   ]
 }
 ```
@@ -980,8 +985,9 @@ Each dimension of `size` can be a number or `"auto"`.
 ```json
 {
   "type": "card",
-  "size": { "width": 600, "height": 400 },
   "style": {
+    "width": 600,
+    "height": 400,
     "display": "grid",
     "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
     "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
@@ -1035,8 +1041,9 @@ Use `container` when you need to apply a single animation/timeline to a group of
 ```json
 {
   "type": "container",
-  "size": { "width": "auto", "height": "auto" },
   "style": {
+    "width": "auto",
+    "height": "auto",
     "align-items": "center",
     "gap": 36,
     "timeline": [
@@ -1047,7 +1054,7 @@ Use `container` when you need to apply a single animation/timeline to a group of
     ]
   },
   "children": [
-    { "type": "icon", "icon": "lucide:zap", "size": { "width": 80, "height": 80 }, "style": { "color": "#25D366" } },
+    { "type": "icon", "icon": "lucide:zap", "style": { "width": 80, "height": 80, "color": "#25D366" } },
     { "type": "text", "content": "Grouped content", "style": { "font-size": 48, "color": "#FFFFFF" } }
   ]
 }
@@ -1080,7 +1087,9 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 }
 ```
 
-**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background), `auto_scroll` (bool, default `true` — when content overflows the box vertically, scrolls so the last revealed line stays visible; font is never reduced. See [rules/geometry-safety.md](rules/geometry-safety.md))
+**Root fields:** `code` (required), `language`, `theme`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff` (bool — enables diff mode: lines starting with `+` get green background, `-` get red background), `auto_scroll` (bool, default `true` — when content overflows the box vertically, scrolls so the last revealed line stays visible; font is never reduced. See [rules/geometry-safety.md](rules/geometry-safety.md))
+
+Style: `width`, `height` (set to constrain the visible area; content scrolls if it overflows vertically when `auto_scroll: true`)
 
 **Diff mode example:**
 ```json
@@ -1195,11 +1204,13 @@ Terminal window with colored lines and chrome.
     { "text": "npm install", "line_type": "prompt" },
     { "text": "added 42 packages", "line_type": "output" }
   ],
-  "size": { "width": 600, "height": 300 }
+  "style": { "width": 600, "height": 300 }
 }
 ```
 
-**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `size`, `auto_scroll` (bool, default `true` — vertical scroll when content > box, font never shrinks. See [rules/geometry-safety.md](rules/geometry-safety.md))
+**Root fields:** `lines` (required — `[{ "text", "line_type", "color" }]`), `theme` (dark/light), `title`, `show_chrome` (default true), `reveal`, `auto_scroll` (bool, default `true` — vertical scroll when content > box, font never shrinks. See [rules/geometry-safety.md](rules/geometry-safety.md))
+
+Style: `width`, `height` (set to constrain the visible area)
 
 **Reveal:** `{ "mode": "typewriter"|"line_by_line", "start": 0, "duration": 1.0, "easing": "linear" }` — animates line/word appearance. In typewriter mode, a blinking cursor appears at the typing position.
 
@@ -1220,12 +1231,11 @@ Data table with headers, styled rows, configurable column widths and alignment.
   "column_align": ["left", "right", "right"],
   "cell_padding": 20,
   "show_borders": true,
-  "size": { "width": 650, "height": 150 },
-  "style": { "color": "#E2E8F0", "font-size": 15, "border-radius": 12 }
+  "style": { "width": 650, "height": 150, "color": "#E2E8F0", "font-size": 15, "border-radius": 12 }
 }
 ```
 
-**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating array), `border_color` (#4B5563), `header_text_color`, `column_widths` (array of f32 — explicit pixel widths per column), `column_align` (array — `"left"` / `"center"` / `"right"` per column), `cell_padding` (f32, default 12), `show_borders` (bool, default true), `size`
+**Root fields:** `headers` (required), `rows` (required), `header_color` (#374151), `row_colors` (alternating array), `border_color` (#4B5563), `header_text_color`, `column_widths` (array of f32 — explicit pixel widths per column), `column_align` (array — `"left"` / `"center"` / `"right"` per column), `cell_padding` (f32, default 12), `show_borders` (bool, default true)
 
 Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default 14), `font-family`, `border-radius`
 
@@ -1248,13 +1258,15 @@ Data visualization with animation. Supports 12 chart types.
   "show_grid": true,
   "show_x_labels": true,
   "show_y_labels": true,
-  "size": { "width": 600, "height": 300 }
+  "style": { "width": 600, "height": 300 }
 }
 ```
 
 **Chart types:** `bar`, `line`, `pie`, `donut`, `horizontal_bar`, `area`, `stacked_bar`, `radar`, `scatter`, `radial_bar`, `funnel`, `waterfall`
 
-**Root fields:** `chart_type` (required), `data` (`[{ "value", "label"?, "color"? }]`), `size` (default 300x200), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
+**Root fields:** `chart_type` (required), `data` (`[{ "value", "label"?, "color"? }]`), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
+
+Style: `width`, `height` (default 300×200)
 
 **Axes & grid (bar, line, area, stacked_bar, scatter, waterfall):** `show_grid`, `show_x_labels`, `show_y_labels`, `grid_color` (#FFFFFF15), `label_color` (#888888), `label_font_size` (12)
 
@@ -1461,20 +1473,21 @@ Renders Lottie animations from pre-rendered PNG frame sequences. Requires frames
   "type": "lottie",
   "src": "animation.json",
   "frames_dir": "/path/to/frames",
-  "size": { "width": 300, "height": 300 },
   "speed": 1.0,
-  "loop": true
+  "loop": true,
+  "style": { "width": 300, "height": 300 }
 }
 ```
 
-| Field       | Type              | Default  | Description                                                  |
-| ----------- | ----------------- | -------- | ------------------------------------------------------------ |
-| `src`       | string            | `null`   | Path to Lottie JSON file (for metadata: fps, frame count)    |
-| `data`      | string            | `null`   | Inline Lottie JSON data (alternative to `src`)               |
-| `frames_dir`| string            | `null`   | Directory with pre-rendered frames (`0000.png`, `0001.png`, ...) |
-| `size`      | `{width, height}` | `null`   | Display size (falls back to Lottie intrinsic size)           |
-| `speed`     | f32               | `1.0`    | Playback speed multiplier                                    |
-| `loop`      | bool              | `true`   | Loop the animation                                           |
+| Field        | Type   | Default | Description                                                  |
+| ------------ | ------ | ------- | ------------------------------------------------------------ |
+| `src`        | string | `null`  | Path to Lottie JSON file (for metadata: fps, frame count)    |
+| `data`       | string | `null`  | Inline Lottie JSON data (alternative to `src`)               |
+| `frames_dir` | string | `null`  | Directory with pre-rendered frames (`0000.png`, `0001.png`, ...) |
+| `speed`      | f32    | `1.0`   | Playback speed multiplier                                    |
+| `loop`       | bool   | `true`  | Loop the animation                                           |
+
+Style: `width`, `height` (default: Lottie intrinsic size)
 
 **Generating frames:** Use tools like `npx lottie-to-frames animation.json --output frames/` or puppeteer/lottie-web to pre-render Lottie frames as numbered PNGs.
 
@@ -1618,11 +1631,13 @@ Semi-circular arc gauge for KPIs and dashboards.
   "track_color": "#1E293B",
   "track_width": 16,
   "show_value": true,
-  "size": { "width": 200, "height": 140 }
+  "style": { "width": 200, "height": 140 }
 }
 ```
 
-**Root fields:** `value` (required), `min` (0), `max` (100), `label`, `fill_color` (#3B82F6), `track_color` (#333333), `track_width` (16), `start_angle` (135), `end_angle` (405), `show_value` (true), `animated` (true), `animation_duration` (1.5s), `size` (default 200x140)
+**Root fields:** `value` (required), `min` (0), `max` (100), `label`, `fill_color` (#3B82F6), `track_color` (#333333), `track_width` (16), `start_angle` (135), `end_angle` (405), `show_value` (true), `animated` (true), `animation_duration` (1.5s)
+
+Style: `width`, `height` (default 200×140)
 
 ### 31. `sparkline`
 
@@ -1636,11 +1651,13 @@ Mini inline chart without axes — ideal inside cards next to counters.
   "fill": true,
   "fill_opacity": 0.2,
   "stroke_width": 2,
-  "size": { "width": 120, "height": 40 }
+  "style": { "width": 120, "height": 40 }
 }
 ```
 
-**Root fields:** `data` (required — array of f64), `color` (#22C55E), `fill` (false — gradient fill under line), `fill_opacity` (0.2), `stroke_width` (2.0), `animated` (true), `animation_duration` (1.0s), `size` (default 120x40)
+**Root fields:** `data` (required — array of f64), `color` (#22C55E), `fill` (false — gradient fill under line), `fill_opacity` (0.2), `stroke_width` (2.0), `animated` (true), `animation_duration` (1.0s)
+
+Style: `width`, `height` (default 120×40)
 
 ### 32. `stat`
 
@@ -1654,12 +1671,13 @@ Composite KPI card: value + label + trend arrow + sparkline.
   "trend": { "value": "+12.5%", "direction": "up" },
   "sparkline_data": [20, 25, 22, 30, 28, 35, 32, 40, 38, 45],
   "sparkline_color": "#22C55E",
-  "size": { "width": 280, "height": 180 },
-  "style": { "background": "#1E293B", "border-radius": 16 }
+  "style": { "width": 280, "height": 180, "background": "#1E293B", "border-radius": 16 }
 }
 ```
 
-**Root fields:** `value` (required — display string), `label`, `trend` (`{ "value": string, "direction": "up"/"down"/"neutral", "color"? }`), `sparkline_data` (array of f64), `sparkline_color`, `value_font_size` (48), `label_font_size` (14), `value_color` (#FFFFFF), `label_color` (#94A3B8), `size` (default 240x140)
+**Root fields:** `value` (required — display string), `label`, `trend` (`{ "value": string, "direction": "up"/"down"/"neutral", "color"? }`), `sparkline_data` (array of f64), `sparkline_color`, `value_font_size` (48), `label_font_size` (14), `value_color` (#FFFFFF), `label_color` (#94A3B8)
+
+Style: `width`, `height` (default 240×140)
 
 Trend uses `lucide:trending-up` / `lucide:trending-down` icons. Direction `"down"` with a positive connotation (e.g. churn decreasing) can use `"color": "#22C55E"` to override the default red.
 
@@ -1672,11 +1690,13 @@ Loading placeholder with animated shimmer effect. Three variants for different c
   "type": "skeleton",
   "variant": "text",
   "lines": 3,
-  "size": { "width": 300, "height": 68 }
+  "style": { "width": 300, "height": 68 }
 }
 ```
 
-**Root fields:** `variant` (`"rectangle"` / `"circle"` / `"text"`), `base_color` (#1E293B), `shimmer_color` (#334155), `border_radius` (8), `speed` (1.5 — shimmer cycle duration), `lines` (3 — text variant only), `line_height` (16), `line_gap` (12), `size`
+**Root fields:** `variant` (`"rectangle"` / `"circle"` / `"text"`), `base_color` (#1E293B), `shimmer_color` (#334155), `border_radius` (8), `speed` (1.5 — shimmer cycle duration), `lines` (3 — text variant only), `line_height` (16), `line_gap` (12)
+
+Style: `width`, `height` (default: rectangle 200×40, circle 48×48, text auto-computed from lines)
 
 Default sizes: rectangle 200x40, circle 48x48, text auto-computed from lines.
 
@@ -1726,11 +1746,13 @@ Continuous scrolling text — for tickers, breaking news, or decorative text ban
   "direction": "left",
   "font_size": 24,
   "color": "#3B82F6",
-  "size": { "width": 800, "height": 48 }
+  "style": { "width": 800, "height": 48 }
 }
 ```
 
-**Root fields:** `content` (required), `speed` (100 — pixels/second), `direction` (`"left"` / `"right"`), `font_size` (24), `color` (#FFFFFF), `separator` (spacing between repeats, default 5 spaces), `size` (default 800 x font_size*2)
+**Root fields:** `content` (required), `speed` (100 — pixels/second), `direction` (`"left"` / `"right"`), `font_size` (24), `color` (#FFFFFF), `separator` (spacing between repeats, default 5 spaces)
+
+Style: `width`, `height` (default 800 × font_size×2)
 
 ### 37. `avatar_group`
 
@@ -1910,11 +1932,13 @@ Step indicator with connected nodes and animated progression.
   "active_step": 0,
   "animate_to": 2,
   "animate_at": 1.0,
-  "size": { "width": 600, "height": 80 }
+  "style": { "width": 600, "height": 80 }
 }
 ```
 
-**Root fields:** `steps` (required — `[{ "label", "description"? }]`), `active_step` (0), `animate_to` (target step), `animate_at` (time), `transition_duration` (0.5), `orientation` ("horizontal"), `active_color` (#3B82F6), `completed_color` (#22C55E), `pending_color` (#6B7280), `node_size` (32), `size`
+**Root fields:** `steps` (required — `[{ "label", "description"? }]`), `active_step` (0), `animate_to` (target step), `animate_at` (time), `transition_duration` (0.5), `orientation` ("horizontal"), `active_color` (#3B82F6), `completed_color` (#22C55E), `pending_color` (#6B7280), `node_size` (32)
+
+Style: `width`, `height`
 
 ### 46. `comparison`
 
@@ -1932,12 +1956,14 @@ Before/after split view with animated divider.
   "animate_to": 0.8,
   "animate_at": 1.0,
   "animation_duration": 2.0,
-  "size": { "width": 600, "height": 300 },
-  "border_radius": 16
+  "border_radius": 16,
+  "style": { "width": 600, "height": 300 }
 }
 ```
 
-**Root fields:** `left_color`, `right_color`, `left_label`, `right_label`, `divider_position` (0.5), `animate_from`, `animate_to`, `animate_at`, `animation_duration` (2.0), `divider_color` (#FFFFFF), `divider_width` (3), `border_radius` (12), `size`
+**Root fields:** `left_color`, `right_color`, `left_label`, `right_label`, `divider_position` (0.5), `animate_from`, `animate_to`, `animate_at`, `animation_duration` (2.0), `divider_color` (#FFFFFF), `divider_width` (3), `border_radius` (12)
+
+Style: `width`, `height`
 
 ### 47. `countdown`
 
@@ -1950,11 +1976,13 @@ Digital countdown timer with flip-clock style digit boxes.
   "digit_size": 48,
   "digit_color": "#FFFFFF",
   "digit_background": "#1E293B",
-  "size": { "width": 400, "height": 80 }
+  "style": { "width": 400, "height": 80 }
 }
 ```
 
-**Root fields:** `seconds` (total countdown, counts down from ctx.time), `show_hours` (true), `show_minutes` (true), `show_seconds` (true), `digit_size` (64), `digit_color` (#FFFFFF), `digit_background` (#1E293B), `separator_color` (#6B7280), `gap` (12), `border_radius` (12), `size`
+**Root fields:** `seconds` (total countdown, counts down from ctx.time), `show_hours` (true), `show_minutes` (true), `show_seconds` (true), `digit_size` (64), `digit_color` (#FFFFFF), `digit_background` (#1E293B), `separator_color` (#6B7280), `gap` (12), `border_radius` (12)
+
+Style: `width`, `height`
 
 ### 48. `heatmap`
 
@@ -1970,11 +1998,13 @@ Grid of colored cells (GitHub contribution style).
   "cell_size": 20,
   "cell_gap": 3,
   "cell_radius": 4,
-  "size": { "width": 400, "height": 200 }
+  "style": { "width": 400, "height": 200 }
 }
 ```
 
-**Root fields:** `data` (required — 2D array of f64, values 0.0–1.0), `color_scale` (array of hex, default GitHub green scale), `cell_size` (14), `cell_gap` (3), `cell_radius` (2), `animated` (true), `animation_duration` (1.5), `size`
+**Root fields:** `data` (required — 2D array of f64, values 0.0–1.0), `color_scale` (array of hex, default GitHub green scale), `cell_size` (14), `cell_gap` (3), `cell_radius` (2), `animated` (true), `animation_duration` (1.5)
+
+Style: `width`, `height`
 
 ### 49. `treemap`
 
@@ -1991,11 +2021,13 @@ Space-filling rectangles proportional to values.
   "show_labels": true,
   "gap": 3,
   "border_radius": 6,
-  "size": { "width": 500, "height": 300 }
+  "style": { "width": 500, "height": 300 }
 }
 ```
 
-**Root fields:** `data` (required — `[{ "label"?, "value", "color"? }]`), `gap` (3), `border_radius` (6), `show_labels` (true), `show_values` (false), `animated` (true), `animation_duration` (1.0), `size`
+**Root fields:** `data` (required — `[{ "label"?, "value", "color"? }]`), `gap` (3), `border_radius` (6), `show_labels` (true), `show_values` (false), `animated` (true), `animation_duration` (1.0)
+
+Style: `width`, `height`
 
 ### 50. `tag_cloud`
 
@@ -2011,11 +2043,13 @@ Word cloud with weighted font sizes.
   ],
   "min_font_size": 14,
   "max_font_size": 64,
-  "size": { "width": 500, "height": 300 }
+  "style": { "width": 500, "height": 300 }
 }
 ```
 
-**Root fields:** `tags` (required — `[{ "text", "weight", "color"? }]`), `min_font_size` (14), `max_font_size` (64), `colors` (custom palette), `animated` (true), `animation_duration` (1.5), `size`
+**Root fields:** `tags` (required — `[{ "text", "weight", "color"? }]`), `min_font_size` (14), `max_font_size` (64), `colors` (custom palette), `animated` (true), `animation_duration` (1.5)
+
+Style: `width`, `height`
 
 ### 51. `dot_map`
 
@@ -2033,11 +2067,13 @@ World map in dot-pattern with data points at geographic coordinates.
   "world_dot_color": "#334155",
   "dot_spacing": 10,
   "dot_radius": 2,
-  "size": { "width": 800, "height": 500 }
+  "style": { "width": 800, "height": 500 }
 }
 ```
 
-**Root fields:** `points` (required — `[{ "lat", "lng", "label"?, "size"?, "color"?, "pulse"? }]`), `show_world` (true — show world map background), `world_dot_color` (#334155), `dot_spacing` (8 — grid spacing px), `dot_radius` (1.5), `background_color` (#0F172A), `animated` (true), `animation_duration` (1.5), `size`
+**Root fields:** `points` (required — `[{ "lat", "lng", "label"?, "size"?, "color"?, "pulse"? }]`), `show_world` (true — show world map background), `world_dot_color` (#334155), `dot_spacing` (8 — grid spacing px), `dot_radius` (1.5), `background_color` (#0F172A), `animated` (true), `animation_duration` (1.5)
+
+Style: `width`, `height`
 
 Points use real geographic coordinates (lat/lng). The world map is rendered as a dot grid using a 180×90 land bitmap. Points with `pulse: true` show expanding concentric rings.
 
@@ -2140,8 +2176,9 @@ Any component can be rendered with true 3D perspective using keyframe animations
 {
   "type": "card",
   "position": { "x": 360, "y": 300 },
-  "size": { "width": 1000, "height": 400 },
   "style": {
+    "width": 1000,
+    "height": 400,
     "background": "#FFFFFF08",
     "border-radius": 24,
     "backdrop-blur": 15,

@@ -8,8 +8,9 @@ Grid cells stretch to fill their row height. When the grid container has `height
 ```json
 {
   "type": "card",
-  "size": { "width": 1200, "height": 400 },
   "style": {
+    "width": 1200,
+    "height": 400,
     "display": "grid",
     "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }, { "fr": 1 }],
     "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
@@ -23,8 +24,9 @@ Grid cells stretch to fill their row height. When the grid container has `height
 ```json
 {
   "type": "card",
-  "size": { "width": 1200, "height": "auto" },
   "style": {
+    "width": 1200,
+    "height": "auto",
     "display": "grid",
     "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }, { "fr": 1 }],
     "gap": 24

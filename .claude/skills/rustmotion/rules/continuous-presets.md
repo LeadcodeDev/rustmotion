@@ -4,12 +4,12 @@ The presets `pulse`, `float`, `shake`, and `spin` are continuous animations. Wit
 
 **GOOD:**
 ```json
-{ "animation": [{ "name": "float", "loop": true }], "style": {} }
+{ "style": { "animation": [{ "name": "float", "loop": true }] } }
 ```
 
 **BAD:**
 ```json
-{ "animation": [{ "name": "float" }], "style": {} }
+{ "style": { "animation": [{ "name": "float" }] } }
 ```
 
 Continuous presets: `pulse`, `float`, `shake`, `spin`.

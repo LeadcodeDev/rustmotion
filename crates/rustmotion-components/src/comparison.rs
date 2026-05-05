@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_left_color() -> String {
@@ -64,16 +64,12 @@ pub struct Comparison {
     pub divider_color: String,
     #[serde(default = "default_divider_width")]
     pub divider_width: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_border_radius")]
     pub border_radius: f32,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

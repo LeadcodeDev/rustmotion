@@ -4,20 +4,21 @@ Presets are simpler, less error-prone, and produce consistent motion design. Onl
 
 **GOOD:**
 ```json
-{ "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.8 }], "style": {} }
+{ "style": { "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.8 }] } }
 ```
 
 **BAD** (over-engineering a simple fade-in):
 ```json
 {
-  "animation": [{
-    "name": "keyframes",
-    "keyframes": [
-      { "property": "opacity", "keyframes": [{ "time": 0.3, "value": 0.0 }, { "time": 1.1, "value": 1.0 }], "easing": "ease_out" },
-      { "property": "translate_y", "keyframes": [{ "time": 0.3, "value": 30.0 }, { "time": 1.1, "value": 0.0 }], "easing": "ease_out" }
-    ]
-  }],
-  "style": {}
+  "style": {
+    "animation": [{
+      "name": "keyframes",
+      "keyframes": [
+        { "property": "opacity", "keyframes": [{ "time": 0.3, "value": 0.0 }, { "time": 1.1, "value": 1.0 }], "easing": "ease_out" },
+        { "property": "translate_y", "keyframes": [{ "time": 0.3, "value": 30.0 }, { "time": 1.1, "value": 0.0 }], "easing": "ease_out" }
+      ]
+    }]
+  }
 }
 ```
 

@@ -39,38 +39,36 @@ The `icon` field must use the `"prefix:name"` format.
 - Use `devicon` for programming language logos (e.g. `devicon:rust`, `devicon:python`)
 - All icons are monochrome and colored via `style.color`
 
-## animation must be at root level — never inside style
+## animation belongs inside style
 
-`style` is a `CssStyle` with `deny_unknown_fields`. Any non-CSS property inside `style` will cause the entire component to fail to deserialize (silent drop in render, warning in studio).
+`animation`, `width`, `height` are placed **inside `style`**, not at the component root.
 
-`animation`, `fill`, `stroke`, `size`, `position`, `x`, `y` are **root-level fields**, not CSS properties.
+**BAD — animation at root (old schema, now invalid):**
+```json
+{
+  "type": "icon",
+  "icon": "lucide:sparkles",
+  "animation": [{ "name": "fade_in" }],
+  "style": {
+    "color": "#C084FC"
+  }
+}
+```
 
-**BAD — animation inside style (component silently dropped):**
+**GOOD — animation inside style:**
 ```json
 {
   "type": "icon",
   "icon": "lucide:sparkles",
   "style": {
     "color": "#C084FC",
-    "animation": [{ "name": "fade_in" }]
+    "z-index": 2,
+    "animation": [
+      { "name": "fade_in", "duration": 0.4 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 10, "frequency": 1.2, "seed": 33 }
+    ]
   }
 }
 ```
 
-**GOOD — animation at root:**
-```json
-{
-  "type": "icon",
-  "icon": "lucide:sparkles",
-  "animation": [
-    { "name": "fade_in", "duration": 0.4 },
-    { "name": "wiggle", "property": "translate_y", "amplitude": 10, "frequency": 1.2, "seed": 33 }
-  ],
-  "style": {
-    "color": "#C084FC",
-    "z-index": 2
-  }
-}
-```
-
-This rule applies to **all components**: `badge`, `icon`, `shape`, `card`, `text`, etc. — `animation` is always at root, never nested inside `style`.
+This rule applies to **all components**: `badge`, `icon`, `shape`, `card`, `text`, etc. — `animation` is always inside `style`.

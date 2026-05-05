@@ -23,8 +23,8 @@ The `dot_map` component uses geographic coordinates, not normalized 0-1 values.
 | São Paulo | -23.55 | -46.63 |
 
 ### Sizing recommendations
-- Full-width map: `"size": { "width": 1760, "height": 880 }` with `dot_spacing: 10`, `dot_radius: 2`
-- Medium map: `"size": { "width": 800, "height": 400 }` with `dot_spacing: 8`, `dot_radius: 1.5`
+- Full-width map: `"style": { "width": 1760, "height": 880 }` with `dot_spacing: 10`, `dot_radius: 2`
+- Medium map: `"style": { "width": 800, "height": 400 }` with `dot_spacing: 8`, `dot_radius: 1.5`
 - Use `pulse: true` on 3-5 key points maximum to avoid visual clutter
 
 ### BAD: using 0-1 coordinates

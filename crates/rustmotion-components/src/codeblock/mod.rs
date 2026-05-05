@@ -12,7 +12,7 @@ use skia_safe::Canvas;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::{AnimationEffect, CodeblockChrome, CodeblockHighlight, CodeblockReveal, CodeblockState, Size, TimelineStep};
+use rustmotion_core::schema::{CodeblockChrome, CodeblockHighlight, CodeblockReveal, CodeblockState, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -22,8 +22,6 @@ pub struct Codeblock {
     pub language: String,
     #[serde(default = "default_theme")]
     pub theme: String,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default)]
     pub show_line_numbers: bool,
     #[serde(default)]
@@ -47,8 +45,6 @@ pub struct Codeblock {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

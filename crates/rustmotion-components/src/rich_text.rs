@@ -7,7 +7,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::schema::{AnimationEffect, FontStyleType, FontWeight, TextAlign, TimelineStep};
+use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A single styled span within a rich_text component.
@@ -38,8 +38,6 @@ pub struct RichText {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

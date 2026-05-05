@@ -19,10 +19,10 @@ macro_rules! impl_traits {
         )*
     };
 
-    (@single $type:ty, Animatable, $field:ident) => {
+    (@single $type:ty, Animatable, $_field:ident) => {
         impl $crate::traits::Animatable for $type {
             fn animation_effects(&self) -> &[$crate::schema::AnimationEffect] {
-                &self.$field
+                &self.style.animation
             }
         }
     };

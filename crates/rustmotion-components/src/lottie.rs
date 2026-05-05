@@ -6,7 +6,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
@@ -22,9 +22,6 @@ pub struct Lottie {
     /// Inline Lottie JSON data.
     #[serde(default)]
     pub data: Option<String>,
-    /// Output size (width, height). If not specified, uses the Lottie's intrinsic size.
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Playback speed multiplier (1.0 = normal, 2.0 = double speed).
     #[serde(default = "default_speed")]
     pub speed: f32,
@@ -40,8 +37,6 @@ pub struct Lottie {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

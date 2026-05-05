@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
     measure_text_with_fallback, paint_from_hex, parse_hex_color,
 };
-use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
+use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_value_font_size() -> f32 {
@@ -62,8 +62,6 @@ pub struct Stat {
     pub sparkline_data: Vec<f64>,
     #[serde(default)]
     pub sparkline_color: Option<String>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_value_font_size")]
     pub value_font_size: f32,
     #[serde(default = "default_label_font_size")]
@@ -76,8 +74,6 @@ pub struct Stat {
     pub timing: TimingConfig,
     #[serde(default)]
     pub style: CssStyle,
-    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
-    pub animation: Vec<AnimationEffect>,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]

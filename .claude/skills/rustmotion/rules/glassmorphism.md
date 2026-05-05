@@ -52,12 +52,9 @@ Règle du pouce : **hex opacity 12–30 sur fond sombre, 60–90 sur fond clair.
 ```json
 {
   "type": "card",
-  "size": { "width": 860, "height": 480 },
-  "animation": [
-    { "name": "fade_in_up", "duration": 0.6 },
-    { "name": "float_3d", "loop": true }
-  ],
   "style": {
+    "width": 860,
+    "height": 480,
     "background": "#FFFFFF18",
     "backdrop-filter": [{ "fn": "blur", "radius": 24 }],
     "border-radius": 32,
@@ -71,7 +68,11 @@ Règle du pouce : **hex opacity 12–30 sur fond sombre, 60–90 sur fond clair.
     "justify-content": "center",
     "gap": 24,
     "padding": 48,
-    "z-index": 1
+    "z-index": 1,
+    "animation": [
+      { "name": "fade_in_up", "duration": 0.6 },
+      { "name": "float_3d", "loop": true }
+    ]
   },
   "children": [...]
 }
@@ -89,17 +90,20 @@ Le glassmorphisme n'a d'intérêt que s'il y a quelque chose à voir derrière. 
 {
   "type": "shape",
   "shape": "circle",
-  "size": { "width": 700, "height": 700 },
   "position": "absolute",
   "x": 90,
   "y": 600,
   "fill": { "type": "radial", "colors": ["#6366F180", "#6366F100"] },
-  "animation": [
-    { "name": "fade_in", "duration": 1.0 },
-    { "name": "wiggle", "property": "scale", "amplitude": 0.06, "frequency": 0.25, "seed": 7 },
-    { "name": "wiggle", "property": "translate_y", "amplitude": 14, "frequency": 0.20, "seed": 91 }
-  ],
-  "style": { "z-index": 0 }
+  "style": {
+    "width": 700,
+    "height": 700,
+    "z-index": 0,
+    "animation": [
+      { "name": "fade_in", "duration": 1.0 },
+      { "name": "wiggle", "property": "scale", "amplitude": 0.06, "frequency": 0.25, "seed": 7 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 14, "frequency": 0.20, "seed": 91 }
+    ]
+  }
 }
 ```
 
