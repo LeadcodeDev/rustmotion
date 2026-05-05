@@ -2,10 +2,12 @@ use rustmotion_core::error::{Result, RustmotionError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
 ///
@@ -166,5 +168,50 @@ impl Widget for Lottie {
         }
 
         (200.0, 200.0)
+    }
+}
+
+impl Painter for Lottie {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let Ok((fr, total_frames, duration, _intrinsic_w, _intrinsic_h)) = self.parse_metadata() else {
+            return;
+        };
+
+        if total_frames == 0 {
+            return;
+        }
+
+        let anim_time = ctx.time * self.speed as f64;
+        let effective_time = if self.repeat && duration > 0.0 {
+            anim_time % duration
+        } else {
+            anim_time.min(duration)
+        };
+        let frame = ((effective_time * fr) as usize).min(total_frames.saturating_sub(1));
+
+        let cache_key = self.cache_key(frame);
+        let cache = asset_cache();
+
+        let img = if let Some(cached) = cache.get(&cache_key) {
+            cached.clone()
+        } else if let Some(ref frames_dir) = self.frames_dir {
+            let Ok(img) = self.load_frame_from_dir(frames_dir, frame) else {
+                return;
+            };
+            cache.insert(cache_key, img.clone());
+            img
+        } else {
+            return;
+        };
+
+        let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
+        let paint = Paint::default();
+        canvas.draw_image_rect(img, None, dst, &paint);
     }
 }

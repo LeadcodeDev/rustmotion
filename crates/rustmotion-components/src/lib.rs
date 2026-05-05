@@ -416,6 +416,9 @@ impl Component {
             Component::Icon(c) => Some(c),
             Component::Svg(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::Gif(c) => Some(c),
+            Component::Video(c) => Some(c),
+            Component::Lottie(c) => Some(c),
             _ => None,
         }
     }
