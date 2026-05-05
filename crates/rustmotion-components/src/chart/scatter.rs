@@ -39,7 +39,7 @@ impl Chart {
         let range_x = (max_x - min_x).max(0.001);
         let range_y = (max_y - min_y).max(0.001);
 
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_y, max_y, &[]);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_y, max_y, &[], false);
 
         for (i, pt) in self.points.iter().enumerate() {
             let px = ml + ((pt.x - min_x) / range_x) as f32 * chart_w;

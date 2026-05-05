@@ -1,8 +1,7 @@
-//! Bridge from the legacy `Component` tree to the new `BoxNode` tree.
+//! Bridge from the `Component` tree to the new `BoxNode` tree.
 //!
 //! Each `ChildComponent` becomes one `BoxNode`. The component's
-//! `style: LayerStyle` is converted to `CssStyle` via `legacy::layer_to_css`
-//! and augmented with:
+//! `style: CssStyle` is augmented with:
 //! - `position: absolute` + `top` / `left` when `child.position` is set
 //! - `width` / `height` from the component's `size` field (if any)
 //! - `z-index` from the child's `z_index` field
@@ -17,13 +16,14 @@
 use std::sync::Arc;
 
 use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
-use rustmotion_core::css::{apply_animated_props, layer_to_css, Length as CLength, LengthPercentage as CLP};
+use rustmotion_core::css::{apply_animated_props, Length as CLength, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use rustmotion_core::schema::SizeDimension;
 
 use crate::divider::DividerDirection;
 use crate::flex::FlexSize;
+use crate::timeline::TimelineDirection;
 use crate::{ChildComponent, Component};
 
 /// Frame-level context passed into the builder so animations can be resolved
@@ -247,10 +247,10 @@ fn container_children<'a>(
         .collect()
 }
 
-/// Convert a component's legacy style into CSS, augmented with intrinsic
-/// `width`/`height` for components that carry a fixed size.
+/// Pull the component's `CssStyle`, augmented with intrinsic `width`/`height`
+/// for components that carry a fixed size.
 fn component_css(component: &Component) -> CssStyle {
-    let mut css = layer_to_css(component_style(component));
+    let mut css = component_style(component).clone();
 
     if let Some((w, h)) = component_size(component) {
         if let Some(s) = size_to_css(&w) {
@@ -261,8 +261,24 @@ fn component_css(component: &Component) -> CssStyle {
         }
     }
 
+    apply_default_display(component, &mut css);
     apply_intrinsic_overrides(component, &mut css);
     css
+}
+
+/// Set `display` from the component kind when the user didn't specify one.
+/// `card` / `flex` → `flex`, `grid` → `grid`. The taffy bridge defaults to
+/// `block` otherwise, which would silently ignore `flex-direction` & friends.
+fn apply_default_display(component: &Component, css: &mut CssStyle) {
+    use rustmotion_core::css::style::Display;
+    if css.display.is_some() {
+        return;
+    }
+    css.display = match component {
+        Component::Card(_) | Component::Flex(_) => Some(Display::Flex),
+        Component::Grid(_) => Some(Display::Grid),
+        _ => return,
+    };
 }
 
 /// Apply per-component CSS overrides for things that the legacy
@@ -357,8 +373,8 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
     }
 }
 
-/// Borrow the legacy `LayerStyle` from any component.
-fn component_style(c: &Component) -> &rustmotion_core::schema::LayerStyle {
+/// Borrow the `CssStyle` from any component.
+fn component_style(c: &Component) -> &CssStyle {
     use Component::*;
     match c {
         Text(c) => &c.style,
@@ -457,8 +473,55 @@ fn component_size(c: &Component) -> Option<(SizeDimension, SizeDimension)> {
         Treemap(c) => c.size.as_ref().map(size_pair),
         DotMap(c) => c.size.as_ref().map(size_pair),
         Table(c) => c.size.as_ref().map(size_pair),
-        Countdown(c) => c.size.as_ref().map(size_pair),
+        Countdown(c) => Some(c.size.as_ref().map(size_pair).unwrap_or_else(|| {
+            let visible = [c.show_hours, c.show_minutes, c.show_seconds]
+                .iter()
+                .filter(|v| **v)
+                .count() as f32;
+            let box_w = c.digit_size * 0.75;
+            let box_h = c.digit_size * 1.2;
+            let w = (visible * 2.0 * box_w) + ((visible - 1.0).max(0.0) * c.gap);
+            (SizeDimension::Fixed(w), SizeDimension::Fixed(box_h))
+        })),
         Progress(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
+        Marquee(c) => c.size.as_ref().map(size_pair),
+        Callout(c) => c.size.as_ref().map(size_pair),
+        TagCloud(c) => c.size.as_ref().map(size_pair),
+        List(c) => {
+            let font_size = c.style.font_size_px_or(16.0);
+            let line_height = font_size * 1.3;
+            let n = c.items.len() as f32;
+            let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
+            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
+        }
+        Timeline(c) => {
+            let r = c.node_radius;
+            let h = match c.direction {
+                TimelineDirection::Horizontal => r * 2.0 + c.font_size * 2.5 + 24.0,
+                TimelineDirection::Vertical => {
+                    let n = c.steps.len().max(1) as f32;
+                    n * (r * 2.0 + 64.0)
+                }
+            };
+            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
+        }
+        Notification(c) => {
+            let h = if c.message.is_some() { 96.0 } else { 64.0 };
+            Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(h)))
+        }
+        Rating(c) => {
+            let count = c.max as f32;
+            let w = count * c.size + (count - 1.0).max(0.0) * c.gap;
+            Some((SizeDimension::Fixed(w), SizeDimension::Fixed(c.size)))
+        }
+        AvatarGroup(c) => {
+            let visible = c.visible_count() as f32;
+            let extra = if c.overflow_count() > 0 { 1.0 } else { 0.0 };
+            let total = visible + extra;
+            let step = (c.size - c.overlap).max(0.0);
+            let w = if total <= 0.0 { 0.0 } else { c.size + (total - 1.0) * step };
+            Some((SizeDimension::Fixed(w), SizeDimension::Fixed(c.size)))
+        }
         _ => None,
     }
 }
@@ -487,17 +550,20 @@ fn _silence(_: CLength) {}
 mod tests {
     use super::*;
     use crate::flex::FlexSize;
-    use rustmotion_core::css::style::{Display, FlexDirection};
+    use rustmotion_core::css::style::{CssStyle, Display, Edges, FlexDirection, Gap};
+    use rustmotion_core::css::units::LengthPercentage;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
-    use rustmotion_core::schema::{LayerStyle, Spacing};
 
-    fn make_card(children: Vec<ChildComponent>, style: LayerStyle, size: Option<FlexSize>) -> Component {
+    fn make_card(children: Vec<ChildComponent>, style: CssStyle, size: Option<FlexSize>) -> Component {
         Component::Card(crate::card::Card {
             children,
             size,
             timing: Default::default(),
             style,
+            animation: Vec::new(),
+            timeline: Vec::new(),
+            stagger: None,
         })
     }
 
@@ -508,7 +574,12 @@ mod tests {
                 size: rustmotion_core::schema::Size { width, height },
                 text: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                fill: None,
+                stroke: None,
             }),
             position: None,
             x: None,
@@ -528,11 +599,11 @@ mod tests {
     fn flex_card_with_two_shapes_lays_out_vertically() {
         let card = make_card(
             vec![make_shape(200.0, 50.0), make_shape(200.0, 50.0)],
-            LayerStyle {
-                display: Some(rustmotion_core::schema::style::CardDisplay::Flex),
-                flex_direction: Some(rustmotion_core::schema::style::CardDirection::Column),
-                gap: Some(10.0),
-                padding: Some(Spacing::Uniform(20.0)),
+            CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                gap: Some(Gap::Uniform(LengthPercentage::Px(10.0))),
+                padding: Some(Edges::Uniform(LengthPercentage::Px(20.0))),
                 ..Default::default()
             },
             Some(FlexSize {
@@ -578,7 +649,12 @@ mod tests {
                 size: rustmotion_core::schema::Size { width: 100.0, height: 80.0 },
                 text: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                fill: None,
+                stroke: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 40.0, y: 30.0 }),
             x: None,
@@ -604,7 +680,10 @@ mod tests {
                 line_style: Default::default(),
                 length: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: None,
             x: None,
@@ -628,15 +707,23 @@ mod tests {
         use crate::card::Card;
         use crate::text::Text;
 
+        use rustmotion_core::css::units::Length;
+
         let text = ChildComponent {
             component: Component::Text(Text {
                 content: "Hello World".into(),
                 max_width: None,
                 timing: Default::default(),
-                style: LayerStyle {
-                    font_size: Some(40.0),
+                style: CssStyle {
+                    font_size: Some(Length::Px(40.0)),
                     ..Default::default()
                 },
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                text_shadow: None,
+                stroke: None,
+                text_background: None,
             }),
             position: None,
             x: None,
@@ -649,14 +736,15 @@ mod tests {
                 children: vec![text],
                 size: None,
                 timing: Default::default(),
-                style: LayerStyle {
-                    display: Some(rustmotion_core::schema::style::CardDisplay::Flex),
-                    flex_direction: Some(
-                        rustmotion_core::schema::style::CardDirection::Column,
-                    ),
-                    padding: Some(Spacing::Uniform(20.0)),
+                style: CssStyle {
+                    display: Some(Display::Flex),
+                    flex_direction: Some(FlexDirection::Column),
+                    padding: Some(Edges::Uniform(LengthPercentage::Px(20.0))),
                     ..Default::default()
                 },
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -712,7 +800,10 @@ mod tests {
                 arrow_size: 12.0,
                 dashed: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -743,7 +834,10 @@ mod tests {
                 arrow_size: 10.0,
                 dashed: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -765,6 +859,7 @@ mod tests {
         // Expectation: width > 0 (cosmic-text didn't fail), height ≈ font_size × line_height.
         use crate::counter::Counter;
 
+        use rustmotion_core::css::units::Length;
         let counter = ChildComponent {
             component: Component::Counter(Counter {
                 from: 0.0,
@@ -775,10 +870,15 @@ mod tests {
                 suffix: None,
                 easing: Default::default(),
                 timing: Default::default(),
-                style: LayerStyle {
-                    font_size: Some(64.0),
+                style: CssStyle {
+                    font_size: Some(Length::Px(64.0)),
                     ..Default::default()
                 },
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                text_shadow: None,
+                stroke: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 10.0, y: 20.0 }),
             x: None,
@@ -817,7 +917,10 @@ mod tests {
                 pulse: false,
                 count: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -850,7 +953,10 @@ mod tests {
                 color: "#fff".into(),
                 dashed: None,
                 timing: Default::default(),
-                style: LayerStyle::default(),
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,

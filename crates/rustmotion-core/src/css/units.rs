@@ -7,10 +7,11 @@
 //! carries the viewport dimensions, parent size (for `%`), and font sizes
 //! (for `em` / `rem`).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A pure CSS length, no percentage allowed (e.g. `font-size`, `box-shadow`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Length {
     /// Bare number, treated as pixels.
@@ -24,7 +25,7 @@ impl Default for Length {
 }
 
 /// A CSS length OR percentage (e.g. `width`, `padding`, `top`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum LengthPercentage {
     Px(f32),
@@ -124,6 +125,15 @@ impl Length {
     pub fn resolve(&self, ctx: &LengthContext) -> f32 {
         self.parse().resolve(ctx).unwrap_or(0.0)
     }
+
+    /// Quick px resolution without context (treats em/rem/% as 0). Used by
+    /// painters that only need the px value of an explicit length.
+    pub fn px(&self) -> f32 {
+        match self.parse() {
+            ParsedLength::Px(v) => v,
+            _ => 0.0,
+        }
+    }
 }
 
 impl LengthPercentage {
@@ -136,6 +146,15 @@ impl LengthPercentage {
 
     pub fn resolve(&self, ctx: &LengthContext) -> f32 {
         self.parse().resolve(ctx).unwrap_or(0.0)
+    }
+
+    /// Quick px resolution without context (treats em/rem/% as 0). Used by
+    /// painters that only need the px value of an explicit length.
+    pub fn px(&self) -> f32 {
+        match self.parse() {
+            ParsedLength::Px(v) => v,
+            _ => 0.0,
+        }
     }
 }
 

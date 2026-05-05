@@ -2,10 +2,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::schema::{CaptionStyle, CaptionWord, LayerStyle};
+use rustmotion_core::schema::{AnimationEffect, CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -18,19 +19,25 @@ pub struct Caption {
     #[serde(default)]
     pub max_width: Option<f32>,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Caption {
-    Animatable => style,
+    Animatable => animation,
     Styled => style,
 });
 
 impl Caption {
     fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
-        let font_size = self.style.font_size_or(48.0);
-        let color = self.style.color_or("#FFFFFF");
-        let font_family = self.style.font_family.as_deref().unwrap_or("Inter");
+        let font_size = self.style.font_size_px_or(48.0);
+        let color = self.style.color_str_or("#FFFFFF");
+        let font_family = self.style.font_family_or("Inter");
 
         let fm = font_mgr();
         let typeface = fm
@@ -52,7 +59,7 @@ impl Caption {
 
                         let cx = layout_width / 2.0;
 
-                        if let Some(ref bg_color) = self.style.background {
+                        if let Some(bg_color) = self.style.background_color_str() {
                             let padding = font_size * 0.3;
                             let bg_rect = Rect::from_xywh(
                                 cx - text_width / 2.0 - padding,
@@ -91,7 +98,7 @@ impl Caption {
                 let line_height = font_size * 1.4;
                 let cx = layout_width / 2.0;
 
-                if let Some(ref bg_color) = self.style.background {
+                if let Some(bg_color) = self.style.background_color_str() {
                     let padding = font_size * 0.3;
                     let total_height = lines.len() as f32 * line_height;
                     let max_line_width = lines.iter().map(|line| {

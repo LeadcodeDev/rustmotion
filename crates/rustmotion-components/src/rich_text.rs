@@ -2,10 +2,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle};
 
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
+use rustmotion_core::schema::{AnimationEffect, FontStyleType, FontWeight, TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A single styled span within a rich_text component.
@@ -35,11 +37,17 @@ pub struct RichText {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(RichText {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -74,15 +82,6 @@ fn make_font(
     Font::from_typeface(typeface, size)
 }
 
-/// Resolve line height from optional value and font size.
-fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
-    match line_height {
-        Some(v) if v <= 10.0 => font_size * v,
-        Some(v) => v,
-        None => font_size * 1.3,
-    }
-}
-
 /// A prepared span ready for rendering (with resolved font, paint, measurements).
 struct PreparedSpan {
     text: String,
@@ -94,13 +93,26 @@ struct PreparedSpan {
 
 impl RichText {
     fn paint(&self, canvas: &Canvas, layout_width: f32, props: &AnimatedProperties) {
-        let default_size = self.style.font_size_or(48.0);
-        let default_color = self.style.color_or("#FFFFFF");
+        let default_size = self.style.font_size_px_or(48.0);
+        let default_color = self.style.color_str_or("#FFFFFF");
         let default_family = self.style.font_family_or("Inter");
-        let default_weight = self.style.font_weight_or(FontWeight::Normal);
-        let default_font_style = self.style.font_style_or(FontStyleType::Normal);
-        let align = self.style.text_align_or(TextAlign::Left);
-        let line_height_val = resolve_line_height(self.style.line_height, default_size);
+        let default_weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+        let default_font_style = match self.style.font_style {
+            Some(CssFontStyle::Italic) => FontStyleType::Italic,
+            Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
+            _ => FontStyleType::Normal,
+        };
+        let align = match self.style.text_align {
+            Some(CssTextAlign::Center) => TextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        let line_height_val = self.style.line_height_for(default_size);
 
         let emoji_tf = emoji_typeface();
 

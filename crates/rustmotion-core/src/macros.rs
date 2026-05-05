@@ -3,14 +3,14 @@
 /// Usage:
 /// ```ignore
 /// impl_traits!(Text {
-///     Animatable => animation,
+///     Animatable => animation,  // Vec<AnimationEffect> directly
 ///     Timed => timing,
-///     Styled => style,
+///     Styled => style,          // CssStyle
 /// });
 /// ```
 ///
 /// This generates both the object-safe accessor trait AND the mutable
-/// builder trait (e.g. `Styled` + `StyledMut`, enabling `StyledExt` builders).
+/// builder trait (e.g. `Styled` + `StyledMut`).
 #[macro_export]
 macro_rules! impl_traits {
     ($type:ty { $($trait_name:ident => $field:ident),* $(,)? }) => {
@@ -22,7 +22,7 @@ macro_rules! impl_traits {
     (@single $type:ty, Animatable, $field:ident) => {
         impl $crate::traits::Animatable for $type {
             fn animation_effects(&self) -> &[$crate::schema::AnimationEffect] {
-                &self.$field.animation
+                &self.$field
             }
         }
     };
@@ -37,13 +37,13 @@ macro_rules! impl_traits {
 
     (@single $type:ty, Styled, $field:ident) => {
         impl $crate::traits::Styled for $type {
-            fn style_config(&self) -> &$crate::schema::LayerStyle {
+            fn style_config(&self) -> &$crate::css::CssStyle {
                 &self.$field
             }
         }
 
         impl $crate::traits::StyledMut for $type {
-            fn style_config_mut(&mut self) -> &mut $crate::schema::LayerStyle {
+            fn style_config_mut(&mut self) -> &mut $crate::css::CssStyle {
                 &mut self.$field
             }
         }

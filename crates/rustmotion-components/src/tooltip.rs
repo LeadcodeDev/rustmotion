@@ -2,12 +2,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_font_size() -> f32 {
@@ -61,21 +62,27 @@ pub struct Tooltip {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Tooltip {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Tooltip {
     fn make_font(&self) -> skia_safe::Font {
-        let fs = self.style.font_size.unwrap_or(self.font_size);
+        let fs = self.style.font_size_px_or(self.font_size);
         let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
-        let family = self.style.font_family.as_deref().unwrap_or("Inter");
+        let family = self.style.font_family_or("Inter");
         let typeface = fm
             .match_family_style(family, font_style)
             .or_else(|| fm.match_family_style("Helvetica", font_style))
@@ -90,8 +97,8 @@ impl Tooltip {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
-        let bg_color = self.style.background.as_deref().unwrap_or(&self.background_color);
-        let radius = self.style.border_radius.unwrap_or(8.0);
+        let bg_color = self.style.background_color_str().unwrap_or(&self.background_color);
+        let radius = self.style.border_radius_px_or(8.0);
         let arrow_sz = self.arrow_size;
 
         // Compute body rect (excluding arrow area)
@@ -164,10 +171,10 @@ impl Tooltip {
 
         // Text centered in body
         let font = self.make_font();
-        let fs = self.style.font_size.unwrap_or(self.font_size);
+        let fs = self.style.font_size_px_or(self.font_size);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
 
-        let text_color = self.style.color.as_deref().unwrap_or(&self.text_color);
+        let text_color = self.style.color_str().unwrap_or(&self.text_color);
         let mut text_paint = paint_from_hex(text_color);
         text_paint.set_anti_alias(true);
 

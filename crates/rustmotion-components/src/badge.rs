@@ -2,11 +2,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -71,11 +72,17 @@ pub struct Badge {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Badge {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -83,8 +90,7 @@ rustmotion_core::impl_traits!(Badge {
 impl Badge {
     fn resolved_font_size(&self) -> f32 {
         self.style
-            .font_size
-            .unwrap_or_else(|| self.badge_size.params().0)
+            .font_size_px_or(self.badge_size.params().0)
     }
 
     /// Returns (h_padding, v_padding, icon_size) scaled proportionally
@@ -117,7 +123,7 @@ impl Badge {
 
 impl Badge {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
-        let color = self.style.background.as_deref().unwrap_or("#3B82F6");
+        let color = self.style.background_color_str().unwrap_or("#3B82F6");
         let (h_pad, _v_pad, icon_size) = self.resolved_params();
 
         let w = layout_w;

@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback,
 };
-use rustmotion_core::schema::{LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_speed() -> f32 {
@@ -55,11 +56,17 @@ pub struct Marquee {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Marquee {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -69,9 +76,9 @@ impl Marquee {
         let w = layout_w;
         let h = layout_h;
 
-        let fs = self.style.font_size.unwrap_or(self.font_size);
+        let fs = self.style.font_size_px_or(self.font_size);
         let font_style = skia_safe::FontStyle::normal();
-        let family = self.style.font_family.as_deref().unwrap_or("Inter");
+        let family = self.style.font_family_or("Inter");
         let typeface = typeface_with_fallback(family, font_style)?;
         let font = skia_safe::Font::from_typeface(typeface, fs);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
@@ -84,7 +91,7 @@ impl Marquee {
             return Ok(());
         }
 
-        let color = self.style.color.as_deref().unwrap_or(&self.color);
+        let color = self.style.color_str().unwrap_or(&self.color);
         let mut text_paint = paint_from_hex(color);
         text_paint.set_anti_alias(true);
 

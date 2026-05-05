@@ -11,7 +11,6 @@ pub use rustmotion_components as components;
 pub mod engine {
     pub use rustmotion_core::engine::*;
     pub mod render;
-    pub mod codeblock;
     pub mod world;
     pub mod preload;
     pub use preload::{prefetch_icons, preextract_video_frames};

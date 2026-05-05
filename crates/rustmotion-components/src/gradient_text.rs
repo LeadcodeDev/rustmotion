@@ -2,13 +2,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Point, TextBlob};
 
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw};
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     emoji_typeface, font_mgr, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_colors() -> Vec<String> {
@@ -39,32 +41,36 @@ pub struct GradientText {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(GradientText {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl GradientText {
     fn resolve_font(&self) -> (Font, Option<Font>) {
-        let font_size = self.style.font_size_or(48.0);
+        let font_size = self.style.font_size_px_or(48.0);
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
 
         let fm = font_mgr();
-        let slant = match font_style_type {
-            FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
-            FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
-            FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
+        let slant = match self.style.font_style {
+            Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
+            Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
+            _ => skia_safe::font_style::Slant::Upright,
         };
-        let weight = match font_weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
+        let weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => skia_safe::font_style::Weight::BOLD,
+            Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
+            _ => skia_safe::font_style::Weight::NORMAL,
         };
         let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
@@ -86,7 +92,7 @@ impl GradientText {
         }
 
         let (font, _emoji_font) = self.resolve_font();
-        let _font_size = self.style.font_size_or(48.0);
+        let _font_size = self.style.font_size_px_or(48.0);
 
         // Measure text
         let (_, metrics) = font.metrics();

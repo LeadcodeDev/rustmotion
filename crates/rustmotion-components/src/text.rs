@@ -6,20 +6,12 @@ use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 use rustmotion_core::engine::animator::ease;
 use rustmotion_core::error::RustmotionError;
 
-/// Resolve `line-height`: values <= 10 are treated as a multiplier (CSS-like),
-/// values > 10 are absolute pixels.
-fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
-    match line_height {
-        Some(v) if v <= 10.0 => font_size * v,
-        Some(v) => v,
-        None => font_size * 1.3,
-    }
-}
-
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign, TextAnimGranularity};
+use rustmotion_core::schema::{AnimationEffect, CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign, TextAnimGranularity, TextBackground, TextShadow, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -30,11 +22,23 @@ pub struct Text {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
+    #[serde(default, rename = "text-shadow")]
+    pub text_shadow: Option<TextShadow>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
+    #[serde(default, rename = "text-background")]
+    pub text_background: Option<TextBackground>,
 }
 
 rustmotion_core::impl_traits!(Text {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -262,14 +266,27 @@ impl Text {
         time: f64,
         props: &AnimatedProperties,
     ) -> Result<()> {
-        let font_size = self.style.font_size_or(48.0);
-        let color = self.style.color_or("#FFFFFF");
+        let font_size = self.style.font_size_px_or(48.0);
+        let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
-        let align = self.style.text_align_or(TextAlign::Left);
-        let line_height_val = resolve_line_height(self.style.line_height, font_size);
-        let letter_spacing = self.style.letter_spacing.unwrap_or(0.0);
+        let font_weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+        let font_style_type = match self.style.font_style {
+            Some(CssFontStyle::Italic) => FontStyleType::Italic,
+            Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
+            _ => FontStyleType::Normal,
+        };
+        let align = match self.style.text_align {
+            Some(CssTextAlign::Center) => TextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        let line_height_val = self.style.line_height_for(font_size);
+        let letter_spacing = self.style.letter_spacing_px();
 
         let fm = font_mgr();
         let slant = match font_style_type {
@@ -333,7 +350,7 @@ impl Text {
         let baseline_offset = (line_height_val + ascent - descent) / 2.0;
 
         // Prepare optional shadow and stroke paints
-        let shadow_paint = self.style.text_shadow.as_ref().map(|shadow| {
+        let shadow_paint = self.text_shadow.as_ref().map(|shadow| {
             let mut p = paint_from_hex(&shadow.color);
             if shadow.blur > 0.01 {
                 if let Some(filter) = skia_safe::image_filters::blur(
@@ -348,7 +365,7 @@ impl Text {
             (p, shadow.offset_x, shadow.offset_y)
         });
 
-        let stroke_paint = self.style.stroke.as_ref().map(|stroke| {
+        let stroke_paint = self.stroke.as_ref().map(|stroke| {
             let mut p = paint_from_hex(&stroke.color);
             p.set_style(PaintStyle::Stroke);
             p.set_stroke_width(stroke.width);
@@ -400,7 +417,7 @@ impl Text {
             let y = i as f32 * line_height_val + baseline_offset;
 
             // Draw background highlight behind text
-            if let Some(ref bg) = self.style.text_background {
+            if let Some(ref bg) = self.text_background {
                 let bg_paint = paint_from_hex(&bg.color);
                 let (_, font_rect) = font.measure_str(line, None);
                 let bg_rect = Rect::from_xywh(

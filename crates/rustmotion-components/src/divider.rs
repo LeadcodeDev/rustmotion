@@ -2,9 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -47,7 +48,13 @@ pub struct Divider {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_thickness() -> f32 {
@@ -55,7 +62,7 @@ fn default_thickness() -> f32 {
 }
 
 rustmotion_core::impl_traits!(Divider {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -68,7 +75,7 @@ impl Painter for Divider {
         _props: &rustmotion_core::engine::animator::AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        let color = self.style.color.as_deref().unwrap_or("#FFFFFF");
+        let color = self.style.color_str_or("#FFFFFF");
         let mut paint = paint_from_hex(color);
         paint.set_anti_alias(true);
 

@@ -1,13 +1,18 @@
+mod chrome;
+mod diff;
+mod dimensions;
+mod highlight;
+mod render;
+mod reveal;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::{
-    CodeblockChrome, CodeblockHighlight, CodeblockReveal,
-    CodeblockState, LayerStyle, Size,
-};
+use rustmotion_core::schema::{AnimationEffect, CodeblockChrome, CodeblockHighlight, CodeblockReveal, CodeblockState, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -41,13 +46,19 @@ pub struct Codeblock {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_auto_scroll() -> bool { true }
 
 rustmotion_core::impl_traits!(Codeblock {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -55,12 +66,12 @@ rustmotion_core::impl_traits!(Codeblock {
 impl Painter for Codeblock {
     fn paint_content(
         &self,
-        _canvas: &Canvas,
-        _layout: &BoxLayout,
-        _props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
     ) {
-        // Codeblock rendering is handled by the engine::codeblock module in the rustmotion crate.
+        render::render_codeblock(canvas, self, layout, props, ctx);
     }
 }
 

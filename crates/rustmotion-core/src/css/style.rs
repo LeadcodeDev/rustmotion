@@ -4,13 +4,14 @@
 //! gradients, position absolute/relative, box-shadow, border-radius, opacity,
 //! clip-path). Excludes: inline boxes, floats, tables, position sticky/fixed.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::units::{Length, LengthPercentage};
 
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
 /// and lets the cascade fill in inherited / initial values.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CssStyle {
     // ---- Layout / box ----
@@ -97,9 +98,116 @@ pub struct CssStyle {
     pub visibility: Option<Visibility>,
 }
 
+// ---- Painter convenience accessors ----
+//
+// These resolve raw CssStyle values to the simple primitives that component
+// painters deal with: f32 px, &str hex colors, etc. They drop unsupported
+// units (em/rem/% with no parent context). Painters that need full
+// resolution should use `Length::resolve(&LengthContext)` directly.
+impl CssStyle {
+    /// `font-size` in px, falling back to `default` when unset.
+    pub fn font_size_px_or(&self, default: f32) -> f32 {
+        self.font_size.as_ref().map(|l| l.px()).unwrap_or(default)
+    }
+
+    /// `font-size` in px if set as a length.
+    pub fn font_size_px(&self) -> Option<f32> {
+        self.font_size.as_ref().map(|l| l.px())
+    }
+
+    /// `color` as a hex string (only `Color::String` returns Some).
+    pub fn color_str(&self) -> Option<&str> {
+        match &self.color {
+            Some(Color::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// `color` as a hex string with default fallback.
+    pub fn color_str_or<'a>(&'a self, default: &'a str) -> &'a str {
+        self.color_str().unwrap_or(default)
+    }
+
+    /// `font-family` string.
+    pub fn font_family_str(&self) -> Option<&str> {
+        self.font_family.as_deref()
+    }
+
+    /// `font-family` string with default fallback.
+    pub fn font_family_or<'a>(&'a self, default: &'a str) -> &'a str {
+        self.font_family.as_deref().unwrap_or(default)
+    }
+
+    /// `letter-spacing` in px, defaulting to 0.
+    pub fn letter_spacing_px(&self) -> f32 {
+        self.letter_spacing.as_ref().map(|l| l.px()).unwrap_or(0.0)
+    }
+
+    /// `line-height` resolution. For `Number` (unitless) returns
+    /// `n * font_size`; for `Length(px)` returns the px value; otherwise
+    /// returns `1.3 * font_size`.
+    pub fn line_height_for(&self, font_size: f32) -> f32 {
+        match &self.line_height {
+            Some(LineHeight::Number(n)) => n * font_size,
+            Some(LineHeight::Length(l)) => l.px(),
+            _ => font_size * 1.3,
+        }
+    }
+
+    /// `opacity` with default 1.0.
+    pub fn opacity_or(&self, default: f32) -> f32 {
+        self.opacity.unwrap_or(default)
+    }
+
+    /// `border-radius` resolved as a single uniform px value (drops per-corner).
+    pub fn border_radius_px(&self) -> Option<f32> {
+        match &self.border_radius {
+            Some(BorderRadius::Uniform(lp)) => Some(lp.px()),
+            Some(BorderRadius::Corners { top_left, .. }) => Some(top_left.px()),
+            None => None,
+        }
+    }
+
+    /// `border-radius` as px, defaulting to `default`.
+    pub fn border_radius_px_or(&self, default: f32) -> f32 {
+        self.border_radius_px().unwrap_or(default)
+    }
+
+    /// Resolved padding tuple `(top, right, bottom, left)` in px.
+    pub fn padding_px(&self) -> (f32, f32, f32, f32) {
+        edges_px(self.padding.as_ref())
+    }
+
+    /// Resolved margin tuple `(top, right, bottom, left)` in px.
+    pub fn margin_px(&self) -> (f32, f32, f32, f32) {
+        edges_px(self.margin.as_ref())
+    }
+
+    /// `background` as a hex/keyword string when set as a plain color.
+    pub fn background_color_str(&self) -> Option<&str> {
+        match &self.background {
+            Some(Background::Color(Color::String(s))) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+}
+
+fn edges_px(e: Option<&Edges>) -> (f32, f32, f32, f32) {
+    match e {
+        Some(Edges::Uniform(v)) => {
+            let p = v.px();
+            (p, p, p, p)
+        }
+        Some(Edges::Sides { top, right, bottom, left }) => {
+            (top.px(), right.px(), bottom.px(), left.px())
+        }
+        None => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
 // ---- Layout enums ----
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Display {
     Block,
@@ -110,7 +218,7 @@ pub enum Display {
     Contents,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Position {
     Static,
@@ -118,14 +226,14 @@ pub enum Position {
     Absolute,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BoxSizing {
     ContentBox,
     BorderBox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Overflow {
     Visible,
@@ -135,7 +243,7 @@ pub enum Overflow {
     Clip,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Visibility {
     Visible,
@@ -143,7 +251,7 @@ pub enum Visibility {
 }
 
 /// `width: <length>` / `width: auto` / `width: 50%` / `width: max-content` / etc.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Size {
     Auto(AutoKw),
@@ -151,13 +259,13 @@ pub enum Size {
     Keyword(SizeKeyword),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AutoKw {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SizeKeyword {
     MaxContent,
@@ -166,7 +274,7 @@ pub enum SizeKeyword {
 }
 
 /// Edge values for `margin` / `padding`. Either uniform or per-side.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Edges {
     Uniform(LengthPercentage),
@@ -194,7 +302,7 @@ impl Edges {
 }
 
 /// `border: 1px solid red` modeled per side.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BorderEdges {
     pub width: Option<Edges>,
@@ -207,7 +315,7 @@ pub struct BorderEdges {
     pub left: Option<BorderSide>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BorderSide {
     pub width: Option<Length>,
@@ -215,7 +323,7 @@ pub struct BorderSide {
     pub color: Option<Color>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BorderStyle {
     None,
@@ -226,7 +334,7 @@ pub enum BorderStyle {
 }
 
 /// Border-radius: uniform or per-corner.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum BorderRadius {
     Uniform(LengthPercentage),
@@ -244,36 +352,36 @@ pub enum BorderRadius {
 
 // ---- Flex ----
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlexDirection { Row, RowReverse, Column, ColumnReverse }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlexWrap { Nowrap, Wrap, WrapReverse }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum JustifyContent {
     FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly,
     Start, End,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlignItems {
     Stretch, FlexStart, FlexEnd, Center, Baseline,
     Start, End,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlignSelf {
     Auto, Stretch, FlexStart, FlexEnd, Center, Baseline,
     Start, End,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlignContent {
     Stretch, FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly,
@@ -281,7 +389,7 @@ pub enum AlignContent {
 }
 
 /// `gap: 8px` (uniform) or `gap: 8px 16px` (row-gap, column-gap).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Gap {
     Uniform(LengthPercentage),
@@ -293,7 +401,7 @@ pub enum Gap {
 
 // ---- Grid ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GridTrack {
     Length(LengthPercentage),
@@ -303,11 +411,11 @@ pub enum GridTrack {
     Minmax { min: Box<GridTrack>, max: Box<GridTrack> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GridTrackKeyword { Auto, MinContent, MaxContent }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct GridLine {
     pub start: Option<GridLineEnd>,
@@ -319,43 +427,43 @@ impl Default for GridLine {
     fn default() -> Self { Self { start: None, end: None, span: None } }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GridLineEnd { Index(i32) }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GridAutoFlow { Row, Column, RowDense, ColumnDense }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum JustifyItems { Stretch, Start, End, Center, Legacy }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum JustifySelf { Auto, Stretch, Start, End, Center }
 
 // ---- Typography ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FontWeight {
     Keyword(FontWeightKw),
     Number(u16),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FontWeightKw {
     Normal, Bold, Bolder, Lighter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FontStyle { Normal, Italic, Oblique }
 
 /// `line-height: 1.5` (number) or `line-height: 24px` (length).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum LineHeight {
     Number(f32),
@@ -363,29 +471,29 @@ pub enum LineHeight {
     Keyword(LineHeightKw),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum LineHeightKw { Normal }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextAlign { Left, Right, Center, Justify, Start, End }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WhiteSpace {
     Normal, Nowrap, Pre, PreLine, PreWrap, BreakSpaces,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OverflowWrap { Normal, BreakWord, Anywhere }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextOverflow { Clip, Ellipsis }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TextDecoration {
     pub line: Option<TextDecorationLine>,
@@ -394,18 +502,18 @@ pub struct TextDecoration {
     pub thickness: Option<Length>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextDecorationLine { None, Underline, Overline, LineThrough }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextDecorationStyle { Solid, Double, Dotted, Dashed, Wavy }
 
 // ---- Color ----
 
 /// Typed color. Strings are parsed lazily ("#rgb", "rgba(..)", named colors).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Color {
     String(String),
@@ -416,7 +524,7 @@ fn one_f32() -> f32 { 1.0 }
 
 // ---- Background ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Background {
     Color(Color),
@@ -424,7 +532,7 @@ pub enum Background {
     Single(BackgroundLayer),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum BackgroundLayer {
     Color { color: Color },
@@ -458,7 +566,7 @@ pub enum BackgroundLayer {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct GradientStop {
     pub color: Color,
@@ -471,11 +579,11 @@ impl Default for GradientStop {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RadialShape { Circle, Ellipse }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackgroundSize {
     Cover,
@@ -484,13 +592,13 @@ pub enum BackgroundSize {
     Length { width: LengthPercentage, height: LengthPercentage },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackgroundRepeat { Repeat, NoRepeat, RepeatX, RepeatY, Round, Space }
 
 // ---- Shadows ----
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BoxShadow {
     pub offset_x: Length,
@@ -501,7 +609,7 @@ pub struct BoxShadow {
     pub inset: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TextShadow {
     pub offset_x: Length,
@@ -512,7 +620,7 @@ pub struct TextShadow {
 
 // ---- Transform ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "fn", rename_all = "kebab-case")]
 pub enum TransformFn {
     Translate { x: LengthPercentage, #[serde(default)] y: LengthPercentage },
@@ -538,7 +646,7 @@ pub enum TransformFn {
     Matrix3d { values: [f32; 16] },
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TransformOrigin {
     pub x: Option<LengthPercentage>,
@@ -548,7 +656,7 @@ pub struct TransformOrigin {
 
 // ---- Filters ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "fn", rename_all = "kebab-case")]
 pub enum FilterFn {
     Blur { radius: Length },
@@ -572,7 +680,7 @@ pub enum FilterFn {
 
 // ---- Blend ----
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
     Normal, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn,
@@ -582,7 +690,7 @@ pub enum BlendMode {
 
 // ---- Clip-path ----
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ClipPath {
     None,

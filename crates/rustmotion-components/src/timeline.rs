@@ -2,10 +2,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep as AnimTimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A horizontal or vertical pipeline/timeline component.
@@ -46,7 +47,13 @@ pub struct Timeline {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<AnimTimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -84,7 +91,7 @@ fn default_sublabel_color() -> String { "#8B949E".to_string() }
 fn default_node_color() -> String { "#58A6FF".to_string() }
 
 rustmotion_core::impl_traits!(Timeline {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });

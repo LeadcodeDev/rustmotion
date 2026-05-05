@@ -2,10 +2,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Connector component that draws a routed line between two points.
@@ -43,7 +44,13 @@ pub struct Connector {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -71,7 +78,7 @@ fn default_arrow_size() -> f32 { 10.0 }
 fn default_true() -> bool { true }
 
 rustmotion_core::impl_traits!(Connector {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });

@@ -2,9 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -20,62 +21,20 @@ pub struct ContainerComponent {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(ContainerComponent {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
-
-impl Bordered for ContainerComponent {
-    fn border(&self) -> Option<&Border> {
-        None
-    }
-}
-
-impl BorderedMut for ContainerComponent {
-    fn set_border(&mut self, _border: Option<Border>) {}
-}
-
-impl Rounded for ContainerComponent {
-    fn corner_radius(&self) -> f32 {
-        self.style.border_radius_or(0.0)
-    }
-}
-
-impl RoundedMut for ContainerComponent {
-    fn set_corner_radius(&mut self, radius: f32) {
-        self.style.border_radius = Some(radius);
-    }
-}
-
-impl Shadowed for ContainerComponent {
-    fn shadow(&self) -> Option<&Shadow> {
-        None
-    }
-}
-
-impl ShadowedMut for ContainerComponent {
-    fn set_shadow(&mut self, _shadow: Option<Shadow>) {}
-}
-
-impl rustmotion_core::traits::Backgrounded for ContainerComponent {
-    fn background(&self) -> Option<&str> {
-        None
-    }
-}
-
-impl rustmotion_core::traits::BackgroundedMut for ContainerComponent {
-    fn set_background(&mut self, _bg: Option<String>) {}
-}
-
-impl rustmotion_core::traits::Clipped for ContainerComponent {
-    fn clip(&self) -> bool {
-        false
-    }
-}
 
 impl Painter for ContainerComponent {
     fn paint_content(

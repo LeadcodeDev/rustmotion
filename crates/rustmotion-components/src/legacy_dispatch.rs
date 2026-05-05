@@ -129,7 +129,8 @@ mod tests {
     use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::box_tree::BoxKind;
     use rustmotion_core::engine::layout_pass::run_layout;
-    use rustmotion_core::schema::{LayerStyle, ShapeType, Size};
+    use rustmotion_core::css::style::CssStyle;
+    use rustmotion_core::schema::{ShapeType, Size};
     use std::sync::Arc;
 
     fn shape_child(w: f32, h: f32, x: f32, y: f32) -> ChildComponent {
@@ -139,10 +140,12 @@ mod tests {
                 size: Size { width: w, height: h },
                 text: None,
                 timing: Default::default(),
-                style: LayerStyle {
-                    fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
-                    ..Default::default()
-                },
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                stroke: None,
             }),
             position: Some(PositionMode::Absolute { x, y }),
             x: None,
@@ -215,16 +218,20 @@ mod tests {
         use crate::flex::FlexSize;
         use rustmotion_core::schema::SizeDimension;
 
+        use rustmotion_core::css::style::{Background, Color};
+
         let red_shape = ChildComponent {
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 size: Size { width: 30.0, height: 20.0 },
                 text: None,
                 timing: Default::default(),
-                style: LayerStyle {
-                    fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
-                    ..Default::default()
-                },
+                style: CssStyle::default(),
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
+                fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                stroke: None,
             }),
             position: Some(PositionMode::Absolute { x: 10.0, y: 10.0 }),
             x: None,
@@ -240,10 +247,13 @@ mod tests {
                     height: SizeDimension::Fixed(80.0),
                 }),
                 timing: Default::default(),
-                style: LayerStyle {
-                    background: Some("#00ff00".into()),
+                style: CssStyle {
+                    background: Some(Background::Color(Color::String("#00ff00".into()))),
                     ..Default::default()
                 },
+                animation: Vec::new(),
+                timeline: Vec::new(),
+                stagger: None,
             }),
             position: Some(PositionMode::Absolute { x: 40.0, y: 30.0 }),
             x: None,
@@ -324,16 +334,17 @@ mod tests {
                     size: Size { width: 100.0, height: 100.0 },
                     text: None,
                     timing: Default::default(),
-                    style: LayerStyle {
-                        fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
-                        animation: vec![AnimationEffect::FadeIn(AnimationTiming {
-                            duration: 0.5,
-                            delay: 0.0,
-                            repeat: false,
-                            overshoot: None,
-                        })],
-                        ..Default::default()
-                    },
+                    style: CssStyle::default(),
+                    animation: vec![AnimationEffect::FadeIn(AnimationTiming {
+                        duration: 0.5,
+                        delay: 0.0,
+                        repeat: false,
+                        overshoot: None,
+                    })],
+                    timeline: Vec::new(),
+                    stagger: None,
+                    fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                    stroke: None,
                 }),
                 position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
                 x: None,

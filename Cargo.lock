@@ -3223,7 +3223,9 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "similar",
  "skia-safe",
+ "syntect",
  "tiny-skia",
  "usvg",
 ]

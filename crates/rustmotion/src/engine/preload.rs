@@ -22,7 +22,7 @@ pub fn prefetch_icons(scenes: &[Scene]) {
                     Some(size) => (size.width as u32, size.height as u32),
                     None => (24, 24),
                 };
-                seen.insert((icon.icon.clone(), icon.style_config().color_or("#FFFFFF").to_string(), w, h));
+                seen.insert((icon.icon.clone(), icon.style_config().color_str_or("#FFFFFF").to_string(), w, h));
             }
             Component::Card(c) => {
                 for child in &c.children {

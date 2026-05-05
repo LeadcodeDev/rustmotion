@@ -82,6 +82,10 @@ pub fn run_layout(
     ctx: &ConversionContext,
 ) -> LayoutResult {
     let mut tree: TaffyTree<NodeData> = TaffyTree::new();
+    // Disable taffy's pixel rounding: it floors widths/heights to integers,
+    // but our painters use sub-pixel Skia metrics. A width of 710.376 rounded
+    // to 710 makes the painter re-wrap onto an extra line.
+    tree.disable_rounding();
     let mut node_map: HashMap<NodeId, tf::NodeId> = HashMap::new();
 
     // Build the taffy tree top-down.

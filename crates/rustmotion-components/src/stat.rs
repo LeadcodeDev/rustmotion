@@ -2,13 +2,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, Path, Point, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
     measure_text_with_fallback, paint_from_hex, parse_hex_color,
 };
-use rustmotion_core::schema::{LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_value_font_size() -> f32 {
@@ -74,11 +75,17 @@ pub struct Stat {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Stat {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -90,11 +97,11 @@ impl Stat {
         let fm = font_mgr();
 
         // Background if set
-        if let Some(bg) = &self.style.background {
+        if let Some(bg) = self.style.background_color_str() {
             let mut bg_paint = paint_from_hex(bg);
             bg_paint.set_style(PaintStyle::Fill);
             bg_paint.set_anti_alias(true);
-            let radius = self.style.border_radius.unwrap_or(12.0);
+            let radius = self.style.border_radius_px_or(12.0);
             let rect = Rect::from_xywh(0.0, 0.0, w, h);
             let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
             canvas.draw_rrect(rrect, &bg_paint);

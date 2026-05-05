@@ -33,6 +33,13 @@ pub(super) fn format_number(val: f64) -> String {
 
 impl Chart {
     /// Draw grid lines and axis labels for cartesian charts.
+    ///
+    /// When `categorical` is true, x-labels are placed at the center of evenly
+    /// distributed slots (`(i+0.5)/n * chart_w`) — appropriate for bar charts
+    /// where labels belong to a discrete bar slot. When false, labels are
+    /// placed at proportional positions (`i/(n-1) * chart_w`), spanning the
+    /// full chart width — appropriate for line/scatter where labels mark
+    /// points on a continuous axis.
     pub(super) fn draw_axes(
         &self,
         canvas: &Canvas,
@@ -43,6 +50,7 @@ impl Chart {
         min_val: f64,
         max_val: f64,
         x_labels: &[String],
+        categorical: bool,
     ) {
         let font = self.make_label_font();
         let emoji_font =
@@ -97,6 +105,8 @@ impl Chart {
             for (i, label) in x_labels.iter().enumerate() {
                 let x = if n == 1 {
                     chart_x + chart_w / 2.0
+                } else if categorical {
+                    chart_x + ((i as f32 + 0.5) / n as f32) * chart_w
                 } else {
                     chart_x + (i as f32 / (n - 1).max(1) as f32) * chart_w
                 };

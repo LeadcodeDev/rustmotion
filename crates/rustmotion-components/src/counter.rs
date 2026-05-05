@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle};
 
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
+use rustmotion_core::schema::{AnimationEffect, EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -27,11 +29,21 @@ pub struct Counter {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
+    #[serde(default, rename = "text-shadow")]
+    pub text_shadow: Option<TextShadow>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
 }
 
 rustmotion_core::impl_traits!(Counter {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -40,12 +52,25 @@ impl Counter {
     fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64, scene_duration: f64) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
-        let font_size = self.style.font_size_or(48.0);
-        let color = self.style.color_or("#FFFFFF");
+        let font_size = self.style.font_size_px_or(48.0);
+        let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
-        let align = self.style.text_align_or(TextAlign::Left);
+        let font_weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+        let font_style_type = match self.style.font_style {
+            Some(CssFontStyle::Italic) => FontStyleType::Italic,
+            Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
+            _ => FontStyleType::Normal,
+        };
+        let align = match self.style.text_align {
+            Some(CssTextAlign::Center) => TextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
 
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
@@ -85,7 +110,7 @@ impl Counter {
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        let letter_spacing = self.style.letter_spacing.unwrap_or(0.0);
+        let letter_spacing = self.style.letter_spacing_px();
 
         let advance_width = measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
 
@@ -118,7 +143,7 @@ impl Counter {
         let y = (line_height + ascent - descent) / 2.0;
 
         // Draw shadow
-        if let Some(ref shadow) = self.style.text_shadow {
+        if let Some(ref shadow) = self.text_shadow {
             let mut sp = paint_from_hex(&shadow.color);
             if shadow.blur > 0.01 {
                 if let Some(filter) = skia_safe::image_filters::blur(
@@ -134,7 +159,7 @@ impl Counter {
         }
 
         // Draw stroke
-        if let Some(ref stroke) = self.style.stroke {
+        if let Some(ref stroke) = self.stroke {
             let mut sp = paint_from_hex(&stroke.color);
             sp.set_style(PaintStyle::Stroke);
             sp.set_stroke_width(stroke.width);

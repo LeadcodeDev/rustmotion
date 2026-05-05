@@ -1,14 +1,21 @@
 //! Intrinsic measurers for components whose box size depends on content.
 //!
-//! Currently exposes [`TextIntrinsic`] — a thin wrapper around cosmic-text's
-//! `measure_text` that satisfies [`IntrinsicMeasure`] so `box_builder` can
-//! attach it to text-bearing leaves and let taffy size them in flex/grid
-//! parents the same way a browser would.
+//! Uses the same Skia metrics that the painter uses, so the box reserved by
+//! taffy matches the pixels actually drawn — measure-vs-paint mismatches
+//! would otherwise cause text to wrap onto an extra line at paint time and
+//! overflow into the next sibling.
 
+use skia_safe::{Font, FontStyle as SkFontStyle};
+
+use rustmotion_core::css::style::{
+    CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    LineHeight,
+};
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
-use rustmotion_core::engine::renderer::format_counter_value;
-use rustmotion_core::engine::text::cosmic::{measure_text, TextStyle};
-use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle};
+use rustmotion_core::engine::renderer::{
+    emoji_typeface, font_mgr, format_counter_value, measure_text_with_fallback,
+    wrap_text_with_fallback,
+};
 
 use crate::badge::{Badge, BadgeSize};
 use crate::caption::Caption;
@@ -22,7 +29,7 @@ pub struct TextIntrinsic {
     content: String,
     font_family: Option<String>,
     font_size: f32,
-    line_height: Option<f32>,
+    line_height_resolved: f32,
     weight: u16,
     italic: bool,
     letter_spacing: f32,
@@ -35,27 +42,30 @@ impl TextIntrinsic {
         Self::from_parts(&text.content, &text.style, text.max_width)
     }
 
-    pub fn from_parts(content: &str, style: &LayerStyle, max_width: Option<f32>) -> Self {
-        let font_size = style.font_size.unwrap_or(48.0);
+    pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
+        let font_size = style.font_size_px_or(48.0);
+        let line_height_resolved = style.line_height_for(font_size);
         Self {
             content: content.to_string(),
             font_family: style.font_family.clone(),
             font_size,
-            line_height: style.line_height,
+            line_height_resolved,
             weight: weight_to_u16(style.font_weight.as_ref()),
-            italic: matches!(style.font_style, Some(FontStyleType::Italic)),
-            letter_spacing: style.letter_spacing.unwrap_or(0.0),
+            italic: matches!(style.font_style, Some(CssFontStyle::Italic)),
+            letter_spacing: style.letter_spacing_px(),
             max_width,
-            wrap: style.wrap.unwrap_or(true),
+            // CssStyle has no `wrap` field — use white-space/overflow-wrap heuristics.
+            // For now, default to true (CSS default).
+            wrap: true,
         }
     }
 
-    fn resolved_line_height(&self) -> f32 {
-        match self.line_height {
-            Some(v) if v <= 10.0 => self.font_size * v,
-            Some(v) => v,
-            None => self.font_size * 1.3,
-        }
+    /// Build with an explicit `wrap` override (used by atomic components like
+    /// counter, kbd, badge that never wrap).
+    pub fn from_parts_with_wrap(content: &str, style: &CssStyle, max_width: Option<f32>, wrap: bool) -> Self {
+        let mut t = Self::from_parts(content, style, max_width);
+        t.wrap = wrap;
+        t
     }
 }
 
@@ -65,7 +75,6 @@ impl IntrinsicMeasure for TextIntrinsic {
         known: (Option<f32>, Option<f32>),
         available: (AvailableSpace, AvailableSpace),
     ) -> (f32, f32) {
-        // If width is already known, use it; else cap at min(self.max_width, available width).
         let max_width = if let Some(w) = known.0 {
             Some(w)
         } else {
@@ -82,27 +91,50 @@ impl IntrinsicMeasure for TextIntrinsic {
             }
         };
 
-        let style = TextStyle {
-            font_family: self.font_family.as_deref(),
-            font_size: self.font_size,
-            line_height: self.resolved_line_height(),
-            weight: self.weight,
-            italic: self.italic,
-            max_width: if self.wrap { max_width } else { None },
-            wrap: self.wrap,
-            letter_spacing: self.letter_spacing,
-        };
+        let font = self.skia_font();
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
 
-        let m = measure_text(&self.content, &style);
-        (m.width, m.height)
+        let wrap_at = if self.wrap { max_width } else { None };
+        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, wrap_at);
+
+        let mut max_w = 0.0f32;
+        for line in &lines {
+            let w = measure_text_with_fallback(line, &font, &emoji_font, self.letter_spacing);
+            max_w = max_w.max(w);
+        }
+        let line_count = lines.len().max(1) as f32;
+        (max_w, line_count * self.line_height_resolved)
     }
 }
 
-fn weight_to_u16(w: Option<&FontWeight>) -> u16 {
+impl TextIntrinsic {
+    fn skia_font(&self) -> Font {
+        let fm = font_mgr();
+        let slant = if self.italic {
+            skia_safe::font_style::Slant::Italic
+        } else {
+            skia_safe::font_style::Slant::Upright
+        };
+        let weight = skia_safe::font_style::Weight::from(self.weight as i32);
+        let sk_style = SkFontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
+        let family = self.font_family.as_deref().unwrap_or("Inter");
+        let typeface = fm
+            .match_family_style(family, sk_style)
+            .or_else(|| fm.match_family_style("Helvetica", sk_style))
+            .or_else(|| fm.match_family_style("Arial", sk_style))
+            .or_else(|| fm.match_family_style("sans-serif", sk_style))
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, sk_style).expect("no fallback font"));
+        Font::from_typeface(typeface, self.font_size)
+    }
+}
+
+fn weight_to_u16(w: Option<&CssFontWeight>) -> u16 {
     match w {
-        Some(FontWeight::Normal) | None => 400,
-        Some(FontWeight::Bold) => 700,
-        Some(FontWeight::Weight(n)) => (*n).clamp(1, 1000) as u16,
+        Some(CssFontWeight::Keyword(FontWeightKw::Bold)) => 700,
+        Some(CssFontWeight::Keyword(FontWeightKw::Bolder)) => 800,
+        Some(CssFontWeight::Keyword(FontWeightKw::Lighter)) => 300,
+        Some(CssFontWeight::Keyword(FontWeightKw::Normal)) | None => 400,
+        Some(CssFontWeight::Number(n)) => (*n).clamp(1, 1000),
     }
 }
 
@@ -166,24 +198,10 @@ pub struct KbdIntrinsic {
 
 impl KbdIntrinsic {
     pub fn from_kbd(k: &Kbd) -> Self {
-        let fs = k.style.font_size.unwrap_or(k.font_size);
-        let synthetic_style = LayerStyle {
-            font_size: Some(fs),
-            font_family: Some(
-                k.style
-                    .font_family
-                    .clone()
-                    .unwrap_or_else(|| "SF Mono".to_string()),
-            ),
-            font_weight: k.style.font_weight.clone(),
-            font_style: k.style.font_style.clone(),
-            letter_spacing: k.style.letter_spacing,
-            line_height: k.style.line_height,
-            wrap: Some(false),
-            ..LayerStyle::default()
-        };
+        let fs = k.style.font_size_px_or(k.font_size);
+        let synthetic_style = synthesize_text_style(&k.style, fs, "SF Mono");
         Self {
-            text: TextIntrinsic::from_parts(&k.key, &synthetic_style, None),
+            text: TextIntrinsic::from_parts_with_wrap(&k.key, &synthetic_style, None, false),
             h_padding: fs * 0.7,
             v_padding: fs * 0.4,
             min_width: fs * 1.8,
@@ -219,11 +237,7 @@ impl CounterIntrinsic {
         let display =
             format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
         // Counter is atomic: it never wraps.
-        let style = LayerStyle {
-            wrap: Some(false),
-            ..c.style.clone()
-        };
-        Self(TextIntrinsic::from_parts(&display, &style, None))
+        Self(TextIntrinsic::from_parts_with_wrap(&display, &c.style, None, false))
     }
 }
 
@@ -250,7 +264,7 @@ pub struct BadgeIntrinsic {
 impl BadgeIntrinsic {
     pub fn from_badge(b: &Badge) -> Self {
         let (default_fs, h_pad, v_pad, icon_size) = badge_size_params(&b.badge_size);
-        let font_size = b.style.font_size.unwrap_or(default_fs);
+        let font_size = b.style.font_size_px_or(default_fs);
         let ratio = font_size / default_fs;
         let h_padding = h_pad * ratio;
         let v_padding = v_pad * ratio;
@@ -260,24 +274,10 @@ impl BadgeIntrinsic {
             0.0
         };
 
-        let synthetic_style = LayerStyle {
-            font_size: Some(font_size),
-            font_family: Some(
-                b.style
-                    .font_family
-                    .clone()
-                    .unwrap_or_else(|| "Inter".to_string()),
-            ),
-            font_weight: b.style.font_weight.clone(),
-            font_style: b.style.font_style.clone(),
-            letter_spacing: b.style.letter_spacing,
-            line_height: b.style.line_height,
-            wrap: Some(false),
-            ..LayerStyle::default()
-        };
+        let synthetic_style = synthesize_text_style(&b.style, font_size, "Inter");
 
         Self {
-            text: TextIntrinsic::from_parts(&b.text, &synthetic_style, None),
+            text: TextIntrinsic::from_parts_with_wrap(&b.text, &synthetic_style, None, false),
             h_padding,
             v_padding,
             icon_extra,
@@ -308,9 +308,35 @@ fn badge_size_params(s: &BadgeSize) -> (f32, f32, f32, f32) {
     }
 }
 
+/// Build a CssStyle for text measurement carrying just the typography fields
+/// from `src`, with a forced `font-size` and `font-family` fallback.
+fn synthesize_text_style(src: &CssStyle, font_size: f32, default_family: &str) -> CssStyle {
+    use rustmotion_core::css::Length;
+    let family = src
+        .font_family
+        .clone()
+        .unwrap_or_else(|| default_family.to_string());
+    CssStyle {
+        font_size: Some(Length::Px(font_size)),
+        font_family: Some(family),
+        font_weight: src.font_weight.clone(),
+        font_style: src.font_style,
+        letter_spacing: src.letter_spacing.clone(),
+        line_height: src.line_height.clone(),
+        ..CssStyle::default()
+    }
+}
+
+// Compatibility shim: keep an unused fn so old callers that referenced
+// `LineHeight::Number` style helpers compile cleanly.
+#[allow(dead_code)]
+fn _line_height_unused(_: Option<&LineHeight>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustmotion_core::css::style::CssStyle;
+    use rustmotion_core::css::Length;
     use rustmotion_core::engine::box_tree::AvailableSpace;
 
     #[test]
@@ -319,7 +345,13 @@ mod tests {
             content: "Hello World".into(),
             max_width: None,
             timing: Default::default(),
-            style: LayerStyle { font_size: Some(32.0), ..Default::default() },
+            style: CssStyle { font_size: Some(Length::Px(32.0)), ..Default::default() },
+            animation: Vec::new(),
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(
@@ -336,7 +368,13 @@ mod tests {
             content: "the quick brown fox jumps over the lazy dog".into(),
             max_width: None,
             timing: Default::default(),
-            style: LayerStyle { font_size: Some(20.0), ..Default::default() },
+            style: CssStyle { font_size: Some(Length::Px(20.0)), ..Default::default() },
+            animation: Vec::new(),
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (_w_unwrapped, h_unwrapped) = m.measure(
@@ -361,7 +399,13 @@ mod tests {
             content: "".into(),
             max_width: None,
             timing: Default::default(),
-            style: LayerStyle { font_size: Some(24.0), ..Default::default() },
+            style: CssStyle { font_size: Some(Length::Px(24.0)), ..Default::default() },
+            animation: Vec::new(),
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(

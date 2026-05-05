@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -53,7 +54,13 @@ pub struct Avatar {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_avatar_size() -> f32 {
@@ -61,7 +68,7 @@ fn default_avatar_size() -> f32 {
 }
 
 rustmotion_core::impl_traits!(Avatar {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });

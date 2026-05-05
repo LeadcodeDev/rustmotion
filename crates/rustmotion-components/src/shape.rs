@@ -3,11 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Point};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{build_shape_path, color4f_from_hex, draw_shape_path, font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
+use rustmotion_core::schema::{AnimationEffect, Fill, GradientType, ShapeText, ShapeType, Size, Stroke, TextAlign, TimelineStep, FontWeight};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -20,11 +21,21 @@ pub struct Shape {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
+    #[serde(default)]
+    pub fill: Option<Fill>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
 }
 
 rustmotion_core::impl_traits!(Shape {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -39,9 +50,9 @@ impl Painter for Shape {
     ) {
         let w = layout.width;
         let h = layout.height;
-        let corner_radius = self.style.border_radius;
+        let corner_radius = self.style.border_radius_px();
 
-        if let Some(fill) = &self.style.fill {
+        if let Some(fill) = &self.fill {
             let mut paint = match fill {
                 Fill::Solid(color) => paint_from_hex(color),
                 Fill::Gradient(gradient) => {
@@ -101,7 +112,7 @@ impl Painter for Shape {
             draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
-        if let Some(stroke) = &self.style.stroke {
+        if let Some(stroke) = &self.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
             let stroke_w = if props.stroke_width >= 0.0 { props.stroke_width } else { stroke.width };

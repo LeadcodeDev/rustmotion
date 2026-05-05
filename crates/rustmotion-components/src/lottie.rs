@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::{Result, RustmotionError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -5,7 +6,7 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::schema::{LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
@@ -38,7 +39,13 @@ pub struct Lottie {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_speed() -> f32 {
@@ -50,7 +57,7 @@ fn default_true() -> bool {
 }
 
 rustmotion_core::impl_traits!(Lottie {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });

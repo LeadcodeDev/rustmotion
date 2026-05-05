@@ -27,7 +27,7 @@ impl Chart {
             .filter_map(|d| d.label.clone())
             .collect();
 
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true);
 
         let n = self.data.len();
         let gap = 8.0;
@@ -164,7 +164,7 @@ impl Chart {
             .max(0.001);
 
         let x_labels: Vec<String> = self.categories.clone();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true);
 
         let gap = 8.0;
         let bar_w = (chart_w - gap * (n_cats + 1) as f32) / n_cats as f32;

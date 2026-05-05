@@ -2,8 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::LayerStyle;
 use rustmotion_core::traits::{PaintCtx, Painter};
 
 use crate::ChildComponent;
@@ -15,7 +15,7 @@ pub struct Positioned {
     #[serde(default)]
     pub children: Vec<ChildComponent>,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
 }
 
 rustmotion_core::impl_traits!(Positioned {

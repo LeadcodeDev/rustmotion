@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ use rustmotion_core::engine::renderer::{
     color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
 };
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_progress_width() -> f32 {
@@ -64,11 +65,17 @@ pub struct Progress {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Progress {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });

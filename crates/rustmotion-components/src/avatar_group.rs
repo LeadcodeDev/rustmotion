@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use rustmotion_core::engine::renderer::{
     paint_from_hex,
 };
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::LayerStyle;
+use rustmotion_core::schema::{AnimationEffect, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_avatar_size() -> f32 {
@@ -50,24 +51,30 @@ pub struct AvatarGroup {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(AvatarGroup {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl AvatarGroup {
-    fn visible_count(&self) -> usize {
+    pub fn visible_count(&self) -> usize {
         match self.max_display {
             Some(max) => max.min(self.avatars.len()),
             None => self.avatars.len(),
         }
     }
 
-    fn overflow_count(&self) -> usize {
+    pub fn overflow_count(&self) -> usize {
         self.avatars.len().saturating_sub(self.visible_count())
     }
 }

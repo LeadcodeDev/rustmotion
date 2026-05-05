@@ -18,7 +18,6 @@
 //! geometry it checks matches what the renderer will actually paint.
 
 use rustmotion::components::{ChildComponent, Component};
-use rustmotion::core::css::layer_to_css;
 use rustmotion::core::css::taffy_bridge::ConversionContext;
 use rustmotion::core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
 use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult};
@@ -28,7 +27,7 @@ use rustmotion::engine::animator::{
 use rustmotion::components::box_builder::build_scene_from_refs;
 use rustmotion::components::intrinsic::TextIntrinsic;
 use rustmotion::engine::render;
-use rustmotion::schema::{Overflow, ResolvedScenario};
+use rustmotion::schema::ResolvedScenario;
 use serde::Serialize;
 
 /// One detected layout violation.
@@ -89,8 +88,7 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
             let viewport = (scenario.video.width, scenario.video.height);
             let viewport_f = (viewport.0 as f32, viewport.1 as f32);
 
-            let root_layer = render::root_style(scene.layout.as_ref());
-            let root_css = layer_to_css(&root_layer);
+            let root_css = render::root_style(scene.layout.as_ref());
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
             let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
 
@@ -182,8 +180,10 @@ fn container_children(c: &Component) -> Option<&[ChildComponent]> {
 /// parent box, since CSS-style overflow:visible is the default).
 fn container_clips(c: &Component) -> bool {
     let style = c.as_styled().style_config();
-    matches!(style.overflow, Some(Overflow::Hidden))
-        || style.background.is_some() // card with background already clips
+    matches!(
+        style.overflow,
+        Some(rustmotion::core::css::style::Overflow::Hidden)
+    ) || style.background.is_some() // card with background already clips
 }
 
 fn check_viewport(
@@ -269,8 +269,11 @@ fn check_unwrappable_text(
     // the allocated width when wrap is disabled. (Text only — other components
     // either wrap or use fixed dimensions.)
     if let Component::Text(t) = component {
-        let wrap = t.style.wrap.unwrap_or(true);
-        if wrap {
+        let nowrap = matches!(
+            t.style.white_space,
+            Some(rustmotion::core::css::style::WhiteSpace::Nowrap | rustmotion::core::css::style::WhiteSpace::Pre)
+        );
+        if !nowrap {
             return;
         }
         // Measure the text at its natural (unbounded) width via the same
@@ -310,12 +313,12 @@ fn check_auto_scroll(
 ) {
     match component {
         Component::Codeblock(cb) if !cb.auto_scroll => {
-            let font_size = cb.style.font_size.unwrap_or(14.0);
-            let line_height = cb.style.line_height.unwrap_or(1.5);
+            let font_size = cb.style.font_size_px_or(14.0);
+            let actual_line_height = cb.style.line_height_for(font_size);
             let line_count = cb.code.lines().count().max(1) as f32;
             let chrome_h = if cb.chrome.as_ref().is_some_and(|c| c.enabled) { 36.0 } else { 0.0 };
             let pad = 32.0; // ~16 top + 16 bottom default
-            let natural_h = chrome_h + pad + line_count * font_size * line_height;
+            let natural_h = chrome_h + pad + line_count * actual_line_height;
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -334,11 +337,11 @@ fn check_auto_scroll(
             }
         }
         Component::Terminal(t) if !t.auto_scroll => {
-            let font_size = t.style.font_size.unwrap_or(16.0);
-            let line_height = t.style.line_height.unwrap_or(1.5);
+            let font_size = t.style.font_size_px_or(16.0);
+            let actual_line_height = t.style.line_height_for(font_size);
             let chrome_h = if t.show_chrome { 36.0 } else { 0.0 };
             let pad = 32.0;
-            let natural_h = chrome_h + pad + t.lines.len() as f32 * font_size * line_height;
+            let natural_h = chrome_h + pad + t.lines.len() as f32 * actual_line_height;
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -445,8 +448,7 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
             // Use the resting layout as the base bbox. Animation transforms
             // (translate/scale/wiggle/orbit) are applied analytically per
             // sample — they don't reflow taffy.
-            let root_layer = render::root_style(scene.layout.as_ref());
-            let root_css = layer_to_css(&root_layer);
+            let root_css = render::root_style(scene.layout.as_ref());
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
             let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
 
@@ -690,7 +692,7 @@ mod tests {
                     "shape": "rect",
                     "size": { "width": 100, "height": 80 },
                     "x": 10, "y": 10,
-                    "style": { "fill": "#ff0000" }
+                    "fill": "#ff0000"
                 }]
             }]
         }"##;
@@ -713,7 +715,7 @@ mod tests {
                     "size": { "width": 400, "height": 100 },
                     "position": "absolute",
                     "x": 1700, "y": 100,
-                    "style": { "fill": "#ff0000" }
+                    "fill": "#ff0000"
                 }]
             }]
         }"##;
@@ -729,7 +731,7 @@ mod tests {
 
     #[test]
     fn unwrappable_text_in_narrow_card_is_flagged() {
-        // A card 200 px wide with a 96 px font_size unwrapped text. Natural
+        // A card 200 px wide with a 96 px font-size unwrapped text. Natural
         // width far exceeds 200, so we should get UnwrappableTextOverflow.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
@@ -743,7 +745,7 @@ mod tests {
                     "children": [{
                         "type": "text",
                         "content": "this string is too long to fit",
-                        "style": { "color": "#ffffff", "font_size": 96, "wrap": false }
+                        "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap" }
                     }]
                 }]
             }]

@@ -2,11 +2,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
-use rustmotion_core::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
+use rustmotion_core::schema::{AnimationEffect, CodeblockReveal, RevealMode, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -111,7 +112,13 @@ pub struct Terminal {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_show_chrome() -> bool {
@@ -123,7 +130,7 @@ fn default_auto_scroll() -> bool {
 }
 
 rustmotion_core::impl_traits!(Terminal {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -148,13 +155,13 @@ impl Terminal {
             .or_else(|| fm.legacy_make_typeface(None, font_style))
             .expect(&RustmotionError::FontNotFound.to_string());
 
-        let size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let size = self.style.font_size_px_or(FONT_SIZE);
 
         skia_safe::Font::from_typeface(typeface, size)
     }
 
     fn line_height(&self) -> f32 {
-        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let font_size = self.style.font_size_px_or(FONT_SIZE);
         (font_size * LINE_HEIGHT / FONT_SIZE).ceil()
     }
 
@@ -273,7 +280,7 @@ impl Terminal {
             // Title
             if let Some(title) = &self.title {
                 let font = self.make_font();
-                let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+                let font_size = self.style.font_size_px_or(FONT_SIZE);
                 let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
                 let mut title_paint = paint_from_hex(self.theme.title_color());
                 title_paint.set_anti_alias(true);
@@ -292,7 +299,7 @@ impl Terminal {
 
         // Lines
         let font = self.make_font();
-        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let font_size = self.style.font_size_px_or(FONT_SIZE);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;

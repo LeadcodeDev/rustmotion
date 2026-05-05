@@ -1,3 +1,4 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -44,7 +45,13 @@ pub struct Callout {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_arrow_size() -> f32 {
@@ -52,26 +59,26 @@ fn default_arrow_size() -> f32 {
 }
 
 rustmotion_core::impl_traits!(Callout {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Callout {
     fn bg_color(&self) -> &str {
-        self.style.background.as_deref().unwrap_or("#333333")
+        self.style.background_color_str().unwrap_or("#333333")
     }
 
     fn text_color(&self) -> &str {
-        self.style.color.as_deref().unwrap_or("#FFFFFF")
+        self.style.color_str_or("#FFFFFF")
     }
 
     fn radius(&self) -> f32 {
-        self.style.border_radius.unwrap_or(8.0)
+        self.style.border_radius_px_or(8.0)
     }
 
     fn font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(16.0)
+        self.style.font_size_px_or(16.0)
     }
 
     fn bubble_rect(&self, w: f32, h: f32) -> Rect {

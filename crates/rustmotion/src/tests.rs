@@ -194,7 +194,8 @@ mod component_smoke {
         use rustmotion_core::css::taffy_bridge::ConversionContext;
         use rustmotion_core::engine::layout_pass::run_layout;
         use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
-        use rustmotion_core::schema::{style::CardDirection, LayerStyle, Spacing};
+        use rustmotion_core::css::style::{CssStyle, Edges, FlexDirection, Gap};
+        use rustmotion_core::css::units::LengthPercentage;
 
         let mut surface = skia_safe::surfaces::raster_n32_premul((400, 300))
             .expect("raster surface");
@@ -221,10 +222,10 @@ mod component_smoke {
                 y: None,
                 z_index: None,
             };
-            let card_style = LayerStyle {
-                flex_direction: Some(CardDirection::Column),
-                padding: Some(Spacing::Uniform(8.0)),
-                gap: Some(4.0),
+            let card_style = CssStyle {
+                flex_direction: Some(FlexDirection::Column),
+                padding: Some(Edges::Uniform(LengthPercentage::Px(8.0))),
+                gap: Some(Gap::Uniform(LengthPercentage::Px(4.0))),
                 ..Default::default()
             };
             let card_child = ChildComponent {
@@ -233,6 +234,9 @@ mod component_smoke {
                     size: None,
                     timing: Default::default(),
                     style: card_style,
+                    animation: Vec::new(),
+                    timeline: Vec::new(),
+                    stagger: None,
                 }),
                 position: Some(PositionMode::Absolute { x: 10.0, y: 10.0 }),
                 x: None,
@@ -364,10 +368,8 @@ mod component_smoke {
             "type": "shape",
             "shape": "rect",
             "size": { "width": 100, "height": 80 },
-            "style": {
-                "fill": "#ff3366",
-                "animation": [{ "name": "fade_in", "duration": 1.0 }]
-            }
+            "fill": "#ff3366",
+            "animation": [{ "name": "fade_in", "duration": 1.0 }]
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
@@ -414,10 +416,8 @@ mod component_smoke {
             "type": "shape",
             "shape": "rect",
             "size": { "width": 100, "height": 80 },
-            "style": {
-                "fill": "#ff3366",
-                "animation": [{ "name": "scale_in", "duration": 1.0 }]
-            }
+            "fill": "#ff3366",
+            "animation": [{ "name": "scale_in", "duration": 1.0 }]
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
@@ -452,10 +452,8 @@ mod component_smoke {
             "type": "shape",
             "shape": "rect",
             "size": { "width": 60, "height": 60 },
-            "style": {
-                "fill": "#ff3366",
-                "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
-            }
+            "fill": "#ff3366",
+            "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {

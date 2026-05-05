@@ -2,11 +2,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{LayerStyle, Size};
+use rustmotion_core::schema::{AnimationEffect, Size, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Text alignment for table columns.
@@ -61,18 +62,24 @@ pub struct Table {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Table {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Table {
     fn font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(14.0)
+        self.style.font_size_px_or(14.0)
     }
 
     fn row_height(&self) -> f32 {
@@ -149,17 +156,17 @@ impl Table {
 
         let header_color = self.header_color.as_deref().unwrap_or("#374151");
         let border_color = self.border_color.as_deref().unwrap_or("#4B5563");
-        let text_color = self.style.color.as_deref().unwrap_or("#FFFFFF");
+        let text_color = self.style.color_str_or("#FFFFFF");
         let header_text_color = self.header_text_color.as_deref().unwrap_or("#FFFFFF");
         let default_row_colors = vec!["#1F2937".to_string(), "#111827".to_string()];
         let row_colors = self.row_colors.as_ref().unwrap_or(&default_row_colors);
 
         // Clip to rounded rect if border-radius is set
-        let has_radius = self.style.border_radius.unwrap_or(0.0) > 0.0;
+        let radius_px = self.style.border_radius_px_or(0.0);
+        let has_radius = radius_px > 0.0;
         if has_radius {
-            let radius = self.style.border_radius.unwrap_or(0.0);
             let rect = Rect::from_xywh(0.0, 0.0, w, layout_h);
-            let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
+            let rrect = skia_safe::RRect::new_rect_xy(rect, radius_px, radius_px);
             canvas.save();
             canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
         }

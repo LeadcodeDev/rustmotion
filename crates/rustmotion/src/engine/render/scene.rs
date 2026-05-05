@@ -7,7 +7,12 @@ use crate::components::ChildComponent;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
-use crate::schema::{Camera, LayerStyle, Scene, SceneLayout, VideoConfig};
+use crate::schema::{Camera, Scene, SceneLayout, VideoConfig};
+use rustmotion_core::css::style::{
+    AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection,
+    Gap, JustifyContent as CssJustifyContent,
+};
+use rustmotion_core::css::units::LengthPercentage;
 
 /// Internal render-time context — bundles per-scene timing/dimension info that
 /// the scene renderer threads down into its helpers. This is intentionally
@@ -218,21 +223,49 @@ pub fn render_frame_v2_scaled(
     Ok(pixels)
 }
 
-/// Build a `LayerStyle` from an optional `SceneLayout` for root-level flex layout.
-pub fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
-    let mut style = LayerStyle::default();
+/// Build a `CssStyle` from an optional `SceneLayout` for root-level flex layout.
+pub fn root_style(scene_layout: Option<&SceneLayout>) -> CssStyle {
+    use crate::schema::{CardAlign, CardDirection, CardJustify};
+    let mut style = CssStyle::default();
+    style.display = Some(rustmotion_core::css::style::Display::Flex);
+
     if let Some(layout) = scene_layout {
-        style.flex_direction = layout.direction.clone();
-        style.gap = layout.gap;
-        style.align_items = layout.align_items.clone();
-        style.justify_content = layout.justify_content.clone();
+        if let Some(d) = &layout.direction {
+            style.flex_direction = Some(match d {
+                CardDirection::Row => CssFlexDirection::Row,
+                CardDirection::Column => CssFlexDirection::Column,
+                CardDirection::RowReverse => CssFlexDirection::RowReverse,
+                CardDirection::ColumnReverse => CssFlexDirection::ColumnReverse,
+            });
+        }
+        if let Some(g) = layout.gap {
+            style.gap = Some(Gap::Uniform(LengthPercentage::Px(g)));
+        }
+        if let Some(a) = &layout.align_items {
+            style.align_items = Some(match a {
+                CardAlign::Start => CssAlignItems::FlexStart,
+                CardAlign::End => CssAlignItems::FlexEnd,
+                CardAlign::Center => CssAlignItems::Center,
+                CardAlign::Stretch => CssAlignItems::Stretch,
+            });
+        }
+        if let Some(j) = &layout.justify_content {
+            style.justify_content = Some(match j {
+                CardJustify::Start => CssJustifyContent::FlexStart,
+                CardJustify::End => CssJustifyContent::FlexEnd,
+                CardJustify::Center => CssJustifyContent::Center,
+                CardJustify::SpaceBetween => CssJustifyContent::SpaceBetween,
+                CardJustify::SpaceAround => CssJustifyContent::SpaceAround,
+                CardJustify::SpaceEvenly => CssJustifyContent::SpaceEvenly,
+            });
+        }
         if let Some(p) = layout.padding {
-            style.padding = Some(crate::schema::Spacing::Uniform(p));
+            style.padding = Some(Edges::Uniform(LengthPercentage::Px(p)));
         }
     }
     // Default direction is column (like a web page)
     if style.flex_direction.is_none() {
-        style.flex_direction = Some(crate::schema::CardDirection::Column);
+        style.flex_direction = Some(CssFlexDirection::Column);
     }
     style
 }
@@ -273,15 +306,13 @@ fn render_with_new_pipeline_iter<'a, I>(
 {
     use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
-    use rustmotion_core::css::layer_to_css;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 
     // Mirror the legacy `root_style` so the new pipeline applies the same
     // scene-level flex configuration (direction, gap, padding, alignment).
-    let root_layer = root_style(scene_layout);
-    let root_css = layer_to_css(&root_layer);
+    let root_css = root_style(scene_layout);
 
     let anim = Some(BuildAnimationCtx {
         time: ctx.time,

@@ -2,9 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::{LayerStyle, SizeDimension};
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::schema::{AnimationEffect, SizeDimension, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 use crate::ChildComponent;
 
@@ -25,67 +26,20 @@ pub struct Flex {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default, deserialize_with = "rustmotion_core::schema::deserialize_animation_effects")]
+    pub animation: Vec<AnimationEffect>,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Flex {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
-
-impl Bordered for Flex {
-    fn border(&self) -> Option<&Border> {
-        // Border in LayerStyle uses CardBorder, but trait uses Border.
-        // They have the same shape. We use unsafe transmute or just return None and handle in render.
-        None // Handled directly in render via self.style.border
-    }
-}
-
-impl BorderedMut for Flex {
-    fn set_border(&mut self, _border: Option<Border>) {}
-}
-
-impl Rounded for Flex {
-    fn corner_radius(&self) -> f32 {
-        self.style.border_radius_or(12.0)
-    }
-}
-
-impl RoundedMut for Flex {
-    fn set_corner_radius(&mut self, radius: f32) {
-        self.style.border_radius = Some(radius);
-    }
-}
-
-impl Shadowed for Flex {
-    fn shadow(&self) -> Option<&Shadow> {
-        // CardShadow and Shadow have the same shape
-        None // Handled directly in render via self.style.box_shadow
-    }
-}
-
-impl ShadowedMut for Flex {
-    fn set_shadow(&mut self, _shadow: Option<Shadow>) {}
-}
-
-impl rustmotion_core::traits::Backgrounded for Flex {
-    fn background(&self) -> Option<&str> {
-        self.style.background.as_deref()
-    }
-}
-
-impl rustmotion_core::traits::BackgroundedMut for Flex {
-    fn set_background(&mut self, bg: Option<String>) {
-        self.style.background = bg;
-    }
-}
-
-impl rustmotion_core::traits::Clipped for Flex {
-    fn clip(&self) -> bool {
-        true
-    }
-}
 
 impl Painter for Flex {
     fn paint_content(
@@ -97,4 +51,3 @@ impl Painter for Flex {
     ) {
     }
 }
-

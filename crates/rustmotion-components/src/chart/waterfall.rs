@@ -34,7 +34,7 @@ impl Chart {
             .iter()
             .filter_map(|d| d.label.clone())
             .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, true);
 
         let n = self.data.len();
         let gap = 6.0;
