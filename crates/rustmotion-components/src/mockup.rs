@@ -75,8 +75,6 @@ rustmotion_core::impl_traits!(Mockup {
 });
 
 struct DeviceMetrics {
-    default_width: f32,
-    default_height: f32,
     corner_radius: f32,
     bezel_top: f32,
     bezel_bottom: f32,
@@ -87,32 +85,24 @@ impl MockupDevice {
     fn metrics(&self) -> DeviceMetrics {
         match self {
             MockupDevice::Iphone => DeviceMetrics {
-                default_width: 375.0,
-                default_height: 812.0,
                 corner_radius: 40.0,
                 bezel_top: 44.0,
                 bezel_bottom: 34.0,
                 bezel_side: 12.0,
             },
             MockupDevice::Android => DeviceMetrics {
-                default_width: 360.0,
-                default_height: 800.0,
                 corner_radius: 35.0,
                 bezel_top: 32.0,
                 bezel_bottom: 24.0,
                 bezel_side: 10.0,
             },
             MockupDevice::Laptop => DeviceMetrics {
-                default_width: 800.0,
-                default_height: 550.0,
                 corner_radius: 12.0,
                 bezel_top: 32.0,
                 bezel_bottom: 32.0,
                 bezel_side: 16.0,
             },
             MockupDevice::Browser => DeviceMetrics {
-                default_width: 800.0,
-                default_height: 600.0,
                 corner_radius: 10.0,
                 bezel_top: 40.0,
                 bezel_bottom: 0.0,

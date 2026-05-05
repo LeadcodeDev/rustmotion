@@ -122,17 +122,6 @@ impl Notification {
         skia_safe::Font::from_typeface(typeface, size)
     }
 
-    fn compute_height(&self) -> f32 {
-        let v_pad = 16.0;
-        let title_fs = self.title_font_size();
-        let mut h = v_pad * 2.0 + title_fs * 1.3;
-        if self.message.is_some() {
-            let msg_fs = self.message_font_size();
-            h += 4.0 + msg_fs * 1.3;
-        }
-        h
-    }
-
     fn compute_opacity(&self, time: f64) -> f32 {
         // Effective start: if wait_for_push, delay by slide_duration so push animations finish first
         let effective_start = if self.wait_for_push {

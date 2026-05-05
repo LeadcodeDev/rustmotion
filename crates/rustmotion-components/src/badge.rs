@@ -113,22 +113,6 @@ impl Badge {
         skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
     }
 
-    fn measure_content(&self) -> (f32, f32) {
-        let (h_pad, v_pad, icon_size) = self.resolved_params();
-        let font = self.make_font();
-        let font_size = self.resolved_font_size();
-
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
-        let text_width = measure_text_with_fallback(&self.text, &font, &emoji_font, 0.0);
-        let ratio = self.resolved_font_size() / self.badge_size.params().0;
-        let icon_gap = if self.icon.is_some() { 6.0 * ratio } else { 0.0 };
-        let icon_w = if self.icon.is_some() { icon_size } else { 0.0 };
-
-        let w = h_pad * 2.0 + text_width + icon_w + icon_gap;
-        let h = v_pad * 2.0 + font_size * 1.3;
-
-        (w, h)
-    }
 }
 
 impl Badge {

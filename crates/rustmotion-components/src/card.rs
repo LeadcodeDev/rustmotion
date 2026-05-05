@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, GridConfig, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -40,16 +40,6 @@ impl FlexContainer for Card {
 impl FlexContainerMut for Card {
     fn flex_config_mut(&mut self) -> &mut FlexConfig {
         unreachable!("Use style directly for flex config")
-    }
-}
-
-impl Card {
-    fn grid_config_owned(&self) -> GridConfig {
-        GridConfig {
-            grid_template_columns: self.style.grid_template_columns.clone(),
-            grid_template_rows: self.style.grid_template_rows.clone(),
-            gap: self.style.gap_or(0.0),
-        }
     }
 }
 

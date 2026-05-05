@@ -84,23 +84,6 @@ impl Tooltip {
         skia_safe::Font::from_typeface(typeface, fs)
     }
 
-    fn measure_content(&self) -> (f32, f32) {
-        let font = self.make_font();
-        let fs = self.style.font_size.unwrap_or(self.font_size);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
-        let text_w = measure_text_with_fallback(&self.text, &font, &emoji_font, 0.0);
-        let h_pad = fs * 0.8;
-        let v_pad = fs * 0.5;
-        let body_w = text_w + h_pad * 2.0;
-        let body_h = fs * 1.4 + v_pad * 2.0;
-
-        let (total_w, total_h) = match self.arrow {
-            TooltipArrow::Top | TooltipArrow::Bottom => (body_w, body_h + self.arrow_size),
-            TooltipArrow::Left | TooltipArrow::Right => (body_w + self.arrow_size, body_h),
-            TooltipArrow::None => (body_w, body_h),
-        };
-        (total_w, total_h)
-    }
 }
 
 impl Tooltip {

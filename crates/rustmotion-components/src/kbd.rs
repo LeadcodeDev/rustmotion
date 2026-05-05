@@ -64,18 +64,6 @@ impl Kbd {
         skia_safe::Font::from_typeface(typeface, fs)
     }
 
-    fn measure_content(&self) -> (f32, f32) {
-        let font = self.make_font();
-        let fs = self.style.font_size.unwrap_or(self.font_size);
-        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
-        let text_w = measure_text_with_fallback(&self.key, &font, &emoji_font, 0.0);
-        let h_pad = fs * 0.7;
-        let v_pad = fs * 0.4;
-        let min_w = fs * 1.8;
-        let w = (text_w + h_pad * 2.0).max(min_w);
-        let h = fs + v_pad * 2.0;
-        (w, h)
-    }
 }
 
 impl Kbd {
