@@ -1,33 +1,25 @@
-//! Legacy paint dispatcher — bridges the new `paint_tree` pipeline to the
-//! existing `Widget::render` implementations of all 51 components.
+//! Paint dispatcher for the new `paint_tree` pipeline. Bridges from the
+//! taffy-laid-out `BoxNode` tree back to component-typed `Painter` impls.
 //!
-//! While components are progressively migrated to `Painter`, this dispatcher
-//! lets the new pipeline (taffy layout + box-decoration paint pass) keep
-//! producing pixel-correct output by delegating component-internal painting
-//! to the legacy `Widget::render`.
-//!
-//! The payload stored in `BoxKind::Component` is an `Arc<NodeId>` (cf.
-//! `box_builder::build_scene`). The dispatcher downcasts it, looks up the
-//! component in the `BuiltScene::components` table, builds a synthetic
-//! `LayoutNode` from the `BoxLayout`, and calls `Widget::render`.
+//! Naming kept as "legacy" for now to avoid churn in callers; this is the
+//! sole dispatcher in use since all 51 components implement `Painter`.
 //!
 //! Containers (Card / Flex / Grid / Container / Positioned) are intentionally
 //! skipped: paint_pass already paints their box decorations and recurses into
-//! children. Calling their `Widget::render` would double-recurse via the old
-//! `RenderPipeline` and conflict with the new flow.
+//! children — so calling the container's own `paint_content` would do nothing
+//! anyway, and we save a no-op call.
 
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::NodeId;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
-use rustmotion_core::layout::LayoutNode;
-use rustmotion_core::traits::{PaintCtx, RenderContext, RenderPipeline};
+use rustmotion_core::traits::PaintCtx;
 use skia_safe::Canvas;
 
 use crate::{ChildComponent, Component};
 
-/// Maps NodeIds to legacy `ChildComponent`s and dispatches paint to their
-/// `Widget::render` implementations.
+/// Maps NodeIds to `ChildComponent`s and dispatches paint to their
+/// `Painter::paint_content` impls.
 pub struct LegacyPaintDispatcher<'a> {
     /// `components[id as usize]` is the component for `id`. Slot 0 is the
     /// synthetic root and is always `None`.
@@ -67,26 +59,12 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             return;
         }
 
-        // Build a synthetic LayoutNode anchored at the local origin so legacy
-        // `Widget::render` impls can use (0, 0, w, h) the way they always have.
-        let node = LayoutNode::new(0.0, 0.0, layout.width, layout.height);
-
-        let render_ctx = RenderContext {
-            time: frame.time,
-            scene_duration: frame.scene_duration,
-            frame_index: frame.frame_index,
-            fps: frame.fps,
-            video_width: frame.video_width,
-            video_height: frame.video_height,
-            stagger_offset: 0.0,
-        };
-
         // Resolve animations for this leaf. Outer transforms (translate /
         // scale / rotate / opacity / blur) are applied by `paint_pass` via
-        // the CSS overrides injected at box-tree build time, so we no longer
-        // wrap the canvas here. We still resolve `props` because Widget
-        // implementations read internal-only fields like `draw_progress`,
-        // `stroke_width`, `visible_chars*`, and `char_animation`.
+        // the CSS overrides injected at box-tree build time, so we don't
+        // wrap the canvas here. `props` is still needed for internal-only
+        // fields like `draw_progress`, `stroke_width`, `visible_chars*`,
+        // and `char_animation`.
         let props = match child.component.as_animatable() {
             Some(a) => {
                 let effects = a.animation_effects();
@@ -101,35 +79,31 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         if props.opacity <= 0.0 {
             return;
         }
-        let pipeline = NoOpPipeline;
+
+        let Some(painter) = child.component.as_painter() else {
+            return;
+        };
 
         canvas.save();
         canvas.translate((layout.x, layout.y));
 
-        if let Some(painter) = child.component.as_painter() {
-            let paint_ctx = PaintCtx {
-                time: frame.time,
-                scene_duration: frame.scene_duration,
-                frame_index: frame.frame_index,
-                fps: frame.fps,
-                video_width: frame.video_width,
-                video_height: frame.video_height,
-                stagger_offset: 0.0,
-            };
-            let local = BoxLayout {
-                x: 0.0,
-                y: 0.0,
-                width: layout.width,
-                height: layout.height,
-                ..Default::default()
-            };
-            painter.paint_content(canvas, &local, &props, &paint_ctx);
-        } else {
-            let _ = child
-                .component
-                .as_widget()
-                .render(canvas, &node, &render_ctx, &props, &pipeline);
-        }
+        let paint_ctx = PaintCtx {
+            time: frame.time,
+            scene_duration: frame.scene_duration,
+            frame_index: frame.frame_index,
+            fps: frame.fps,
+            video_width: frame.video_width,
+            video_height: frame.video_height,
+            stagger_offset: 0.0,
+        };
+        let local = BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: layout.width,
+            height: layout.height,
+            ..Default::default()
+        };
+        painter.paint_content(canvas, &local, &props, &paint_ctx);
 
         canvas.restore();
     }
@@ -144,24 +118,6 @@ fn is_container(c: &Component) -> bool {
             | Component::Container(_)
             | Component::Positioned(_)
     )
-}
-
-/// `RenderPipeline` impl that drops every recursion request — paint_tree owns
-/// child traversal in the new pipeline, so legacy containers must not recurse
-/// when reached via the dispatcher.
-struct NoOpPipeline;
-
-impl RenderPipeline for NoOpPipeline {
-    fn render_children(
-        &self,
-        _canvas: &Canvas,
-        _children: &dyn std::any::Any,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _stagger: Option<f32>,
-    ) -> rustmotion_core::error::Result<()> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -197,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_runs_widget_render_on_leaf() {
+    fn dispatch_runs_paint_content_on_leaf() {
         let scene = vec![shape_child(50.0, 30.0, 10.0, 20.0)];
         let built = build_scene(&scene, (200.0, 200.0));
         let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
@@ -229,7 +185,7 @@ mod tests {
         );
 
         // Read back the pixel at the centre of the shape (10+25, 20+15)=(35,35)
-        // and assert it's red-ish — confirms legacy Widget::render painted.
+        // and assert it's red-ish — confirms paint_content painted.
         let snapshot = surface.image_snapshot();
         let mut buf = [0u8; 4];
         let info = skia_safe::ImageInfo::new(
