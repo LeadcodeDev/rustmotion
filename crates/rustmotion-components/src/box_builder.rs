@@ -55,12 +55,26 @@ pub fn build_scene<'a>(
 pub fn build_scene_with_root<'a>(
     children: &'a [ChildComponent],
     viewport: (f32, f32),
-    mut root_css: CssStyle,
+    root_css: CssStyle,
 ) -> BuiltScene<'a> {
+    build_scene_from_refs(children.iter(), viewport, root_css)
+}
+
+/// Same as [`build_scene_with_root`] but accepts an iterator over
+/// `&ChildComponent` references. Useful when the caller has filtered or
+/// re-ordered the scene's children and doesn't want to clone.
+pub fn build_scene_from_refs<'a, I>(
+    children: I,
+    viewport: (f32, f32),
+    mut root_css: CssStyle,
+) -> BuiltScene<'a>
+where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
     let mut next_id: NodeId = 1;
 
-    let mut child_boxes = Vec::with_capacity(children.len());
+    let mut child_boxes = Vec::new();
     for c in children {
         child_boxes.push(build_child(c, &mut components, &mut next_id));
     }

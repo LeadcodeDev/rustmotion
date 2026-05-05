@@ -256,7 +256,29 @@ fn render_with_new_pipeline(
     scene_layout: Option<&SceneLayout>,
     ctx: &RenderContext,
 ) {
-    use rustmotion_components::box_builder::build_scene_with_root;
+    render_with_new_pipeline_iter(
+        canvas,
+        root_children.iter(),
+        viewport_w,
+        viewport_h,
+        scene_layout,
+        ctx,
+    );
+}
+
+/// Iterator-based variant for callers (like world rendering) that want to
+/// pass a filtered subset of children without cloning.
+fn render_with_new_pipeline_iter<'a, I>(
+    canvas: &Canvas,
+    root_children: I,
+    viewport_w: f32,
+    viewport_h: f32,
+    scene_layout: Option<&SceneLayout>,
+    ctx: &RenderContext,
+) where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    use rustmotion_components::box_builder::build_scene_from_refs;
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
     use rustmotion_core::css::layer_to_css;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
@@ -268,7 +290,7 @@ fn render_with_new_pipeline(
     let root_layer = root_style(scene_layout);
     let root_css = layer_to_css(&root_layer);
 
-    let built = build_scene_with_root(root_children, (viewport_w, viewport_h), root_css);
+    let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css);
     let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
     let dispatcher = LegacyPaintDispatcher::new(&built.components);
     let frame = PaintFrame {
@@ -559,18 +581,21 @@ pub fn render_world_frame_scaled(
         let scene_children = deserialize_children(scene);
         let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
-        // Render: decorative children get fullscreen layout, content children get flex layout
-        // World scenes still use the legacy path; the new pipeline gate only
-        // covers slide views and isolated scene rendering for now.
+        // Render: decorative children get fullscreen layout, content children get flex layout.
+        // Decorative (particles) always go through the legacy path: they're
+        // intentionally fullscreen, which the new pipeline's flex flow can't
+        // express. Non-decorative children go through the new pipeline when
+        // the feature flag is on, so world scenes stay in sync with slide
+        // views.
+        let use_new = new_pipeline_enabled();
         for (i, child) in scene_children.iter().enumerate() {
             if i >= layout.children.len() { break; }
             if child.is_decorative() {
-                // Render particles fullscreen
                 let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
                 canvas.save();
                 render_component(canvas, child, &deco_layout, &ctx)?;
                 canvas.restore();
-            } else {
+            } else if !use_new {
                 let child_layout = &layout.children[i];
                 canvas.save();
                 canvas.translate((child_layout.x, child_layout.y));
@@ -580,6 +605,16 @@ pub fn render_world_frame_scaled(
                 }
                 canvas.restore();
             }
+        }
+        if use_new {
+            render_with_new_pipeline_iter(
+                canvas,
+                scene_children.iter().filter(|c| !c.is_decorative()),
+                vw,
+                vh,
+                Some(scene_layout),
+                &ctx,
+            );
         }
 
         if has_camera {
