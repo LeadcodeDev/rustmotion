@@ -3,6 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
@@ -10,7 +12,7 @@ use rustmotion_core::engine::renderer::{
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_avatar_size() -> f32 {
     48.0
@@ -71,15 +73,8 @@ impl AvatarGroup {
     }
 }
 
-impl Widget for AvatarGroup {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl AvatarGroup {
+    fn paint(&self, canvas: &Canvas) -> Result<()> {
         let s = self.size;
         let step = s - self.overlap;
         let visible = self.visible_count();
@@ -190,6 +185,19 @@ impl Widget for AvatarGroup {
 
         Ok(())
     }
+}
+
+impl Widget for AvatarGroup {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas)
+    }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         let visible = self.visible_count();
@@ -202,5 +210,17 @@ impl Widget for AvatarGroup {
             (total - 1) as f32 * step + self.size
         };
         (w, self.size)
+    }
+}
+
+impl Painter for AvatarGroup {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas);
     }
 }

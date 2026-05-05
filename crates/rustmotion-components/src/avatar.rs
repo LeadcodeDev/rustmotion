@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -65,17 +67,10 @@ rustmotion_core::impl_traits!(Avatar {
     Styled => style,
 });
 
-impl Widget for Avatar {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Avatar {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
 
         // Load image
         let cache = asset_cache();
@@ -152,8 +147,33 @@ impl Widget for Avatar {
 
         Ok(())
     }
+}
+
+impl Widget for Avatar {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height)
+    }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         (self.size, self.size)
+    }
+}
+
+impl Painter for Avatar {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height);
     }
 }

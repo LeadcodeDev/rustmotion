@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_width() -> f32 {
     360.0
@@ -229,18 +231,11 @@ impl Notification {
     }
 }
 
-impl Widget for Notification {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let opacity = self.compute_opacity(ctx.time);
+impl Notification {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
+        let opacity = self.compute_opacity(time);
 
         if opacity <= 0.0 {
             return Ok(());
@@ -252,8 +247,8 @@ impl Widget for Notification {
         let mut stack_y = 0.0_f32;
         let transition_dur = self.slide_duration;
         for &push_time in &self.push_at {
-            if ctx.time >= push_time {
-                let t = ((ctx.time - push_time) / transition_dur).clamp(0.0, 1.0) as f32;
+            if time >= push_time {
+                let t = ((time - push_time) / transition_dur).clamp(0.0, 1.0) as f32;
                 let eased = t * t * (3.0 - 2.0 * t); // smoothstep
                 stack_y += slot_size * eased;
             }
@@ -359,13 +354,38 @@ impl Widget for Notification {
         }
 
         if opacity < 1.0 {
-            canvas.restore(); // layer
+            canvas.restore();
         }
         canvas.restore();
         Ok(())
     }
+}
+
+impl Widget for Notification {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time)
+    }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         (self.width, self.compute_height())
+    }
+}
+
+impl Painter for Notification {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

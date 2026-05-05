@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, PaintStyle, Point, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_base_color() -> String {
     "#1E293B".to_string()
@@ -139,44 +141,48 @@ impl Skeleton {
     }
 }
 
-impl Widget for Skeleton {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Skeleton {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         match self.variant {
             SkeletonVariant::Rectangle => {
                 let rect = Rect::from_xywh(0.0, 0.0, w, h);
-                self.draw_shimmer_rect(canvas, rect, self.border_radius, ctx.time);
+                self.draw_shimmer_rect(canvas, rect, self.border_radius, time);
             }
             SkeletonVariant::Circle => {
                 let diameter = w.min(h);
                 let rect = Rect::from_xywh(0.0, 0.0, diameter, diameter);
-                self.draw_shimmer_rect(canvas, rect, diameter / 2.0, ctx.time);
+                self.draw_shimmer_rect(canvas, rect, diameter / 2.0, time);
             }
             SkeletonVariant::Text => {
                 let total_lines = self.lines.max(1);
                 for i in 0..total_lines {
                     let y = i as f32 * (self.line_height + self.line_gap);
-                    // Last line is shorter
                     let line_w = if i == total_lines - 1 {
                         w * 0.6
                     } else {
                         w
                     };
                     let rect = Rect::from_xywh(0.0, y, line_w, self.line_height);
-                    self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, ctx.time);
+                    self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, time);
                 }
             }
         }
+    }
+}
 
+impl Widget for Skeleton {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
@@ -193,5 +199,17 @@ impl Widget for Skeleton {
                 (300.0, h)
             }
         }
+    }
+}
+
+impl Painter for Skeleton {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

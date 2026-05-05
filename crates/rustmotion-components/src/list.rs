@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_gap() -> f32 {
     16.0
@@ -152,15 +154,8 @@ impl List {
     }
 }
 
-impl Widget for List {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl List {
+    fn paint(&self, canvas: &Canvas) -> Result<()> {
         let font = self.make_font();
         let font_size = self.resolved_font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
@@ -248,6 +243,19 @@ impl Widget for List {
 
         Ok(())
     }
+}
+
+impl Widget for List {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas)
+    }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         let font_size = self.resolved_font_size();
@@ -258,5 +266,17 @@ impl Widget for List {
             self.items.len() as f32 * (line_height + self.gap) - self.gap
         };
         (self.width, total_h)
+    }
+}
+
+impl Painter for List {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas);
     }
 }

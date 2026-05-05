@@ -433,6 +433,17 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Switch(c) => Some(c),
             Component::Slider(c) => Some(c),
+            Component::Rating(c) => Some(c),
+            Component::Stepper(c) => Some(c),
+            Component::Comparison(c) => Some(c),
+            Component::Notification(c) => Some(c),
+            Component::Tooltip(c) => Some(c),
+            Component::PillNav(c) => Some(c),
+            Component::List(c) => Some(c),
+            Component::Skeleton(c) => Some(c),
+            Component::Avatar(c) => Some(c),
+            Component::AvatarGroup(c) => Some(c),
+            Component::Timeline(c) => Some(c),
             _ => None,
         }
     }

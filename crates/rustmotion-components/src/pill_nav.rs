@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_pill_color() -> String {
     "#3B82F6".to_string()
@@ -152,21 +154,14 @@ impl PillNav {
     }
 }
 
-impl Widget for PillNav {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl PillNav {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
         if self.items.is_empty() {
-            return Ok(());
+            return;
         }
 
-        let w = layout.width;
-        let h = layout.height;
+        let w = layout_w;
+        let h = layout_h;
 
         // Outer container
         let outer_rect = Rect::from_xywh(0.0, 0.0, w, h);
@@ -177,7 +172,7 @@ impl Widget for PillNav {
         canvas.draw_rrect(outer_rrect, &bg_paint);
 
         let (_total_w, tab_positions, tab_widths) = self.compute_tab_layout();
-        let (active, transition_info) = self.active_at_time(ctx.time);
+        let (active, transition_info) = self.active_at_time(time);
 
         // Pill indicator
         let pill_h = h - self.gap * 2.0;
@@ -239,12 +234,36 @@ impl Widget for PillNav {
                 &label_paint,
             );
         }
+    }
+}
 
+impl Widget for PillNav {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         let (total_w, _, _) = self.compute_tab_layout();
         (total_w, self.height)
+    }
+}
+
+impl Painter for PillNav {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }
