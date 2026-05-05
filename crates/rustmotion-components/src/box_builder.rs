@@ -16,11 +16,12 @@
 
 use std::sync::Arc;
 
-use rustmotion_core::css::style::{CssStyle, Edges, Position, Size as CSize};
+use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
 use rustmotion_core::css::{layer_to_css, Length as CLength, LengthPercentage as CLP};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use rustmotion_core::schema::SizeDimension;
 
+use crate::divider::DividerDirection;
 use crate::flex::FlexSize;
 use crate::{ChildComponent, Component};
 
@@ -138,15 +139,59 @@ fn component_css(component: &Component) -> CssStyle {
         }
     }
 
-    if needs_default_padding(component) && css.padding.is_none() {
-        // Card has a Remotion-like default padding for v1 compatibility.
-        // Not applied if the user supplied a padding explicitly.
-        // Keep this minimal so tests stay deterministic.
-        let _ = &mut css; // no-op placeholder — keep behaviour neutral.
-        let _: Option<Edges> = None; // silence dead-code analysis
-    }
-
+    apply_intrinsic_overrides(component, &mut css);
     css
+}
+
+/// Apply per-component CSS overrides for things that the legacy
+/// `Widget::measure` derived from constraints (e.g. divider stretching to its
+/// parent, line bounding box from its endpoints).
+fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
+    use Component::*;
+    match component {
+        Divider(d) => match d.direction {
+            DividerDirection::Horizontal => {
+                // Stretch horizontally in flex row/column parents (cross-axis
+                // for column = horizontal). Width stays auto.
+                if css.height.is_none() {
+                    css.height = Some(CSize::Length(CLP::Px(d.thickness)));
+                }
+                if css.width.is_none() {
+                    css.width = match d.length {
+                        Some(l) => Some(CSize::Length(CLP::Px(l))),
+                        None => Some(CSize::Length(CLP::String("100%".into()))),
+                    };
+                }
+                if css.align_self.is_none() {
+                    css.align_self = Some(AlignSelf::Stretch);
+                }
+            }
+            DividerDirection::Vertical => {
+                if css.width.is_none() {
+                    css.width = Some(CSize::Length(CLP::Px(d.thickness)));
+                }
+                if css.height.is_none() {
+                    css.height = match d.length {
+                        Some(l) => Some(CSize::Length(CLP::Px(l))),
+                        None => Some(CSize::Length(CLP::String("100%".into()))),
+                    };
+                }
+            }
+        },
+        Line(l) => {
+            // Line draws inside its bounding box at (x1,y1)→(x2,y2). Use the
+            // bounding box as the intrinsic size so taffy reserves enough room.
+            let w = (l.x2 - l.x1).abs().max(1.0);
+            let h = (l.y2 - l.y1).abs().max(1.0);
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Borrow the legacy `LayerStyle` from any component.
@@ -246,10 +291,6 @@ fn size_to_css(s: &SizeDimension) -> Option<CSize> {
         SizeDimension::Percent(p) => Some(CSize::Length(CLP::String(format!("{}%", p)))),
         SizeDimension::Auto => Some(CSize::Auto(rustmotion_core::css::style::AutoKw::Auto)),
     }
-}
-
-fn needs_default_padding(_component: &Component) -> bool {
-    false
 }
 
 // Silence unused `Length` import (kept for future intrinsic measurement work).
@@ -369,5 +410,60 @@ mod tests {
         assert_eq!(l.y, 30.0);
         assert_eq!(l.width, 100.0);
         assert_eq!(l.height, 80.0);
+    }
+
+    #[test]
+    fn horizontal_divider_stretches_to_parent_width() {
+        let divider = ChildComponent {
+            component: Component::Divider(crate::divider::Divider {
+                direction: DividerDirection::Horizontal,
+                thickness: 4.0,
+                line_style: Default::default(),
+                length: None,
+                timing: Default::default(),
+                style: LayerStyle::default(),
+            }),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![divider];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let id = built.root.children[0].id;
+        let l = layout.get(id).expect("divider laid out");
+        assert_eq!(l.height, 4.0);
+        assert_eq!(l.width, 800.0);
+    }
+
+    #[test]
+    fn line_intrinsic_size_matches_endpoint_bounding_box() {
+        let line = ChildComponent {
+            component: Component::Line(crate::line::Line {
+                x1: 10.0,
+                y1: 20.0,
+                x2: 110.0,
+                y2: 80.0,
+                width: 2.0,
+                color: "#fff".into(),
+                dashed: None,
+                timing: Default::default(),
+                style: LayerStyle::default(),
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![line];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let id = built.root.children[0].id;
+        let l = layout.get(id).expect("line laid out");
+        assert_eq!(l.width, 100.0);
+        assert_eq!(l.height, 60.0);
     }
 }
