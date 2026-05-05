@@ -1,0 +1,240 @@
+//! Legacy paint dispatcher — bridges the new `paint_tree` pipeline to the
+//! existing `Widget::render` implementations of all 51 components.
+//!
+//! While components are progressively migrated to `Painter`, this dispatcher
+//! lets the new pipeline (taffy layout + box-decoration paint pass) keep
+//! producing pixel-correct output by delegating component-internal painting
+//! to the legacy `Widget::render`.
+//!
+//! The payload stored in `BoxKind::Component` is an `Arc<NodeId>` (cf.
+//! `box_builder::build_scene`). The dispatcher downcasts it, looks up the
+//! component in the `BuiltScene::components` table, builds a synthetic
+//! `LayoutNode` from the `BoxLayout`, and calls `Widget::render`.
+//!
+//! Containers (Card / Flex / Grid / Container / Positioned) are intentionally
+//! skipped: paint_pass already paints their box decorations and recurses into
+//! children. Calling their `Widget::render` would double-recurse via the old
+//! `RenderPipeline` and conflict with the new flow.
+
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::box_tree::NodeId;
+use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
+use rustmotion_core::layout::LayoutNode;
+use rustmotion_core::traits::{RenderContext, RenderPipeline};
+use skia_safe::Canvas;
+
+use crate::{ChildComponent, Component};
+
+/// Maps NodeIds to legacy `ChildComponent`s and dispatches paint to their
+/// `Widget::render` implementations.
+pub struct LegacyPaintDispatcher<'a> {
+    /// `components[id as usize]` is the component for `id`. Slot 0 is the
+    /// synthetic root and is always `None`.
+    components: &'a [Option<&'a ChildComponent>],
+}
+
+impl<'a> LegacyPaintDispatcher<'a> {
+    pub fn new(components: &'a [Option<&'a ChildComponent>]) -> Self {
+        Self { components }
+    }
+
+    fn lookup(&self, id: NodeId) -> Option<&'a ChildComponent> {
+        let idx = id as usize;
+        self.components.get(idx).copied().flatten()
+    }
+}
+
+impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
+    fn dispatch(
+        &self,
+        canvas: &Canvas,
+        payload: &(dyn std::any::Any + Send + Sync),
+        _css: &rustmotion_core::css::CssStyle,
+        layout: &BoxLayout,
+        frame: &PaintFrame,
+    ) {
+        let Some(node_id) = payload.downcast_ref::<NodeId>() else {
+            return;
+        };
+        let Some(child) = self.lookup(*node_id) else {
+            return;
+        };
+
+        // Containers paint nothing of their own here — children are handled
+        // recursively by paint_tree, and decorations were already painted.
+        if is_container(&child.component) {
+            return;
+        }
+
+        // Build a synthetic LayoutNode anchored at the local origin so legacy
+        // `Widget::render` impls can use (0, 0, w, h) the way they always have.
+        let node = LayoutNode::new(0.0, 0.0, layout.width, layout.height);
+
+        let render_ctx = RenderContext {
+            time: frame.time,
+            scene_duration: 0.0, // unused by leaf widgets in their paint
+            frame_index: frame.frame_index,
+            fps: frame.fps,
+            video_width: frame.video_width,
+            video_height: frame.video_height,
+            stagger_offset: 0.0,
+        };
+
+        let props = AnimatedProperties::default();
+        let pipeline = NoOpPipeline;
+
+        canvas.save();
+        canvas.translate((layout.x, layout.y));
+        let _ = child
+            .component
+            .as_widget()
+            .render(canvas, &node, &render_ctx, &props, &pipeline);
+        canvas.restore();
+    }
+}
+
+fn is_container(c: &Component) -> bool {
+    matches!(
+        c,
+        Component::Card(_)
+            | Component::Flex(_)
+            | Component::Grid(_)
+            | Component::Container(_)
+            | Component::Positioned(_)
+    )
+}
+
+/// `RenderPipeline` impl that drops every recursion request — paint_tree owns
+/// child traversal in the new pipeline, so legacy containers must not recurse
+/// when reached via the dispatcher.
+struct NoOpPipeline;
+
+impl RenderPipeline for NoOpPipeline {
+    fn render_children(
+        &self,
+        _canvas: &Canvas,
+        _children: &dyn std::any::Any,
+        _layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _stagger: Option<f32>,
+    ) -> rustmotion_core::error::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::box_builder::build_scene;
+    use crate::shape::Shape;
+    use crate::PositionMode;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::box_tree::BoxKind;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::schema::{LayerStyle, ShapeType, Size};
+    use std::sync::Arc;
+
+    fn shape_child(w: f32, h: f32, x: f32, y: f32) -> ChildComponent {
+        ChildComponent {
+            component: Component::Shape(Shape {
+                shape: ShapeType::Rect,
+                size: Size { width: w, height: h },
+                text: None,
+                timing: Default::default(),
+                style: LayerStyle {
+                    fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                    ..Default::default()
+                },
+            }),
+            position: Some(PositionMode::Absolute { x, y }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn dispatch_runs_widget_render_on_leaf() {
+        let scene = vec![shape_child(50.0, 30.0, 10.0, 20.0)];
+        let built = build_scene(&scene, (200.0, 200.0));
+        let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
+
+        // Sanity: the only component slot at idx 1 points to the shape.
+        assert!(built.components[0].is_none());
+        assert!(built.components[1].is_some());
+
+        // Build a Skia raster surface and run a paint pass against the
+        // dispatcher — this just exercises the dispatcher hook end-to-end.
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 200))
+            .expect("raster surface");
+        let canvas = surface.canvas();
+        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let frame = PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 200,
+            video_height: 200,
+        };
+        rustmotion_core::engine::paint_pass::paint_tree(
+            canvas,
+            &built.root,
+            &layout,
+            &frame,
+            &dispatcher,
+        );
+
+        // Read back the pixel at the centre of the shape (10+25, 20+15)=(35,35)
+        // and assert it's red-ish — confirms legacy Widget::render painted.
+        let snapshot = surface.image_snapshot();
+        let mut buf = [0u8; 4];
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let read_ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            4,
+            skia_safe::IPoint::new(35, 35),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(read_ok, "pixel read should succeed");
+        // Red channel should dominate (#ff0000).
+        assert!(buf[0] > 200, "expected red, got rgba {:?}", buf);
+        assert!(buf[1] < 50, "green should be low, got rgba {:?}", buf);
+        assert!(buf[2] < 50, "blue should be low, got rgba {:?}", buf);
+    }
+
+    #[test]
+    fn dispatch_skips_unknown_payloads() {
+        let dispatcher = LegacyPaintDispatcher::new(&[]);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((10, 10)).unwrap();
+        let canvas = surface.canvas();
+        let css = rustmotion_core::css::CssStyle::default();
+        let layout = BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+            ..Default::default()
+        };
+        let frame = PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 10,
+            video_height: 10,
+        };
+        // Wrong payload type — must not panic.
+        let bogus: Arc<dyn std::any::Any + Send + Sync> = Arc::new(42i64);
+        // Reach into the dispatcher trait method.
+        // (BoxKind::Component is just a marker here; we drive dispatch directly.)
+        dispatcher.dispatch(canvas, bogus.as_ref(), &css, &layout, &frame);
+        let _ = BoxKind::Container; // touch import
+    }
+}

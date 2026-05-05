@@ -13,6 +13,8 @@ pub mod style;
 pub mod units;
 pub mod cascade;
 pub mod taffy_bridge;
+pub mod legacy;
 
 pub use style::CssStyle;
 pub use units::{Length, LengthContext, LengthPercentage};
+pub use legacy::layer_to_css;

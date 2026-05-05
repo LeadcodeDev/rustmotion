@@ -179,8 +179,21 @@ pub fn render_frame_v2_scaled(
         true,
     );
 
-    // Render component tree
-    render_children(canvas, root_children, root_layout, &ctx)?;
+    // Render component tree.
+    // If the new CSS-engine pipeline is enabled (env var or feature flag),
+    // route through taffy + paint_tree + LegacyPaintDispatcher. Otherwise
+    // fall back to the legacy Widget pipeline.
+    if new_pipeline_enabled() {
+        render_with_new_pipeline(
+            canvas,
+            root_children,
+            config.width as f32,
+            config.height as f32,
+            &ctx,
+        );
+    } else {
+        render_children(canvas, root_children, root_layout, &ctx)?;
+    }
 
     drop(clip_guard);
     drop(camera_guard);
@@ -219,6 +232,46 @@ fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
         style.flex_direction = Some(crate::schema::CardDirection::Column);
     }
     style
+}
+
+/// Returns true when the new CSS-engine pipeline should be used instead of
+/// the legacy Widget tree. Controlled by the `RUSTMOTION_NEW_PIPELINE` env
+/// var (set to `1` to enable). Off by default.
+fn new_pipeline_enabled() -> bool {
+    std::env::var("RUSTMOTION_NEW_PIPELINE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Render `root_children` through the new pipeline:
+/// build a `BoxNode` tree, run taffy to lay it out, then paint via
+/// `paint_tree` with the `LegacyPaintDispatcher` bridging to existing
+/// `Widget::render` impls.
+fn render_with_new_pipeline(
+    canvas: &Canvas,
+    root_children: &[ChildComponent],
+    viewport_w: f32,
+    viewport_h: f32,
+    ctx: &RenderContext,
+) {
+    use rustmotion_components::box_builder::build_scene;
+    use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+    let mut built = build_scene(root_children, (viewport_w, viewport_h));
+    built.root.assign_ids(0);
+    let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
+    let dispatcher = LegacyPaintDispatcher::new(&built.components);
+    let frame = PaintFrame {
+        time: ctx.time,
+        frame_index: ctx.frame_index,
+        fps: ctx.fps,
+        video_width: ctx.video_width,
+        video_height: ctx.video_height,
+    };
+    paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 }
 
 /// Compute the layout tree for a set of root-level ChildComponents.
