@@ -1,4 +1,3 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};

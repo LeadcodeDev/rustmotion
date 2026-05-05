@@ -1,4 +1,3 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
@@ -6,7 +5,6 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::color4f_from_hex;
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::LayerStyle;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 

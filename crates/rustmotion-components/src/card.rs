@@ -1,11 +1,9 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Rect};
+use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::{CardDisplay, LayerStyle};
+use rustmotion_core::schema::LayerStyle;
 use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, GridConfig, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;

@@ -1,4 +1,3 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
@@ -6,7 +5,7 @@ use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, font_mgr, paint_from_hex,
 };
 use rustmotion_core::schema::LayerStyle;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
