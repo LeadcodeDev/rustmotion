@@ -115,5 +115,12 @@ impl Widget for ContainerComponent {
 }
 
 impl Painter for ContainerComponent {
-    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {}
+    fn paint_content(
+        &self,
+        _canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+    }
 }

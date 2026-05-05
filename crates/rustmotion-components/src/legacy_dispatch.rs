@@ -123,7 +123,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
                 height: layout.height,
                 ..Default::default()
             };
-            painter.paint_content(canvas, &local, &paint_ctx);
+            painter.paint_content(canvas, &local, &props, &paint_ctx);
         } else {
             let _ = child
                 .component

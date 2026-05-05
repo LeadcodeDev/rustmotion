@@ -180,7 +180,14 @@ impl Widget for Flex {
 }
 
 impl Painter for Flex {
-    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {}
+    fn paint_content(
+        &self,
+        _canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+    }
 }
 
 /// Resolve FlexSize dimensions into constraints.

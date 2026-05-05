@@ -50,7 +50,13 @@ impl Widget for Positioned {
 }
 
 impl Painter for Positioned {
-    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {
+    fn paint_content(
+        &self,
+        _canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
         // Containers paint nothing of their own. Box decorations are
         // handled by paint_pass; children are recursed by paint_tree.
     }

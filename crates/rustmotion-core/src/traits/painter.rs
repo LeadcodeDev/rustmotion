@@ -7,6 +7,7 @@
 
 use skia_safe::Canvas;
 
+use crate::engine::animator::AnimatedProperties;
 use crate::engine::box_tree::AvailableSpace;
 use crate::engine::layout_pass::BoxLayout;
 
@@ -42,7 +43,21 @@ pub trait Painter {
     /// already translated to the content-box origin and clipped if
     /// `overflow: hidden` was set. Generic decorations (bg, border,
     /// shadow) are already painted by the engine.
-    fn paint_content(&self, canvas: &Canvas, layout: &BoxLayout, ctx: &PaintCtx);
+    ///
+    /// `props` carries the per-component animation state at the current
+    /// frame. Outer paint properties (transform / opacity / filter) have
+    /// already been applied to the canvas by the engine via CSS overrides;
+    /// `props` exposes the *internal-only* fields (`draw_progress`,
+    /// `stroke_width`, `char_animation`, `visible_chars*`, `font_size`,
+    /// `color`, `border_radius`, etc.) that components use to drive their
+    /// own painting.
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    );
 
     /// Optional intrinsic measurement for leaves like `text`, `image`,
     /// `codeblock`. Return `None` to let taffy compute the size from the

@@ -134,7 +134,13 @@ impl Widget for Divider {
 }
 
 impl Painter for Divider {
-    fn paint_content(&self, canvas: &Canvas, layout: &BoxLayout, _ctx: &PaintCtx) {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
         let color = self.style.color.as_deref().unwrap_or("#FFFFFF");
         let mut paint = paint_from_hex(color);
         paint.set_anti_alias(true);

@@ -195,5 +195,12 @@ fn layout_grid_for_card(card: &Card, constraints: &Constraints) -> LayoutNode {
 }
 
 impl Painter for Card {
-    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {}
+    fn paint_content(
+        &self,
+        _canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+    }
 }
