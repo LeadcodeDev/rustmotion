@@ -429,6 +429,8 @@ impl Component {
             Component::Callout(c) => Some(c),
             Component::Marquee(c) => Some(c),
             Component::TagCloud(c) => Some(c),
+            Component::GradientText(c) => Some(c),
+            Component::RichText(c) => Some(c),
             _ => None,
         }
     }

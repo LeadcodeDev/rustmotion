@@ -3,13 +3,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Point, TextBlob};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_colors() -> Vec<String> {
     vec!["#3B82F6".to_string(), "#8B5CF6".to_string()]
@@ -79,17 +81,10 @@ impl GradientText {
     }
 }
 
-impl Widget for GradientText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl GradientText {
+    fn paint(&self, canvas: &Canvas, time: f64) {
         if self.content.is_empty() || self.colors.is_empty() {
-            return Ok(());
+            return;
         }
 
         let (font, _emoji_font) = self.resolve_font();
@@ -102,7 +97,7 @@ impl Widget for GradientText {
 
         // Compute angle (possibly animated)
         let angle = if self.animate_angle {
-            self.angle + ctx.time as f32 * self.speed * 360.0
+            self.angle + time as f32 * self.speed * 360.0
         } else {
             self.angle
         };
@@ -163,7 +158,19 @@ impl Widget for GradientText {
                 canvas.draw_text_blob(&blob, Point::new(0.0, y), &paint);
             }
         }
+    }
+}
 
+impl Widget for GradientText {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, ctx.time);
         Ok(())
     }
 
@@ -179,5 +186,17 @@ impl Widget for GradientText {
         let line_height = font_size * 1.3;
 
         (text_w, line_height)
+    }
+}
+
+impl Painter for GradientText {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

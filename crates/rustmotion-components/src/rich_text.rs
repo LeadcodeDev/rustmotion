@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 /// A single styled span within a rich_text component.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -92,15 +94,8 @@ struct PreparedSpan {
     width: f32,
 }
 
-impl Widget for RichText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl RichText {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, props: &AnimatedProperties) {
         let default_size = self.style.font_size_or(48.0);
         let default_color = self.style.color_or("#FFFFFF");
         let default_family = self.style.font_family_or("Inter");
@@ -127,11 +122,11 @@ impl Widget for RichText {
         }).collect();
 
         // Typewriter animation: truncate spans based on visible_chars_progress
-        if _props.visible_chars_progress >= 0.0 {
+        if props.visible_chars_progress >= 0.0 {
             let total_chars: usize = prepared.iter().map(|ps| ps.text.chars().count()).sum();
-            let visible = ((_props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
+            let visible = ((props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
             if visible == 0 {
-                return Ok(());
+                return;
             }
             if visible < total_chars {
                 let mut remaining = visible;
@@ -154,10 +149,10 @@ impl Widget for RichText {
             }
         }
 
-        let wrap_width = if layout.width.is_finite() && layout.width > 0.0 {
+        let wrap_width = if layout_width.is_finite() && layout_width > 0.0 {
             match self.max_width {
-                Some(mw) => mw.min(layout.width),
-                None => layout.width,
+                Some(mw) => mw.min(layout_width),
+                None => layout_width,
             }
         } else {
             self.max_width.unwrap_or(f32::INFINITY)
@@ -191,8 +186,8 @@ impl Widget for RichText {
             }
         }
 
-        let align_width = if layout.width.is_finite() && layout.width > 0.0 {
-            layout.width
+        let align_width = if layout_width.is_finite() && layout_width > 0.0 {
+            layout_width
         } else {
             lines.iter().map(|l| l.width).fold(0.0f32, f32::max)
         };
@@ -231,7 +226,19 @@ impl Widget for RichText {
                 );
             }
         }
+    }
+}
 
+impl Widget for RichText {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, props);
         Ok(())
     }
 
@@ -262,5 +269,17 @@ impl Widget for RichText {
         let h = num_lines as f32 * line_height_val;
 
         (total_width.min(wrap_width), h)
+    }
+}
+
+impl Painter for RichText {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, props);
     }
 }
