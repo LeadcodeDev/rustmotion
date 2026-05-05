@@ -267,6 +267,155 @@ mod component_smoke {
         }
     }
 
+    /// Renders a flat list of children through the legacy pipeline
+    /// (compute_root_layout + render_children) onto a fresh raster surface
+    /// and returns the RGBA buffer. Mirrors what `render_scene_fg_scaled`
+    /// does for the foreground without setting up a Scene struct.
+    fn render_legacy(children: &[crate::components::ChildComponent], w: u32, h: u32) -> Vec<u8> {
+        use crate::engine::render::render_children;
+        use crate::layout::flex::layout_flex;
+        use crate::layout::Constraints;
+        use crate::schema::{CardDirection, LayerStyle};
+        use crate::traits::RenderContext;
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32))
+            .expect("raster surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+        let style = LayerStyle {
+            flex_direction: Some(CardDirection::Column),
+            ..Default::default()
+        };
+        let constraints = Constraints::tight(w as f32, h as f32);
+        let layout = layout_flex(children, &style, &constraints);
+        let ctx = RenderContext {
+            time: 0.5,
+            scene_duration: 1.0,
+            frame_index: 15,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            stagger_offset: 0.0,
+        };
+        render_children(canvas, children, &layout, &ctx).expect("legacy render");
+
+        let row_bytes = w as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    /// Same as `render_legacy` but routes the scene through the new
+    /// pipeline (box_builder + run_layout + paint_tree).
+    fn render_new(children: &[crate::components::ChildComponent], w: u32, h: u32) -> Vec<u8> {
+        use rustmotion_components::box_builder::build_scene;
+        use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+        use rustmotion_core::css::taffy_bridge::ConversionContext;
+        use rustmotion_core::engine::layout_pass::run_layout;
+        use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32))
+            .expect("raster surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+        let built = build_scene(children, (w as f32, h as f32));
+        let layout = run_layout(&built.root, (w as f32, h as f32), &ConversionContext::default());
+        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let frame = PaintFrame {
+            time: 0.5,
+            frame_index: 15,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+        };
+        paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+
+        let row_bytes = w as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    /// Counts non-transparent pixels in an RGBA buffer (alpha > 0).
+    fn nonzero_pixels(buf: &[u8]) -> usize {
+        buf.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    #[test]
+    fn new_pipeline_produces_pixels_for_text_in_card() {
+        // The new pipeline should render at least *something* when given a
+        // non-trivial scene (a card containing centered text). This is a
+        // coarse smoke test — it doesn't assert pixel-perfect parity with
+        // legacy (taffy and the old flex.rs differ on edge cases), only
+        // that the new pipeline isn't producing a fully-blank canvas.
+        let json = serde_json::json!({
+            "type": "card",
+            "style": { "padding": 24, "background": "#1a1a2e" },
+            "children": [
+                { "type": "text", "content": "Hello", "style": { "color": "#ffffff", "font-size": 48 } }
+            ]
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let new_buf = render_new(&scene, 400, 300);
+        let lit = nonzero_pixels(&new_buf);
+        assert!(lit > 100, "new pipeline produced too few non-zero pixels: {lit}");
+    }
+
+    #[test]
+    fn new_and_legacy_pipelines_both_produce_pixels() {
+        // Sanity check that BOTH pipelines render visible output for the
+        // same scene. We don't compare pixel-by-pixel because layout
+        // engines (flex.rs vs taffy) and box decorations (legacy paints
+        // backgrounds via Card::paint, new pipeline via paint_tree) draw
+        // slightly different rectangles. Equal "lit" pixel counts is a
+        // useful weak-parity signal: both engines find the content.
+        let json = serde_json::json!({
+            "type": "text",
+            "content": "Parity",
+            "style": { "color": "#ffffff", "font-size": 64 }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 50.0, y: 100.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let legacy_buf = render_legacy(&scene, 400, 300);
+        let new_buf = render_new(&scene, 400, 300);
+        let legacy_lit = nonzero_pixels(&legacy_buf);
+        let new_lit = nonzero_pixels(&new_buf);
+        assert!(legacy_lit > 50, "legacy pipeline empty: {legacy_lit}");
+        assert!(new_lit > 50, "new pipeline empty: {new_lit}");
+    }
+
     #[test]
     fn all_components_measure() {
         let constraints = Constraints::loose(1920.0, 1080.0);
