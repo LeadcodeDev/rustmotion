@@ -25,6 +25,9 @@ use crate::divider::DividerDirection;
 use crate::flex::FlexSize;
 use crate::{ChildComponent, Component};
 
+/// Padding allowance to keep arrow/connector heads inside the box.
+const ARROW_BBOX_PADDING: f32 = 16.0;
+
 /// Result of building a box tree from a scene description.
 pub struct BuiltScene<'a> {
     /// Root box (a flex column container at viewport dimensions).
@@ -218,6 +221,29 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // bounding box as the intrinsic size so taffy reserves enough room.
             let w = (l.x2 - l.x1).abs().max(1.0);
             let h = (l.y2 - l.y1).abs().max(1.0);
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        Arrow(a) => {
+            // Endpoint bounding box + padding for the arrowhead/curve overshoot.
+            let pad = ARROW_BBOX_PADDING + a.arrow_size.max(0.0);
+            let w = (a.x2 - a.x1).abs().max(1.0) + pad;
+            let h = (a.y2 - a.y1).abs().max(1.0) + pad;
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(h)));
+            }
+        }
+        Connector(c) => {
+            let pad = ARROW_BBOX_PADDING + c.arrow_size.max(0.0);
+            let w = (c.to.x - c.from.x).abs().max(1.0) + pad;
+            let h = (c.to.y - c.from.y).abs().max(1.0) + pad;
             if css.width.is_none() {
                 css.width = Some(CSize::Length(CLP::Px(w)));
             }
@@ -546,6 +572,74 @@ mod tests {
             card_layout.height,
             text_layout.height,
         );
+    }
+
+    #[test]
+    fn arrow_intrinsic_size_uses_endpoint_bbox_plus_arrowhead() {
+        let arrow = ChildComponent {
+            component: Component::Arrow(crate::arrow::Arrow {
+                x1: 10.0,
+                y1: 20.0,
+                x2: 110.0,
+                y2: 80.0,
+                cp: None,
+                cp1: None,
+                cp2: None,
+                curve: None,
+                width: 4.0,
+                color: "#fff".into(),
+                arrow_end: true,
+                arrow_start: false,
+                arrow_size: 12.0,
+                dashed: None,
+                timing: Default::default(),
+                style: LayerStyle::default(),
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![arrow];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let l = layout.get(built.root.children[0].id).expect("arrow laid out");
+        // bbox 100×60 + (16 padding + 12 arrow_size) = 128×88.
+        assert_eq!(l.width, 128.0);
+        assert_eq!(l.height, 88.0);
+    }
+
+    #[test]
+    fn connector_intrinsic_size_uses_endpoint_bbox_plus_arrowhead() {
+        let conn = ChildComponent {
+            component: Component::Connector(crate::connector::Connector {
+                from: crate::connector::ConnectorPoint { x: 50.0, y: 0.0 },
+                to: crate::connector::ConnectorPoint { x: 150.0, y: 50.0 },
+                routing: Default::default(),
+                curvature: 0.4,
+                width: 2.0,
+                color: "#fff".into(),
+                arrow_end: true,
+                arrow_start: false,
+                arrow_size: 10.0,
+                dashed: None,
+                timing: Default::default(),
+                style: LayerStyle::default(),
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![conn];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let l = layout.get(built.root.children[0].id).expect("connector laid out");
+        // bbox 100×50 + (16 + 10) = 126×76.
+        assert_eq!(l.width, 126.0);
+        assert_eq!(l.height, 76.0);
     }
 
     #[test]
