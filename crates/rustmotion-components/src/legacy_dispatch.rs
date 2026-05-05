@@ -211,6 +211,107 @@ mod tests {
     }
 
     #[test]
+    fn card_background_painted_with_red_shape_inside() {
+        // Card 100×80 at (40,30), green background, contains a red 30×20 shape
+        // absolutely positioned at (10,10) inside the card.
+        use crate::card::Card;
+        use crate::flex::FlexSize;
+        use rustmotion_core::schema::SizeDimension;
+
+        let red_shape = ChildComponent {
+            component: Component::Shape(Shape {
+                shape: ShapeType::Rect,
+                size: Size { width: 30.0, height: 20.0 },
+                text: None,
+                timing: Default::default(),
+                style: LayerStyle {
+                    fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                    ..Default::default()
+                },
+            }),
+            position: Some(PositionMode::Absolute { x: 10.0, y: 10.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+
+        let card = ChildComponent {
+            component: Component::Card(Card {
+                children: vec![red_shape],
+                size: Some(FlexSize {
+                    width: SizeDimension::Fixed(100.0),
+                    height: SizeDimension::Fixed(80.0),
+                }),
+                timing: Default::default(),
+                style: LayerStyle {
+                    background: Some("#00ff00".into()),
+                    ..Default::default()
+                },
+            }),
+            position: Some(PositionMode::Absolute { x: 40.0, y: 30.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+
+        let scene = vec![card];
+        let built = build_scene(&scene, (200.0, 200.0));
+        let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
+        let canvas = surface.canvas();
+        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let frame = PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 200,
+            video_height: 200,
+        };
+        rustmotion_core::engine::paint_pass::paint_tree(
+            canvas,
+            &built.root,
+            &layout,
+            &frame,
+            &dispatcher,
+        );
+
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let read = |x: i32, y: i32| -> [u8; 4] {
+            let mut buf = [0u8; 4];
+            assert!(snapshot.read_pixels(
+                &info,
+                &mut buf,
+                4,
+                skia_safe::IPoint::new(x, y),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            buf
+        };
+
+        // Card background area: bottom-right corner of the card (well away
+        // from the red shape at (10,10)+(30,20)). Card spans x∈[40,140],
+        // y∈[30,110]. Pick (130, 100) — green.
+        let bg = read(130, 100);
+        assert!(bg[1] > 200, "expected green card bg, got {:?}", bg);
+        assert!(bg[0] < 50, "red should be low at bg, got {:?}", bg);
+
+        // Red shape area: shape spans (50,40)→(80,60). Pick centre (65, 50).
+        let fg = read(65, 50);
+        assert!(fg[0] > 200, "expected red shape, got {:?}", fg);
+        assert!(fg[1] < 50, "green should be low at shape, got {:?}", fg);
+    }
+
+    #[test]
     fn dispatch_skips_unknown_payloads() {
         let dispatcher = LegacyPaintDispatcher::new(&[]);
         let mut surface = skia_safe::surfaces::raster_n32_premul((10, 10)).unwrap();
