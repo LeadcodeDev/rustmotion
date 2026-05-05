@@ -36,6 +36,9 @@ pub struct PaintFrame {
     pub fps: u32,
     pub video_width: u32,
     pub video_height: u32,
+    /// Total duration of the scene in seconds — used by the dispatcher to
+    /// compute animation progress (`time / scene_duration`).
+    pub scene_duration: f64,
 }
 
 /// Hook to delegate component-specific painting. Implemented by the

@@ -400,6 +400,46 @@ impl AnimatedProperties {
     }
 }
 
+/// High-level helper: extract `effects`, resolve presets/keyframes/wiggles/orbits,
+/// and propagate the char animation. Returns the resolved [`AnimatedProperties`]
+/// at `time` within a scene of `scene_duration` seconds.
+///
+/// Used by both the legacy render pipeline and the new paint-tree dispatcher
+/// so they share the exact same animation semantics.
+pub fn resolve_props_for_effects(
+    effects: &[AnimationEffect],
+    time: f64,
+    scene_duration: f64,
+) -> AnimatedProperties {
+    let mut props = AnimatedProperties::default();
+    if effects.is_empty() {
+        return props;
+    }
+    let extracted = extract_effects(effects);
+
+    for (preset, preset_config) in &extracted.presets {
+        let p = resolve_animations(&[], Some(preset), Some(preset_config), time, scene_duration);
+        props.merge(&p);
+    }
+    if !extracted.keyframes.is_empty() {
+        let kf: Vec<_> = extracted.keyframes.iter().copied().cloned().collect();
+        let kp = resolve_animations(&kf, None, None, time, scene_duration);
+        props.merge(&kp);
+    }
+    if !extracted.wiggles.is_empty() {
+        let wiggles: Vec<_> = extracted.wiggles.iter().copied().cloned().collect();
+        apply_wiggles(&mut props, &wiggles, time);
+    }
+    if !extracted.orbits.is_empty() {
+        let orbits: Vec<_> = extracted.orbits.iter().copied().cloned().collect();
+        apply_orbits(&mut props, &orbits, time);
+    }
+    if extracted.char_animation.is_some() {
+        props.char_animation = extracted.char_animation;
+    }
+    props
+}
+
 /// Resolve animations for a layer at a specific time (seconds) within the scene
 pub fn resolve_animations(
     animations: &[Animation],

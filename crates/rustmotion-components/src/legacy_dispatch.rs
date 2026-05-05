@@ -16,7 +16,7 @@
 //! children. Calling their `Widget::render` would double-recurse via the old
 //! `RenderPipeline` and conflict with the new flow.
 
-use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::NodeId;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
@@ -73,7 +73,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
 
         let render_ctx = RenderContext {
             time: frame.time,
-            scene_duration: 0.0, // unused by leaf widgets in their paint
+            scene_duration: frame.scene_duration,
             frame_index: frame.frame_index,
             fps: frame.fps,
             video_width: frame.video_width,
@@ -81,15 +81,63 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             stagger_offset: 0.0,
         };
 
-        let props = AnimatedProperties::default();
+        // Resolve animations (presets + keyframes + wiggles + orbits + char anim)
+        // for this leaf at the current frame time.
+        let props = match child.component.as_animatable() {
+            Some(a) => {
+                let effects = a.animation_effects();
+                if effects.is_empty() {
+                    AnimatedProperties::default()
+                } else {
+                    resolve_props_for_effects(effects, frame.time, frame.scene_duration)
+                }
+            }
+            None => AnimatedProperties::default(),
+        };
+        if props.opacity <= 0.0 {
+            return;
+        }
         let pipeline = NoOpPipeline;
 
         canvas.save();
         canvas.translate((layout.x, layout.y));
+
+        // Apply animation transforms around the box centre so scale/rotation
+        // pivot from the middle (matches CSS `transform-origin: 50% 50%`).
+        let cx = layout.width / 2.0;
+        let cy = layout.height / 2.0;
+        canvas.translate((cx, cy));
+        if props.translate_x != 0.0 || props.translate_y != 0.0 {
+            canvas.translate((props.translate_x, props.translate_y));
+        }
+        if (props.scale_x - 1.0).abs() > 1e-4 || (props.scale_y - 1.0).abs() > 1e-4 {
+            canvas.scale((props.scale_x, props.scale_y));
+        }
+        if props.rotation.abs() > 1e-3 {
+            canvas.rotate(props.rotation, None);
+        }
+        canvas.translate((-cx, -cy));
+
+        // Open an alpha layer if the leaf is partially transparent.
+        if props.opacity < 0.999 {
+            let mut layer_paint = skia_safe::Paint::default();
+            layer_paint.set_alpha_f(props.opacity);
+            let bounds = skia_safe::Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
+            canvas.save_layer(
+                &skia_safe::canvas::SaveLayerRec::default()
+                    .bounds(&bounds)
+                    .paint(&layer_paint),
+            );
+        }
+
         let _ = child
             .component
             .as_widget()
             .render(canvas, &node, &render_ctx, &props, &pipeline);
+
+        if props.opacity < 0.999 {
+            canvas.restore();
+        }
         canvas.restore();
     }
 }
@@ -177,6 +225,7 @@ mod tests {
             fps: 30,
             video_width: 200,
             video_height: 200,
+            scene_duration: 1.0,
         };
         rustmotion_core::engine::paint_pass::paint_tree(
             canvas,
@@ -270,6 +319,7 @@ mod tests {
             fps: 30,
             video_width: 200,
             video_height: 200,
+            scene_duration: 1.0,
         };
         rustmotion_core::engine::paint_pass::paint_tree(
             canvas,
@@ -312,6 +362,102 @@ mod tests {
     }
 
     #[test]
+    fn fade_in_preset_drives_alpha_through_dispatcher() {
+        // A red shape with a `FadeIn` preset over 0.5s, sampled at two points:
+        //   t=0.05s — early in the curve, opacity should be near zero
+        //   t=0.5s  — at the end of the curve, opacity should be ~1
+        // The dispatcher must wire animator output into the canvas alpha,
+        // otherwise both samples render fully opaque and the test fails.
+        use crate::shape::Shape;
+        use rustmotion_core::schema::{AnimationEffect, AnimationTiming, ShapeType, Size};
+
+        let make_scene = || {
+            let shape = ChildComponent {
+                component: Component::Shape(Shape {
+                    shape: ShapeType::Rect,
+                    size: Size { width: 100.0, height: 100.0 },
+                    text: None,
+                    timing: Default::default(),
+                    style: LayerStyle {
+                        fill: Some(rustmotion_core::schema::Fill::Solid("#ff0000".into())),
+                        animation: vec![AnimationEffect::FadeIn(AnimationTiming {
+                            duration: 0.5,
+                            delay: 0.0,
+                            repeat: false,
+                            overshoot: None,
+                        })],
+                        ..Default::default()
+                    },
+                }),
+                position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+                overlays: Vec::new(),
+            };
+            vec![shape]
+        };
+
+        let sample_red_at = |time: f64| -> u8 {
+            let scene = make_scene();
+            let built = build_scene(&scene, (200.0, 200.0));
+            let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::BLACK);
+            let dispatcher = LegacyPaintDispatcher::new(&built.components);
+            let frame = PaintFrame {
+                time,
+                frame_index: 0,
+                fps: 30,
+                video_width: 200,
+                video_height: 200,
+                scene_duration: 1.0,
+            };
+            rustmotion_core::engine::paint_pass::paint_tree(
+                canvas, &built.root, &layout, &frame, &dispatcher,
+            );
+            let snap = surface.image_snapshot();
+            let info = skia_safe::ImageInfo::new(
+                (1, 1),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let mut buf = [0u8; 4];
+            assert!(snap.read_pixels(
+                &info,
+                &mut buf,
+                4,
+                skia_safe::IPoint::new(50, 50),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            buf[0]
+        };
+
+        let early = sample_red_at(0.05);
+        let late = sample_red_at(0.5);
+        assert!(
+            late > early + 50,
+            "FadeIn should produce a clearly higher red at t=0.5 than at t=0.05 \
+             (early={}, late={})",
+            early,
+            late,
+        );
+        assert!(
+            late > 200,
+            "at t=duration the shape should be ~fully opaque red, got {}",
+            late
+        );
+        assert!(
+            early < 150,
+            "at t=0.05 the shape should be mostly transparent, got {}",
+            early
+        );
+    }
+
+    #[test]
     fn dispatch_skips_unknown_payloads() {
         let dispatcher = LegacyPaintDispatcher::new(&[]);
         let mut surface = skia_safe::surfaces::raster_n32_premul((10, 10)).unwrap();
@@ -330,6 +476,7 @@ mod tests {
             fps: 30,
             video_width: 10,
             video_height: 10,
+            scene_duration: 1.0,
         };
         // Wrong payload type — must not panic.
         let bogus: Arc<dyn std::any::Any + Send + Sync> = Arc::new(42i64);

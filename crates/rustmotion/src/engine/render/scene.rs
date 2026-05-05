@@ -277,6 +277,7 @@ fn render_with_new_pipeline(
         fps: ctx.fps,
         video_width: ctx.video_width,
         video_height: ctx.video_height,
+        scene_duration: ctx.scene_duration,
     };
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 }
