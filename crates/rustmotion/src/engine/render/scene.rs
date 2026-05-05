@@ -189,6 +189,7 @@ pub fn render_frame_v2_scaled(
             root_children,
             config.width as f32,
             config.height as f32,
+            scene.layout.as_ref(),
             &ctx,
         );
     } else {
@@ -252,16 +253,22 @@ fn render_with_new_pipeline(
     root_children: &[ChildComponent],
     viewport_w: f32,
     viewport_h: f32,
+    scene_layout: Option<&SceneLayout>,
     ctx: &RenderContext,
 ) {
-    use rustmotion_components::box_builder::build_scene;
+    use rustmotion_components::box_builder::build_scene_with_root;
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::layer_to_css;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 
-    let mut built = build_scene(root_children, (viewport_w, viewport_h));
-    built.root.assign_ids(0);
+    // Mirror the legacy `root_style` so the new pipeline applies the same
+    // scene-level flex configuration (direction, gap, padding, alignment).
+    let root_layer = root_style(scene_layout);
+    let root_css = layer_to_css(&root_layer);
+
+    let built = build_scene_with_root(root_children, (viewport_w, viewport_h), root_css);
     let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
     let dispatcher = LegacyPaintDispatcher::new(&built.components);
     let frame = PaintFrame {

@@ -44,6 +44,16 @@ pub fn build_scene<'a>(
     children: &'a [ChildComponent],
     viewport: (f32, f32),
 ) -> BuiltScene<'a> {
+    build_scene_with_root(children, viewport, default_root_css(viewport))
+}
+
+/// Same as [`build_scene`] but lets the caller supply the root container's
+/// `CssStyle`. Width/height are forced to the viewport regardless.
+pub fn build_scene_with_root<'a>(
+    children: &'a [ChildComponent],
+    viewport: (f32, f32),
+    mut root_css: CssStyle,
+) -> BuiltScene<'a> {
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
     let mut next_id: NodeId = 1;
 
@@ -52,13 +62,9 @@ pub fn build_scene<'a>(
         child_boxes.push(build_child(c, &mut components, &mut next_id));
     }
 
-    let root_css = CssStyle {
-        display: Some(rustmotion_core::css::style::Display::Flex),
-        flex_direction: Some(rustmotion_core::css::style::FlexDirection::Column),
-        width: Some(CSize::Length(CLP::Px(viewport.0))),
-        height: Some(CSize::Length(CLP::Px(viewport.1))),
-        ..Default::default()
-    };
+    // Force the root to viewport dimensions even if the caller didn't set them.
+    root_css.width = Some(CSize::Length(CLP::Px(viewport.0)));
+    root_css.height = Some(CSize::Length(CLP::Px(viewport.1)));
 
     let root = BoxNode {
         id: 0,
@@ -69,6 +75,16 @@ pub fn build_scene<'a>(
     };
 
     BuiltScene { root, components }
+}
+
+fn default_root_css(viewport: (f32, f32)) -> CssStyle {
+    CssStyle {
+        display: Some(rustmotion_core::css::style::Display::Flex),
+        flex_direction: Some(rustmotion_core::css::style::FlexDirection::Column),
+        width: Some(CSize::Length(CLP::Px(viewport.0))),
+        height: Some(CSize::Length(CLP::Px(viewport.1))),
+        ..Default::default()
+    }
 }
 
 /// Convert a single `ChildComponent` to a `BoxNode`. Recurses into containers.
