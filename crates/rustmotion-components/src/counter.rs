@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Counter {
@@ -35,8 +37,8 @@ rustmotion_core::impl_traits!(Counter {
     Styled => style,
 });
 
-impl Widget for Counter {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Counter {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64, scene_duration: f64) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
         let font_size = self.style.font_size_or(48.0);
@@ -47,8 +49,8 @@ impl Widget for Counter {
         let align = self.style.text_align_or(TextAlign::Left);
 
         let start = self.timing.start_at.unwrap_or(0.0);
-        let elapsed = (ctx.time as f64 - start).max(0.0);
-        let remaining_duration = ctx.scene_duration as f64 - start;
+        let elapsed = (time - start).max(0.0);
+        let remaining_duration = scene_duration - start;
         let t = if remaining_duration > 0.0 {
             (elapsed / remaining_duration).clamp(0.0, 1.0)
         } else {
@@ -103,9 +105,9 @@ impl Widget for Counter {
 
         let raw_x = match align {
             TextAlign::Left => 0.0,
-            TextAlign::Center => (layout.width - stable_width) / 2.0
+            TextAlign::Center => (layout_width - stable_width) / 2.0
                 + (stable_width - advance_width) / 2.0,
-            TextAlign::Right => layout.width - advance_width,
+            TextAlign::Right => layout_width - advance_width,
         };
         // Snap to whole pixels to eliminate the sub-pixel jitter that the
         // glyph rasterizer would otherwise introduce on a moving counter.
@@ -140,10 +142,15 @@ impl Widget for Counter {
             draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &sp);
         }
 
-        // Draw fill
         draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &paint);
 
         Ok(())
+    }
+}
+
+impl Widget for Counter {
+    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+        self.paint(canvas, layout.width, ctx.time, ctx.scene_duration as f64)
     }
 
     fn measure(&self, constraints: &Constraints) -> (f32, f32) {
@@ -176,5 +183,17 @@ impl Widget for Counter {
         // engine never assigns more than the parent allows; the geometry
         // validator will detect the natural-size overflow separately.
         constraints.constrain(text_width, line_height)
+    }
+}
+
+impl Painter for Counter {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration as f64);
     }
 }

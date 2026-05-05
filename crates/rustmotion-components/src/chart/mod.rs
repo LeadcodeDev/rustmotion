@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::font_mgr;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 mod axes;
 mod bar;
@@ -191,56 +193,19 @@ impl Chart {
         DEFAULT_PALETTE[index % DEFAULT_PALETTE.len()]
     }
 
-    fn progress(&self, ctx: &RenderContext) -> f32 {
+    fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
         // ease_out_cubic
         1.0 - (1.0 - p).powi(3)
     }
 
-    /// Compute margins for axes/labels area.
-    pub(super) fn chart_margins(&self) -> (f32, f32, f32, f32) {
-        let left = if self.show_y_labels {
-            self.label_font_size * 3.5
-        } else {
-            0.0
-        };
-        let bottom = if self.show_x_labels {
-            self.label_font_size * 2.0
-        } else {
-            0.0
-        };
-        // top, right, bottom, left
-        (8.0, 8.0, bottom + 8.0, left + 8.0)
-    }
-
-    pub(super) fn make_label_font(&self) -> skia_safe::Font {
-        let fm = font_mgr();
-        let font_style = skia_safe::FontStyle::normal();
-        let typeface = fm
-            .match_family_style("Inter", font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .or_else(|| fm.match_family_style("sans-serif", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, self.label_font_size)
-    }
-}
-
-impl Widget for Chart {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let progress = self.progress(ctx);
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
+        let progress = self.progress_at(time);
 
         match self.chart_type {
             ChartType::Bar => {
@@ -303,10 +268,63 @@ impl Widget for Chart {
         }
     }
 
+    /// Compute margins for axes/labels area.
+    pub(super) fn chart_margins(&self) -> (f32, f32, f32, f32) {
+        let left = if self.show_y_labels {
+            self.label_font_size * 3.5
+        } else {
+            0.0
+        };
+        let bottom = if self.show_x_labels {
+            self.label_font_size * 2.0
+        } else {
+            0.0
+        };
+        // top, right, bottom, left
+        (8.0, 8.0, bottom + 8.0, left + 8.0)
+    }
+
+    pub(super) fn make_label_font(&self) -> skia_safe::Font {
+        let fm = font_mgr();
+        let font_style = skia_safe::FontStyle::normal();
+        let typeface = fm
+            .match_family_style("Inter", font_style)
+            .or_else(|| fm.match_family_style("Helvetica", font_style))
+            .or_else(|| fm.match_family_style("Arial", font_style))
+            .or_else(|| fm.match_family_style("sans-serif", font_style))
+            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+        skia_safe::Font::from_typeface(typeface, self.label_font_size)
+    }
+}
+
+impl Widget for Chart {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time)
+    }
+
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         if let Some(size) = &self.size {
             return (size.width, size.height);
         }
         (300.0, 200.0)
+    }
+}
+
+impl Painter for Chart {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

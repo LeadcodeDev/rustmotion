@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 /// Text alignment for table columns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -140,16 +142,9 @@ impl Table {
     }
 }
 
-impl Widget for Table {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
+impl Table {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+        let w = layout_w;
         let col_count = self.headers.len().max(1);
         let col_widths = self.resolve_column_widths(w);
         let row_h = self.row_height();
@@ -165,7 +160,7 @@ impl Widget for Table {
         let has_radius = self.style.border_radius.unwrap_or(0.0) > 0.0;
         if has_radius {
             let radius = self.style.border_radius.unwrap_or(0.0);
-            let rect = Rect::from_xywh(0.0, 0.0, w, layout.height);
+            let rect = Rect::from_xywh(0.0, 0.0, w, layout_h);
             let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
             canvas.save();
             canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
@@ -257,7 +252,19 @@ impl Widget for Table {
         if has_radius {
             canvas.restore();
         }
+    }
+}
 
+impl Widget for Table {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height);
         Ok(())
     }
 
@@ -271,5 +278,17 @@ impl Widget for Table {
         let h = (1 + self.rows.len()) as f32 * self.row_height();
 
         (w, h)
+    }
+}
+
+impl Painter for Table {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height);
     }
 }

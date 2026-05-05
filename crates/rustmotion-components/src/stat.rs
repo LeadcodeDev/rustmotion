@@ -3,13 +3,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, Path, Point, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
     measure_text_with_fallback, paint_from_hex, parse_hex_color,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_value_font_size() -> f32 {
     48.0
@@ -83,17 +85,10 @@ rustmotion_core::impl_traits!(Stat {
     Styled => style,
 });
 
-impl Widget for Stat {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Stat {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+        let w = layout_w;
+        let h = layout_h;
         let fm = font_mgr();
 
         // Background if set
@@ -318,7 +313,19 @@ impl Widget for Stat {
             line_paint.set_stroke_join(skia_safe::paint::Join::Round);
             canvas.draw_path(&line_path, &line_paint);
         }
+    }
+}
 
+impl Widget for Stat {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height);
         Ok(())
     }
 
@@ -327,5 +334,17 @@ impl Widget for Stat {
             return (size.width, size.height);
         }
         (240.0, 140.0)
+    }
+}
+
+impl Painter for Stat {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height);
     }
 }

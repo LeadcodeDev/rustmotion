@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 const DEFAULT_PALETTE: &[&str] = &[
     "#3B82F6", "#EF4444", "#22C55E", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
@@ -105,32 +107,23 @@ fn layout_treemap(items: &[(f64, usize)], rect: Rect, vertical: bool) -> Vec<(us
 }
 
 impl Treemap {
-    fn progress(&self, ctx: &RenderContext) -> f32 {
+    fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
-}
 
-impl Widget for Treemap {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         if self.data.is_empty() {
-            return Ok(());
+            return;
         }
 
-        let progress = self.progress(ctx);
+        let progress = self.progress_at(time);
 
         // Sort data by value descending, keeping original indices
         let mut sorted: Vec<(f64, usize)> = self
@@ -235,7 +228,19 @@ impl Widget for Treemap {
                 );
             }
         }
+    }
+}
 
+impl Widget for Treemap {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
@@ -244,5 +249,17 @@ impl Widget for Treemap {
             return (size.width, size.height);
         }
         (400.0, 300.0)
+    }
+}
+
+impl Painter for Treemap {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

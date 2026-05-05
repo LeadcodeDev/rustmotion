@@ -3,13 +3,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_progress_width() -> f32 {
     300.0
@@ -72,23 +74,41 @@ rustmotion_core::impl_traits!(Progress {
     Styled => style,
 });
 
+impl Progress {
+    fn paint(&self, canvas: &Canvas) -> Result<()> {
+        match self.variant {
+            ProgressVariant::Linear => self.render_linear(canvas),
+            ProgressVariant::Circular => self.render_circular(canvas),
+        }
+    }
+}
+
 impl Widget for Progress {
     fn render(
         &self,
         canvas: &Canvas,
         _layout: &LayoutNode,
         _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
+        _props: &AnimatedProperties,
         _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
     ) -> Result<()> {
-        match self.variant {
-            ProgressVariant::Linear => self.render_linear(canvas),
-            ProgressVariant::Circular => self.render_circular(canvas),
-        }
+        self.paint(canvas)
     }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         (self.width, self.height)
+    }
+}
+
+impl Painter for Progress {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas);
     }
 }
 

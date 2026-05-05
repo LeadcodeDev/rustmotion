@@ -3,12 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
-use rustmotion_core::engine::animator::ease;
+use rustmotion_core::engine::animator::{ease, AnimatedProperties};
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -229,17 +230,10 @@ impl Terminal {
     }
 }
 
-impl Widget for Terminal {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Terminal {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         // Background
         let bg_rect = Rect::from_xywh(0.0, 0.0, w, h);
@@ -296,7 +290,7 @@ impl Widget for Terminal {
         }
 
         // Compute reveal visibility
-        let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(ctx.time);
+        let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(time);
 
         // Lines
         let font = self.make_font();
@@ -390,7 +384,7 @@ impl Widget for Terminal {
 
             // Blinking cursor on the last visible line during typewriter reveal
             if is_last_visible && self.reveal.is_some() && partial_chars.is_some() {
-                let blink = ((ctx.time * 2.0) as i32) % 2 == 0;
+                let blink = ((time * 2.0) as i32) % 2 == 0;
                 if blink {
                     let cursor_w = font_size * 0.55;
                     let cursor_h = font_size * 1.2;
@@ -408,6 +402,19 @@ impl Widget for Terminal {
 
         canvas.restore(); // close inner content clip
         canvas.restore(); // close outer rrect clip
+    }
+}
+
+impl Widget for Terminal {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
@@ -420,5 +427,17 @@ impl Widget for Terminal {
         let content_h = self.lines.len() as f32 * self.line_height() + PADDING * 2.0;
 
         (500.0, chrome_h + content_h)
+    }
+}
+
+impl Painter for Terminal {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

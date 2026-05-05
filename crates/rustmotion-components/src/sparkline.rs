@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_color() -> String {
     "#22C55E".to_string()
@@ -58,32 +60,23 @@ rustmotion_core::impl_traits!(Sparkline {
 });
 
 impl Sparkline {
-    fn progress(&self, ctx: &RenderContext) -> f32 {
+    fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
-}
 
-impl Widget for Sparkline {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
         let n = self.data.len();
         if n < 2 {
-            return Ok(());
+            return;
         }
 
-        let progress = self.progress(ctx);
+        let progress = self.progress_at(time);
 
         let max_val = self.data.iter().fold(f64::MIN, |a, &b| a.max(b));
         let min_val = self.data.iter().fold(f64::MAX, |a, &b| a.min(b));
@@ -158,6 +151,19 @@ impl Widget for Sparkline {
         canvas.draw_path(&line_path, &line_paint);
 
         canvas.restore();
+    }
+}
+
+impl Widget for Sparkline {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
@@ -166,5 +172,17 @@ impl Widget for Sparkline {
             return (size.width, size.height);
         }
         (120.0, 40.0)
+    }
+}
+
+impl Painter for Sparkline {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

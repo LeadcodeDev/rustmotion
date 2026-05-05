@@ -3,13 +3,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_seconds() -> f64 {
     3600.0
@@ -161,16 +163,9 @@ impl Countdown {
     }
 }
 
-impl Widget for Countdown {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let remaining = (self.seconds - ctx.time).max(0.0);
+impl Countdown {
+    fn paint(&self, canvas: &Canvas, time: f64) {
+        let remaining = (self.seconds - time).max(0.0);
         let total_secs = remaining as u64;
         let hours = total_secs / 3600;
         let minutes = (total_secs % 3600) / 60;
@@ -252,7 +247,19 @@ impl Widget for Countdown {
             cursor_x += box_w + inner_gap;
             self.draw_digit_box(canvas, cursor_x, cursor_y, chars[1], &font, &emoji_font);
         }
+    }
+}
 
+impl Widget for Countdown {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, ctx.time);
         Ok(())
     }
 
@@ -280,5 +287,17 @@ impl Widget for Countdown {
         let total_w = digit_pair_w * num_groups as f32 + self.gap * separators as f32;
 
         (total_w, box_h)
+    }
+}
+
+impl Painter for Countdown {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

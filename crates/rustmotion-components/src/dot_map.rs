@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_background_color() -> String {
     "#0F172A".to_string()
@@ -118,34 +120,25 @@ rustmotion_core::impl_traits!(DotMap {
     Styled => style,
 });
 
-impl DotMap {
-    fn progress(&self, ctx: &RenderContext) -> f32 {
-        if !self.animated {
-            return 1.0;
-        }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
-        1.0 - (1.0 - p).powi(3)
-    }
-}
-
 /// Check if a screen-normalized point (0-1) is land.
 fn is_land_screen(nx: f32, ny: f32) -> bool {
     let (lat, lng) = screen_to_geo(nx, ny);
     geo_is_land(lat, lng)
 }
 
-impl Widget for DotMap {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let progress = self.progress(ctx);
+impl DotMap {
+    fn progress_at(&self, time: f64) -> f32 {
+        if !self.animated {
+            return 1.0;
+        }
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        1.0 - (1.0 - p).powi(3)
+    }
+
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
+        let progress = self.progress_at(time);
 
         // Draw background
         let mut bg_paint = paint_from_hex(&self.background_color);
@@ -207,7 +200,7 @@ impl Widget for DotMap {
                     0.0
                 };
                 let dot_progress =
-                    ((ctx.time - stagger_delay) / (self.animation_duration * 0.4)).clamp(0.0, 1.0)
+                    ((time - stagger_delay) / (self.animation_duration * 0.4)).clamp(0.0, 1.0)
                         as f32;
                 dot_progress * progress
             } else {
@@ -228,7 +221,7 @@ impl Widget for DotMap {
             if point.pulse.unwrap_or(false) {
                 let num_rings = 2;
                 for ring in 0..num_rings {
-                    let phase = ((ctx.time * 1.5 + ring as f64 * 0.5).fract()) as f32;
+                    let phase = ((time * 1.5 + ring as f64 * 0.5).fract()) as f32;
                     let ring_radius = dot_size * (1.0 + phase * 2.5);
                     let ring_alpha = (1.0 - phase).max(0.0) * 0.4 * dot_alpha;
 
@@ -279,7 +272,19 @@ impl Widget for DotMap {
                 );
             }
         }
+    }
+}
 
+impl Widget for DotMap {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
@@ -288,5 +293,17 @@ impl Widget for DotMap {
             return (size.width, size.height);
         }
         (600.0, 400.0)
+    }
+}
+
+impl Painter for DotMap {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }
