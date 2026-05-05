@@ -7,7 +7,6 @@ use crate::components::ChildComponent;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
-use crate::layout::{Constraints, LayoutNode};
 use crate::schema::{Camera, LayerStyle, Scene, SceneLayout, VideoConfig};
 use crate::traits::RenderContext;
 
@@ -21,10 +20,8 @@ pub fn render_frame_v2(
     frame_index: u32,
     _total_frames: u32,
     root_children: &[ChildComponent],
-    root_layout: &LayoutNode,
 ) -> Result<Vec<u8>> {
-    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, root_layout, 1.0, None)
-
+    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, 1.0, None)
 }
 
 /// Render a frame with an optional scale factor for higher-resolution output.
@@ -39,7 +36,6 @@ pub fn render_frame_v2_scaled(
     frame_index: u32,
     _total_frames: u32,
     root_children: &[ChildComponent],
-    root_layout: &LayoutNode,
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
@@ -179,7 +175,6 @@ pub fn render_frame_v2_scaled(
     );
 
     // Render component tree through taffy + paint_tree + LegacyPaintDispatcher.
-    let _ = root_layout;
     render_with_new_pipeline(
         canvas,
         root_children,
@@ -348,33 +343,6 @@ fn paint_decorative_fullscreen(
     canvas.restore();
 }
 
-/// Compute the layout tree for a set of root-level ChildComponents.
-/// Uses an implicit flex container at video dimensions (like a full-screen web page).
-/// All root children participate in flex flow (position is stripped before layout).
-/// Only children inside `Positioned` containers use absolute coordinates.
-pub fn compute_root_layout(
-    children: &[ChildComponent],
-    config: &VideoConfig,
-    scene_layout: Option<&SceneLayout>,
-) -> LayoutNode {
-    let constraints = Constraints::tight(config.width as f32, config.height as f32);
-    let style = root_style(scene_layout);
-    crate::layout::flex::layout_flex(children, &style, &constraints)
-}
-
-/// Like `compute_root_layout`, but forces all children into flex flow
-/// (ignores absolute positions). Used for world scenes where content
-/// should be centered regardless of position attributes in the JSON.
-pub fn compute_root_layout_all_flow(
-    children: &[ChildComponent],
-    config: &VideoConfig,
-    scene_layout: Option<&SceneLayout>,
-) -> LayoutNode {
-    let constraints = Constraints::tight(config.width as f32, config.height as f32);
-    let style = root_style(scene_layout);
-    crate::layout::flex::layout_flex_all_flow(children, &style, &constraints)
-}
-
 /// Deserialize a scene's raw JSON children into typed ChildComponents.
 ///
 /// Children that fail to deserialize are skipped, but a warning is emitted
@@ -395,14 +363,12 @@ pub fn deserialize_children(scene: &Scene) -> Vec<ChildComponent> {
         .collect()
 }
 
-/// Compute layout for a scene's children — ready for render_frame_v2.
+/// Deserialize a scene's children — ready for render_frame_v2.
 pub fn prepare_scene(
     scene: &Scene,
-    config: &VideoConfig,
-) -> (Vec<ChildComponent>, LayoutNode) {
-    let children = deserialize_children(scene);
-    let layout = compute_root_layout(&children, config, scene.layout.as_ref());
-    (children, layout)
+    _config: &VideoConfig,
+) -> Vec<ChildComponent> {
+    deserialize_children(scene)
 }
 
 /// Render a single frame using the v2 pipeline.
@@ -413,8 +379,8 @@ pub fn render_scene_frame(
     frame_in_scene: u32,
     scene_total_frames: u32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children, &layout)
+    let children = prepare_scene(scene, config);
+    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children)
 }
 
 pub fn render_scene_frame_scaled(
@@ -424,8 +390,8 @@ pub fn render_scene_frame_scaled(
     scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, &layout, scale_factor, None)
+    let children = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, None)
 }
 
 /// Like `render_scene_frame_scaled` but with the previous scene's resolved background for transition interpolation.
@@ -438,8 +404,8 @@ pub fn render_scene_frame_scaled_with_prev_bg(
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, &layout, scale_factor, prev_bg)
+    let children = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, prev_bg)
 }
 
 /// Render a single frame of a world view: shared background, camera translation, visible scenes.
@@ -623,13 +589,11 @@ pub fn render_world_frame_scaled(
         };
         let scene_layout = scene.layout.as_ref().unwrap_or(&world_default_layout);
         let scene_children = deserialize_children(scene);
-        let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
         // Decorative children (particles) get a full-viewport BoxLayout and
         // paint directly via Painter::paint_content. Flex-flow children go
         // through the new pipeline so world scenes stay in sync with slide
         // views.
-        let _ = layout;
         for child in scene_children.iter().filter(|c| c.is_decorative()) {
             paint_decorative_fullscreen(canvas, child, vw, vh, &ctx);
         }
@@ -714,7 +678,7 @@ pub fn render_scene_fg_scaled(
     _scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
+    let children = prepare_scene(scene, config);
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
     let mut time = frame_in_scene as f64 / config.fps as f64;
@@ -754,7 +718,6 @@ pub fn render_scene_fg_scaled(
         ClipOp::Intersect,
         true,
     );
-    let _ = layout;
     render_with_new_pipeline(
         canvas,
         &children,
