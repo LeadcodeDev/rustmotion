@@ -6,10 +6,13 @@
 //! parents the same way a browser would.
 
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
+use rustmotion_core::engine::renderer::format_counter_value;
 use rustmotion_core::engine::text::cosmic::{measure_text, TextStyle};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle};
 
+use crate::badge::{Badge, BadgeSize};
 use crate::caption::Caption;
+use crate::counter::Counter;
 use crate::gradient_text::GradientText;
 use crate::kbd::Kbd;
 use crate::text::Text;
@@ -198,6 +201,110 @@ impl IntrinsicMeasure for KbdIntrinsic {
         let w = (tw + self.h_padding * 2.0).max(self.min_width);
         let h = th + self.v_padding * 2.0;
         (w, h)
+    }
+}
+
+/// Intrinsic measurer for [`Counter`] — reserves space for the largest absolute
+/// value the counter will display so layout never reflows during animation.
+pub struct CounterIntrinsic(TextIntrinsic);
+
+impl CounterIntrinsic {
+    pub fn from_counter(c: &Counter) -> Self {
+        let absmax = c.from.abs().max(c.to.abs());
+        let signed = if c.from < 0.0 || c.to < 0.0 {
+            -absmax
+        } else {
+            absmax
+        };
+        let display =
+            format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
+        // Counter is atomic: it never wraps.
+        let style = LayerStyle {
+            wrap: Some(false),
+            ..c.style.clone()
+        };
+        Self(TextIntrinsic::from_parts(&display, &style, None))
+    }
+}
+
+impl IntrinsicMeasure for CounterIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        self.0.measure(known, available)
+    }
+}
+
+/// Intrinsic measurer for [`Badge`] — measures the label text plus icon, gap,
+/// and the size-derived horizontal/vertical padding.
+pub struct BadgeIntrinsic {
+    text: TextIntrinsic,
+    h_padding: f32,
+    v_padding: f32,
+    icon_extra: f32,
+    font_size: f32,
+}
+
+impl BadgeIntrinsic {
+    pub fn from_badge(b: &Badge) -> Self {
+        let (default_fs, h_pad, v_pad, icon_size) = badge_size_params(&b.badge_size);
+        let font_size = b.style.font_size.unwrap_or(default_fs);
+        let ratio = font_size / default_fs;
+        let h_padding = h_pad * ratio;
+        let v_padding = v_pad * ratio;
+        let icon_extra = if b.icon.is_some() {
+            icon_size * ratio + 6.0 * ratio
+        } else {
+            0.0
+        };
+
+        let synthetic_style = LayerStyle {
+            font_size: Some(font_size),
+            font_family: Some(
+                b.style
+                    .font_family
+                    .clone()
+                    .unwrap_or_else(|| "Inter".to_string()),
+            ),
+            font_weight: b.style.font_weight.clone(),
+            font_style: b.style.font_style.clone(),
+            letter_spacing: b.style.letter_spacing,
+            line_height: b.style.line_height,
+            wrap: Some(false),
+            ..LayerStyle::default()
+        };
+
+        Self {
+            text: TextIntrinsic::from_parts(&b.text, &synthetic_style, None),
+            h_padding,
+            v_padding,
+            icon_extra,
+            font_size,
+        }
+    }
+}
+
+impl IntrinsicMeasure for BadgeIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let (tw, _th) = self.text.measure(known, available);
+        let w = self.h_padding * 2.0 + tw + self.icon_extra;
+        let h = self.v_padding * 2.0 + self.font_size * 1.3;
+        (w, h)
+    }
+}
+
+fn badge_size_params(s: &BadgeSize) -> (f32, f32, f32, f32) {
+    // (font_size, h_padding, v_padding, icon_size) — matches badge.rs::params
+    match s {
+        BadgeSize::Sm => (12.0, 8.0, 4.0, 14.0),
+        BadgeSize::Md => (14.0, 12.0, 6.0, 18.0),
+        BadgeSize::Lg => (18.0, 16.0, 8.0, 22.0),
     }
 }
 

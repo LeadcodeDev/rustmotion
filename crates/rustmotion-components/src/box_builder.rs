@@ -138,6 +138,8 @@ fn component_intrinsic(
         )),
         Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(c))),
         Kbd(k) => Some(Arc::new(crate::intrinsic::KbdIntrinsic::from_kbd(k))),
+        Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(c))),
+        Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
         _ => None,
     }
 }
@@ -681,6 +683,87 @@ mod tests {
         // bbox 100×50 + (16 + 10) = 126×76.
         assert_eq!(l.width, 126.0);
         assert_eq!(l.height, 76.0);
+    }
+
+    #[test]
+    fn counter_intrinsic_size_reserves_space_for_max_value() {
+        // 1234 → 1234 → format with 0 decimals → measure largest absolute value.
+        // Expectation: width > 0 (cosmic-text didn't fail), height ≈ font_size × line_height.
+        use crate::counter::Counter;
+
+        let counter = ChildComponent {
+            component: Component::Counter(Counter {
+                from: 0.0,
+                to: 1234.0,
+                decimals: 0,
+                separator: None,
+                prefix: None,
+                suffix: None,
+                easing: Default::default(),
+                timing: Default::default(),
+                style: LayerStyle {
+                    font_size: Some(64.0),
+                    ..Default::default()
+                },
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 10.0, y: 20.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![counter];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let id = built.root.children[0].id;
+        let l = layout.get(id).expect("counter laid out");
+        assert!(l.width > 0.0, "counter width should be > 0, got {}", l.width);
+        // line_height defaults to font_size × 1.3 = 83.2. Allow some slack.
+        assert!(
+            l.height >= 60.0,
+            "counter height should be ≥ ~one line ({}), got {}",
+            64.0,
+            l.height
+        );
+    }
+
+    #[test]
+    fn badge_intrinsic_size_includes_padding_and_text() {
+        // Default size = Md → font_size 14, h_pad 12, v_pad 6, icon 18.
+        // Without an icon, height ≈ 6×2 + 14×1.3 ≈ 30.2.
+        use crate::badge::{Badge, BadgeSize, BadgeVariant};
+
+        let badge = ChildComponent {
+            component: Component::Badge(Badge {
+                text: "New".into(),
+                icon: None,
+                variant: BadgeVariant::Solid,
+                badge_size: BadgeSize::Md,
+                dot: false,
+                dot_color: None,
+                pulse: false,
+                count: None,
+                timing: Default::default(),
+                style: LayerStyle::default(),
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![badge];
+        let built = build_scene(&scene, (400.0, 200.0));
+        let layout = run_layout(&built.root, (400.0, 200.0), &ConversionContext::default());
+        let id = built.root.children[0].id;
+        let l = layout.get(id).expect("badge laid out");
+        // h_pad×2 = 24 alone, plus the text width.
+        assert!(l.width > 24.0, "badge width should exceed padding alone, got {}", l.width);
+        assert!(
+            (l.height - 30.2).abs() < 2.0,
+            "badge height should be ~30.2, got {}",
+            l.height
+        );
     }
 
     #[test]
