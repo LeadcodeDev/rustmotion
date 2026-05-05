@@ -49,8 +49,9 @@ Ask the user **3-5 questions** using `AskUserQuestion` to understand the project
 1. **Format & Device** — Portrait 9:16 / Mobile (1080×1920), Landscape 16:9 / Desktop (1920×1080), or Square 1:1 (1080×1080)? Accept aliases: "mobile"/"phone"/"story"/"reel"/"TikTok" → Mobile 9:16, "desktop"/"YouTube"/"presentation" → Desktop 16:9, "tablet"/"iPad" → Tablet. **The chosen device determines all component sizing** — see [rules/responsive-device-sizing.md](rules/responsive-device-sizing.md).
 2. **Target duration** — Short (15-30s), Medium (30-60s), or Long (60s+)?
 3. **Tone/style** — Corporate, Playful, Minimal, Tech/Dark, Colorful?
-4. **Key content** — What text, data, features, or CTA should appear?
-5. **Color palette** — Brand colors? If not, pick a tone: (A) Dark Tech — navy + indigo, (B) Corporate — white + blue, (C) Playful — dark + amber/pink, (D) Minimal — white + black. Exact hex values: see [rules/color-palettes.md](rules/color-palettes.md).
+4. **Dynamism level** — How much motion do you want post-entrance? (0) Static — elements enter then freeze; (1) Subtle — 1-2 gentle floats/wiggles; (2) Dynamic — floating hero, depth cards, camera zoom reveals; (3) Cinematic — camera pan/zoom, orbital backgrounds, multi-layer parallax. Default: 1. See [rules/dynamic-depth.md](rules/dynamic-depth.md). If level ≥ 2, also ask which parallax approach: (A) `float_3d` + wiggle seeds — per-element depth, (B) Camera keyframes — cinematic pan/zoom, (C) Orbital backgrounds — decorative ambient layer. Multiple choices combine well.
+5. **Key content** — What text, data, features, or CTA should appear?
+6. **Color palette** — Brand colors? If not, pick a tone: (A) Dark Tech — navy + indigo, (B) Corporate — white + blue, (C) Playful — dark + amber/pink, (D) Minimal — white + black. Exact hex values: see [rules/color-palettes.md](rules/color-palettes.md).
 
 Skip questions where the answer is already obvious from context.
 
@@ -64,16 +65,18 @@ Based on the brief, propose a **structured scene plan** using the table format b
 Device: [Mobile 9:16 / Desktop 16:9 / Square] | Durée totale: [Xs] | Ton: [Corporate/Playful/…]
 Palette: BG [#hex] | Texte [#hex] | Accent [#hex] | Cards [#hex]
   → See rules/color-palettes.md for the 4 ready-to-use palettes.
+Dynamisme: [0 Static / 1 Subtle / 2 Dynamic / 3 Cinematic] — [chosen parallax approach]
+  → See rules/dynamic-depth.md for patterns and recipes.
 Style animations: [e.g. "fade_in_up entrances, stagger 0.2s, ease_out — no exit animations"]
 ```
 
 **Scene table (one row per scene):**
 
-| # | Durée | Nom | Composants | Tailles texte clés | Budget animation |
-|---|---|---|---|---|---|
-| 1 | 3.5s | Intro hero | icon hero (180px) + text titre + animated-bg radial | titre: 108px bold | fade_in_up: 0+0.6 → 0.6s ✓ |
-| 2 | 5.5s | Features | 3× card(row, stagger 0.2s) + icon feature (80px) + text body | body: 54px | stagger: 0+0.2+0.4 + 0.6 → 1.0s ✓ |
-| 3 | 3.0s | CTA | badge + text titre + glow | titre: 108px | fade_in_up 0.3+0.6 → 0.9s ✓ |
+| # | Durée | Nom | Composants | Tailles texte clés | Budget animation | Effets dynamiques |
+|---|---|---|---|---|---|---|
+| 1 | 3.5s | Intro hero | icon hero (180px) + text titre + animated-bg radial | titre: 108px bold | fade_in_up: 0+0.6 → 0.6s ✓ | float_3d loop, camera zoom 1.1→1.0 |
+| 2 | 5.5s | Features | 3× card(row, stagger 0.2s) + icon feature (80px) + text body | body: 54px | stagger: 0+0.2+0.4 + 0.6 → 1.0s ✓ | wiggle seeds 7/42/91 per card |
+| 3 | 3.0s | CTA | badge + text titre + glow | titre: 108px | fade_in_up 0.3+0.6 → 0.9s ✓ | float_3d loop, camera zoom 1.05→1.0 |
 
 **Validation column "Budget animation":** compute `last_delay + last_duration` and mark ✓ if ≤ scene duration, ✗ if not. See [rules/animation-completion-budget.md](rules/animation-completion-budget.md).
 
@@ -110,6 +113,7 @@ The user validates or adjusts the plan before proceeding.
 3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
 4. No `counter` component inside a card (see [rules/counter-standalone.md](rules/counter-standalone.md))
 5. Scene duration ≥ reading time of all text (`word_count ÷ 2.5`) (see [rules/scene-pacing.md](rules/scene-pacing.md))
+6. If dynamism level ≥ 2: at least one non-text element per scene has a continuous effect (`float_3d`/`wiggle`/`orbit` with `loop: true`). Never apply continuous motion to primary text. See [rules/dynamic-depth.md](rules/dynamic-depth.md).
 
 For each scene in the validated plan:
 1. Generate the JSON for the scene
