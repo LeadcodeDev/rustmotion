@@ -560,6 +560,8 @@ pub fn render_world_frame_scaled(
         let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
         // Render: decorative children get fullscreen layout, content children get flex layout
+        // World scenes still use the legacy path; the new pipeline gate only
+        // covers slide views and isolated scene rendering for now.
         for (i, child) in scene_children.iter().enumerate() {
             if i >= layout.children.len() { break; }
             if child.is_decorative() {
