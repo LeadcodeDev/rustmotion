@@ -3,9 +3,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Container, RenderContext, Widget};
+use rustmotion_core::traits::{Container, PaintCtx, Painter, RenderContext, Widget};
 
 use crate::ChildComponent;
 
@@ -45,5 +46,12 @@ impl Widget for Positioned {
             max_y = max_y.max(cy + ch);
         }
         (max_x, max_y)
+    }
+}
+
+impl Painter for Positioned {
+    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {
+        // Containers paint nothing of their own. Box decorations are
+        // handled by paint_pass; children are recursed by paint_tree.
     }
 }

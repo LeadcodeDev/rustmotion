@@ -3,13 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
 use rustmotion_core::layout::{layout_flex, layout_grid_with_config, Constraints, LayoutNode};
 use rustmotion_core::schema::{CardDisplay, LayerStyle};
 use rustmotion_core::traits::{
     Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
-    FlexContainerMut, GridConfig, RenderContext, Rounded, RoundedMut, Shadow, Shadowed,
-    ShadowedMut, TimingConfig, Widget,
+    FlexContainerMut, GridConfig, PaintCtx, Painter, RenderContext, Rounded, RoundedMut, Shadow,
+    Shadowed, ShadowedMut, TimingConfig, Widget,
 };
 
 use crate::flex::FlexSize;
@@ -191,4 +192,8 @@ impl Widget for Card {
 fn layout_grid_for_card(card: &Card, constraints: &Constraints) -> LayoutNode {
     let grid_config = card.grid_config_owned();
     layout_grid_with_config(&card.children, &card.style, &grid_config, constraints)
+}
+
+impl Painter for Card {
+    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {}
 }

@@ -62,7 +62,7 @@ pub mod video;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use rustmotion_core::traits::{Animatable, Container, Styled, Timed, Widget};
+use rustmotion_core::traits::{Animatable, Container, Painter, Styled, Timed, Widget};
 
 pub use arrow::Arrow;
 pub use avatar::Avatar;
@@ -396,6 +396,21 @@ impl Component {
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Returns the Painter trait if this component has been migrated to
+    /// the new pipeline. `None` means the dispatcher should fall back to
+    /// `Widget::render`. Migration is incremental.
+    pub fn as_painter(&self) -> Option<&dyn Painter> {
+        match self {
+            Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
+            Component::Flex(c) => Some(c),
+            Component::Grid(c) => Some(c),
+            Component::Positioned(c) => Some(c),
+            Component::Divider(c) => Some(c),
             _ => None,
         }
     }

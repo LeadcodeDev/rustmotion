@@ -21,7 +21,7 @@ use rustmotion_core::engine::box_tree::NodeId;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
 use rustmotion_core::layout::LayoutNode;
-use rustmotion_core::traits::{RenderContext, RenderPipeline};
+use rustmotion_core::traits::{PaintCtx, RenderContext, RenderPipeline};
 use skia_safe::Canvas;
 
 use crate::{ChildComponent, Component};
@@ -130,10 +130,34 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             );
         }
 
-        let _ = child
-            .component
-            .as_widget()
-            .render(canvas, &node, &render_ctx, &props, &pipeline);
+        // Prefer Painter when the component has been migrated. Both
+        // paths receive the same already-translated/transformed canvas
+        // and the same logical box. Painter takes BoxLayout + PaintCtx;
+        // Widget takes the legacy LayoutNode + RenderContext + props.
+        if let Some(painter) = child.component.as_painter() {
+            let paint_ctx = PaintCtx {
+                time: frame.time,
+                scene_duration: frame.scene_duration,
+                frame_index: frame.frame_index,
+                fps: frame.fps,
+                video_width: frame.video_width,
+                video_height: frame.video_height,
+                stagger_offset: 0.0,
+            };
+            let local = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: layout.width,
+                height: layout.height,
+                ..Default::default()
+            };
+            painter.paint_content(canvas, &local, &paint_ctx);
+        } else {
+            let _ = child
+                .component
+                .as_widget()
+                .render(canvas, &node, &render_ctx, &props, &pipeline);
+        }
 
         if props.opacity < 0.999 {
             canvas.restore();

@@ -3,12 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::layout::{layout_flex, Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
 use rustmotion_core::traits::{
     Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
-    FlexContainerMut, RenderContext, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut,
-    TimingConfig, Widget,
+    FlexContainerMut, PaintCtx, Painter, RenderContext, Rounded, RoundedMut, Shadow, Shadowed,
+    ShadowedMut, TimingConfig, Widget,
 };
 
 use crate::flex::FlexSize;
@@ -111,4 +112,8 @@ impl Widget for ContainerComponent {
         let c = crate::flex::resolve_size_constraints(&self.size, constraints);
         layout_flex(&self.children, &self.style, &c)
     }
+}
+
+impl Painter for ContainerComponent {
+    fn paint_content(&self, _canvas: &Canvas, _layout: &BoxLayout, _ctx: &PaintCtx) {}
 }
