@@ -6,9 +6,8 @@ use skia_safe::{Canvas, Font, FontStyle, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, LayerStyle};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Caption {
@@ -128,27 +127,6 @@ impl Caption {
                 }
             }
         }
-    }
-}
-
-impl Widget for Caption {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.style.font_size_or(48.0);
-        let w = self.max_width.unwrap_or(400.0);
-        let h = font_size * 1.3;
-        (w, h)
     }
 }
 

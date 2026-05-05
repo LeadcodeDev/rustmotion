@@ -6,9 +6,8 @@ use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A horizontal or vertical pipeline/timeline component.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -118,35 +117,6 @@ impl Timeline {
             }
             TimelineDirection::Vertical => {
                 self.render_vertical(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent);
-            }
-        }
-    }
-}
-
-impl Widget for Timeline {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, props);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match self.direction {
-            TimelineDirection::Horizontal => {
-                let h = self.node_radius * 2.0 + self.font_size * 2.5 + 20.0;
-                (self.width, h)
-            }
-            TimelineDirection::Vertical => {
-                let n = self.steps.len().max(1);
-                let spacing = 80.0;
-                let h = n as f32 * spacing;
-                (self.width, h)
             }
         }
     }

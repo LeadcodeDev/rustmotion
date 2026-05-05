@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -187,45 +186,6 @@ impl Callout {
         }
 
         Ok(())
-    }
-}
-
-impl Widget for Callout {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let font_size = self.font_size();
-        let fm = font_mgr();
-        let typeface = fm
-            .match_family_style("Inter", skia_safe::FontStyle::normal())
-            .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::normal()))
-            .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::normal()))
-            .or_else(|| fm.legacy_make_typeface(None, skia_safe::FontStyle::normal()))
-            .expect(&RustmotionError::FontNotFound.to_string());
-        let font = skia_safe::Font::from_typeface(typeface, font_size);
-        let text_w = font.measure_str(&self.text, None).0;
-
-        let padding = 12.0;
-        let w = text_w + padding * 2.0 + 16.0;
-        let h = font_size * 1.4 + padding * 2.0;
-
-        match self.arrow_direction {
-            ArrowDirection::Top | ArrowDirection::Bottom => (w, h + self.arrow_size),
-            ArrowDirection::Left | ArrowDirection::Right => (w + self.arrow_size, h),
-        }
     }
 }
 

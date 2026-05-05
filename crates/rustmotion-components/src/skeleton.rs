@@ -6,9 +6,8 @@ use skia_safe::{Canvas, Color, PaintStyle, Point, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_base_color() -> String {
     "#1E293B".to_string()
@@ -168,35 +167,6 @@ impl Skeleton {
                     let rect = Rect::from_xywh(0.0, y, line_w, self.line_height);
                     self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, time);
                 }
-            }
-        }
-    }
-}
-
-impl Widget for Skeleton {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        match self.variant {
-            SkeletonVariant::Rectangle => (200.0, 40.0),
-            SkeletonVariant::Circle => (48.0, 48.0),
-            SkeletonVariant::Text => {
-                let h = self.lines.max(1) as f32 * (self.line_height + self.line_gap)
-                    - self.line_gap;
-                (300.0, h)
             }
         }
     }

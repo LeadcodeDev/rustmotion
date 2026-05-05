@@ -4,13 +4,8 @@ use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::layout::{layout_flex, Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{
-    Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
-    FlexContainerMut, PaintCtx, Painter, RenderContext, Rounded, RoundedMut, Shadow, Shadowed,
-    ShadowedMut, TimingConfig, Widget,
-};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -94,23 +89,6 @@ impl rustmotion_core::traits::BackgroundedMut for ContainerComponent {
 impl rustmotion_core::traits::Clipped for ContainerComponent {
     fn clip(&self) -> bool {
         false
-    }
-}
-
-impl Widget for ContainerComponent {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        // No background, no border, no shadow, no clip — just render children
-        pipeline.render_children(canvas, &self.children as &dyn std::any::Any, layout, ctx, self.style.stagger)
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        let layout = self.layout(constraints);
-        (layout.width, layout.height)
-    }
-
-    fn layout(&self, constraints: &Constraints) -> LayoutNode {
-        let c = crate::flex::resolve_size_constraints(&self.size, constraints);
-        layout_flex(&self.children, &self.style, &c)
     }
 }
 

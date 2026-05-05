@@ -62,7 +62,7 @@ pub mod video;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use rustmotion_core::traits::{Animatable, Container, Painter, Styled, Timed, Widget};
+use rustmotion_core::traits::{Animatable, Painter, Styled, Timed};
 
 pub use arrow::Arrow;
 pub use avatar::Avatar;
@@ -196,30 +196,6 @@ impl ChildComponent {
     }
 }
 
-impl rustmotion_core::traits::LayoutItem for ChildComponent {
-    fn as_widget(&self) -> &dyn Widget {
-        self.component.as_widget()
-    }
-    fn as_styled(&self) -> &dyn rustmotion_core::traits::Styled {
-        self.component.as_styled()
-    }
-    fn is_container(&self) -> bool {
-        self.component.is_container()
-    }
-    fn is_flow(&self) -> bool {
-        self.position.is_none()
-    }
-    fn is_decorative(&self) -> bool {
-        matches!(self.component, Component::Particle(_))
-    }
-    fn absolute_position(&self) -> Option<(f32, f32)> {
-        ChildComponent::absolute_position(self)
-    }
-    fn default_position(&self) -> (f32, f32) {
-        (self.x.unwrap_or(0.0), self.y.unwrap_or(0.0))
-    }
-}
-
 // --- Component enum ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -286,31 +262,6 @@ pub enum Component {
 // --- Dispatch helpers ---
 
 impl Component {
-    pub fn as_widget(&self) -> &dyn Widget {
-        match self {
-            Component::Text(c) => c, Component::Shape(c) => c, Component::Image(c) => c,
-            Component::Icon(c) => c, Component::Svg(c) => c, Component::Video(c) => c,
-            Component::Gif(c) => c, Component::Counter(c) => c, Component::Cursor(c) => c,
-            Component::Caption(c) => c, Component::Codeblock(c) => c, Component::Avatar(c) => c,
-            Component::AvatarGroup(c) => c, Component::Arrow(c) => c, Component::Connector(c) => c,
-            Component::Badge(c) => c, Component::Callout(c) => c, Component::Chart(c) => c,
-            Component::Comparison(c) => c, Component::Countdown(c) => c,
-            Component::Divider(c) => c, Component::DotMap(c) => c, Component::Gauge(c) => c,
-            Component::GradientText(c) => c, Component::Heatmap(c) => c,
-            Component::Kbd(c) => c, Component::Line(c) => c, Component::List(c) => c,
-            Component::Lottie(c) => c, Component::Marquee(c) => c, Component::Mockup(c) => c,
-            Component::Notification(c) => c, Component::Particle(c) => c,
-            Component::PillNav(c) => c, Component::Progress(c) => c, Component::QrCode(c) => c,
-            Component::Rating(c) => c, Component::Skeleton(c) => c, Component::Slider(c) => c,
-            Component::Sparkline(c) => c, Component::Stat(c) => c, Component::Stepper(c) => c,
-            Component::Switch(c) => c, Component::RichText(c) => c, Component::Table(c) => c,
-            Component::TagCloud(c) => c, Component::Terminal(c) => c, Component::Timeline(c) => c,
-            Component::Tooltip(c) => c, Component::Treemap(c) => c,
-            Component::Positioned(c) => c, Component::Flex(c) => c, Component::Grid(c) => c,
-            Component::Card(c) => c, Component::Container(c) => c,
-        }
-    }
-
     pub fn as_animatable(&self) -> Option<&dyn Animatable> {
         match self {
             Component::Text(c) => Some(c), Component::Shape(c) => Some(c), Component::Image(c) => Some(c),
@@ -388,18 +339,6 @@ impl Component {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn as_container(&self) -> Option<&dyn Container> {
-        match self {
-            Component::Positioned(c) => Some(c),
-            Component::Flex(c) => Some(c),
-            Component::Grid(c) => Some(c),
-            Component::Card(c) => Some(c),
-            Component::Container(c) => Some(c),
-            _ => None,
-        }
-    }
-
     /// Returns the Painter trait. All 51 components are migrated to the new
     /// pipeline; the dispatcher always uses Painter::paint_content.
     pub fn as_painter(&self) -> Option<&dyn Painter> {
@@ -460,10 +399,6 @@ impl Component {
             Component::Arrow(c) => Some(c),
             Component::Connector(c) => Some(c),
         }
-    }
-
-    pub fn is_container(&self) -> bool {
-        matches!(self, Component::Positioned(_) | Component::Flex(_) | Component::Grid(_) | Component::Card(_) | Component::Container(_))
     }
 }
 

@@ -6,9 +6,8 @@ use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Curved arrow component with optional bezier control points and oriented arrowhead.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -186,51 +185,6 @@ impl Arrow {
                 Self::draw_arrowhead(canvas, &path, false, self.arrow_size, &paint);
             }
         }
-    }
-}
-
-impl Widget for Arrow {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, props);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let mut min_x = self.x1.min(self.x2);
-        let mut max_x = self.x1.max(self.x2);
-        let mut min_y = self.y1.min(self.y2);
-        let mut max_y = self.y1.max(self.y2);
-
-        // Include control points in bounds
-        if let Some(ref cp) = self.cp {
-            min_x = min_x.min(cp.x);
-            max_x = max_x.max(cp.x);
-            min_y = min_y.min(cp.y);
-            max_y = max_y.max(cp.y);
-        }
-        if let Some(ref cp1) = self.cp1 {
-            min_x = min_x.min(cp1.x);
-            max_x = max_x.max(cp1.x);
-            min_y = min_y.min(cp1.y);
-            max_y = max_y.max(cp1.y);
-        }
-        if let Some(ref cp2) = self.cp2 {
-            min_x = min_x.min(cp2.x);
-            max_x = max_x.max(cp2.x);
-            min_y = min_y.min(cp2.y);
-            max_y = max_y.max(cp2.y);
-        }
-
-        let w = (max_x - min_x).max(1.0);
-        let h = (max_y - min_y).max(1.0);
-        (w, h)
     }
 }
 

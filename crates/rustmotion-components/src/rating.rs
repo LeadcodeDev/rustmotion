@@ -6,9 +6,8 @@ use skia_safe::{Canvas, PaintStyle, Path};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_max() -> u32 {
     5
@@ -147,25 +146,6 @@ impl Rating {
                 canvas.draw_path(&path, &paint);
             }
         }
-    }
-}
-
-impl Widget for Rating {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let total_width = self.max as f32 * self.size + (self.max.saturating_sub(1)) as f32 * self.gap;
-        (total_width, self.size)
     }
 }
 

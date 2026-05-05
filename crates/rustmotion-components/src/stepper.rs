@@ -9,9 +9,8 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_active_step() -> u32 {
     0
@@ -397,36 +396,6 @@ impl Stepper {
                     );
                 }
             }
-        }
-    }
-}
-
-impl Widget for Stepper {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let n = self.steps.len().max(1);
-        if self.orientation == "horizontal" {
-            let w = (n as f32 * 100.0).max(200.0);
-            let h = self.node_size + 60.0;
-            (w, h)
-        } else {
-            let w = self.node_size + 200.0;
-            let h = (n as f32 * 80.0).max(100.0);
-            (w, h)
         }
     }
 }

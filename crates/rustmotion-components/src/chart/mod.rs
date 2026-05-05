@@ -6,9 +6,8 @@ use skia_safe::Canvas;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::font_mgr;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 mod axes;
 mod bar;
@@ -294,26 +293,6 @@ impl Chart {
             .or_else(|| fm.match_family_style("sans-serif", font_style))
             .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
         skia_safe::Font::from_typeface(typeface, self.label_font_size)
-    }
-}
-
-impl Widget for Chart {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (300.0, 200.0)
     }
 }
 

@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -402,31 +401,6 @@ impl Terminal {
 
         canvas.restore(); // close inner content clip
         canvas.restore(); // close outer rrect clip
-    }
-}
-
-impl Widget for Terminal {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let chrome_h = if self.show_chrome { CHROME_HEIGHT } else { 0.0 };
-        let content_h = self.lines.len() as f32 * self.line_height() + PADDING * 2.0;
-
-        (500.0, chrome_h + content_h)
     }
 }
 

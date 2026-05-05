@@ -6,9 +6,8 @@ use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_color() -> String {
     "#22C55E".to_string()
@@ -151,27 +150,6 @@ impl Sparkline {
         canvas.draw_path(&line_path, &line_paint);
 
         canvas.restore();
-    }
-}
-
-impl Widget for Sparkline {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (120.0, 40.0)
     }
 }
 

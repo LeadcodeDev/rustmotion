@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, LayerStyle, TextAlign};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Counter {
@@ -145,44 +144,6 @@ impl Counter {
         draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &paint);
 
         Ok(())
-    }
-}
-
-impl Widget for Counter {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        self.paint(canvas, layout.width, ctx.time, ctx.scene_duration as f64)
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.style.font_size_or(48.0);
-        let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-
-        let fm = font_mgr();
-        let skia_font_style = match font_weight {
-            FontWeight::Bold => FontStyle::bold(),
-            FontWeight::Normal => FontStyle::normal(),
-            FontWeight::Weight(w) => FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
-        };
-        let typeface = fm
-            .match_family_style(font_family, skia_font_style)
-            .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
-            .or_else(|| fm.match_family_style("Arial", skia_font_style))
-            .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        // Reserve space for the largest absolute value the counter will display
-        // (between `from` and `to`) so layout never reflows during animation.
-        let absmax = self.from.abs().max(self.to.abs());
-        let signed = if self.from < 0.0 || self.to < 0.0 { -absmax } else { absmax };
-        let display = format_counter_value(signed, self.decimals, &self.separator, &self.prefix, &self.suffix);
-        let text_width = measure_text_with_fallback(&display, &font, &emoji_font, 0.0);
-        let line_height = font_size * 1.3;
-        // Counter is atomic: it does not wrap. We still constrain so the layout
-        // engine never assigns more than the parent allows; the geometry
-        // validator will detect the natural-size overflow separately.
-        constraints.constrain(text_width, line_height)
     }
 }
 

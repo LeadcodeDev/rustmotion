@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Text alignment for table columns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -252,32 +251,6 @@ impl Table {
         if has_radius {
             canvas.restore();
         }
-    }
-}
-
-impl Widget for Table {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let col_count = self.headers.len().max(1);
-        let w = col_count as f32 * 120.0;
-        let h = (1 + self.rows.len()) as f32 * self.row_height();
-
-        (w, h)
     }
 }
 

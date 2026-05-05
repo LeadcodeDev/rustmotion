@@ -6,9 +6,8 @@ use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Connector component that draws a routed line between two points.
 /// Supports straight, curved (bezier), and elbow (right-angle) routing.
@@ -193,26 +192,6 @@ impl Connector {
                 Self::draw_arrowhead(canvas, &path, false, self.arrow_size, &paint);
             }
         }
-    }
-}
-
-impl Widget for Connector {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, props);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let w = (self.to.x - self.from.x).abs().max(1.0);
-        let h = (self.to.y - self.from.y).abs().max(1.0);
-        (w, h)
     }
 }
 

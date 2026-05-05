@@ -10,9 +10,8 @@ use rustmotion_core::engine::renderer::{
     paint_from_hex,
 };
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_avatar_size() -> f32 {
     48.0
@@ -184,32 +183,6 @@ impl AvatarGroup {
         }
 
         Ok(())
-    }
-}
-
-impl Widget for AvatarGroup {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let visible = self.visible_count();
-        let overflow = self.overflow_count();
-        let total = visible + if overflow > 0 { 1 } else { 0 };
-        let step = self.size - self.overlap;
-        let w = if total == 0 {
-            0.0
-        } else {
-            (total - 1) as f32 * step + self.size
-        };
-        (w, self.size)
     }
 }
 

@@ -5,9 +5,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
 ///
@@ -107,67 +106,6 @@ impl Lottie {
 
         skia_safe::images::raster_from_data(&img_info, img_data, w as usize * 4)
             .ok_or(RustmotionError::SkiaImageCreation { target: "lottie frame".to_string() })
-    }
-}
-
-impl Widget for Lottie {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let (fr, total_frames, duration, _intrinsic_w, _intrinsic_h) = self.parse_metadata()?;
-
-        if total_frames == 0 {
-            return Ok(());
-        }
-
-        // Calculate which frame to render
-        let anim_time = ctx.time * self.speed as f64;
-        let effective_time = if self.repeat && duration > 0.0 {
-            anim_time % duration
-        } else {
-            anim_time.min(duration)
-        };
-        let frame = ((effective_time * fr) as usize).min(total_frames.saturating_sub(1));
-
-        let cache_key = self.cache_key(frame);
-        let cache = asset_cache();
-
-        let img = if let Some(cached) = cache.get(&cache_key) {
-            cached.clone()
-        } else if let Some(ref frames_dir) = self.frames_dir {
-            let img = self.load_frame_from_dir(frames_dir, frame)?;
-            cache.insert(cache_key, img.clone());
-            img
-        } else {
-            return Err(RustmotionError::LottieRender {
-                reason: "Lottie component requires 'frames_dir' pointing to pre-rendered PNG frames. \
-                         You can generate frames using: npx lottie-to-frames <lottie.json> --output <dir>".to_string(),
-            });
-        };
-
-        let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-        let paint = Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(ref size) = self.size {
-            return (size.width, size.height);
-        }
-
-        // Try to read intrinsic size from Lottie JSON
-        if let Ok((_, _, _, w, h)) = self.parse_metadata() {
-            return (w, h);
-        }
-
-        (200.0, 200.0)
     }
 }
 

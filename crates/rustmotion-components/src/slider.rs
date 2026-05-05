@@ -8,9 +8,8 @@ use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_slider_value() -> f64 {
     0.5
@@ -156,31 +155,6 @@ impl Slider {
                 canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
             );
         }
-    }
-}
-
-impl Widget for Slider {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let total_height = self.thumb_size;
-        let value_extra = if self.show_value {
-            let font_size = (self.thumb_size * 0.7).max(12.0);
-            font_size + 4.0
-        } else {
-            0.0
-        };
-        (self.width, total_height + value_extra)
     }
 }
 

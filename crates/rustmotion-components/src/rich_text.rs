@@ -6,9 +6,8 @@ use skia_safe::{Canvas, Font, FontStyle};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A single styled span within a rich_text component.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -226,49 +225,6 @@ impl RichText {
                 );
             }
         }
-    }
-}
-
-impl Widget for RichText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, props);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let default_size = self.style.font_size_or(48.0);
-        let default_family = self.style.font_family_or("Inter");
-        let default_weight = self.style.font_weight_or(FontWeight::Normal);
-        let default_font_style = self.style.font_style_or(FontStyleType::Normal);
-        let line_height_val = resolve_line_height(self.style.line_height, default_size);
-
-        let emoji_tf = emoji_typeface();
-
-        let mut total_width = 0.0f32;
-        for span in &self.spans {
-            let size = span.font_size.unwrap_or(default_size);
-            let family = span.font_family.as_deref().unwrap_or(default_family);
-            let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
-            let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
-            let letter_spacing = span.letter_spacing.unwrap_or(0.0);
-            let font = make_font(family, weight, fstyle, size);
-            let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), size));
-            total_width += measure_text_with_fallback(&span.text, &font, &emoji_font, letter_spacing);
-        }
-
-        // Simple single-line measurement (wrapping handled at render time)
-        let wrap_width = self.max_width.unwrap_or(total_width);
-        let num_lines = (total_width / wrap_width).ceil().max(1.0) as usize;
-        let h = num_lines as f32 * line_height_val;
-
-        (total_width.min(wrap_width), h)
     }
 }
 

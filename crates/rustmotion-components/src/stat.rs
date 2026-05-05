@@ -9,9 +9,8 @@ use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
     measure_text_with_fallback, paint_from_hex, parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_value_font_size() -> f32 {
     48.0
@@ -313,27 +312,6 @@ impl Stat {
             line_paint.set_stroke_join(skia_safe::paint::Join::Round);
             canvas.draw_path(&line_path, &line_paint);
         }
-    }
-}
-
-impl Widget for Stat {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (240.0, 140.0)
     }
 }
 

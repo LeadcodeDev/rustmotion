@@ -9,9 +9,8 @@ use rustmotion_core::engine::renderer::{
     color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_progress_width() -> f32 {
     300.0
@@ -80,23 +79,6 @@ impl Progress {
             ProgressVariant::Linear => self.render_linear(canvas),
             ProgressVariant::Circular => self.render_circular(canvas),
         }
-    }
-}
-
-impl Widget for Progress {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.width, self.height)
     }
 }
 

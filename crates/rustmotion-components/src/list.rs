@@ -8,9 +8,8 @@ use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_gap() -> f32 {
     16.0
@@ -242,30 +241,6 @@ impl List {
         }
 
         Ok(())
-    }
-}
-
-impl Widget for List {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.resolved_font_size();
-        let line_height = font_size * 1.3;
-        let total_h = if self.items.is_empty() {
-            0.0
-        } else {
-            self.items.len() as f32 * (line_height + self.gap) - self.gap
-        };
-        (self.width, total_h)
     }
 }
 

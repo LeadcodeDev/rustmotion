@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{build_shape_path, color4f_from_hex, draw_shape_path, font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Shape {
@@ -29,110 +28,6 @@ rustmotion_core::impl_traits!(Shape {
     Timed => timing,
     Styled => style,
 });
-
-impl Widget for Shape {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let corner_radius = self.style.border_radius;
-
-        // Fill
-        if let Some(fill) = &self.style.fill {
-            let mut paint = match fill {
-                Fill::Solid(color) => paint_from_hex(color),
-                Fill::Gradient(gradient) => {
-                    let colors: Vec<skia_safe::Color4f> = gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
-                    let stops: Option<Vec<f32>> = gradient.stops.clone();
-                    let mut paint = Paint::default();
-                    paint.set_anti_alias(true);
-
-                    let shader = match gradient.gradient_type {
-                        GradientType::Linear => {
-                            let angle = gradient.angle.unwrap_or(0.0);
-                            let rad = angle.to_radians();
-                            let cx = w / 2.0;
-                            let cy = h / 2.0;
-                            let dx = (w / 2.0) * rad.cos();
-                            let dy = (h / 2.0) * rad.sin();
-                            let start = Point::new(cx - dx, cy - dy);
-                            let end = Point::new(cx + dx, cy + dy);
-                            skia_safe::shader::Shader::linear_gradient(
-                                (start, end),
-                                skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(
-                                    &colors,
-                                    Some(skia_safe::ColorSpace::new_srgb()),
-                                ),
-                                stops.as_deref(),
-                                skia_safe::TileMode::Clamp,
-                                None,
-                                None,
-                            )
-                        }
-                        GradientType::Radial => {
-                            let center = Point::new(w / 2.0, h / 2.0);
-                            let radius = w.max(h) / 2.0;
-                            skia_safe::shader::Shader::radial_gradient(
-                                center,
-                                radius,
-                                skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(
-                                    &colors,
-                                    Some(skia_safe::ColorSpace::new_srgb()),
-                                ),
-                                stops.as_deref(),
-                                skia_safe::TileMode::Clamp,
-                                None,
-                                None,
-                            )
-                        }
-                    };
-                    if let Some(shader) = shader {
-                        paint.set_shader(shader);
-                        paint.set_dither(true);
-                    }
-                    paint
-                }
-            };
-            paint.set_style(PaintStyle::Fill);
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
-        }
-
-        // Stroke (with optional draw_progress for stroke animation)
-        if let Some(stroke) = &self.style.stroke {
-            let mut paint = paint_from_hex(&stroke.color);
-            paint.set_style(PaintStyle::Stroke);
-            let stroke_w = if props.stroke_width >= 0.0 { props.stroke_width } else { stroke.width };
-            paint.set_stroke_width(stroke_w);
-
-            // Apply draw_progress: animate stroke appearance using dash path effect
-            if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
-                if let Some(path) = build_shape_path(&self.shape, 0.0, 0.0, w, h, corner_radius) {
-                    let mut measure = skia_safe::PathMeasure::new(&path, false, None);
-                    let path_len = measure.length();
-                    if path_len > 0.0 {
-                        let draw_len = path_len * props.draw_progress.clamp(0.0, 1.0);
-                        let intervals = [draw_len, path_len - draw_len + 0.01];
-                        if let Some(dash) = skia_safe::PathEffect::dash(&intervals, 0.0) {
-                            paint.set_path_effect(dash);
-                        }
-                    }
-                }
-            }
-
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
-        }
-
-        // Text inside shape
-        if let Some(text) = &self.text {
-            render_shape_text(canvas, text, 0.0, 0.0, w, h)?;
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.size.width, self.size.height)
-    }
-}
 
 impl Painter for Shape {
     fn paint_content(

@@ -5,12 +5,11 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{
     CodeblockChrome, CodeblockHighlight, CodeblockReveal,
     CodeblockState, LayerStyle, Size,
 };
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Codeblock {
@@ -53,21 +52,6 @@ rustmotion_core::impl_traits!(Codeblock {
     Timed => timing,
     Styled => style,
 });
-
-impl Widget for Codeblock {
-    fn render(&self, _canvas: &Canvas, _layout: &LayoutNode, _ctx: &RenderContext, _props: &AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        // Codeblock rendering is handled by the engine::codeblock module in the rustmotion crate.
-        // The render pipeline in the main crate special-cases this component.
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match &self.size {
-            Some(s) => (s.width, s.height),
-            None => (400.0, 300.0),
-        }
-    }
-}
 
 impl Painter for Codeblock {
     fn paint_content(

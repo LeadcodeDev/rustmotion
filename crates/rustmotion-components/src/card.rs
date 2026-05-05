@@ -5,13 +5,8 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{layout_flex, layout_grid_with_config, Constraints, LayoutNode};
 use rustmotion_core::schema::{CardDisplay, LayerStyle};
-use rustmotion_core::traits::{
-    Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer,
-    FlexContainerMut, GridConfig, PaintCtx, Painter, RenderContext, Rounded, RoundedMut, Shadow,
-    Shadowed, ShadowedMut, TimingConfig, Widget,
-};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, GridConfig, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -108,90 +103,6 @@ impl rustmotion_core::traits::Clipped for Card {
     fn clip(&self) -> bool {
         true
     }
-}
-
-impl Widget for Card {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, props: &rustmotion_core::engine::animator::AnimatedProperties, pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        let corner_radius = self.style.border_radius_or(12.0);
-        let rect = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-        let rrect = skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius);
-
-        // 1. Shadow (skip if 3D active — render_v2 draws adaptive ground shadow instead)
-        let has_3d = props.rotate_x.abs() > 0.01 || props.rotate_y.abs() > 0.01 || props.perspective >= 0.0;
-        if !has_3d {
-        if let Some(ref shadow) = self.style.box_shadow {
-            let shadow_rect = Rect::from_xywh(
-                shadow.offset_x, shadow.offset_y,
-                layout.width, layout.height,
-            );
-            let shadow_rrect = skia_safe::RRect::new_rect_xy(
-                shadow_rect, corner_radius, corner_radius,
-            );
-            let mut shadow_paint = paint_from_hex(&shadow.color);
-            if shadow.blur > 0.0 {
-                shadow_paint.set_mask_filter(skia_safe::MaskFilter::blur(
-                    skia_safe::BlurStyle::Normal,
-                    shadow.blur / 2.0,
-                    false,
-                ));
-            }
-            canvas.draw_rrect(shadow_rrect, &shadow_paint);
-        }
-        }
-
-        // 2. Background
-        if let Some(ref bg) = self.style.background {
-            let bg_paint = paint_from_hex(bg);
-            canvas.draw_rrect(rrect, &bg_paint);
-        }
-
-        // 3. Clip to rounded rect for children (only when card has a visible background)
-        let should_clip = self.style.background.is_some();
-        if should_clip {
-            canvas.save();
-            canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
-        }
-
-        // 4. Render children with animation support (with optional stagger)
-        pipeline.render_children(canvas, &self.children as &dyn std::any::Any, layout, ctx, self.style.stagger)?;
-
-        if should_clip {
-            canvas.restore();
-        }
-
-        // 5. Border
-        if let Some(ref border) = self.style.border {
-            let mut border_paint = paint_from_hex(&border.color);
-            border_paint.set_style(PaintStyle::Stroke);
-            border_paint.set_stroke_width(border.width);
-            canvas.draw_rrect(rrect, &border_paint);
-        }
-
-        // 5b. Gradient border
-        if let Some(ref gb) = self.style.gradient_border {
-            crate::draw_gradient_border(canvas, &rrect, gb);
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        let layout = self.layout(constraints);
-        (layout.width, layout.height)
-    }
-
-    fn layout(&self, constraints: &Constraints) -> LayoutNode {
-        let c = crate::flex::resolve_size_constraints(&self.size, constraints);
-        match self.style.display_or(CardDisplay::Flex) {
-            CardDisplay::Flex => layout_flex(&self.children, &self.style, &c),
-            CardDisplay::Grid => layout_grid_for_card(self, &c),
-        }
-    }
-}
-
-fn layout_grid_for_card(card: &Card, constraints: &Constraints) -> LayoutNode {
-    let grid_config = card.grid_config_owned();
-    layout_grid_with_config(&card.children, &card.style, &grid_config, constraints)
 }
 
 impl Painter for Card {

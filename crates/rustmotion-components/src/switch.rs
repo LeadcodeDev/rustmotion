@@ -8,9 +8,8 @@ use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_switch_width() -> f32 {
     52.0
@@ -149,40 +148,6 @@ impl Switch {
                 canvas, label, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
             );
         }
-    }
-}
-
-impl Widget for Switch {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let label_width = if let Some(label) = &self.label {
-            let font_size = (self.height * 0.5).max(12.0);
-            let fm = font_mgr();
-            let font_style = skia_safe::FontStyle::normal();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .or_else(|| fm.match_family_style("Arial", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-            let font = skia_safe::Font::from_typeface(typeface, font_size);
-            let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
-            8.0 + measure_text_with_fallback(label, &font, &emoji_font, 0.0)
-        } else {
-            0.0
-        };
-        (self.width + label_width, self.height)
     }
 }
 

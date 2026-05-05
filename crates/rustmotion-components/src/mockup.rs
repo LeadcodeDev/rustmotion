@@ -7,9 +7,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -120,43 +119,6 @@ impl MockupDevice {
                 bezel_side: 0.0,
             },
         }
-    }
-}
-
-impl Widget for Mockup {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let m = self.device.metrics();
-
-        match self.device {
-            MockupDevice::Iphone | MockupDevice::Android => {
-                self.render_phone(canvas, w, h, &m)?;
-            }
-            MockupDevice::Laptop => {
-                self.render_laptop(canvas, w, h, &m)?;
-            }
-            MockupDevice::Browser => {
-                self.render_browser(canvas, w, h, &m)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let m = self.device.metrics();
-        (m.default_width, m.default_height)
     }
 }
 

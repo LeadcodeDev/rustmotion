@@ -19,9 +19,8 @@ fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign, TextAnimGranularity};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
@@ -433,85 +432,6 @@ impl Text {
         }
 
         Ok(())
-    }
-}
-
-impl Widget for Text {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, ctx.time, props)
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.style.font_size_or(48.0);
-        let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
-
-        let fm = font_mgr();
-        let slant = match font_style_type {
-            FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
-            FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
-            FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
-        };
-        let weight = match font_weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
-        };
-        let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
-        let typeface = fm
-            .match_family_style(font_family, skia_font_style)
-            .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
-            .or_else(|| fm.match_family_style("Arial", skia_font_style))
-            .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-
-        // Constraint-aware wrap: when `wrap` is not explicitly false, the
-        // effective max_width is the smaller of the user `max_width` and
-        // `constraints.max_width`. This makes the measured size always
-        // satisfy the parent's bounds.
-        let wrap_enabled = self.style.wrap.unwrap_or(true);
-        let parent_cap = if constraints.has_bounded_width() {
-            Some(constraints.max_width)
-        } else {
-            None
-        };
-        let effective_max_width = if wrap_enabled {
-            match (self.max_width, parent_cap) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            }
-        } else {
-            self.max_width
-        };
-
-        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, effective_max_width);
-        let line_height_val = resolve_line_height(self.style.line_height, font_size);
-        let mut max_w = lines.iter().map(|l| {
-            measure_text_with_fallback(l, &font, &emoji_font, 0.0)
-        }).fold(0.0f32, f32::max);
-        let mut h = lines.len() as f32 * line_height_val;
-
-        // Account for text-background padding in measurement
-        if let Some(ref bg) = self.style.text_background {
-            max_w += bg.padding * 2.0;
-            h += bg.padding;
-        }
-
-        // Final constrain — guarantees the contract that returned size <= constraints.max
-        let (max_w, h) = constraints.constrain(max_w, h);
-        (max_w, h)
     }
 }
 

@@ -6,9 +6,8 @@ use skia_safe::{Canvas, PaintStyle};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A line component that draws a line from (x1, y1) to (x2, y2).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -79,26 +78,6 @@ impl Line {
             (self.x2, self.y2),
             &paint,
         );
-    }
-}
-
-impl Widget for Line {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, props);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let w = (self.x2 - self.x1).abs();
-        let h = (self.y2 - self.y1).abs();
-        (w.max(1.0), h.max(1.0))
     }
 }
 

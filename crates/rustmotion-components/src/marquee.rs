@@ -9,9 +9,8 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_speed() -> f32 {
     100.0
@@ -132,27 +131,6 @@ impl Marquee {
 
         canvas.restore();
         Ok(())
-    }
-}
-
-impl Widget for Marquee {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time)
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let fs = self.style.font_size.unwrap_or(self.font_size);
-        (800.0, fs * 2.0)
     }
 }
 

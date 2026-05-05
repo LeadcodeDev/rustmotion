@@ -6,9 +6,8 @@ use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::parse_hex_color;
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_cell_size() -> f32 {
     14.0
@@ -162,40 +161,6 @@ impl Heatmap {
         }
 
         canvas.restore();
-    }
-}
-
-impl Widget for Heatmap {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let rows = self.data.len();
-        let cols = self.data.iter().map(|r| r.len()).max().unwrap_or(0);
-        let step = self.cell_size + self.cell_gap;
-        let w = if cols > 0 {
-            cols as f32 * step - self.cell_gap
-        } else {
-            0.0
-        };
-        let h = if rows > 0 {
-            rows as f32 * step - self.cell_gap
-        } else {
-            0.0
-        };
-        (w, h)
     }
 }
 

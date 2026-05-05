@@ -9,9 +9,8 @@ use rustmotion_core::engine::renderer::{
     emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, Size};
-use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_colors() -> Vec<String> {
     vec!["#3B82F6".to_string(), "#8B5CF6".to_string()]
@@ -158,34 +157,6 @@ impl GradientText {
                 canvas.draw_text_blob(&blob, Point::new(0.0, y), &paint);
             }
         }
-    }
-}
-
-impl Widget for GradientText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        self.paint(canvas, ctx.time);
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let (font, emoji_font) = self.resolve_font();
-        let font_size = self.style.font_size_or(48.0);
-
-        let text_w = measure_text_with_fallback(&self.content, &font, &emoji_font, 0.0);
-        let line_height = font_size * 1.3;
-
-        (text_w, line_height)
     }
 }
 
