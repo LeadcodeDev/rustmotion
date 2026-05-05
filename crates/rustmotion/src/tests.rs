@@ -400,6 +400,54 @@ mod component_smoke {
     }
 
     #[test]
+    fn pipelines_agree_on_flex_card_lit_count() {
+        // A flex card with two text children — exercises taffy vs the
+        // legacy flex.rs engine. We can't expect pixel-perfect parity
+        // (the two layout engines disagree on rounding and intrinsic
+        // sizing), but the total number of lit pixels should be in the
+        // same ballpark. If taffy returned a degenerate layout (zero
+        // size, NaN, etc.) the new pipeline would render very few
+        // pixels relative to legacy, and this assertion would catch it.
+        let json = serde_json::json!({
+            "type": "card",
+            "style": {
+                "padding": 16,
+                "background": "#222244",
+                "card_direction": "column",
+                "gap": 8
+            },
+            "children": [
+                { "type": "text", "content": "Title", "style": { "color": "#ffffff", "font-size": 32 } },
+                { "type": "text", "content": "Body",  "style": { "color": "#aaaaaa", "font-size": 18 } }
+            ]
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 40.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let legacy = render_legacy(&scene, 500, 300);
+        let new = render_new(&scene, 500, 300);
+        let legacy_lit = nonzero_pixels(&legacy);
+        let new_lit = nonzero_pixels(&new);
+        assert!(legacy_lit > 1000, "legacy card too small: {legacy_lit}");
+        assert!(new_lit > 1000, "new card too small: {new_lit}");
+        let ratio = new_lit as f64 / legacy_lit as f64;
+        // Flex layout differences are expected. Generous band: 0.5..2.0.
+        // The point is "both pipelines drew a recognisable card", not
+        // pixel-perfect equality.
+        assert!(
+            (0.5..2.0).contains(&ratio),
+            "flex card lit-pixel ratio diverged: legacy={legacy_lit} new={new_lit} ratio={ratio}"
+        );
+    }
+
+    #[test]
     fn pipelines_agree_on_simple_shape() {
         // For a single absolutely-positioned solid shape, both pipelines
         // should agree closely: there's no flex layout, no font shaping,
