@@ -251,6 +251,24 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::Px(h)));
             }
         }
+        Cursor(cur) => {
+            // Fixed-size pointer; legacy measure returns (width, height).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(cur.width)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(cur.height)));
+            }
+        }
+        Particle(_) => {
+            // Particles fill their parent (legacy returned the max constraints).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::String("100%".into())));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::String("100%".into())));
+            }
+        }
         _ => {}
     }
 }
