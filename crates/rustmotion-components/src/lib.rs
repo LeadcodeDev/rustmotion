@@ -1,4 +1,5 @@
 pub mod box_builder;
+pub mod intrinsic;
 pub mod legacy_dispatch;
 
 pub mod arrow;

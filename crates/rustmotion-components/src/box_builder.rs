@@ -110,13 +110,27 @@ fn build_child<'a>(
     }
 
     let children_boxes = container_children(&child.component, components, next_id);
+    let intrinsic = component_intrinsic(&child.component);
 
     BoxNode {
         id,
         kind: BoxKind::Component(Arc::new(id)),
         css,
         children: children_boxes,
-        intrinsic: None,
+        intrinsic,
+    }
+}
+
+/// Build an [`IntrinsicMeasure`] for components whose box size depends on
+/// their content (text, codeblock, terminal, etc.). Returns `None` for
+/// components with explicit dimensions or pure containers.
+fn component_intrinsic(
+    component: &Component,
+) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
+    use Component::*;
+    match component {
+        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
+        _ => None,
     }
 }
 
@@ -452,6 +466,81 @@ mod tests {
         let l = layout.get(id).expect("divider laid out");
         assert_eq!(l.height, 4.0);
         assert_eq!(l.width, 800.0);
+    }
+
+    #[test]
+    fn text_child_in_flex_card_gets_cosmic_intrinsic_size() {
+        // A flex column card with no fixed size — its children's intrinsic
+        // sizes should determine the card's width/height. The text child
+        // must be measured via cosmic-text, not collapse to 0×0.
+        use crate::card::Card;
+        use crate::text::Text;
+
+        let text = ChildComponent {
+            component: Component::Text(Text {
+                content: "Hello World".into(),
+                max_width: None,
+                timing: Default::default(),
+                style: LayerStyle {
+                    font_size: Some(40.0),
+                    ..Default::default()
+                },
+            }),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+
+        let card = ChildComponent {
+            component: Component::Card(Card {
+                children: vec![text],
+                size: None,
+                timing: Default::default(),
+                style: LayerStyle {
+                    display: Some(rustmotion_core::schema::style::CardDisplay::Flex),
+                    flex_direction: Some(
+                        rustmotion_core::schema::style::CardDirection::Column,
+                    ),
+                    padding: Some(Spacing::Uniform(20.0)),
+                    ..Default::default()
+                },
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+
+        let scene = vec![card];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+
+        let card_id = built.root.children[0].id;
+        let text_id = built.root.children[0].children[0].id;
+        let text_layout = layout.get(text_id).expect("text laid out");
+
+        assert!(
+            text_layout.width > 0.0,
+            "text width should be > 0, got {}",
+            text_layout.width
+        );
+        assert!(
+            text_layout.height >= 40.0,
+            "text height should be at least one line tall, got {}",
+            text_layout.height
+        );
+
+        // Card height should hug the text + 2×padding(20) = ~text_h + 40.
+        let card_layout = layout.get(card_id).expect("card laid out");
+        assert!(
+            card_layout.height >= text_layout.height + 40.0 - 1.0,
+            "card height ({}) should fit text + padding ({}+40)",
+            card_layout.height,
+            text_layout.height,
+        );
     }
 
     #[test]
