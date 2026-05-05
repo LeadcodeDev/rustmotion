@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_switch_width() -> f32 {
     52.0
@@ -66,17 +68,17 @@ impl Switch {
         1.0 - (1.0 - t).powi(3)
     }
 
-    fn current_state(&self, ctx: &RenderContext) -> f64 {
+    fn current_state_at(&self, time: f64) -> f64 {
         let target = match self.toggle_at {
-            Some(toggle_time) if ctx.time >= toggle_time => !self.value,
+            Some(toggle_time) if time >= toggle_time => !self.value,
             _ => self.value,
         };
 
         let target_val = if target { 1.0 } else { 0.0 };
 
         match self.toggle_at {
-            Some(toggle_time) if ctx.time >= toggle_time => {
-                let elapsed = ctx.time - toggle_time;
+            Some(toggle_time) if time >= toggle_time => {
+                let elapsed = time - toggle_time;
                 let progress = (elapsed / self.transition_duration).clamp(0.0, 1.0);
                 let eased = Self::ease_out_cubic(progress);
                 let start_val = if self.value { 1.0 } else { 0.0 };
@@ -87,19 +89,12 @@ impl Switch {
     }
 }
 
-impl Widget for Switch {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Switch {
+    fn paint(&self, canvas: &Canvas, time: f64) {
         let w = self.width;
         let h = self.height;
         let radius = h / 2.0;
-        let state = self.current_state(ctx) as f32;
+        let state = self.current_state_at(time) as f32;
 
         // Interpolate track color
         let track_color = if state > 0.5 {
@@ -154,7 +149,19 @@ impl Widget for Switch {
                 canvas, label, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
             );
         }
+    }
+}
 
+impl Widget for Switch {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        _layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, ctx.time);
         Ok(())
     }
 
@@ -176,5 +183,17 @@ impl Widget for Switch {
             0.0
         };
         (self.width + label_width, self.height)
+    }
+}
+
+impl Painter for Switch {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

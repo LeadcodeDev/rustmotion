@@ -431,6 +431,8 @@ impl Component {
             Component::TagCloud(c) => Some(c),
             Component::GradientText(c) => Some(c),
             Component::RichText(c) => Some(c),
+            Component::Switch(c) => Some(c),
+            Component::Slider(c) => Some(c),
             _ => None,
         }
     }
