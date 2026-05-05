@@ -74,7 +74,8 @@ These are **hard minimums**. Below these values, cards visually merge and conten
   "type": "icon",
   "icon": "lucide:rocket",
   "size": { "width": 180, "height": 180 },
-  "style": { "color": "#6366F1", "animation": [{ "name": "scale_in", "duration": 0.6 }] }
+  "animation": [{ "name": "scale_in", "duration": 0.6 }],
+  "style": { "color": "#6366F1" }
 }
 ```
 180px ÷ 3 = 60px CSS → prominent, visible, impactful. ✓

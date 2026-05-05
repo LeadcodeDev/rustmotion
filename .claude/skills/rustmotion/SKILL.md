@@ -190,6 +190,8 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/icon-sizing-hierarchy.md](rules/icon-sizing-hierarchy.md) - Icon sizing (hero/card/inline roles), card spacing minimums, row layout by device
 - [rules/depth-layering.md](rules/depth-layering.md) - **NEW:** Visual depth — 3 planes (bg/mid/fg), z-index, blur, shadow hierarchy, scale gradient, 3D tilt
 - [rules/dynamic-depth.md](rules/dynamic-depth.md) - **NEW:** Multi-element parallax — wiggle seeds, float_3d preset, camera zoom, orbit phases, frequency hierarchy
+- [rules/component-field-placement.md](rules/component-field-placement.md) - **CRITICAL:** Field placement (root vs style) — `animation`, `fill`, `stroke` at root; `box-shadow` as array; silently-dropped component pitfalls
+- [rules/badge-video-sizing.md](rules/badge-video-sizing.md) - Badge sizing for video resolution — `badge_size` sm/md/lg is too small at 1080px; use `style.font-size` to override (40px recommended for 1080×1920)
 
 ### Architecture (pour contribuer au code)
 

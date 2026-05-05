@@ -8,15 +8,15 @@ Use the `timeline` field on a component's style to define sequential animation p
 
 Timeline steps allow multi-phase animations without requiring separate scenes. Each step has an `at` time (in seconds) and an `animation` array. When the scene time reaches `step.at`, the step's animations activate with time resolved relative to `step.at`.
 
-**Merging behavior:** Base `style.animation` effects play from the start. Timeline step effects are merged additively when they activate. Multiple steps can overlap.
+**Merging behavior:** Base `animation` effects (root-level) play from the start. Timeline step effects are merged additively when they activate. Multiple steps can overlap.
 
 ## GOOD
 
 ```json
 {
   "type": "card",
+  "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
   "style": {
-    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
     "timeline": [
       {
         "at": 2.0,
@@ -47,7 +47,7 @@ This creates: fade in (0-0.6s) → shake (2.0-2.5s) → fade out (4.0-4.8s).
   }
 }
 ```
-Don't use timeline for initial entrance — use `style.animation` directly. Timeline is for subsequent phases.
+Don't use timeline for initial entrance — use `animation` directly at the root level. Timeline is for subsequent phases.
 
 ## Tips
 
