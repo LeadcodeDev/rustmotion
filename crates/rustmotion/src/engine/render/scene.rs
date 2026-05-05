@@ -3,7 +3,6 @@ use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
-use super::render_component;
 use crate::components::ChildComponent;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
@@ -229,11 +228,6 @@ pub fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
     style
 }
 
-/// Returns true when the new CSS-engine pipeline should be used instead of
-/// the legacy Widget tree. On by default — set `RUSTMOTION_LEGACY_PIPELINE=1`
-/// to opt back into the old Flutter-style engine for the duration of the
-/// migration. The legacy escape hatch is temporary: once all 51 components
-/// are migrated to `Painter`, the switch and the legacy code paths go away.
 /// Render `root_children` through the CSS-engine pipeline:
 /// build a `BoxNode` tree, run taffy to lay it out, then paint via
 /// `paint_tree` with the `LegacyPaintDispatcher` bridging to component
@@ -296,6 +290,62 @@ fn render_with_new_pipeline_iter<'a, I>(
         scene_duration: ctx.scene_duration,
     };
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+}
+
+/// Paint a decorative leaf (e.g. Particle) over the full viewport without
+/// going through taffy. Resolves animations and dispatches to
+/// `Painter::paint_content` directly with a viewport-sized `BoxLayout`.
+fn paint_decorative_fullscreen(
+    canvas: &Canvas,
+    child: &ChildComponent,
+    viewport_w: f32,
+    viewport_h: f32,
+    ctx: &RenderContext,
+) {
+    use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
+    use rustmotion_core::engine::layout_pass::BoxLayout;
+    use rustmotion_core::traits::PaintCtx;
+
+    if let Some(timed) = child.component.as_timed() {
+        let (start_at, end_at) = timed.timing();
+        if let Some(s) = start_at { if ctx.time < s { return; } }
+        if let Some(e) = end_at { if ctx.time > e { return; } }
+    }
+
+    let props = match child.component.as_animatable() {
+        Some(a) => {
+            let effects = a.animation_effects();
+            if effects.is_empty() {
+                AnimatedProperties::default()
+            } else {
+                resolve_props_for_effects(effects, ctx.time, ctx.scene_duration)
+            }
+        }
+        None => AnimatedProperties::default(),
+    };
+    if props.opacity <= 0.0 { return; }
+
+    let Some(painter) = child.component.as_painter() else { return; };
+
+    let local = BoxLayout {
+        x: 0.0,
+        y: 0.0,
+        width: viewport_w,
+        height: viewport_h,
+        ..Default::default()
+    };
+    let paint_ctx = PaintCtx {
+        time: ctx.time,
+        scene_duration: ctx.scene_duration,
+        frame_index: ctx.frame_index,
+        fps: ctx.fps,
+        video_width: ctx.video_width,
+        video_height: ctx.video_height,
+        stagger_offset: 0.0,
+    };
+    canvas.save();
+    painter.paint_content(canvas, &local, &props, &paint_ctx);
+    canvas.restore();
 }
 
 /// Compute the layout tree for a set of root-level ChildComponents.
@@ -575,15 +625,13 @@ pub fn render_world_frame_scaled(
         let scene_children = deserialize_children(scene);
         let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
-        // Decorative (particles) get the full viewport via the legacy
-        // render_component path; flex-flow children go through the new
-        // pipeline so world scenes stay in sync with slide views.
+        // Decorative children (particles) get a full-viewport BoxLayout and
+        // paint directly via Painter::paint_content. Flex-flow children go
+        // through the new pipeline so world scenes stay in sync with slide
+        // views.
         let _ = layout;
         for child in scene_children.iter().filter(|c| c.is_decorative()) {
-            let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
-            canvas.save();
-            render_component(canvas, child, &deco_layout, &ctx)?;
-            canvas.restore();
+            paint_decorative_fullscreen(canvas, child, vw, vh, &ctx);
         }
         render_with_new_pipeline_iter(
             canvas,
