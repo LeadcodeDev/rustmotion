@@ -692,7 +692,18 @@ pub fn render_scene_fg_scaled(
         ClipOp::Intersect,
         true,
     );
-    render_children(canvas, &children, &layout, &ctx)?;
+    if new_pipeline_enabled() {
+        render_with_new_pipeline(
+            canvas,
+            &children,
+            config.width as f32,
+            config.height as f32,
+            scene.layout.as_ref(),
+            &ctx,
+        );
+    } else {
+        render_children(canvas, &children, &layout, &ctx)?;
+    }
     canvas.restore();
 
     if has_camera { canvas.restore(); }
