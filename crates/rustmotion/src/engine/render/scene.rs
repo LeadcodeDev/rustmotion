@@ -236,12 +236,15 @@ pub fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
 }
 
 /// Returns true when the new CSS-engine pipeline should be used instead of
-/// the legacy Widget tree. Controlled by the `RUSTMOTION_NEW_PIPELINE` env
-/// var (set to `1` to enable). Off by default.
+/// the legacy Widget tree. On by default — set `RUSTMOTION_LEGACY_PIPELINE=1`
+/// to opt back into the old Flutter-style engine for the duration of the
+/// migration. The legacy escape hatch is temporary: once all 51 components
+/// are migrated to `Painter`, the switch and the legacy code paths go away.
 fn new_pipeline_enabled() -> bool {
-    std::env::var("RUSTMOTION_NEW_PIPELINE")
+    let legacy_opt_out = std::env::var("RUSTMOTION_LEGACY_PIPELINE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    !legacy_opt_out
 }
 
 /// Render `root_children` through the new pipeline:
