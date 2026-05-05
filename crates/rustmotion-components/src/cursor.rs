@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 /// A cursor waypoint with position and time.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -272,5 +274,78 @@ impl Widget for Cursor {
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         (self.width, self.height)
+    }
+}
+
+impl Painter for Cursor {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let click_times = self.click_times();
+
+        let in_click = click_times.iter().any(|&t| {
+            let dt = ctx.time - t;
+            dt >= 0.0 && dt < self.click_duration as f64
+        });
+
+        if self.blink > 0.0 && !in_click {
+            let cycle = (ctx.time as f32 % (self.blink * 2.0)) / self.blink;
+            if cycle >= 1.0 {
+                return;
+            }
+        }
+
+        let (path_dx, path_dy) = if !self.auto_path.is_empty() {
+            self.auto_path_offset(ctx.time)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let click_scale = if in_click {
+            let closest_click = click_times.iter()
+                .filter(|&&t| ctx.time >= t && ctx.time < t + self.click_duration as f64)
+                .copied()
+                .last()
+                .unwrap_or(0.0);
+            let progress = ((ctx.time - closest_click) / self.click_duration as f64) as f32;
+            if progress < 0.3 {
+                1.0 + 0.5 * (progress / 0.3)
+            } else {
+                1.5 - 0.5 * ((progress - 0.3) / 0.7)
+            }
+        } else {
+            1.0
+        };
+
+        if path_dx.abs() > 0.001 || path_dy.abs() > 0.001 {
+            canvas.save();
+            canvas.translate((path_dx, path_dy));
+        }
+
+        if (click_scale - 1.0).abs() > 0.001 {
+            let cx = self.width / 2.0;
+            let cy = self.height / 2.0;
+            canvas.save();
+            canvas.translate((cx, cy));
+            canvas.scale((click_scale, click_scale));
+            canvas.translate((-cx, -cy));
+        }
+
+        let paint = paint_from_hex(&self.color);
+        let rect = skia_safe::Rect::from_xywh(0.0, 0.0, self.width, self.height);
+        let rrect = skia_safe::RRect::new_rect_xy(rect, self.radius, self.radius);
+        canvas.draw_rrect(rrect, &paint);
+
+        if (click_scale - 1.0).abs() > 0.001 {
+            canvas.restore();
+        }
+
+        if path_dx.abs() > 0.001 || path_dy.abs() > 0.001 {
+            canvas.restore();
+        }
     }
 }

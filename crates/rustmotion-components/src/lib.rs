@@ -419,6 +419,9 @@ impl Component {
             Component::Gif(c) => Some(c),
             Component::Video(c) => Some(c),
             Component::Lottie(c) => Some(c),
+            Component::Cursor(c) => Some(c),
+            Component::Particle(c) => Some(c),
+            Component::Mockup(c) => Some(c),
             _ => None,
         }
     }
