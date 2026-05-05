@@ -356,6 +356,20 @@ mod component_smoke {
         buf.chunks_exact(4).filter(|p| p[3] > 0).count()
     }
 
+    /// Mean absolute per-channel difference between two RGBA buffers,
+    /// returned as a fraction in [0.0, 1.0]. Channels with both buffers
+    /// fully transparent contribute 0.
+    fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
+        assert_eq!(a.len(), b.len(), "buffer length mismatch");
+        if a.is_empty() {
+            return 0.0;
+        }
+        let total: u64 = a.iter().zip(b.iter())
+            .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
+            .sum();
+        total as f64 / (a.len() as f64 * 255.0)
+    }
+
     #[test]
     fn new_pipeline_produces_pixels_for_text_in_card() {
         // The new pipeline should render at least *something* when given a
@@ -383,6 +397,37 @@ mod component_smoke {
         let new_buf = render_new(&scene, 400, 300);
         let lit = nonzero_pixels(&new_buf);
         assert!(lit > 100, "new pipeline produced too few non-zero pixels: {lit}");
+    }
+
+    #[test]
+    fn pipelines_agree_on_simple_shape() {
+        // For a single absolutely-positioned solid shape, both pipelines
+        // should agree closely: there's no flex layout, no font shaping,
+        // just a coloured rectangle. Tolerance is generous (~5% mean
+        // diff) to absorb antialiasing differences at edges, but a
+        // pipeline regression that wholly misplaces or recolours the
+        // shape will exceed it.
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "size": { "width": 100, "height": 80 },
+            "fill": "#ff3366"
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let legacy = render_legacy(&scene, 400, 300);
+        let new = render_new(&scene, 400, 300);
+        let diff = mean_abs_diff(&legacy, &new);
+        assert!(diff < 0.05, "shape diff too large: {diff} (legacy lit={}, new lit={})",
+            nonzero_pixels(&legacy), nonzero_pixels(&new));
     }
 
     #[test]
