@@ -459,6 +459,15 @@ mod component_smoke {
         let new_lit = nonzero_pixels(&new_buf);
         assert!(legacy_lit > 50, "legacy pipeline empty: {legacy_lit}");
         assert!(new_lit > 50, "new pipeline empty: {new_lit}");
+        // Text shaping is identical (both pipelines call into the legacy
+        // text painter via Widget::render); only the surrounding layout
+        // box differs. Lit-pixel counts should be within 10% of each
+        // other if both engines positioned the glyph run consistently.
+        let ratio = new_lit as f64 / legacy_lit as f64;
+        assert!(
+            ratio > 0.85 && ratio < 1.15,
+            "text lit-pixel ratio out of band: legacy={legacy_lit} new={new_lit} ratio={ratio}"
+        );
     }
 
     #[test]
