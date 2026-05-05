@@ -81,8 +81,12 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             stagger_offset: 0.0,
         };
 
-        // Resolve animations (presets + keyframes + wiggles + orbits + char anim)
-        // for this leaf at the current frame time.
+        // Resolve animations for this leaf. Outer transforms (translate /
+        // scale / rotate / opacity / blur) are applied by `paint_pass` via
+        // the CSS overrides injected at box-tree build time, so we no longer
+        // wrap the canvas here. We still resolve `props` because Widget
+        // implementations read internal-only fields like `draw_progress`,
+        // `stroke_width`, `visible_chars*`, and `char_animation`.
         let props = match child.component.as_animatable() {
             Some(a) => {
                 let effects = a.animation_effects();
@@ -102,38 +106,6 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         canvas.save();
         canvas.translate((layout.x, layout.y));
 
-        // Apply animation transforms around the box centre so scale/rotation
-        // pivot from the middle (matches CSS `transform-origin: 50% 50%`).
-        let cx = layout.width / 2.0;
-        let cy = layout.height / 2.0;
-        canvas.translate((cx, cy));
-        if props.translate_x != 0.0 || props.translate_y != 0.0 {
-            canvas.translate((props.translate_x, props.translate_y));
-        }
-        if (props.scale_x - 1.0).abs() > 1e-4 || (props.scale_y - 1.0).abs() > 1e-4 {
-            canvas.scale((props.scale_x, props.scale_y));
-        }
-        if props.rotation.abs() > 1e-3 {
-            canvas.rotate(props.rotation, None);
-        }
-        canvas.translate((-cx, -cy));
-
-        // Open an alpha layer if the leaf is partially transparent.
-        if props.opacity < 0.999 {
-            let mut layer_paint = skia_safe::Paint::default();
-            layer_paint.set_alpha_f(props.opacity);
-            let bounds = skia_safe::Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-            canvas.save_layer(
-                &skia_safe::canvas::SaveLayerRec::default()
-                    .bounds(&bounds)
-                    .paint(&layer_paint),
-            );
-        }
-
-        // Prefer Painter when the component has been migrated. Both
-        // paths receive the same already-translated/transformed canvas
-        // and the same logical box. Painter takes BoxLayout + PaintCtx;
-        // Widget takes the legacy LayoutNode + RenderContext + props.
         if let Some(painter) = child.component.as_painter() {
             let paint_ctx = PaintCtx {
                 time: frame.time,
@@ -159,9 +131,6 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
                 .render(canvas, &node, &render_ctx, &props, &pipeline);
         }
 
-        if props.opacity < 0.999 {
-            canvas.restore();
-        }
         canvas.restore();
     }
 }
@@ -424,7 +393,14 @@ mod tests {
 
         let sample_red_at = |time: f64| -> u8 {
             let scene = make_scene();
-            let built = build_scene(&scene, (200.0, 200.0));
+            // Build the box tree with an animation context so the FadeIn
+            // preset is resolved into CSS overrides (transform/opacity) on
+            // each box. paint_pass then applies those during painting.
+            let built = crate::box_builder::build_scene_with_anim(
+                &scene,
+                (200.0, 200.0),
+                crate::box_builder::BuildAnimationCtx { time, scene_duration: 1.0 },
+            );
             let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
             let mut surface =
                 skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");

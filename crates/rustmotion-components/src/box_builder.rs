@@ -17,13 +17,23 @@
 use std::sync::Arc;
 
 use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
-use rustmotion_core::css::{layer_to_css, Length as CLength, LengthPercentage as CLP};
+use rustmotion_core::css::{apply_animated_props, layer_to_css, Length as CLength, LengthPercentage as CLP};
+use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use rustmotion_core::schema::SizeDimension;
 
 use crate::divider::DividerDirection;
 use crate::flex::FlexSize;
 use crate::{ChildComponent, Component};
+
+/// Frame-level context passed into the builder so animations can be resolved
+/// per-node and merged into the resulting `CssStyle`. When `None`, the box
+/// tree is built without any animation overrides (resting state).
+#[derive(Debug, Clone, Copy)]
+pub struct BuildAnimationCtx {
+    pub time: f64,
+    pub scene_duration: f64,
+}
 
 /// Padding allowance to keep arrow/connector heads inside the box.
 const ARROW_BBOX_PADDING: f32 = 16.0;
@@ -57,7 +67,29 @@ pub fn build_scene_with_root<'a>(
     viewport: (f32, f32),
     root_css: CssStyle,
 ) -> BuiltScene<'a> {
-    build_scene_from_refs(children.iter(), viewport, root_css)
+    build_scene_from_refs(children.iter(), viewport, root_css, None)
+}
+
+/// Like [`build_scene_with_root`] but resolves animations at `time` (seconds)
+/// for each node and merges the result into its `CssStyle`. Use this when
+/// rendering an animated frame.
+pub fn build_scene_at_time<'a>(
+    children: &'a [ChildComponent],
+    viewport: (f32, f32),
+    root_css: CssStyle,
+    anim: BuildAnimationCtx,
+) -> BuiltScene<'a> {
+    build_scene_from_refs(children.iter(), viewport, root_css, Some(anim))
+}
+
+/// Like [`build_scene`] but with an animation context. Convenience wrapper
+/// that uses the default root CSS (full-viewport flex column).
+pub fn build_scene_with_anim<'a>(
+    children: &'a [ChildComponent],
+    viewport: (f32, f32),
+    anim: BuildAnimationCtx,
+) -> BuiltScene<'a> {
+    build_scene_from_refs(children.iter(), viewport, default_root_css(viewport), Some(anim))
 }
 
 /// Same as [`build_scene_with_root`] but accepts an iterator over
@@ -67,6 +99,7 @@ pub fn build_scene_from_refs<'a, I>(
     children: I,
     viewport: (f32, f32),
     mut root_css: CssStyle,
+    anim: Option<BuildAnimationCtx>,
 ) -> BuiltScene<'a>
 where
     I: IntoIterator<Item = &'a ChildComponent>,
@@ -76,7 +109,7 @@ where
 
     let mut child_boxes = Vec::new();
     for c in children {
-        child_boxes.push(build_child(c, &mut components, &mut next_id));
+        child_boxes.push(build_child(c, &mut components, &mut next_id, anim));
     }
 
     // Force the root to viewport dimensions even if the caller didn't set them.
@@ -109,6 +142,7 @@ fn build_child<'a>(
     child: &'a ChildComponent,
     components: &mut Vec<Option<&'a ChildComponent>>,
     next_id: &mut NodeId,
+    anim: Option<BuildAnimationCtx>,
 ) -> BoxNode {
     let id = *next_id;
     *next_id += 1;
@@ -126,7 +160,23 @@ fn build_child<'a>(
         css.z_index = Some(z);
     }
 
-    let children_boxes = container_children(&child.component, components, next_id);
+    // Resolve animations and apply transform/opacity/filter overrides on the
+    // box's CSS. Only paint-time properties (transform, opacity, filter,
+    // perspective) flow into CSS — internal animations like draw_progress or
+    // char_animation remain on the `AnimatedProperties` legacy path.
+    if let Some(actx) = anim {
+        if let Some(animatable) = child.component.as_animatable() {
+            let effects = animatable.animation_effects();
+            if !effects.is_empty() {
+                let props = resolve_props_for_effects(effects, actx.time, actx.scene_duration);
+                if props_has_paint_overrides(&props) {
+                    apply_animated_props(&mut css, &props);
+                }
+            }
+        }
+    }
+
+    let children_boxes = container_children(&child.component, components, next_id, anim);
     let intrinsic = component_intrinsic(&child.component);
 
     BoxNode {
@@ -136,6 +186,23 @@ fn build_child<'a>(
         children: children_boxes,
         intrinsic,
     }
+}
+
+/// Quick gate: does this resolved `AnimatedProperties` carry any property
+/// that we know how to translate to CSS? Avoids allocating a transform Vec
+/// when there's nothing to apply.
+fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
+    p.translate_x != 0.0
+        || p.translate_y != 0.0
+        || (p.scale_x - 1.0).abs() > 1e-4
+        || (p.scale_y - 1.0).abs() > 1e-4
+        || p.rotation.abs() > 1e-3
+        || p.rotate_x.abs() > 1e-3
+        || p.rotate_y.abs() > 1e-3
+        || (p.opacity - 1.0).abs() > 1e-4
+        || p.blur > 0.0
+        || (p.glow_radius > 0.0 && p.glow_intensity > 0.0)
+        || p.perspective > 0.0
 }
 
 /// Build an [`IntrinsicMeasure`] for components whose box size depends on
@@ -164,6 +231,7 @@ fn container_children<'a>(
     component: &'a Component,
     components: &mut Vec<Option<&'a ChildComponent>>,
     next_id: &mut NodeId,
+    anim: Option<BuildAnimationCtx>,
 ) -> Vec<BoxNode> {
     let children: &[ChildComponent] = match component {
         Component::Card(c) => &c.children,
@@ -175,7 +243,7 @@ fn container_children<'a>(
     };
     children
         .iter()
-        .map(|c| build_child(c, components, next_id))
+        .map(|c| build_child(c, components, next_id, anim))
         .collect()
 }
 

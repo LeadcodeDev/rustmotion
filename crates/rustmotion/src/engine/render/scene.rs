@@ -278,7 +278,7 @@ fn render_with_new_pipeline_iter<'a, I>(
 ) where
     I: IntoIterator<Item = &'a ChildComponent>,
 {
-    use rustmotion_components::box_builder::build_scene_from_refs;
+    use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
     use rustmotion_core::css::layer_to_css;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
@@ -290,7 +290,11 @@ fn render_with_new_pipeline_iter<'a, I>(
     let root_layer = root_style(scene_layout);
     let root_css = layer_to_css(&root_layer);
 
-    let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css);
+    let anim = Some(BuildAnimationCtx {
+        time: ctx.time,
+        scene_duration: ctx.scene_duration,
+    });
+    let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css, anim);
     let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
     let dispatcher = LegacyPaintDispatcher::new(&built.components);
     let frame = PaintFrame {

@@ -9,12 +9,14 @@
 //!
 //! Layout is computed by [`taffy`]; paint is done by Skia in `engine::paint_pass`.
 
+pub mod animation;
 pub mod style;
 pub mod units;
 pub mod cascade;
 pub mod taffy_bridge;
 pub mod legacy;
 
+pub use animation::apply_animated_props;
 pub use style::CssStyle;
 pub use units::{Length, LengthContext, LengthPercentage};
 pub use legacy::layer_to_css;
