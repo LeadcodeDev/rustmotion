@@ -360,6 +360,21 @@ fn component_size(c: &Component) -> Option<(SizeDimension, SizeDimension)> {
         Switch(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
         Slider(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
         Avatar(c) => Some((SizeDimension::Fixed(c.size), SizeDimension::Fixed(c.size))),
+        // Vague 5 — specialized: every one carries Option<Size> except chart-mod
+        // (size: Option<Size>), gauge (size: Option<Size>), progress (separate
+        // width/height), and counter (no explicit size — depends on font).
+        Codeblock(c) => c.size.as_ref().map(size_pair),
+        Terminal(c) => c.size.as_ref().map(size_pair),
+        Chart(c) => c.size.as_ref().map(size_pair),
+        Gauge(c) => c.size.as_ref().map(size_pair),
+        Sparkline(c) => c.size.as_ref().map(size_pair),
+        Stat(c) => c.size.as_ref().map(size_pair),
+        Heatmap(c) => c.size.as_ref().map(size_pair),
+        Treemap(c) => c.size.as_ref().map(size_pair),
+        DotMap(c) => c.size.as_ref().map(size_pair),
+        Table(c) => c.size.as_ref().map(size_pair),
+        Countdown(c) => c.size.as_ref().map(size_pair),
+        Progress(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
         _ => None,
     }
 }
