@@ -9,6 +9,9 @@ use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::text::cosmic::{measure_text, TextStyle};
 use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle};
 
+use crate::caption::Caption;
+use crate::gradient_text::GradientText;
+use crate::kbd::Kbd;
 use crate::text::Text;
 
 /// Cosmic-text–backed intrinsic measurer for [`Text`].
@@ -97,6 +100,104 @@ fn weight_to_u16(w: Option<&FontWeight>) -> u16 {
         Some(FontWeight::Normal) | None => 400,
         Some(FontWeight::Bold) => 700,
         Some(FontWeight::Weight(n)) => (*n).clamp(1, 1000) as u16,
+    }
+}
+
+/// Cosmic-text–backed intrinsic measurer for [`GradientText`] — same content
+/// model as [`Text`] (a single string + style); the gradient is purely a
+/// paint-time concern and doesn't change box dimensions.
+pub struct GradientTextIntrinsic(TextIntrinsic);
+
+impl GradientTextIntrinsic {
+    pub fn from_gradient_text(t: &GradientText) -> Self {
+        let max_width = t.size.as_ref().map(|s| s.width);
+        Self(TextIntrinsic::from_parts(&t.content, &t.style, max_width))
+    }
+}
+
+impl IntrinsicMeasure for GradientTextIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        self.0.measure(known, available)
+    }
+}
+
+/// Intrinsic measurer for [`Caption`]. Concatenates the words with single
+/// spaces and measures the result like a regular text run.
+pub struct CaptionIntrinsic(TextIntrinsic);
+
+impl CaptionIntrinsic {
+    pub fn from_caption(c: &Caption) -> Self {
+        let joined = c
+            .words
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self(TextIntrinsic::from_parts(&joined, &c.style, c.max_width))
+    }
+}
+
+impl IntrinsicMeasure for CaptionIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        self.0.measure(known, available)
+    }
+}
+
+/// Intrinsic measurer for [`Kbd`] — measures the key text plus the legacy
+/// keyboard-cap padding (h ≈ font_size × 0.7, v ≈ font_size × 0.4) and
+/// enforces a min-width of `font_size × 1.8`.
+pub struct KbdIntrinsic {
+    text: TextIntrinsic,
+    h_padding: f32,
+    v_padding: f32,
+    min_width: f32,
+}
+
+impl KbdIntrinsic {
+    pub fn from_kbd(k: &Kbd) -> Self {
+        let fs = k.style.font_size.unwrap_or(k.font_size);
+        let synthetic_style = LayerStyle {
+            font_size: Some(fs),
+            font_family: Some(
+                k.style
+                    .font_family
+                    .clone()
+                    .unwrap_or_else(|| "SF Mono".to_string()),
+            ),
+            font_weight: k.style.font_weight.clone(),
+            font_style: k.style.font_style.clone(),
+            letter_spacing: k.style.letter_spacing,
+            line_height: k.style.line_height,
+            wrap: Some(false),
+            ..LayerStyle::default()
+        };
+        Self {
+            text: TextIntrinsic::from_parts(&k.key, &synthetic_style, None),
+            h_padding: fs * 0.7,
+            v_padding: fs * 0.4,
+            min_width: fs * 1.8,
+        }
+    }
+}
+
+impl IntrinsicMeasure for KbdIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let (tw, th) = self.text.measure(known, available);
+        let w = (tw + self.h_padding * 2.0).max(self.min_width);
+        let h = th + self.v_padding * 2.0;
+        (w, h)
     }
 }
 

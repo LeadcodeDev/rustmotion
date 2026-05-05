@@ -130,6 +130,11 @@ fn component_intrinsic(
     use Component::*;
     match component {
         Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
+        GradientText(t) => Some(Arc::new(
+            crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
+        )),
+        Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(c))),
+        Kbd(k) => Some(Arc::new(crate::intrinsic::KbdIntrinsic::from_kbd(k))),
         _ => None,
     }
 }
