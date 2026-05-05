@@ -9,7 +9,7 @@ A flat scene with no depth cues looks like a poster. Depth makes elements feel p
 | Signal | Far (background) | Close (foreground) |
 |---|---|---|
 | **Size** | Smaller | Larger |
-| **Blur** | `backdrop-blur` or low opacity | Sharp, full opacity |
+| **Blur** | `backdrop-filter: blur` or low opacity | Sharp, full opacity |
 | **Opacity** | 0.3–0.6 | 1.0 |
 | **Shadow length** | None or short | Long, diffuse |
 | **Motion speed** | Slow wiggle / slow orbit | Fast wiggle / large amplitude |
@@ -81,21 +81,21 @@ De même, le delta de luminosité entre le fond de scène et la carte doit être
 
 ## Blur as depth cue (glassmorphism / atmospheric)
 
-Background elements feel farther away when slightly blurred. Use `backdrop-blur` on foreground cards to make the background feel like a distinct plane behind them.
+Background elements feel farther away when slightly blurred. Use `backdrop-filter` on foreground cards to make the background feel like a distinct plane behind them.
 
 ```json
 {
   "type": "card",
   "style": {
     "background": "#FFFFFF18",
-    "backdrop-blur": 20,
-    "border": { "all": { "width": 1, "style": "solid", "color": "#FFFFFF30" } },
+    "backdrop-filter": [{ "fn": "blur", "radius": 20 }],
+    "border": { "width": 1, "style": "solid", "color": "#FFFFFF30" },
     "border-radius": 24
   }
 }
 ```
 
-**Rule:** `backdrop-blur` on the foreground card → background elements feel pushed back. Never blur the foreground itself — it breaks readability.
+**Rule:** `backdrop-filter` on the foreground card → background elements feel pushed back. Never blur the foreground itself — it breaks readability. See [glassmorphism.md](glassmorphism.md) for the complete recipe.
 
 ---
 

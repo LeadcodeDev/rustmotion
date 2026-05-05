@@ -1,0 +1,882 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "composition": [
+    {
+      "type": "slide",
+      "scenes": [
+        {
+          "duration": 4.0,
+          "children": [
+            {
+              "type": "card",
+              "size": {
+                "width": 1920,
+                "height": 1080
+              },
+              "style": {
+                "flex-direction": "column",
+                "align-items": "center",
+                "justify-content": "center",
+                "gap": 32,
+                "background": "#0f172a"
+              },
+              "children": [
+                {
+                  "type": "icon",
+                  "icon": "lucide:layers",
+                  "size": {
+                    "width": 96,
+                    "height": 96
+                  },
+                  "style": {
+                    "color": "#6366f1"
+                  },
+                  "animation": [
+                    {
+                      "name": "scale_in",
+                      "duration": 0.6
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "content": "Rustmotion Components",
+                  "style": {
+                    "font-size": 72,
+                    "font-weight": "bold",
+                    "color": "#f8fafc",
+                    "text-align": "center"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in_up",
+                      "delay": 0.3,
+                      "duration": 0.6
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "content": "51 components · Skia rendering · CSS layout via taffy",
+                  "style": {
+                    "font-size": 30,
+                    "color": "#94a3b8",
+                    "text-align": "center"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in_up",
+                      "delay": 0.5,
+                      "duration": 0.5
+                    }
+                  ]
+                },
+                {
+                  "type": "flex",
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 12,
+                    "justify-content": "center"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in",
+                      "delay": 0.8,
+                      "duration": 0.5
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "badge",
+                      "text": "Text & Rich Text",
+                      "style": {
+                        "background": "#6366f1"
+                      }
+                    },
+                    {
+                      "type": "badge",
+                      "text": "Charts & Data",
+                      "style": {
+                        "background": "#10b981"
+                      }
+                    },
+                    {
+                      "type": "badge",
+                      "text": "Code & Terminal",
+                      "style": {
+                        "background": "#f59e0b"
+                      }
+                    },
+                    {
+                      "type": "badge",
+                      "text": "UI Controls",
+                      "style": {
+                        "background": "#ef4444"
+                      }
+                    },
+                    {
+                      "type": "badge",
+                      "text": "Lists & Timeline",
+                      "style": {
+                        "background": "#8b5cf6"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "duration": 5.0,
+          "children": [
+            {
+              "type": "card",
+              "size": {
+                "width": 1920,
+                "height": 1080
+              },
+              "style": {
+                "flex-direction": "column",
+                "padding": 48,
+                "gap": 24,
+                "background": "#0f172a",
+                "overflow": "hidden"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Data Visualization",
+                  "style": {
+                    "font-size": 48,
+                    "font-weight": "bold",
+                    "color": "#f8fafc"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in_up",
+                      "duration": 0.5
+                    }
+                  ]
+                },
+                {
+                  "type": "flex",
+                  "size": {
+                    "width": 1824,
+                    "height": 880
+                  },
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 24
+                  },
+                  "children": [
+                    {
+                      "type": "card",
+                      "size": {
+                        "width": 760,
+                        "height": 880
+                      },
+                      "style": {
+                        "flex-direction": "column",
+                        "padding": 24,
+                        "gap": 16,
+                        "background": "#1e293b",
+                        "border-radius": 16
+                      },
+                      "children": [
+                        {
+                          "type": "text",
+                          "content": "Revenue (k€)",
+                          "style": {
+                            "font-size": 24,
+                            "color": "#94a3b8"
+                          }
+                        },
+                        {
+                          "type": "chart",
+                          "chart_type": "bar",
+                          "size": {
+                            "width": 712,
+                            "height": 800
+                          },
+                          "data": [
+                            {
+                              "value": 42,
+                              "label": "Jan",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "value": 65,
+                              "label": "Feb",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "value": 58,
+                              "label": "Mar",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "value": 81,
+                              "label": "Apr",
+                              "color": "#10b981"
+                            },
+                            {
+                              "value": 74,
+                              "label": "May",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "value": 92,
+                              "label": "Jun",
+                              "color": "#10b981"
+                            }
+                          ],
+                          "animated": true,
+                          "animation_duration": 1.5,
+                          "show_x_labels": true,
+                          "show_y_labels": true,
+                          "show_grid": true,
+                          "label_color": "#94a3b8",
+                          "label_font_size": 16
+                        }
+                      ]
+                    },
+                    {
+                      "type": "flex",
+                      "size": {
+                        "width": 1040,
+                        "height": 880
+                      },
+                      "style": {
+                        "flex-direction": "column",
+                        "gap": 24
+                      },
+                      "children": [
+                        {
+                          "type": "flex",
+                          "style": {
+                            "flex-direction": "row",
+                            "gap": 24
+                          },
+                          "children": [
+                            {
+                              "type": "gauge",
+                              "value": 78,
+                              "max": 100,
+                              "label": "Performance",
+                              "size": {
+                                "width": 508,
+                                "height": 260
+                              },
+                              "fill_color": "#10b981",
+                              "track_color": "#334155",
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 16
+                              }
+                            },
+                            {
+                              "type": "chart",
+                              "chart_type": "donut",
+                              "size": {
+                                "width": 508,
+                                "height": 260
+                              },
+                              "data": [
+                                {
+                                  "value": 45,
+                                  "label": "Desktop",
+                                  "color": "#6366f1"
+                                },
+                                {
+                                  "value": 32,
+                                  "label": "Mobile",
+                                  "color": "#10b981"
+                                },
+                                {
+                                  "value": 23,
+                                  "label": "Tablet",
+                                  "color": "#f59e0b"
+                                }
+                              ],
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 16
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "flex",
+                          "style": {
+                            "flex-direction": "row",
+                            "gap": 16
+                          },
+                          "children": [
+                            {
+                              "type": "stat",
+                              "value": "48.2k",
+                              "label": "Revenue",
+                              "trend": {
+                                "value": "+12.5%",
+                                "direction": "up"
+                              },
+                              "sparkline_data": [20, 35, 28, 45, 38, 52, 48],
+                              "sparkline_color": "#10b981",
+                              "size": {
+                                "width": 248,
+                                "height": 160
+                              },
+                              "value_font_size": 28,
+                              "label_font_size": 14,
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 12,
+                                "padding": 16
+                              }
+                            },
+                            {
+                              "type": "stat",
+                              "value": "12.4k",
+                              "label": "Users",
+                              "trend": {
+                                "value": "+8.3%",
+                                "direction": "up"
+                              },
+                              "sparkline_data": [10, 18, 14, 25, 22, 30, 28],
+                              "sparkline_color": "#6366f1",
+                              "size": {
+                                "width": 248,
+                                "height": 160
+                              },
+                              "value_font_size": 28,
+                              "label_font_size": 14,
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 12,
+                                "padding": 16
+                              }
+                            },
+                            {
+                              "type": "stat",
+                              "value": "99.9%",
+                              "label": "Uptime",
+                              "sparkline_data": [
+                                100, 100, 99, 100, 100, 100, 100
+                              ],
+                              "sparkline_color": "#f59e0b",
+                              "size": {
+                                "width": 248,
+                                "height": 160
+                              },
+                              "value_font_size": 28,
+                              "label_font_size": 14,
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 12,
+                                "padding": 16
+                              }
+                            },
+                            {
+                              "type": "stat",
+                              "value": "4.2s",
+                              "label": "Build Time",
+                              "trend": {
+                                "value": "-0.4s",
+                                "direction": "down"
+                              },
+                              "sparkline_data": [
+                                5.0, 4.8, 4.5, 3.8, 4.0, 3.5, 4.2
+                              ],
+                              "sparkline_color": "#ef4444",
+                              "size": {
+                                "width": 248,
+                                "height": 160
+                              },
+                              "value_font_size": 28,
+                              "label_font_size": 14,
+                              "style": {
+                                "background": "#1e293b",
+                                "border-radius": 12,
+                                "padding": 16
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "card",
+                          "style": {
+                            "flex-direction": "column",
+                            "gap": 14,
+                            "padding": 24,
+                            "background": "#1e293b",
+                            "border-radius": 12
+                          },
+                          "children": [
+                            {
+                              "type": "text",
+                              "content": "Project Milestones",
+                              "style": {
+                                "font-size": 20,
+                                "color": "#94a3b8"
+                              }
+                            },
+                            {
+                              "type": "progress",
+                              "progress": 0.85,
+                              "fill_color": "#10b981",
+                              "animation": [
+                                {
+                                  "name": "fade_in",
+                                  "delay": 0.5,
+                                  "duration": 0.5
+                                }
+                              ]
+                            },
+                            {
+                              "type": "progress",
+                              "progress": 0.62,
+                              "fill_color": "#6366f1",
+                              "animation": [
+                                {
+                                  "name": "fade_in",
+                                  "delay": 0.7,
+                                  "duration": 0.5
+                                }
+                              ]
+                            },
+                            {
+                              "type": "progress",
+                              "progress": 0.44,
+                              "fill_color": "#f59e0b",
+                              "animation": [
+                                {
+                                  "name": "fade_in",
+                                  "delay": 0.9,
+                                  "duration": 0.5
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "duration": 5.5,
+          "children": [
+            {
+              "type": "card",
+              "size": {
+                "width": 1920,
+                "height": 1080
+              },
+              "style": {
+                "flex-direction": "column",
+                "padding": 48,
+                "gap": 24,
+                "background": "#0f172a",
+                "overflow": "hidden"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Code & Terminal",
+                  "style": {
+                    "font-size": 48,
+                    "font-weight": "bold",
+                    "color": "#f8fafc"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in_up",
+                      "duration": 0.5
+                    }
+                  ]
+                },
+                {
+                  "type": "flex",
+                  "size": {
+                    "width": 1824,
+                    "height": 888
+                  },
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 24
+                  },
+                  "children": [
+                    {
+                      "type": "codeblock",
+                      "code": "use skia_safe::Canvas;\n\npub trait Painter {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    );\n}\n\nimpl Painter for Text {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        _props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    ) {\n        draw_runs(canvas, &self.runs, layout, ctx);\n    }\n}",
+                      "language": "rust",
+                      "theme": "tokyo-night",
+                      "size": {
+                        "width": 900,
+                        "height": 888
+                      },
+                      "show_line_numbers": true,
+                      "chrome": {
+                        "enabled": true,
+                        "title": "painter.rs"
+                      },
+                      "reveal": {
+                        "mode": "line_by_line",
+                        "duration": 4.0
+                      },
+                      "animation": [
+                        {
+                          "name": "fade_in_up",
+                          "delay": 0.3,
+                          "duration": 0.5
+                        }
+                      ]
+                    },
+                    {
+                      "type": "terminal",
+                      "size": {
+                        "width": 900,
+                        "height": 888
+                      },
+                      "title": "rustmotion",
+                      "show_chrome": true,
+                      "lines": [
+                        {
+                          "text": "$ rustmotion validate -f showcase.json"
+                        },
+                        {
+                          "text": "✓ schema:   pass"
+                        },
+                        {
+                          "text": "✓ geometry: pass  (0 violations)"
+                        },
+                        {
+                          "text": ""
+                        },
+                        {
+                          "text": "$ rustmotion render -f showcase.json -o out.mp4"
+                        },
+                        {
+                          "text": "  Rendering 1920×1080 @ 30fps"
+                        },
+                        {
+                          "text": "  [scene 1/4]  ████████████  100%"
+                        },
+                        {
+                          "text": "  [scene 2/4]  ████████████  100%"
+                        },
+                        {
+                          "text": "  [scene 3/4]  ████████████  100%"
+                        },
+                        {
+                          "text": "  [scene 4/4]  ████████████  100%"
+                        },
+                        {
+                          "text": "  Encoding… ffmpeg H.264 10-bit"
+                        },
+                        {
+                          "text": "✓  out.mp4  4.2 MB  19.0s"
+                        }
+                      ],
+                      "reveal": {
+                        "mode": "typewriter",
+                        "duration": 4.5
+                      },
+                      "animation": [
+                        {
+                          "name": "fade_in_up",
+                          "delay": 0.5,
+                          "duration": 0.5
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "duration": 5.5,
+          "children": [
+            {
+              "type": "card",
+              "size": {
+                "width": 1920,
+                "height": 1080
+              },
+              "style": {
+                "flex-direction": "column",
+                "padding": 48,
+                "gap": 24,
+                "background": "#0f172a",
+                "overflow": "hidden"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "UI Controls & Lists",
+                  "style": {
+                    "font-size": 48,
+                    "font-weight": "bold",
+                    "color": "#f8fafc"
+                  },
+                  "animation": [
+                    {
+                      "name": "fade_in_up",
+                      "duration": 0.5
+                    }
+                  ]
+                },
+                {
+                  "type": "flex",
+                  "size": {
+                    "width": 1824,
+                    "height": 888
+                  },
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 24
+                  },
+                  "children": [
+                    {
+                      "type": "card",
+                      "size": {
+                        "width": 880,
+                        "height": 888
+                      },
+                      "style": {
+                        "flex-direction": "column",
+                        "gap": 28,
+                        "padding": 40,
+                        "background": "#1e293b",
+                        "border-radius": 16
+                      },
+                      "children": [
+                        {
+                          "type": "text",
+                          "content": "Controls",
+                          "style": {
+                            "font-size": 28,
+                            "font-weight": "bold",
+                            "color": "#94a3b8"
+                          }
+                        },
+                        {
+                          "type": "switch",
+                          "value": false,
+                          "toggle_at": 2.0,
+                          "label": "Enable notifications",
+                          "width": 64,
+                          "height": 34,
+                          "track_color_on": "#6366f1",
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.3,
+                              "duration": 0.4
+                            }
+                          ]
+                        },
+                        {
+                          "type": "slider",
+                          "value": 25,
+                          "animate_to": 80,
+                          "animate_at": 1.5,
+                          "animation_duration": 1.2,
+                          "width": 800,
+                          "fill_color": "#6366f1",
+                          "show_value": true,
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.4,
+                              "duration": 0.4
+                            }
+                          ]
+                        },
+                        {
+                          "type": "rating",
+                          "value": 4.5,
+                          "max": 5,
+                          "size": 44,
+                          "filled_color": "#f59e0b",
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.5,
+                              "duration": 0.4
+                            }
+                          ]
+                        },
+                        {
+                          "type": "progress",
+                          "progress": 0.72,
+                          "width": 800,
+                          "fill_color": "#10b981",
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.6,
+                              "duration": 0.4
+                            }
+                          ]
+                        },
+                        {
+                          "type": "flex",
+                          "style": {
+                            "flex-direction": "row",
+                            "gap": 12,
+                            "align-items": "center"
+                          },
+                          "children": [
+                            {
+                              "type": "kbd",
+                              "key": "⌘"
+                            },
+                            {
+                              "type": "kbd",
+                              "key": "K"
+                            },
+                            {
+                              "type": "text",
+                              "content": "Open command palette",
+                              "style": {
+                                "font-size": 24,
+                                "color": "#94a3b8"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "countdown",
+                          "seconds": 90,
+                          "show_hours": false,
+                          "digit_size": 52,
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.8,
+                              "duration": 0.4
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "flex",
+                      "size": {
+                        "width": 920,
+                        "height": 888
+                      },
+                      "style": {
+                        "flex-direction": "column",
+                        "gap": 28
+                      },
+                      "children": [
+                        {
+                          "type": "list",
+                          "variant": "checklist",
+                          "width": 920,
+                          "gap": 20,
+                          "icon_color": "#10b981",
+                          "items": [
+                            {
+                              "text": "CSS Flex + Grid layout via taffy",
+                              "checked": true
+                            },
+                            {
+                              "text": "Skia paint — gradients, shadows, filters",
+                              "checked": true
+                            },
+                            {
+                              "text": "cosmic-text Unicode shaping & bidi",
+                              "checked": true
+                            },
+                            {
+                              "text": "Animations resolved into CssStyle overrides",
+                              "checked": true
+                            },
+                            {
+                              "text": "Zero-warning clean build",
+                              "checked": true
+                            }
+                          ],
+                          "style": {
+                            "font-size": 26,
+                            "color": "#e2e8f0"
+                          },
+                          "animation": [
+                            {
+                              "name": "fade_in_up",
+                              "delay": 0.3,
+                              "duration": 0.6
+                            }
+                          ]
+                        },
+                        {
+                          "type": "timeline",
+                          "width": 920,
+                          "fill_progress": 0.75,
+                          "bar_fill_color": "#6366f1",
+                          "bar_color": "#1e293b",
+                          "font_size": 20,
+                          "label_color": "#e2e8f0",
+                          "steps": [
+                            {
+                              "label": "Design",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "label": "Build",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "label": "Test",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "label": "Ship",
+                              "color": "#334155"
+                            }
+                          ],
+                          "animation": [
+                            {
+                              "name": "fade_in",
+                              "delay": 0.5,
+                              "duration": 0.5
+                            }
+                          ]
+                        },
+                        {
+                          "type": "notification",
+                          "title": "Build succeeded",
+                          "message": "All 98 tests passed in 1.86s",
+                          "variant": "success",
+                          "icon": "lucide:check-circle",
+                          "width": 920,
+                          "slide_in_at": 1.5,
+                          "slide_out_at": 4.8
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
