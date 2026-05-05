@@ -448,6 +448,45 @@ mod component_smoke {
     }
 
     #[test]
+    fn pipelines_agree_on_nested_cards() {
+        // Nested containers — a grid of cards each containing text.
+        // Catches regressions where recursion into containers loses
+        // box ids, intrinsic measurers, or paint dispatch.
+        let json = serde_json::json!({
+            "type": "card",
+            "style": { "padding": 12, "background": "#101020", "card_direction": "row", "gap": 8 },
+            "children": [
+                {
+                    "type": "card",
+                    "style": { "padding": 8, "background": "#303050" },
+                    "children": [{ "type": "text", "content": "A", "style": { "color": "#ffffff", "font-size": 24 } }]
+                },
+                {
+                    "type": "card",
+                    "style": { "padding": 8, "background": "#503030" },
+                    "children": [{ "type": "text", "content": "B", "style": { "color": "#ffffff", "font-size": 24 } }]
+                }
+            ]
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 60.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let legacy = render_legacy(&scene, 500, 300);
+        let new = render_new(&scene, 500, 300);
+        let legacy_lit = nonzero_pixels(&legacy);
+        let new_lit = nonzero_pixels(&new);
+        assert!(legacy_lit > 1000, "legacy nested card empty: {legacy_lit}");
+        assert!(new_lit > 1000, "new nested card empty: {new_lit}");
+    }
+
+    #[test]
     fn pipelines_agree_on_simple_shape() {
         // For a single absolutely-positioned solid shape, both pipelines
         // should agree closely: there's no flex layout, no font shaping,
