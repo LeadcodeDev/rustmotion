@@ -354,6 +354,12 @@ fn component_size(c: &Component) -> Option<(SizeDimension, SizeDimension)> {
         Flex(c) => c.size.as_ref().map(flex_size_to_dim),
         Grid(c) => c.size.as_ref().map(flex_size_to_dim),
         Container(c) => c.size.as_ref().map(flex_size_to_dim),
+        Stepper(c) => c.size.as_ref().map(size_pair),
+        Comparison(c) => c.size.as_ref().map(size_pair),
+        Skeleton(c) => c.size.as_ref().map(size_pair),
+        Switch(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
+        Slider(c) => Some((SizeDimension::Fixed(c.width), SizeDimension::Fixed(c.height))),
+        Avatar(c) => Some((SizeDimension::Fixed(c.size), SizeDimension::Fixed(c.size))),
         _ => None,
     }
 }
