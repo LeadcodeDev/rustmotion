@@ -315,7 +315,21 @@ mod component_smoke {
     /// Same as `render_legacy` but routes the scene through the new
     /// pipeline (box_builder + run_layout + paint_tree).
     fn render_new(children: &[crate::components::ChildComponent], w: u32, h: u32) -> Vec<u8> {
-        use rustmotion_components::box_builder::build_scene;
+        render_new_at(children, w, h, 0.5, 1.0)
+    }
+
+    /// Render the scene through the new pipeline at a specific time within a
+    /// scene of `scene_duration` seconds. Resolves animations into CSS via
+    /// `build_scene_with_anim` so the box tree carries transform/opacity/
+    /// filter overrides from the animator.
+    fn render_new_at(
+        children: &[crate::components::ChildComponent],
+        w: u32,
+        h: u32,
+        time: f64,
+        scene_duration: f64,
+    ) -> Vec<u8> {
+        use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
         use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
         use rustmotion_core::css::taffy_bridge::ConversionContext;
         use rustmotion_core::engine::layout_pass::run_layout;
@@ -326,16 +340,20 @@ mod component_smoke {
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
 
-        let built = build_scene(children, (w as f32, h as f32));
+        let built = build_scene_with_anim(
+            children,
+            (w as f32, h as f32),
+            BuildAnimationCtx { time, scene_duration },
+        );
         let layout = run_layout(&built.root, (w as f32, h as f32), &ConversionContext::default());
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
-            time: 0.5,
-            frame_index: 15,
+            time,
+            frame_index: (time * 30.0) as u32,
             fps: 30,
             video_width: w,
             video_height: h,
-            scene_duration: 1.0,
+            scene_duration,
         };
         paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 
@@ -554,6 +572,45 @@ mod component_smoke {
         assert!(
             ratio > 0.85 && ratio < 1.15,
             "text lit-pixel ratio out of band: legacy={legacy_lit} new={new_lit} ratio={ratio}"
+        );
+    }
+
+    #[test]
+    fn fade_in_attenuates_pixels_in_new_pipeline() {
+        // A red shape with FadeIn over 1.0s. At t=0.05 the shape is ~5%
+        // opacity, at t=0.95 it's ~95%. The new pipeline must drive opacity
+        // through the box-tree CSS overrides, so the late frame should have
+        // significantly more "lit" red than the early frame. Without the
+        // animator → CssStyle bridge, both frames would look identical.
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "size": { "width": 100, "height": 80 },
+            "style": {
+                "fill": "#ff3366",
+                "animation": [{ "name": "fade_in", "duration": 1.0 }]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            overlays: Vec::new(),
+        };
+        let scene = vec![child];
+        let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
+        let late = render_new_at(&scene, 400, 300, 0.95, 1.0);
+        // Total red intensity (sum of red channel) — alpha-attenuated pixels
+        // contribute less to this sum even when premul keeps the count up.
+        let red_sum: fn(&[u8]) -> u64 = |buf| buf.chunks_exact(4).map(|p| p[0] as u64).sum();
+        let early_red = red_sum(&early);
+        let late_red = red_sum(&late);
+        assert!(
+            late_red > early_red * 3,
+            "FadeIn did not amplify red over time (early={early_red}, late={late_red})"
         );
     }
 
