@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Container, PaintCtx, Painter};
+use rustmotion_core::traits::{PaintCtx, Painter};
 
 use crate::ChildComponent;
 
@@ -21,8 +21,6 @@ pub struct Positioned {
 rustmotion_core::impl_traits!(Positioned {
     Styled => style,
 });
-
-impl Container for Positioned {}
 
 impl Painter for Positioned {
     fn paint_content(

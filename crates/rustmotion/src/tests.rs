@@ -3,7 +3,6 @@
 #[cfg(test)]
 mod component_smoke {
     use crate::components::Component;
-    use crate::layout::Constraints;
 
     /// Minimal JSON for each component type.
     const COMPONENT_JSONS: &[(&str, &str)] = &[
@@ -156,7 +155,6 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
-                overlays: Vec::new(),
             };
             let scene = vec![child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -222,7 +220,6 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
-                overlays: Vec::new(),
             };
             let card_style = LayerStyle {
                 flex_direction: Some(CardDirection::Column),
@@ -241,7 +238,6 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
-                overlays: Vec::new(),
             };
             let scene = vec![card_child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -350,7 +346,6 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![child];
         let new_buf = render_new(&scene, 400, 300);
@@ -381,7 +376,6 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
@@ -432,7 +426,6 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
@@ -471,7 +464,6 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 500, 300, 0.05, 1.0);

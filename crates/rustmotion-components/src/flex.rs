@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::schema::{LayerStyle, SizeDimension};
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::ChildComponent;
 
@@ -33,23 +33,6 @@ rustmotion_core::impl_traits!(Flex {
     Timed => timing,
     Styled => style,
 });
-
-impl Container for Flex {}
-
-impl FlexContainer for Flex {
-    fn flex_config(&self) -> &FlexConfig {
-        // We need to construct a FlexConfig from LayerStyle on the fly.
-        // Since FlexContainer returns a reference, we use a thread-local for the config.
-        // This is a workaround - the layout code will be updated to read from LayerStyle directly.
-        unreachable!("Use style directly for flex config")
-    }
-}
-
-impl FlexContainerMut for Flex {
-    fn flex_config_mut(&mut self) -> &mut FlexConfig {
-        unreachable!("Use style directly for flex config")
-    }
-}
 
 impl Bordered for Flex {
     fn border(&self) -> Option<&Border> {

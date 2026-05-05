@@ -149,31 +149,6 @@ pub struct ChildComponent {
     pub y: Option<f32>,
     #[serde(default, rename = "z-index")]
     pub z_index: Option<i32>,
-    #[serde(default)]
-    pub overlays: Vec<Overlay>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct Overlay {
-    #[serde(flatten)]
-    pub component: Component,
-    #[serde(default)]
-    pub anchor: OverlayAnchor,
-    #[serde(default)]
-    pub offset_x: f32,
-    #[serde(default)]
-    pub offset_y: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum OverlayAnchor {
-    #[default]
-    TopRight,
-    TopLeft,
-    BottomRight,
-    BottomLeft,
-    Center,
 }
 
 impl ChildComponent {

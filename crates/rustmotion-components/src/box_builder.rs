@@ -514,7 +514,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         }
     }
 
@@ -547,7 +546,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         }];
         let built = build_scene(&scene, (1920.0, 1080.0));
         assert_eq!(built.root.children.len(), 1);
@@ -586,7 +584,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         }];
         let built = build_scene(&scene, (400.0, 400.0));
         let layout = run_layout(&built.root, (400.0, 400.0), &ConversionContext::default());
@@ -613,7 +610,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![divider];
         let built = build_scene(&scene, (800.0, 600.0));
@@ -646,7 +642,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
 
         let card = ChildComponent {
@@ -667,7 +662,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
 
         let scene = vec![card];
@@ -724,7 +718,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![arrow];
         let built = build_scene(&scene, (800.0, 600.0));
@@ -756,7 +749,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![conn];
         let built = build_scene(&scene, (800.0, 600.0));
@@ -792,7 +784,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![counter];
         let built = build_scene(&scene, (800.0, 600.0));
@@ -832,7 +823,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![badge];
         let built = build_scene(&scene, (400.0, 200.0));
@@ -866,7 +856,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
         let scene = vec![line];
         let built = build_scene(&scene, (800.0, 600.0));

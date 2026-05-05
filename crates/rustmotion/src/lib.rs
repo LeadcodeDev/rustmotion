@@ -3,7 +3,6 @@ pub use rustmotion_core as core;
 pub use rustmotion_core::error;
 pub use rustmotion_core::schema;
 pub use rustmotion_core::traits;
-pub use rustmotion_core::layout;
 pub use rustmotion_core::variables;
 
 pub use rustmotion_components as components;

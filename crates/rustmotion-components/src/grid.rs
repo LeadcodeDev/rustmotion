@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, GridConfig, GridContainer, GridContainerMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -27,20 +27,6 @@ rustmotion_core::impl_traits!(Grid {
     Timed => timing,
     Styled => style,
 });
-
-impl Container for Grid {}
-
-impl GridContainer for Grid {
-    fn grid_config(&self) -> &GridConfig {
-        unreachable!("Use style directly for grid config")
-    }
-}
-
-impl GridContainerMut for Grid {
-    fn grid_config_mut(&mut self) -> &mut GridConfig {
-        unreachable!("Use style directly for grid config")
-    }
-}
 
 impl Bordered for Grid {
     fn border(&self) -> Option<&Border> {

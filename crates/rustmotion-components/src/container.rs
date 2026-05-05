@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{Border, Bordered, BorderedMut, Container, FlexConfig, FlexContainer, FlexContainerMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
+use rustmotion_core::traits::{Border, Bordered, BorderedMut, PaintCtx, Painter, Rounded, RoundedMut, Shadow, Shadowed, ShadowedMut, TimingConfig};
 
 use crate::flex::FlexSize;
 use crate::ChildComponent;
@@ -28,20 +28,6 @@ rustmotion_core::impl_traits!(ContainerComponent {
     Timed => timing,
     Styled => style,
 });
-
-impl Container for ContainerComponent {}
-
-impl FlexContainer for ContainerComponent {
-    fn flex_config(&self) -> &FlexConfig {
-        unreachable!("Use style directly for flex config")
-    }
-}
-
-impl FlexContainerMut for ContainerComponent {
-    fn flex_config_mut(&mut self) -> &mut FlexConfig {
-        unreachable!("Use style directly for flex config")
-    }
-}
 
 impl Bordered for ContainerComponent {
     fn border(&self) -> Option<&Border> {

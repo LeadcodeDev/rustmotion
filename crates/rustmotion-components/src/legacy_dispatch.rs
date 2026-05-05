@@ -148,7 +148,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         }
     }
 
@@ -231,7 +230,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
 
         let card = ChildComponent {
@@ -251,7 +249,6 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
-            overlays: Vec::new(),
         };
 
         let scene = vec![card];
@@ -342,7 +339,6 @@ mod tests {
                 x: None,
                 y: None,
                 z_index: None,
-                overlays: Vec::new(),
             };
             vec![shape]
         };
