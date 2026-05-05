@@ -18,6 +18,8 @@ pub mod styled;
 pub mod timed;
 #[allow(dead_code)]
 pub mod widget;
+#[allow(dead_code)]
+pub mod painter;
 
 pub use animatable::Animatable;
 pub use backgrounded::{Backgrounded, BackgroundedMut};
@@ -35,3 +37,4 @@ pub use timed::{Timed, TimingConfig};
 pub mod layout_item;
 pub use layout_item::LayoutItem;
 pub use widget::{RenderContext, RenderPipeline, Widget};
+pub use painter::{AvailableSize, MeasureCtx, PaintCtx, Painter};
