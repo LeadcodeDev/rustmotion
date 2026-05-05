@@ -82,74 +82,78 @@ CLI :
 
 ## Architecture
 
-### Render Pipeline (Flutter-like)
+### Render Pipeline (CSS engine)
 
-Chaque composant suit un cycle **measure → layout → paint** inspiré de Flutter :
+Le moteur utilise un pipeline **box_tree → layout_pass → paint_pass** inspiré des navigateurs web :
 
-1. `widget.measure(constraints)` → `(width, height)` — calcule la taille souhaitée
-2. `widget.layout(constraints)` → `LayoutNode` — calcule l'arbre de layout (récursif pour les conteneurs)
-3. `widget.paint(canvas, ctx)` → dessine sur le canvas Skia
+1. **box_tree** (`box_builder.rs`) — construit un arbre de `BoxNode { css: CssStyle, children, intrinsic }` depuis les composants JSON résolus
+2. **layout_pass** (`engine/layout_pass.rs`) — orchestre taffy pour calculer les `BoxLayout { x, y, width, height }` de chaque nœud. Les feuilles avec un `IntrinsicMeasure` (texte, image, codeblock) sont mesurées via une `measure_fn`.
+3. **paint_pass** (`engine/paint_pass.rs`) — descend l'arbre, applique transform/opacity, peint les décorations (background, border, shadow), délègue au `Painter` du composant pour le contenu.
 
-La méthode `paint()` reçoit un `PaintContext` riche contenant :
-- **Timing** : `ctx.time`, `ctx.scene_duration`, `ctx.fps`, `ctx.frame_index`
-- **Layout** : `ctx.layout` (LayoutNode complet), `ctx.width()`, `ctx.height()`
-- **Parent info** : `ctx.parent_size`, `ctx.absolute_position`, `ctx.depth`
-- **Animation** : `ctx.props` (AnimatedProperties résolues), `ctx.stagger_offset`
-- **Vidéo** : `ctx.video_width`, `ctx.video_height`
+Chaque composant implémente le trait `Painter` :
 
-Pour les conteneurs qui appellent `render_children`, utiliser `ctx.as_render_context()` pour convertir vers le pipeline de rendu.
+```rust
+pub trait Painter {
+    fn paint_content(&self, canvas: &Canvas, layout: &BoxLayout, props: &AnimatedProperties, ctx: &PaintCtx);
+    fn intrinsic_size(&self, available: AvailableSize, ctx: &MeasureCtx) -> Option<(f32, f32)> { None }
+}
+```
 
-### Structure des modules
+`PaintCtx` contient : `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
+
+### Structure des crates
 
 ```
-src/
-├── components/           # 51 composants (chacun implémente Widget)
-│   ├── mod.rs            # Enum Component + dispatch (as_widget, as_animatable, etc.)
-│   ├── chart/            # 10 fichiers (mod + bar/line/pie/radar/scatter/radial/funnel/waterfall/axes)
-│   └── *.rs              # Un fichier par composant
-├── engine/
-│   ├── render/           # Pipeline de rendu (5 fichiers)
-│   │   ├── mod.rs        # render_component, render_children, render_overlays
-│   │   ├── scene.rs      # render_frame_v2, render_scene_frame, compute_root_layout
-│   │   ├── background.rs # draw_animated_background, gradients, halo, grid dots
-│   │   └── transforms.rs # draw_3d_shadow, draw_inner_shadow
-│   ├── codeblock/        # Rendu codeblock (6 fichiers)
-│   │   ├── mod.rs        # render_codeblock, render_codeblock_v2
-│   │   ├── highlight.rs  # Syntect, thèmes, highlight_code
-│   │   ├── chrome.rs     # Barre titre macOS
-│   │   ├── reveal.rs     # Typewriter, line-by-line
-│   │   ├── diff.rs       # State transitions, word diff
-│   │   └── dimensions.rs # compute_code_dimensions
-│   ├── animator.rs       # Résolution animations, easing, spring solver
-│   └── renderer.rs       # Primitives de dessin Skia
-├── schema/               # Modèles de données (5 fichiers)
-│   ├── scenario.rs       # Scenario, View, Scene, VideoConfig
-│   ├── style.rs          # LayerStyle, Spacing, FontWeight, CardDirection
-│   ├── background.rs     # AnimatedBackground, BackgroundPreset
-│   ├── animation.rs      # EasingType, AnimationPreset, PresetConfig
-│   ├── codeblock_types.rs # CodeblockChrome, CodeblockState
-│   └── video.rs          # AnimationEffect, Size, ShapeType, Fill
-├── layout/               # Moteurs de layout flex/grid
-│   ├── flex.rs           # CSS flexbox
-│   ├── grid.rs           # CSS grid
-│   ├── tree.rs           # LayoutNode
-│   └── constraints.rs    # Constraints (Flutter-style)
-├── traits/               # Traits des composants
-│   ├── widget.rs         # Widget trait (paint/measure/layout) + PaintContext + RenderContext
-│   ├── styled.rs         # Styled + StyledExt (builder pattern)
-│   ├── container.rs      # Container, FlexContainer, GridContainer
-│   ├── animatable.rs     # Animatable trait
-│   └── timed.rs          # Timed trait + TimingConfig
-└── macros.rs             # impl_traits! macro
+crates/
+├── rustmotion-core/src/
+│   ├── css/                    # Modèle CSS
+│   │   ├── style.rs            # CssStyle (propriétés CSS kebab-case)
+│   │   ├── units.rs            # Length, LengthPercentage (px, %, em, rem, vw, vh)
+│   │   ├── cascade.rs          # Héritage color/font-* parent → enfant
+│   │   ├── taffy_bridge.rs     # CssStyle → taffy::Style
+│   │   └── animation.rs        # Résolution des animations → override CssStyle
+│   ├── engine/
+│   │   ├── box_tree.rs         # BoxNode, BoxKind, IntrinsicMeasure
+│   │   ├── layout_pass.rs      # Orchestration taffy, BoxLayout résultant
+│   │   ├── paint_pass.rs       # Walk top-down, décorations, dispatch Painter
+│   │   ├── animator.rs         # Résolution animations, easing, spring solver
+│   │   ├── transition.rs       # Transitions entre scènes
+│   │   ├── renderer/           # Primitives Skia (colors, fonts, shapes, text)
+│   │   └── text/cosmic.rs      # Bridge cosmic-text ↔ Skia (mesure + glyphs)
+│   ├── schema/                 # Modèles de données JSON
+│   │   ├── scenario.rs         # Scenario, ResolvedScenario, View, Scene, VideoConfig
+│   │   ├── style.rs            # Specialized types (CardBorder, CardShadow, Fill, etc.)
+│   │   ├── background.rs       # AnimatedBackground, BackgroundPreset
+│   │   ├── animation.rs        # EasingType, AnimationPreset, PresetConfig
+│   │   ├── codeblock_types.rs  # CodeblockChrome, CodeblockState
+│   │   └── video.rs            # AnimationEffect, Size, ShapeType, Stroke
+│   └── traits/
+│       ├── painter.rs          # Painter trait + PaintCtx + AvailableSize + MeasureCtx
+│       ├── animatable.rs       # Animatable trait
+│       ├── timed.rs            # Timed trait + TimingConfig
+│       └── styled.rs           # Styled trait
+│
+├── rustmotion-components/src/
+│   ├── lib.rs                  # Enum Component + dispatch (as_painter, as_animatable, etc.)
+│   ├── box_builder.rs          # build_scene() → BoxBuilderResult, component_size()
+│   ├── intrinsic.rs            # TextIntrinsic, BadgeIntrinsic, CounterIntrinsic, etc.
+│   ├── legacy_dispatch.rs      # LegacyPaintDispatcher (bridge NodeId → Painter)
+│   ├── chart/                  # 10 fichiers (mod + bar/line/pie/radar/scatter/radial/funnel/waterfall/axes)
+│   └── *.rs                    # Un fichier par composant (impl Painter)
+│
+└── rustmotion-cli/src/
+    └── commands/               # validate, render, schema, info
 ```
 
 ### Ajouter un nouveau composant
 
-1. Créer `src/components/mon_composant.rs` avec struct + `impl Widget` (`paint`, `measure`)
-2. Ajouter `crate::impl_traits!(MonComposant { Animatable => style, Timed => timing, Styled => style });`
-3. Ajouter le variant dans l'enum `Component` dans `src/components/mod.rs`
-4. Ajouter les match arms dans les 5 méthodes de dispatch (`as_widget`, `as_animatable`, `as_timed`, `as_styled`, `as_container`)
-5. Ajouter `pub mod mon_composant;` et `pub use mon_composant::MonComposant;` dans `mod.rs`
+1. Créer `crates/rustmotion-components/src/mon_composant.rs` avec struct serde + `impl Painter` (`paint_content`)
+2. Ajouter `rustmotion_core::impl_traits!(MonComposant { Animatable => animation, Timed => timing, Styled => style });`
+3. Ajouter le variant dans l'enum `Component` dans `lib.rs`
+4. Ajouter les match arms dans les méthodes de dispatch (`as_painter`, `as_animatable`, `as_timed`, `as_styled`)
+5. Ajouter `pub mod mon_composant;` et `pub use mon_composant::MonComposant;` dans `lib.rs`
+6. Ajouter un arm dans `box_builder.rs::component_size()` si le composant a une taille fixe
+7. Si le composant mesure son propre contenu : ajouter `XxxIntrinsic` dans `intrinsic.rs`
 
 ### Tests
 

@@ -38,3 +38,39 @@ The `icon` field must use the `"prefix:name"` format.
 - Use `simple-icons` for brand/company logos (e.g. `simple-icons:github`, `simple-icons:docker`)
 - Use `devicon` for programming language logos (e.g. `devicon:rust`, `devicon:python`)
 - All icons are monochrome and colored via `style.color`
+
+## animation must be at root level — never inside style
+
+`style` is a `CssStyle` with `deny_unknown_fields`. Any non-CSS property inside `style` will cause the entire component to fail to deserialize (silent drop in render, warning in studio).
+
+`animation`, `fill`, `stroke`, `size`, `position`, `x`, `y` are **root-level fields**, not CSS properties.
+
+**BAD — animation inside style (component silently dropped):**
+```json
+{
+  "type": "icon",
+  "icon": "lucide:sparkles",
+  "style": {
+    "color": "#C084FC",
+    "animation": [{ "name": "fade_in" }]
+  }
+}
+```
+
+**GOOD — animation at root:**
+```json
+{
+  "type": "icon",
+  "icon": "lucide:sparkles",
+  "animation": [
+    { "name": "fade_in", "duration": 0.4 },
+    { "name": "wiggle", "property": "translate_y", "amplitude": 10, "frequency": 1.2, "seed": 33 }
+  ],
+  "style": {
+    "color": "#C084FC",
+    "z-index": 2
+  }
+}
+```
+
+This rule applies to **all components**: `badge`, `icon`, `shape`, `card`, `text`, etc. — `animation` is always at root, never nested inside `style`.

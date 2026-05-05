@@ -188,11 +188,13 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/scene-pacing.md](rules/scene-pacing.md) - Scene duration formula (reading time + animation budget), density limits, dense/breathing alternation
 - [rules/color-palettes.md](rules/color-palettes.md) - 4 ready-to-use palettes (Dark Tech / Corporate / Playful / Minimal), consistency rules
 - [rules/icon-sizing-hierarchy.md](rules/icon-sizing-hierarchy.md) - Icon sizing (hero/card/inline roles), card spacing minimums, row layout by device
+- [rules/depth-layering.md](rules/depth-layering.md) - **NEW:** Visual depth — 3 planes (bg/mid/fg), z-index, blur, shadow hierarchy, scale gradient, 3D tilt
+- [rules/dynamic-depth.md](rules/dynamic-depth.md) - **NEW:** Multi-element parallax — wiggle seeds, float_3d preset, camera zoom, orbit phases, frequency hierarchy
 
 ### Architecture (pour contribuer au code)
 
-- [rules/paint-context.md](rules/paint-context.md) - Widget::paint() API avec PaintContext (Flutter-inspired)
-- [rules/module-structure.md](rules/module-structure.md) - Structure des modules: schema/, chart/, render/, codeblock/ splits
+- [rules/paint-context.md](rules/paint-context.md) - Painter trait API: paint_content(canvas, layout, props, ctx) — remplace l'ancien Widget
+- [rules/module-structure.md](rules/module-structure.md) - Structure des crates: rustmotion-core (css/, engine/, traits/) + rustmotion-components (51 composants)
 
 ---
 

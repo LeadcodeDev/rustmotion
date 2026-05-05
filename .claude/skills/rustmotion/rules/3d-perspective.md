@@ -23,7 +23,7 @@ The 3D engine uses a Skia M44 (4x4 matrix) for real perspective rendering — no
 ```json
 {
   "style": {
-    "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
+    "box-shadow": [{ "color": "#00000060", "offset-x": 0, "offset-y": 20, "blur": 60 }],
     "animation": [{
       "name": "keyframes",
       "keyframes": [
