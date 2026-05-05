@@ -20,14 +20,14 @@
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::layer_to_css;
 use rustmotion::core::css::taffy_bridge::ConversionContext;
-use rustmotion::core::engine::box_tree::BoxNode;
+use rustmotion::core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
 use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult};
 use rustmotion::engine::animator::{
     apply_orbits, apply_wiggles, extract_effects, resolve_animations, AnimatedProperties,
 };
 use rustmotion::components::box_builder::build_scene_from_refs;
+use rustmotion::components::intrinsic::TextIntrinsic;
 use rustmotion::engine::render;
-use rustmotion::layout::Constraints;
 use rustmotion::schema::{Overflow, ResolvedScenario};
 use serde::Serialize;
 
@@ -265,16 +265,22 @@ fn check_unwrappable_text(
     si: usize,
     out: &mut Vec<GeometryViolation>,
 ) {
-    // Only meaningful for components whose Widget::measure with unbounded
-    // constraints reflects the *natural* unwrapped width. (Text only — other
-    // components either wrap or use fixed dimensions.)
+    // Only meaningful for components whose intrinsic natural width can exceed
+    // the allocated width when wrap is disabled. (Text only — other components
+    // either wrap or use fixed dimensions.)
     if let Component::Text(t) = component {
         let wrap = t.style.wrap.unwrap_or(true);
         if wrap {
             return;
         }
-        let natural = component.as_widget().measure(&Constraints::unbounded());
-        if natural.0 > bbox.w + 0.5 {
+        // Measure the text at its natural (unbounded) width via the same
+        // cosmic-text–backed intrinsic the layout engine uses.
+        let intrinsic = TextIntrinsic::from_text(t);
+        let (natural_w, _) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        if natural_w > bbox.w + 0.5 {
             out.push(GeometryViolation {
                 view_index: vi,
                 scene_index: si,
@@ -286,7 +292,7 @@ fn check_unwrappable_text(
                 viewport,
                 hint: format!(
                     "text natural width is {:.0}px but only {:.0}px available — set wrap: true or reduce font_size",
-                    natural.0, bbox.w
+                    natural_w, bbox.w
                 ),
             });
         }
