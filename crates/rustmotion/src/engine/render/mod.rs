@@ -14,7 +14,7 @@ pub use scene::{
     render_world_frame_scaled,
     render_scene_bg_scaled, render_scene_fg_scaled,
     compute_root_layout, compute_root_layout_all_flow,
-    prepare_scene, deserialize_children,
+    prepare_scene, deserialize_children, root_style,
 };
 
 use crate::error::Result;

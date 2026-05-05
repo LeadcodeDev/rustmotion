@@ -217,7 +217,7 @@ pub fn render_frame_v2_scaled(
 }
 
 /// Build a `LayerStyle` from an optional `SceneLayout` for root-level flex layout.
-fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
+pub fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
     let mut style = LayerStyle::default();
     if let Some(layout) = scene_layout {
         style.flex_direction = layout.direction.clone();

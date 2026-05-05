@@ -1,4 +1,4 @@
-//! Geometry validator — walks the resolved layout tree of every scene and
+//! Geometry validator — walks the resolved box tree of every scene and
 //! reports nodes whose absolute bounding box leaves the device viewport.
 //!
 //! Scope of v1:
@@ -13,13 +13,21 @@
 //! (untransformed) layout. With `--strict-anim`, we additionally sample
 //! frames and reapply the same canvas transforms the renderer uses to verify
 //! each frame stays inside the viewport.
+//!
+//! This walker runs the new CSS-engine pipeline (taffy + cosmic-text) so the
+//! geometry it checks matches what the renderer will actually paint.
 
 use rustmotion::components::{ChildComponent, Component};
+use rustmotion::core::css::layer_to_css;
+use rustmotion::core::css::taffy_bridge::ConversionContext;
+use rustmotion::core::engine::box_tree::BoxNode;
+use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult};
 use rustmotion::engine::animator::{
     apply_orbits, apply_wiggles, extract_effects, resolve_animations, AnimatedProperties,
 };
+use rustmotion::components::box_builder::build_scene_from_refs;
 use rustmotion::engine::render;
-use rustmotion::layout::{Constraints, LayoutNode};
+use rustmotion::layout::Constraints;
 use rustmotion::schema::{Overflow, ResolvedScenario};
 use serde::Serialize;
 
@@ -78,18 +86,19 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
             let children = render::deserialize_children(scene);
-            let layout = render::compute_root_layout(
-                &children,
-                &scenario.video,
-                scene.layout.as_ref(),
-            );
             let viewport = (scenario.video.width, scenario.video.height);
+            let viewport_f = (viewport.0 as f32, viewport.1 as f32);
+
+            let root_layer = render::root_style(scene.layout.as_ref());
+            let root_css = layer_to_css(&root_layer);
+            let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
+            let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             walk(
                 &children,
-                &layout,
-                0.0,
-                0.0,
+                &built.root.children,
+                &layouts,
                 viewport,
                 vi,
                 si,
@@ -105,9 +114,8 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
 #[allow(clippy::too_many_arguments)]
 fn walk(
     children: &[ChildComponent],
-    parent_layout: &LayoutNode,
-    parent_x: f32,
-    parent_y: f32,
+    boxes: &[BoxNode],
+    layouts: &LayoutResult,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -115,32 +123,25 @@ fn walk(
     _parent_clips: bool,
     out: &mut Vec<GeometryViolation>,
 ) {
-    for (i, child) in children.iter().enumerate() {
+    for (i, (child, box_node)) in children.iter().zip(boxes.iter()).enumerate() {
         let child_path = format!("{}.children[{}]", path, i);
-        let layout = match parent_layout.children.get(i) {
+        let layout = match layouts.get(box_node.id) {
             Some(l) => l,
             None => continue,
         };
-        let abs_x = parent_x + layout.x;
-        let abs_y = parent_y + layout.y;
-        let bbox = BBox { x: abs_x, y: abs_y, w: layout.width, h: layout.height };
+        let bbox = bbox_of(layout);
 
-        // Component-specific exemptions.
-        if is_exempted(&child.component) {
-            // Recurse into containers anyway — exemption is per-leaf.
-        } else {
+        if !is_exempted(&child.component) {
             check_viewport(&child.component, &child_path, &bbox, viewport, vi, si, out);
             check_unwrappable_text(&child.component, &child_path, &bbox, viewport, vi, si, out);
             check_auto_scroll(&child.component, &child_path, &bbox, viewport, vi, si, out);
         }
 
-        // Recurse into containers.
         if let Some(grandchildren) = container_children(&child.component) {
             walk(
                 grandchildren,
-                layout,
-                abs_x,
-                abs_y,
+                &box_node.children,
+                layouts,
                 viewport,
                 vi,
                 si,
@@ -149,6 +150,15 @@ fn walk(
                 out,
             );
         }
+    }
+}
+
+fn bbox_of(layout: &BoxLayout) -> BBox {
+    BBox {
+        x: layout.x,
+        y: layout.y,
+        w: layout.width,
+        h: layout.height,
     }
 }
 
@@ -256,7 +266,8 @@ fn check_unwrappable_text(
     out: &mut Vec<GeometryViolation>,
 ) {
     // Only meaningful for components whose Widget::measure with unbounded
-    // constraints reflects the *natural* unwrapped width.
+    // constraints reflects the *natural* unwrapped width. (Text only — other
+    // components either wrap or use fixed dimensions.)
     if let Component::Text(t) = component {
         let wrap = t.style.wrap.unwrap_or(true);
         if wrap {
@@ -422,12 +433,17 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
             let children = render::deserialize_children(scene);
-            let layout = render::compute_root_layout(
-                &children,
-                &scenario.video,
-                scene.layout.as_ref(),
-            );
             let viewport = (scenario.video.width, scenario.video.height);
+            let viewport_f = (viewport.0 as f32, viewport.1 as f32);
+
+            // Use the resting layout as the base bbox. Animation transforms
+            // (translate/scale/wiggle/orbit) are applied analytically per
+            // sample — they don't reflow taffy.
+            let root_layer = render::root_style(scene.layout.as_ref());
+            let root_css = layer_to_css(&root_layer);
+            let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
+            let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             let scene_duration = scene.duration;
 
@@ -435,9 +451,8 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                 let time = scene_duration * *ratio;
                 walk_anim(
                     &children,
-                    &layout,
-                    0.0,
-                    0.0,
+                    &built.root.children,
+                    &layouts,
                     viewport,
                     vi,
                     si,
@@ -456,9 +471,8 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
 #[allow(clippy::too_many_arguments)]
 fn walk_anim(
     children: &[ChildComponent],
-    parent_layout: &LayoutNode,
-    parent_x: f32,
-    parent_y: f32,
+    boxes: &[BoxNode],
+    layouts: &LayoutResult,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -468,15 +482,13 @@ fn walk_anim(
     seen: &mut std::collections::HashSet<(usize, usize, String)>,
     out: &mut Vec<GeometryViolation>,
 ) {
-    for (i, child) in children.iter().enumerate() {
+    for (i, (child, box_node)) in children.iter().zip(boxes.iter()).enumerate() {
         let child_path = format!("{}.children[{}]", path, i);
-        let layout = match parent_layout.children.get(i) {
+        let layout = match layouts.get(box_node.id) {
             Some(l) => l,
             None => continue,
         };
-        let abs_x = parent_x + layout.x;
-        let abs_y = parent_y + layout.y;
-        let base_bbox = BBox { x: abs_x, y: abs_y, w: layout.width, h: layout.height };
+        let base_bbox = bbox_of(layout);
 
         if !is_exempted(&child.component) && layout.width > 0.5 && layout.height > 0.5 {
             let props = resolve_props_for_validation(&child.component, time, scene_duration);
@@ -518,9 +530,8 @@ fn walk_anim(
         if let Some(grandchildren) = container_children(&child.component) {
             walk_anim(
                 grandchildren,
-                layout,
-                abs_x,
-                abs_y,
+                &box_node.children,
+                layouts,
                 viewport,
                 vi,
                 si,
@@ -649,6 +660,143 @@ fn hint_for_animated(
             base
         ),
         _ => format!("{} — soften the preset or pull the resting position inward", base),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion::loader::load_scenario_from_source;
+
+    fn parse(json: &str) -> rustmotion::schema::ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("scenario parses")
+    }
+
+    #[test]
+    fn clean_scenario_has_no_violations() {
+        // 100×80 shape at (10, 10) in a 1920×1080 viewport — well inside.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "size": { "width": 100, "height": 80 },
+                    "x": 10, "y": 10,
+                    "style": { "fill": "#ff0000" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(violations.is_empty(), "expected clean, got: {:?}", violations);
+    }
+
+    #[test]
+    fn shape_past_right_edge_triggers_x_overflow() {
+        // A 400×100 shape positioned at x=1700 in a 1920-wide viewport spills
+        // 180 px past the right edge.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "size": { "width": 400, "height": 100 },
+                    "position": "absolute",
+                    "x": 1700, "y": 100,
+                    "style": { "fill": "#ff0000" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let viewport = violations.iter().find(|v| v.kind == ViolationKind::ViewportOverflow);
+        assert!(viewport.is_some(), "missing viewport violation in {:?}", violations);
+        let v = viewport.unwrap();
+        assert_eq!(v.axis, Axis::X, "expected X-axis overflow, got {:?}", v.axis);
+        assert_eq!(v.component, "shape");
+        assert!(v.path.contains("children[0]"), "path missing index: {}", v.path);
+    }
+
+    #[test]
+    fn unwrappable_text_in_narrow_card_is_flagged() {
+        // A card 200 px wide with a 96 px font_size unwrapped text. Natural
+        // width far exceeds 200, so we should get UnwrappableTextOverflow.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "card",
+                    "size": { "width": 200, "height": 200 },
+                    "x": 100, "y": 100,
+                    "style": { "background": "#222244" },
+                    "children": [{
+                        "type": "text",
+                        "content": "this string is too long to fit",
+                        "style": { "color": "#ffffff", "font_size": 96, "wrap": false }
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations.iter().find(|v| v.kind == ViolationKind::UnwrappableTextOverflow);
+        assert!(v.is_some(), "missing UnwrappableTextOverflow in {:?}", violations);
+        let v = v.unwrap();
+        assert_eq!(v.component, "text");
+        assert_eq!(v.axis, Axis::X);
+    }
+
+    #[test]
+    fn marquee_is_exempted_from_overflow() {
+        // A marquee that bleeds past the viewport: no violation should fire,
+        // marquee is by-design designed to scroll content past edges.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "marquee",
+                    "content": "scrolling text that bleeds",
+                    "x": 1900, "y": 100
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations.iter().all(|v| v.component != "marquee"),
+            "marquee should be exempt, got: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn auto_scroll_disabled_codeblock_overflows() {
+        // 20 lines × 14 px × 1.5 line-height + chrome + padding ≈ 487 px.
+        // Box height capped at 200 → AutoScrollDisabledOverflow.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "codeblock",
+                    "code": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20",
+                    "auto_scroll": false,
+                    "size": { "width": 800, "height": 200 },
+                    "x": 100, "y": 100
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations.iter().find(|v| v.kind == ViolationKind::AutoScrollDisabledOverflow);
+        assert!(v.is_some(), "missing AutoScrollDisabledOverflow in {:?}", violations);
+        assert_eq!(v.unwrap().component, "codeblock");
     }
 }
 
