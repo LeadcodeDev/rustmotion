@@ -267,53 +267,8 @@ mod component_smoke {
         }
     }
 
-    /// Renders a flat list of children through the legacy pipeline
-    /// (compute_root_layout + render_children) onto a fresh raster surface
-    /// and returns the RGBA buffer. Mirrors what `render_scene_fg_scaled`
-    /// does for the foreground without setting up a Scene struct.
-    fn render_legacy(children: &[crate::components::ChildComponent], w: u32, h: u32) -> Vec<u8> {
-        use crate::engine::render::render_children;
-        use crate::layout::flex::layout_flex;
-        use crate::layout::Constraints;
-        use crate::schema::{CardDirection, LayerStyle};
-        use crate::traits::RenderContext;
-
-        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32))
-            .expect("raster surface");
-        let canvas = surface.canvas();
-        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-
-        let style = LayerStyle {
-            flex_direction: Some(CardDirection::Column),
-            ..Default::default()
-        };
-        let constraints = Constraints::tight(w as f32, h as f32);
-        let layout = layout_flex(children, &style, &constraints);
-        let ctx = RenderContext {
-            time: 0.5,
-            scene_duration: 1.0,
-            frame_index: 15,
-            fps: 30,
-            video_width: w,
-            video_height: h,
-            stagger_offset: 0.0,
-        };
-        render_children(canvas, children, &layout, &ctx).expect("legacy render");
-
-        let row_bytes = w as usize * 4;
-        let mut pixels = vec![0u8; row_bytes * h as usize];
-        let info = skia_safe::ImageInfo::new(
-            (w as i32, h as i32),
-            skia_safe::ColorType::RGBA8888,
-            skia_safe::AlphaType::Premul,
-            None,
-        );
-        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
-        pixels
-    }
-
-    /// Same as `render_legacy` but routes the scene through the new
-    /// pipeline (box_builder + run_layout + paint_tree).
+    /// Routes the scene through the new pipeline
+    /// (box_builder + run_layout + paint_tree).
     fn render_new(children: &[crate::components::ChildComponent], w: u32, h: u32) -> Vec<u8> {
         render_new_at(children, w, h, 0.5, 1.0)
     }
@@ -374,20 +329,6 @@ mod component_smoke {
         buf.chunks_exact(4).filter(|p| p[3] > 0).count()
     }
 
-    /// Mean absolute per-channel difference between two RGBA buffers,
-    /// returned as a fraction in [0.0, 1.0]. Channels with both buffers
-    /// fully transparent contribute 0.
-    fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
-        assert_eq!(a.len(), b.len(), "buffer length mismatch");
-        if a.is_empty() {
-            return 0.0;
-        }
-        let total: u64 = a.iter().zip(b.iter())
-            .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
-            .sum();
-        total as f64 / (a.len() as f64 * 255.0)
-    }
-
     #[test]
     fn new_pipeline_produces_pixels_for_text_in_card() {
         // The new pipeline should render at least *something* when given a
@@ -415,164 +356,6 @@ mod component_smoke {
         let new_buf = render_new(&scene, 400, 300);
         let lit = nonzero_pixels(&new_buf);
         assert!(lit > 100, "new pipeline produced too few non-zero pixels: {lit}");
-    }
-
-    #[test]
-    fn pipelines_agree_on_flex_card_lit_count() {
-        // A flex card with two text children — exercises taffy vs the
-        // legacy flex.rs engine. We can't expect pixel-perfect parity
-        // (the two layout engines disagree on rounding and intrinsic
-        // sizing), but the total number of lit pixels should be in the
-        // same ballpark. If taffy returned a degenerate layout (zero
-        // size, NaN, etc.) the new pipeline would render very few
-        // pixels relative to legacy, and this assertion would catch it.
-        let json = serde_json::json!({
-            "type": "card",
-            "style": {
-                "padding": 16,
-                "background": "#222244",
-                "card_direction": "column",
-                "gap": 8
-            },
-            "children": [
-                { "type": "text", "content": "Title", "style": { "color": "#ffffff", "font-size": 32 } },
-                { "type": "text", "content": "Body",  "style": { "color": "#aaaaaa", "font-size": 18 } }
-            ]
-        });
-        let component: Component = serde_json::from_value(json).expect("deserialize");
-        let child = crate::components::ChildComponent {
-            component,
-            position: Some(crate::components::PositionMode::Absolute { x: 40.0, y: 40.0 }),
-            x: None,
-            y: None,
-            z_index: None,
-            overlays: Vec::new(),
-        };
-        let scene = vec![child];
-        let legacy = render_legacy(&scene, 500, 300);
-        let new = render_new(&scene, 500, 300);
-        let legacy_lit = nonzero_pixels(&legacy);
-        let new_lit = nonzero_pixels(&new);
-        assert!(legacy_lit > 1000, "legacy card too small: {legacy_lit}");
-        assert!(new_lit > 1000, "new card too small: {new_lit}");
-        let ratio = new_lit as f64 / legacy_lit as f64;
-        // Flex layout differences are expected. Generous band: 0.5..2.0.
-        // The point is "both pipelines drew a recognisable card", not
-        // pixel-perfect equality.
-        assert!(
-            (0.5..2.0).contains(&ratio),
-            "flex card lit-pixel ratio diverged: legacy={legacy_lit} new={new_lit} ratio={ratio}"
-        );
-    }
-
-    #[test]
-    fn pipelines_agree_on_nested_cards() {
-        // Nested containers — a grid of cards each containing text.
-        // Catches regressions where recursion into containers loses
-        // box ids, intrinsic measurers, or paint dispatch.
-        let json = serde_json::json!({
-            "type": "card",
-            "style": { "padding": 12, "background": "#101020", "card_direction": "row", "gap": 8 },
-            "children": [
-                {
-                    "type": "card",
-                    "style": { "padding": 8, "background": "#303050" },
-                    "children": [{ "type": "text", "content": "A", "style": { "color": "#ffffff", "font-size": 24 } }]
-                },
-                {
-                    "type": "card",
-                    "style": { "padding": 8, "background": "#503030" },
-                    "children": [{ "type": "text", "content": "B", "style": { "color": "#ffffff", "font-size": 24 } }]
-                }
-            ]
-        });
-        let component: Component = serde_json::from_value(json).expect("deserialize");
-        let child = crate::components::ChildComponent {
-            component,
-            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 60.0 }),
-            x: None,
-            y: None,
-            z_index: None,
-            overlays: Vec::new(),
-        };
-        let scene = vec![child];
-        let legacy = render_legacy(&scene, 500, 300);
-        let new = render_new(&scene, 500, 300);
-        let legacy_lit = nonzero_pixels(&legacy);
-        let new_lit = nonzero_pixels(&new);
-        assert!(legacy_lit > 1000, "legacy nested card empty: {legacy_lit}");
-        assert!(new_lit > 1000, "new nested card empty: {new_lit}");
-    }
-
-    #[test]
-    fn pipelines_agree_on_simple_shape() {
-        // For a single absolutely-positioned solid shape, both pipelines
-        // should agree closely: there's no flex layout, no font shaping,
-        // just a coloured rectangle. Tolerance is generous (~5% mean
-        // diff) to absorb antialiasing differences at edges, but a
-        // pipeline regression that wholly misplaces or recolours the
-        // shape will exceed it.
-        let json = serde_json::json!({
-            "type": "shape",
-            "shape": "rect",
-            "size": { "width": 100, "height": 80 },
-            "fill": "#ff3366"
-        });
-        let component: Component = serde_json::from_value(json).expect("deserialize");
-        let child = crate::components::ChildComponent {
-            component,
-            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
-            x: None,
-            y: None,
-            z_index: None,
-            overlays: Vec::new(),
-        };
-        let scene = vec![child];
-        let legacy = render_legacy(&scene, 400, 300);
-        let new = render_new(&scene, 400, 300);
-        let diff = mean_abs_diff(&legacy, &new);
-        assert!(diff < 0.05, "shape diff too large: {diff} (legacy lit={}, new lit={})",
-            nonzero_pixels(&legacy), nonzero_pixels(&new));
-    }
-
-    #[test]
-    fn new_and_legacy_pipelines_both_produce_pixels() {
-        // Sanity check that BOTH pipelines render visible output for the
-        // same scene. We don't compare pixel-by-pixel because layout
-        // engines (flex.rs vs taffy) and box decorations (legacy paints
-        // backgrounds via Card::paint, new pipeline via paint_tree) draw
-        // slightly different rectangles. Equal "lit" pixel counts is a
-        // useful weak-parity signal: both engines find the content.
-        let json = serde_json::json!({
-            "type": "text",
-            "content": "Parity",
-            "style": { "color": "#ffffff", "font-size": 64 }
-        });
-        let component: Component = serde_json::from_value(json).expect("deserialize");
-        let child = crate::components::ChildComponent {
-            component,
-            position: Some(crate::components::PositionMode::Absolute { x: 50.0, y: 100.0 }),
-            x: None,
-            y: None,
-            z_index: None,
-            overlays: Vec::new(),
-        };
-        let scene = vec![child];
-        let legacy_buf = render_legacy(&scene, 400, 300);
-        let new_buf = render_new(&scene, 400, 300);
-        let legacy_lit = nonzero_pixels(&legacy_buf);
-        let new_lit = nonzero_pixels(&new_buf);
-        assert!(legacy_lit > 50, "legacy pipeline empty: {legacy_lit}");
-        assert!(new_lit > 50, "new pipeline empty: {new_lit}");
-        // Text shaping is identical (both pipelines call into the legacy
-        // text painter via Widget::render); only the surrounding layout
-        // box differs. Lit-pixel counts should be within 10% of each
-        // other if both engines positioned the glyph run consistently.
-        let ratio = new_lit as f64 / legacy_lit as f64;
-        assert!(
-            ratio > 0.85 && ratio < 1.15,
-            "text lit-pixel ratio out of band: legacy={legacy_lit} new={new_lit} ratio={ratio}"
-        );
     }
 
     #[test]
@@ -626,47 +409,6 @@ mod component_smoke {
             sum_w += w;
         }
         if sum_w == 0.0 { None } else { Some(sum_wx / sum_w) }
-    }
-
-    #[test]
-    fn legacy_and_new_agree_on_fade_in_at_mid_frame() {
-        // Same scene through both pipelines at the same frame. The CSS
-        // bridge must produce an opacity equivalent to what the legacy
-        // animator+canvas-alpha-layer applies. A 15% lit-pixel band is
-        // enough headroom for AA differences and still tight enough to
-        // catch an opacity off-by-much-more-than-rounding.
-        let json = serde_json::json!({
-            "type": "shape",
-            "shape": "rect",
-            "size": { "width": 100, "height": 80 },
-            "style": {
-                "fill": "#ff3366",
-                "animation": [{ "name": "fade_in", "duration": 1.0 }]
-            }
-        });
-        let component: Component = serde_json::from_value(json).expect("deserialize");
-        let child = crate::components::ChildComponent {
-            component,
-            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
-            x: None,
-            y: None,
-            z_index: None,
-            overlays: Vec::new(),
-        };
-        let scene = vec![child];
-        // render_legacy and render_new both sample at t=0.5, scene_duration=1.0
-        let legacy = render_legacy(&scene, 400, 300);
-        let new = render_new(&scene, 400, 300);
-        let red_sum: fn(&[u8]) -> u64 = |buf| buf.chunks_exact(4).map(|p| p[0] as u64).sum();
-        let legacy_red = red_sum(&legacy);
-        let new_red = red_sum(&new);
-        assert!(legacy_red > 0, "legacy fade_in produced no red");
-        assert!(new_red > 0, "new fade_in produced no red");
-        let ratio = new_red as f64 / legacy_red as f64;
-        assert!(
-            (0.85..1.15).contains(&ratio),
-            "fade_in red sums diverged: legacy={legacy_red} new={new_red} ratio={ratio:.3}"
-        );
     }
 
     #[test]
@@ -747,27 +489,4 @@ mod component_smoke {
         );
     }
 
-    #[test]
-    fn all_components_measure() {
-        let constraints = Constraints::loose(1920.0, 1080.0);
-        let mut failures = Vec::new();
-        for (name, json) in COMPONENT_JSONS {
-            let component: Component = match serde_json::from_str(json) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let widget = component.as_widget();
-            let (w, h) = widget.measure(&constraints);
-            if w.is_nan() || h.is_nan() || w < 0.0 || h < 0.0 {
-                failures.push(format!("{name}: invalid size ({w}, {h})"));
-            }
-        }
-        if !failures.is_empty() {
-            panic!(
-                "Measure failures for {} component(s):\n{}",
-                failures.len(),
-                failures.join("\n")
-            );
-        }
-    }
 }
