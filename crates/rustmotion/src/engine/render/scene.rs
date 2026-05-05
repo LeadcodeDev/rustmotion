@@ -8,7 +8,21 @@ use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
 use crate::schema::{Camera, LayerStyle, Scene, SceneLayout, VideoConfig};
-use crate::traits::RenderContext;
+
+/// Internal render-time context — bundles per-scene timing/dimension info that
+/// the scene renderer threads down into its helpers. This is intentionally
+/// private to the scene renderer; component painters receive `PaintCtx`.
+#[derive(Debug, Clone)]
+struct RenderContext {
+    time: f64,
+    scene_duration: f64,
+    frame_index: u32,
+    fps: u32,
+    video_width: u32,
+    video_height: u32,
+    #[allow(dead_code)]
+    stagger_offset: f64,
+}
 
 /// Render a complete frame using the v2 component pipeline.
 ///
