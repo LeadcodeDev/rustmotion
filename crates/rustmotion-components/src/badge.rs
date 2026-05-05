@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -131,20 +133,13 @@ impl Badge {
     }
 }
 
-impl Widget for Badge {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Badge {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
         let color = self.style.background.as_deref().unwrap_or("#3B82F6");
         let (h_pad, _v_pad, icon_size) = self.resolved_params();
 
-        let w = layout.width;
-        let h = layout.height;
+        let w = layout_w;
+        let h = layout_h;
         let radius = h / 2.0;
 
         // Background / outline
@@ -209,16 +204,16 @@ impl Widget for Badge {
                             cache.insert(cache_key, decoded.clone());
                             decoded
                         } else {
-                            return Ok(());
+                            return;
                         }
                     } else {
-                        return Ok(());
+                        return;
                     }
                 } else {
-                    return Ok(());
+                    return;
                 }
             } else {
-                return Ok(());
+                return;
             };
 
             let icon_y = (h - icon_size) / 2.0;
@@ -262,7 +257,7 @@ impl Widget for Badge {
 
             // Pulse ring animation
             if self.pulse {
-                let phase = (ctx.time * 2.0).fract() as f32;
+                let phase = (time * 2.0).fract() as f32;
                 let pulse_r = dot_r * (1.0 + phase * 1.5);
                 let pulse_alpha = (1.0 - phase).max(0.0) * 0.5;
                 let mut pulse_paint = paint_from_hex(dot_color);
@@ -319,11 +314,35 @@ impl Widget for Badge {
             let cy = badge_y + (badge_h + (-count_metrics.ascent)) / 2.0;
             draw_text_with_fallback(canvas, &count_text, &count_font, &count_emoji, 0.0, cx, cy, &count_paint);
         }
+    }
+}
 
+impl Widget for Badge {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
         Ok(())
     }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         self.measure_content()
+    }
+}
+
+impl Painter for Badge {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

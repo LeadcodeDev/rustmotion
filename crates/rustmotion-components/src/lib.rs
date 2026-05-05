@@ -422,6 +422,13 @@ impl Component {
             Component::Cursor(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::Mockup(c) => Some(c),
+            Component::Text(c) => Some(c),
+            Component::Caption(c) => Some(c),
+            Component::Badge(c) => Some(c),
+            Component::Kbd(c) => Some(c),
+            Component::Callout(c) => Some(c),
+            Component::Marquee(c) => Some(c),
+            Component::TagCloud(c) => Some(c),
             _ => None,
         }
     }

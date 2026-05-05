@@ -3,11 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -127,17 +129,10 @@ impl Callout {
     }
 }
 
-impl Widget for Callout {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Callout {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
         let radius = self.radius();
         let font_size = self.font_size();
 
@@ -193,6 +188,19 @@ impl Widget for Callout {
 
         Ok(())
     }
+}
+
+impl Widget for Callout {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height)
+    }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         if let Some(size) = &self.size {
@@ -218,5 +226,17 @@ impl Widget for Callout {
             ArrowDirection::Top | ArrowDirection::Bottom => (w, h + self.arrow_size),
             ArrowDirection::Left | ArrowDirection::Right => (w + self.arrow_size, h),
         }
+    }
+}
+
+impl Painter for Callout {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height);
     }
 }

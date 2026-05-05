@@ -16,10 +16,12 @@ fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
     }
 }
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign, TextAnimGranularity};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
@@ -253,8 +255,14 @@ fn render_char_animation(
     }
 }
 
-impl Widget for Text {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Text {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_width: f32,
+        time: f64,
+        props: &AnimatedProperties,
+    ) -> Result<()> {
         let font_size = self.style.font_size_or(48.0);
         let color = self.style.color_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
@@ -297,10 +305,10 @@ impl Widget for Text {
         paint.set_alpha_f(1.0);
 
         // Use layout width as wrapping constraint, combined with max_width
-        let wrap_width = if layout.width.is_finite() && layout.width > 0.0 {
+        let wrap_width = if layout_width.is_finite() && layout_width > 0.0 {
             match self.max_width {
-                Some(mw) => Some(mw.min(layout.width)),
-                None => Some(layout.width),
+                Some(mw) => Some(mw.min(layout_width)),
+                None => Some(layout_width),
             }
         } else {
             self.max_width
@@ -349,8 +357,8 @@ impl Widget for Text {
         });
 
         // Compute alignment width
-        let align_width = if layout.width.is_finite() && layout.width > 0.0 {
-            layout.width
+        let align_width = if layout_width.is_finite() && layout_width > 0.0 {
+            layout_width
         } else {
             let mut max_w = 0.0f32;
             for line in &lines {
@@ -373,7 +381,7 @@ impl Widget for Text {
             render_char_animation(
                 canvas, &content, &font, &emoji_font, &paint,
                 letter_spacing, align, align_width, line_height_val, baseline_offset,
-                &lines, &char_anim, ctx.time, resolved.overshoot,
+                &lines, &char_anim, time, resolved.overshoot,
             );
             return Ok(());
         }
@@ -425,6 +433,19 @@ impl Widget for Text {
         }
 
         Ok(())
+    }
+}
+
+impl Widget for Text {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, ctx.time, props)
     }
 
     fn measure(&self, constraints: &Constraints) -> (f32, f32) {
@@ -491,5 +512,17 @@ impl Widget for Text {
         // Final constrain — guarantees the contract that returned size <= constraints.max
         let (max_w, h) = constraints.constrain(max_w, h);
         (max_w, h)
+    }
+}
+
+impl Painter for Text {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, ctx.time, props);
     }
 }

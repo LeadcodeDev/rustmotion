@@ -3,12 +3,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, TimingConfig, Widget};
 
 fn default_font_size() -> f32 {
     14.0
@@ -78,17 +80,10 @@ impl Kbd {
     }
 }
 
-impl Widget for Kbd {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Kbd {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+        let w = layout_w;
+        let h = layout_h;
         let radius = 6.0;
 
         let bg_color = self.style.background.as_deref().unwrap_or(&self.background_color);
@@ -141,11 +136,35 @@ impl Widget for Kbd {
             text_y,
             &text_paint,
         );
+    }
+}
 
+impl Widget for Kbd {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        _ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, layout.height);
         Ok(())
     }
 
     fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
         self.measure_content()
+    }
+}
+
+impl Painter for Kbd {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height);
     }
 }

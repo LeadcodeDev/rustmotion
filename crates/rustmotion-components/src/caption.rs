@@ -3,10 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::layout::{Constraints, LayoutNode};
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, LayerStyle};
-use rustmotion_core::traits::{RenderContext, Widget};
+use rustmotion_core::traits::{PaintCtx, Painter, RenderContext, Widget};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Caption {
@@ -26,8 +28,8 @@ rustmotion_core::impl_traits!(Caption {
     Styled => style,
 });
 
-impl Widget for Caption {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Caption {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
         let font_size = self.style.font_size_or(48.0);
         let color = self.style.color_or("#FFFFFF");
         let font_family = self.style.font_family.as_deref().unwrap_or("Inter");
@@ -46,11 +48,11 @@ impl Widget for Caption {
         match self.mode {
             CaptionStyle::WordByWord => {
                 for word in &self.words {
-                    if ctx.time >= word.start && ctx.time < word.end {
+                    if time >= word.start && time < word.end {
                         let paint = paint_from_hex(&self.active_color);
                         let text_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
 
-                        let cx = layout.width / 2.0;
+                        let cx = layout_width / 2.0;
 
                         if let Some(ref bg_color) = self.style.background {
                             let padding = font_size * 0.3;
@@ -89,7 +91,7 @@ impl Widget for Caption {
                 }
 
                 let line_height = font_size * 1.4;
-                let cx = layout.width / 2.0;
+                let cx = layout_width / 2.0;
 
                 if let Some(ref bg_color) = self.style.background {
                     let padding = font_size * 0.3;
@@ -116,7 +118,7 @@ impl Widget for Caption {
 
                     for (word_idx, word_width) in line {
                         let word = &self.words[*word_idx];
-                        let is_active = ctx.time >= word.start && ctx.time < word.end;
+                        let is_active = time >= word.start && time < word.end;
                         let word_color = if is_active { &self.active_color } else { color };
                         let paint = paint_from_hex(word_color);
 
@@ -126,7 +128,19 @@ impl Widget for Caption {
                 }
             }
         }
+    }
+}
 
+impl Widget for Caption {
+    fn render(
+        &self,
+        canvas: &Canvas,
+        layout: &LayoutNode,
+        ctx: &RenderContext,
+        _props: &AnimatedProperties,
+        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
+    ) -> Result<()> {
+        self.paint(canvas, layout.width, ctx.time);
         Ok(())
     }
 
@@ -135,6 +149,18 @@ impl Widget for Caption {
         let w = self.max_width.unwrap_or(400.0);
         let h = font_size * 1.3;
         (w, h)
+    }
+}
+
+impl Painter for Caption {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, ctx.time);
     }
 }
 
