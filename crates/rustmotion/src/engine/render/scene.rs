@@ -3,7 +3,7 @@ use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
-use super::{render_children, render_component, render_overlays};
+use super::render_component;
 use crate::components::ChildComponent;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
@@ -179,22 +179,16 @@ pub fn render_frame_v2_scaled(
         true,
     );
 
-    // Render component tree.
-    // If the new CSS-engine pipeline is enabled (env var or feature flag),
-    // route through taffy + paint_tree + LegacyPaintDispatcher. Otherwise
-    // fall back to the legacy Widget pipeline.
-    if new_pipeline_enabled() {
-        render_with_new_pipeline(
-            canvas,
-            root_children,
-            config.width as f32,
-            config.height as f32,
-            scene.layout.as_ref(),
-            &ctx,
-        );
-    } else {
-        render_children(canvas, root_children, root_layout, &ctx)?;
-    }
+    // Render component tree through taffy + paint_tree + LegacyPaintDispatcher.
+    let _ = root_layout;
+    render_with_new_pipeline(
+        canvas,
+        root_children,
+        config.width as f32,
+        config.height as f32,
+        scene.layout.as_ref(),
+        &ctx,
+    );
 
     drop(clip_guard);
     drop(camera_guard);
@@ -240,17 +234,10 @@ pub fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
 /// to opt back into the old Flutter-style engine for the duration of the
 /// migration. The legacy escape hatch is temporary: once all 51 components
 /// are migrated to `Painter`, the switch and the legacy code paths go away.
-fn new_pipeline_enabled() -> bool {
-    let legacy_opt_out = std::env::var("RUSTMOTION_LEGACY_PIPELINE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    !legacy_opt_out
-}
-
-/// Render `root_children` through the new pipeline:
+/// Render `root_children` through the CSS-engine pipeline:
 /// build a `BoxNode` tree, run taffy to lay it out, then paint via
-/// `paint_tree` with the `LegacyPaintDispatcher` bridging to existing
-/// `Widget::render` impls.
+/// `paint_tree` with the `LegacyPaintDispatcher` bridging to component
+/// `Painter::paint_content` impls.
 fn render_with_new_pipeline(
     canvas: &Canvas,
     root_children: &[ChildComponent],
@@ -588,41 +575,24 @@ pub fn render_world_frame_scaled(
         let scene_children = deserialize_children(scene);
         let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
-        // Render: decorative children get fullscreen layout, content children get flex layout.
-        // Decorative (particles) always go through the legacy path: they're
-        // intentionally fullscreen, which the new pipeline's flex flow can't
-        // express. Non-decorative children go through the new pipeline when
-        // the feature flag is on, so world scenes stay in sync with slide
-        // views.
-        let use_new = new_pipeline_enabled();
-        for (i, child) in scene_children.iter().enumerate() {
-            if i >= layout.children.len() { break; }
-            if child.is_decorative() {
-                let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
-                canvas.save();
-                render_component(canvas, child, &deco_layout, &ctx)?;
-                canvas.restore();
-            } else if !use_new {
-                let child_layout = &layout.children[i];
-                canvas.save();
-                canvas.translate((child_layout.x, child_layout.y));
-                render_component(canvas, child, child_layout, &ctx)?;
-                if !child.overlays.is_empty() {
-                    render_overlays(canvas, &child.overlays, child_layout, &ctx)?;
-                }
-                canvas.restore();
-            }
+        // Decorative (particles) get the full viewport via the legacy
+        // render_component path; flex-flow children go through the new
+        // pipeline so world scenes stay in sync with slide views.
+        let _ = layout;
+        for child in scene_children.iter().filter(|c| c.is_decorative()) {
+            let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
+            canvas.save();
+            render_component(canvas, child, &deco_layout, &ctx)?;
+            canvas.restore();
         }
-        if use_new {
-            render_with_new_pipeline_iter(
-                canvas,
-                scene_children.iter().filter(|c| !c.is_decorative()),
-                vw,
-                vh,
-                Some(scene_layout),
-                &ctx,
-            );
-        }
+        render_with_new_pipeline_iter(
+            canvas,
+            scene_children.iter().filter(|c| !c.is_decorative()),
+            vw,
+            vh,
+            Some(scene_layout),
+            &ctx,
+        );
 
         if has_camera {
             canvas.restore();
@@ -736,18 +706,15 @@ pub fn render_scene_fg_scaled(
         ClipOp::Intersect,
         true,
     );
-    if new_pipeline_enabled() {
-        render_with_new_pipeline(
-            canvas,
-            &children,
-            config.width as f32,
-            config.height as f32,
-            scene.layout.as_ref(),
-            &ctx,
-        );
-    } else {
-        render_children(canvas, &children, &layout, &ctx)?;
-    }
+    let _ = layout;
+    render_with_new_pipeline(
+        canvas,
+        &children,
+        config.width as f32,
+        config.height as f32,
+        scene.layout.as_ref(),
+        &ctx,
+    );
     canvas.restore();
 
     if has_camera { canvas.restore(); }
