@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_color() -> String {
     "#22C55E".to_string()
@@ -31,8 +32,6 @@ fn default_animation_duration() -> f64 {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Sparkline {
     pub data: Vec<f64>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_color")]
     pub color: String,
     #[serde(default)]
@@ -48,42 +47,37 @@ pub struct Sparkline {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Sparkline {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Sparkline {
-    fn progress(&self, ctx: &RenderContext) -> f32 {
+    fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
-}
 
-impl Widget for Sparkline {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
         let n = self.data.len();
         if n < 2 {
-            return Ok(());
+            return;
         }
 
-        let progress = self.progress(ctx);
+        let progress = self.progress_at(time);
 
         let max_val = self.data.iter().fold(f64::MIN, |a, &b| a.max(b));
         let min_val = self.data.iter().fold(f64::MAX, |a, &b| a.min(b));
@@ -158,13 +152,17 @@ impl Widget for Sparkline {
         canvas.draw_path(&line_path, &line_paint);
 
         canvas.restore();
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (120.0, 40.0)
+impl Painter for Sparkline {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

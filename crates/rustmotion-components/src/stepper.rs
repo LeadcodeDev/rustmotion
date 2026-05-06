@@ -1,15 +1,16 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_active_step() -> u32 {
     0
@@ -65,8 +66,6 @@ pub struct Stepper {
     /// Layout direction: "horizontal" or "vertical".
     #[serde(default = "default_orientation")]
     pub orientation: String,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Color of the active step node.
     #[serde(default = "default_active_color")]
     pub active_color: String,
@@ -82,19 +81,23 @@ pub struct Stepper {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Stepper {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Stepper {
-    fn current_step(&self, ctx: &RenderContext) -> f32 {
+    fn current_step_at(&self, time: f64) -> f32 {
         if let (Some(target), Some(start_at)) = (self.animate_to, self.animate_at) {
-            let elapsed = (ctx.time - start_at).max(0.0);
+            let elapsed = (time - start_at).max(0.0);
             let p = (elapsed / self.transition_duration).clamp(0.0, 1.0) as f32;
             let eased = 1.0 - (1.0 - p).powi(3);
             let from = self.active_step as f32;
@@ -106,23 +109,16 @@ impl Stepper {
     }
 }
 
-impl Widget for Stepper {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Stepper {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
         let n = self.steps.len();
         if n == 0 {
-            return Ok(());
+            return;
         }
 
-        let current = self.current_step(ctx);
+        let current = self.current_step_at(time);
         let r = self.node_size / 2.0;
 
         let fm = font_mgr();
@@ -403,23 +399,17 @@ impl Widget for Stepper {
                 }
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let n = self.steps.len().max(1);
-        if self.orientation == "horizontal" {
-            let w = (n as f32 * 100.0).max(200.0);
-            let h = self.node_size + 60.0;
-            (w, h)
-        } else {
-            let w = self.node_size + 200.0;
-            let h = (n as f32 * 80.0).max(100.0);
-            (w, h)
-        }
+impl Painter for Stepper {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

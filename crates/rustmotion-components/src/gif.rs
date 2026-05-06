@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::gif_cache;
-use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{ImageFit, LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{ImageFit, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_loop_true() -> bool { true }
 
@@ -17,37 +17,43 @@ fn default_loop_true() -> bool { true }
 pub struct Gif {
     pub src: String,
     #[serde(default)]
-    pub size: Option<Size>,
-    #[serde(default)]
     pub fit: ImageFit,
     #[serde(default = "default_loop_true")]
     pub loop_gif: bool,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Gif {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Gif {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Painter for Gif {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
         let gcache = gif_cache();
 
         let cached = if let Some(cached) = gcache.get(&self.src) {
             cached.clone()
         } else {
-            let file = std::fs::File::open(&self.src)
-                .map_err(|e| RustmotionError::GifOpen { path: self.src.clone(), reason: e.to_string() })?;
+            let Ok(file) = std::fs::File::open(&self.src) else { return };
 
             let mut decoder = gif::DecodeOptions::new();
             decoder.set_color_output(gif::ColorOutput::RGBA);
-            let mut decoder = decoder.read_info(file)
-                .map_err(|e| RustmotionError::GifDecode { path: self.src.clone(), reason: e.to_string() })?;
+            let Ok(mut decoder) = decoder.read_info(file) else { return };
 
             let gif_width = decoder.width() as u32;
             let gif_height = decoder.height() as u32;
@@ -56,8 +62,7 @@ impl Widget for Gif {
             let mut cumulative_times: Vec<f64> = Vec::new();
             let mut accumulated = 0.0;
 
-            while let Some(frame) = decoder.read_next_frame()
-                .map_err(|e| RustmotionError::GifFrame { reason: e.to_string() })? {
+            while let Ok(Some(frame)) = decoder.read_next_frame() {
                 let delay = frame.delay as f64 / 100.0;
                 let delay = if delay < 0.01 { 0.1 } else { delay };
                 accumulated += delay;
@@ -74,7 +79,7 @@ impl Widget for Gif {
         let (ref frames, ref cumulative_times, total_duration) = *cached;
 
         if frames.is_empty() {
-            return Ok(());
+            return;
         }
 
         let effective_time = if self.loop_gif {
@@ -83,7 +88,9 @@ impl Widget for Gif {
             ctx.time.min(total_duration)
         };
 
-        let frame_idx = cumulative_times.partition_point(|&t| t <= effective_time).min(frames.len() - 1);
+        let frame_idx = cumulative_times
+            .partition_point(|&t| t <= effective_time)
+            .min(frames.len() - 1);
         let (ref frame_data, gif_width, gif_height) = frames[frame_idx];
 
         let img_info = ImageInfo::new(
@@ -98,15 +105,6 @@ impl Widget for Gif {
             let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
             let paint = Paint::default();
             canvas.draw_image_rect(img, None, dst, &paint);
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match &self.size {
-            Some(s) => (s.width, s.height),
-            None => (100.0, 100.0),
         }
     }
 }

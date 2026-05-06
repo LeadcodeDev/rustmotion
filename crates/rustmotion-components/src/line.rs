@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A line component that draws a line from (x1, y1) to (x2, y2).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -26,7 +27,11 @@ pub struct Line {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_line_width() -> f32 {
@@ -38,20 +43,13 @@ fn default_line_color() -> String {
 }
 
 rustmotion_core::impl_traits!(Line {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Line {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Line {
+    fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
         let mut paint = paint_from_hex(&self.color);
         paint.set_style(PaintStyle::Stroke);
         paint.set_stroke_width(self.width);
@@ -84,13 +82,17 @@ impl Widget for Line {
             (self.x2, self.y2),
             &paint,
         );
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let w = (self.x2 - self.x1).abs();
-        let h = (self.y2 - self.y1).abs();
-        (w.max(1.0), h.max(1.0))
+impl Painter for Line {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, props);
     }
 }

@@ -1,14 +1,15 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_pill_color() -> String {
     "#3B82F6".to_string()
@@ -67,18 +68,22 @@ pub struct PillNav {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(PillNav {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl PillNav {
     fn resolved_font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(14.0)
+        self.style.font_size_px_or(14.0)
     }
 
     fn make_font(&self, bold: bool) -> skia_safe::Font {
@@ -152,21 +157,14 @@ impl PillNav {
     }
 }
 
-impl Widget for PillNav {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl PillNav {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
         if self.items.is_empty() {
-            return Ok(());
+            return;
         }
 
-        let w = layout.width;
-        let h = layout.height;
+        let w = layout_w;
+        let h = layout_h;
 
         // Outer container
         let outer_rect = Rect::from_xywh(0.0, 0.0, w, h);
@@ -177,7 +175,7 @@ impl Widget for PillNav {
         canvas.draw_rrect(outer_rrect, &bg_paint);
 
         let (_total_w, tab_positions, tab_widths) = self.compute_tab_layout();
-        let (active, transition_info) = self.active_at_time(ctx.time);
+        let (active, transition_info) = self.active_at_time(time);
 
         // Pill indicator
         let pill_h = h - self.gap * 2.0;
@@ -239,12 +237,17 @@ impl Widget for PillNav {
                 &label_paint,
             );
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let (total_w, _, _) = self.compute_tab_layout();
-        (total_w, self.height)
+impl Painter for PillNav {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

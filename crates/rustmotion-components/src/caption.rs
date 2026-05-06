@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{CaptionStyle, CaptionWord, LayerStyle};
-use rustmotion_core::traits::{RenderContext, Widget};
+use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Caption {
@@ -18,19 +19,23 @@ pub struct Caption {
     #[serde(default)]
     pub max_width: Option<f32>,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Caption {
-    Animatable => style,
+    Animatable => animation,
     Styled => style,
 });
 
-impl Widget for Caption {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        let font_size = self.style.font_size_or(48.0);
-        let color = self.style.color_or("#FFFFFF");
-        let font_family = self.style.font_family.as_deref().unwrap_or("Inter");
+impl Caption {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
+        let font_size = self.style.font_size_px_or(48.0);
+        let color = self.style.color_str_or("#FFFFFF");
+        let font_family = self.style.font_family_or("Inter");
 
         let fm = font_mgr();
         let typeface = fm
@@ -46,13 +51,13 @@ impl Widget for Caption {
         match self.mode {
             CaptionStyle::WordByWord => {
                 for word in &self.words {
-                    if ctx.time >= word.start && ctx.time < word.end {
+                    if time >= word.start && time < word.end {
                         let paint = paint_from_hex(&self.active_color);
                         let text_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
 
-                        let cx = layout.width / 2.0;
+                        let cx = layout_width / 2.0;
 
-                        if let Some(ref bg_color) = self.style.background {
+                        if let Some(bg_color) = self.style.background_color_str() {
                             let padding = font_size * 0.3;
                             let bg_rect = Rect::from_xywh(
                                 cx - text_width / 2.0 - padding,
@@ -89,9 +94,9 @@ impl Widget for Caption {
                 }
 
                 let line_height = font_size * 1.4;
-                let cx = layout.width / 2.0;
+                let cx = layout_width / 2.0;
 
-                if let Some(ref bg_color) = self.style.background {
+                if let Some(bg_color) = self.style.background_color_str() {
                     let padding = font_size * 0.3;
                     let total_height = lines.len() as f32 * line_height;
                     let max_line_width = lines.iter().map(|line| {
@@ -116,7 +121,7 @@ impl Widget for Caption {
 
                     for (word_idx, word_width) in line {
                         let word = &self.words[*word_idx];
-                        let is_active = ctx.time >= word.start && ctx.time < word.end;
+                        let is_active = time >= word.start && time < word.end;
                         let word_color = if is_active { &self.active_color } else { color };
                         let paint = paint_from_hex(word_color);
 
@@ -126,15 +131,18 @@ impl Widget for Caption {
                 }
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.style.font_size_or(48.0);
-        let w = self.max_width.unwrap_or(400.0);
-        let h = font_size * 1.3;
-        (w, h)
+impl Painter for Caption {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, ctx.time);
     }
 }
 

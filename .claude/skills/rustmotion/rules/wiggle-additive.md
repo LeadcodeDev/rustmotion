@@ -1,6 +1,6 @@
 # Rule: Wiggle Is Additive
 
-Wiggle offsets apply additively on top of keyframe animations and presets. Combine a preset entrance with wiggle for ongoing procedural motion. All effects go in `style.animation` array with `"name": "wiggle"`.
+Wiggle offsets apply additively on top of keyframe animations and presets. Combine a preset entrance with wiggle for ongoing procedural motion. All effects go in the `animation` array inside `style`.
 
 **GOOD** (fade in, then gently float):
 ```json
@@ -8,7 +8,8 @@ Wiggle offsets apply additively on top of keyframe animations and presets. Combi
   "type": "text",
   "content": "Floating text",
   "style": {
-    "font-size": 48, "color": "#FFFFFF",
+    "font-size": 48,
+    "color": "#FFFFFF",
     "animation": [
       { "name": "fade_in_up", "delay": 0.2, "duration": 0.8 },
       { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 2, "seed": 42 }
@@ -23,7 +24,8 @@ Wiggle offsets apply additively on top of keyframe animations and presets. Combi
   "type": "icon",
   "icon": "lucide:phone-off",
   "style": {
-    "size": 64, "color": "#FFFFFF",
+    "size": 64,
+    "color": "#FFFFFF",
     "animation": [
       { "name": "scale_in" },
       { "name": "wiggle", "property": "translate_x", "amplitude": 12, "frequency": 90, "mode": "sine" },

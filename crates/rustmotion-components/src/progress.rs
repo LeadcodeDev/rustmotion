@@ -1,15 +1,17 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_progress_width() -> f32 {
     300.0
@@ -63,32 +65,37 @@ pub struct Progress {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Progress {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Progress {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Progress {
+    fn paint(&self, canvas: &Canvas) -> Result<()> {
         match self.variant {
             ProgressVariant::Linear => self.render_linear(canvas),
             ProgressVariant::Circular => self.render_circular(canvas),
         }
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.width, self.height)
+impl Painter for Progress {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas);
     }
 }
 

@@ -1,14 +1,14 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
-use rustmotion_core::engine::animator::ease;
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::{ease, AnimatedProperties};
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{CodeblockReveal, LayerStyle, RevealMode, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{CodeblockReveal, RevealMode, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -101,8 +101,6 @@ pub struct Terminal {
     pub show_chrome: bool,
     #[serde(default)]
     pub reveal: Option<CodeblockReveal>,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// When rendered content overflows the box vertically, scroll up so the
     /// last revealed line stays visible. Default: `true`. Set to `false` to
     /// require all lines fit — the geometry validator will fail otherwise.
@@ -112,7 +110,11 @@ pub struct Terminal {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_show_chrome() -> bool {
@@ -124,7 +126,7 @@ fn default_auto_scroll() -> bool {
 }
 
 rustmotion_core::impl_traits!(Terminal {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -149,13 +151,13 @@ impl Terminal {
             .or_else(|| fm.legacy_make_typeface(None, font_style))
             .expect(&RustmotionError::FontNotFound.to_string());
 
-        let size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let size = self.style.font_size_px_or(FONT_SIZE);
 
         skia_safe::Font::from_typeface(typeface, size)
     }
 
     fn line_height(&self) -> f32 {
-        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let font_size = self.style.font_size_px_or(FONT_SIZE);
         (font_size * LINE_HEIGHT / FONT_SIZE).ceil()
     }
 
@@ -229,17 +231,10 @@ impl Terminal {
     }
 }
 
-impl Widget for Terminal {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Terminal {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         // Background
         let bg_rect = Rect::from_xywh(0.0, 0.0, w, h);
@@ -281,7 +276,7 @@ impl Widget for Terminal {
             // Title
             if let Some(title) = &self.title {
                 let font = self.make_font();
-                let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+                let font_size = self.style.font_size_px_or(FONT_SIZE);
                 let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
                 let mut title_paint = paint_from_hex(self.theme.title_color());
                 title_paint.set_anti_alias(true);
@@ -296,11 +291,11 @@ impl Widget for Terminal {
         }
 
         // Compute reveal visibility
-        let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(ctx.time);
+        let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(time);
 
         // Lines
         let font = self.make_font();
-        let font_size = self.style.font_size.unwrap_or(FONT_SIZE);
+        let font_size = self.style.font_size_px_or(FONT_SIZE);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
@@ -390,7 +385,7 @@ impl Widget for Terminal {
 
             // Blinking cursor on the last visible line during typewriter reveal
             if is_last_visible && self.reveal.is_some() && partial_chars.is_some() {
-                let blink = ((ctx.time * 2.0) as i32) % 2 == 0;
+                let blink = ((time * 2.0) as i32) % 2 == 0;
                 if blink {
                     let cursor_w = font_size * 0.55;
                     let cursor_h = font_size * 1.2;
@@ -408,17 +403,17 @@ impl Widget for Terminal {
 
         canvas.restore(); // close inner content clip
         canvas.restore(); // close outer rrect clip
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let chrome_h = if self.show_chrome { CHROME_HEIGHT } else { 0.0 };
-        let content_h = self.lines.len() as f32 * self.line_height() + PADDING * 2.0;
-
-        (500.0, chrome_h + content_h)
+impl Painter for Terminal {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

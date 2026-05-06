@@ -1,15 +1,17 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Point, TextBlob};
 
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw};
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    emoji_typeface, font_mgr, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_colors() -> Vec<String> {
     vec!["#3B82F6".to_string(), "#8B5CF6".to_string()]
@@ -34,37 +36,37 @@ pub struct GradientText {
     pub animate_angle: bool,
     #[serde(default = "default_speed")]
     pub speed: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(GradientText {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl GradientText {
     fn resolve_font(&self) -> (Font, Option<Font>) {
-        let font_size = self.style.font_size_or(48.0);
+        let font_size = self.style.font_size_px_or(48.0);
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
 
         let fm = font_mgr();
-        let slant = match font_style_type {
-            FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
-            FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
-            FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
+        let slant = match self.style.font_style {
+            Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
+            Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
+            _ => skia_safe::font_style::Slant::Upright,
         };
-        let weight = match font_weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
+        let weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => skia_safe::font_style::Weight::BOLD,
+            Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
+            _ => skia_safe::font_style::Weight::NORMAL,
         };
         let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
@@ -79,21 +81,14 @@ impl GradientText {
     }
 }
 
-impl Widget for GradientText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl GradientText {
+    fn paint(&self, canvas: &Canvas, time: f64) {
         if self.content.is_empty() || self.colors.is_empty() {
-            return Ok(());
+            return;
         }
 
         let (font, _emoji_font) = self.resolve_font();
-        let _font_size = self.style.font_size_or(48.0);
+        let _font_size = self.style.font_size_px_or(48.0);
 
         // Measure text
         let (_, metrics) = font.metrics();
@@ -102,7 +97,7 @@ impl Widget for GradientText {
 
         // Compute angle (possibly animated)
         let angle = if self.animate_angle {
-            self.angle + ctx.time as f32 * self.speed * 360.0
+            self.angle + time as f32 * self.speed * 360.0
         } else {
             self.angle
         };
@@ -163,21 +158,17 @@ impl Widget for GradientText {
                 canvas.draw_text_blob(&blob, Point::new(0.0, y), &paint);
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let (font, emoji_font) = self.resolve_font();
-        let font_size = self.style.font_size_or(48.0);
-
-        let text_w = measure_text_with_fallback(&self.content, &font, &emoji_font, 0.0);
-        let line_height = font_size * 1.3;
-
-        (text_w, line_height)
+impl Painter for GradientText {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

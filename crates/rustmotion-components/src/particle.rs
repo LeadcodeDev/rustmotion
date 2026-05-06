@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, MaskFilter, PaintStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -52,7 +53,11 @@ pub struct Particle {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_count() -> u32 {
@@ -66,7 +71,7 @@ fn default_seed() -> u64 {
 }
 
 rustmotion_core::impl_traits!(Particle {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -122,22 +127,21 @@ impl Particle {
     }
 }
 
-impl Widget for Particle {
-    fn render(
+impl Painter for Particle {
+    fn paint_content(
         &self,
         canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
         let w = layout.width;
         let h = layout.height;
         let t = ctx.time as f32 * self.speed;
 
         let colors = self.colors.clone().unwrap_or_else(|| self.default_colors());
         if colors.is_empty() {
-            return Ok(());
+            return;
         }
 
         for i in 0..self.count {
@@ -190,7 +194,6 @@ impl Widget for Particle {
                     paint.set_style(PaintStyle::Fill);
                     paint.set_alpha_f(twinkle);
 
-                    // Draw a small 4-pointed star
                     let s = size / 2.0;
                     let mut path = skia_safe::Path::new();
                     path.move_to((x, y - s));
@@ -213,7 +216,6 @@ impl Widget for Particle {
                     paint.set_style(PaintStyle::Fill);
                     canvas.draw_circle((x, y), size_osc / 2.0, &paint);
 
-                    // Highlight
                     let mut highlight = paint_from_hex("#FFFFFF");
                     highlight.set_style(PaintStyle::Fill);
                     highlight.set_alpha_f(0.3);
@@ -224,20 +226,17 @@ impl Widget for Particle {
                     );
                 }
                 ParticleType::Halo => {
-                    // Slow drifting glowing circles
                     let drift_x = (t * 0.3 * speed_var + phase).sin() * w * 0.1;
                     let drift_y = (t * 0.2 * speed_var + phase * 1.3).cos() * h * 0.1;
                     let x = base_x + drift_x;
                     let y = base_y + drift_y;
 
-                    // Pulsing opacity and size
                     let pulse = 0.4 + 0.6 * ((t * 1.5 * speed_var + phase).sin() * 0.5 + 0.5);
                     let radius = size * (0.8 + 0.4 * ((t * 0.8 + phase).sin() * 0.5 + 0.5));
 
                     paint.set_style(PaintStyle::Fill);
                     paint.set_alpha_f(pulse * 0.6);
 
-                    // Apply gaussian blur for the glow effect
                     let blur_sigma = radius * 0.6;
                     if let Some(mask) = MaskFilter::blur(skia_safe::BlurStyle::Normal, blur_sigma, false) {
                         paint.set_mask_filter(mask);
@@ -247,11 +246,5 @@ impl Widget for Particle {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        (constraints.max_width, constraints.max_height)
     }
 }

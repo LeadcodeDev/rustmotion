@@ -3,14 +3,31 @@ use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
 
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
-use super::{render_children, render_component, render_overlays};
 use crate::components::ChildComponent;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
-use crate::layout::{Constraints, LayoutNode};
-use crate::schema::{Camera, LayerStyle, Scene, SceneLayout, VideoConfig};
-use crate::traits::RenderContext;
+use crate::schema::{Camera, Scene, SceneLayout, VideoConfig};
+use rustmotion_core::css::style::{
+    AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection,
+    Gap, JustifyContent as CssJustifyContent,
+};
+use rustmotion_core::css::units::LengthPercentage;
+
+/// Internal render-time context — bundles per-scene timing/dimension info that
+/// the scene renderer threads down into its helpers. This is intentionally
+/// private to the scene renderer; component painters receive `PaintCtx`.
+#[derive(Debug, Clone)]
+struct RenderContext {
+    time: f64,
+    scene_duration: f64,
+    frame_index: u32,
+    fps: u32,
+    video_width: u32,
+    video_height: u32,
+    #[allow(dead_code)]
+    stagger_offset: f64,
+}
 
 /// Render a complete frame using the v2 component pipeline.
 ///
@@ -22,10 +39,8 @@ pub fn render_frame_v2(
     frame_index: u32,
     _total_frames: u32,
     root_children: &[ChildComponent],
-    root_layout: &LayoutNode,
 ) -> Result<Vec<u8>> {
-    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, root_layout, 1.0, None)
-
+    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, 1.0, None)
 }
 
 /// Render a frame with an optional scale factor for higher-resolution output.
@@ -40,7 +55,6 @@ pub fn render_frame_v2_scaled(
     frame_index: u32,
     _total_frames: u32,
     root_children: &[ChildComponent],
-    root_layout: &LayoutNode,
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
@@ -179,8 +193,15 @@ pub fn render_frame_v2_scaled(
         true,
     );
 
-    // Render component tree
-    render_children(canvas, root_children, root_layout, &ctx)?;
+    // Render component tree through taffy + paint_tree + LegacyPaintDispatcher.
+    render_with_new_pipeline(
+        canvas,
+        root_children,
+        config.width as f32,
+        config.height as f32,
+        scene.layout.as_ref(),
+        &ctx,
+    );
 
     drop(clip_guard);
     drop(camera_guard);
@@ -202,50 +223,169 @@ pub fn render_frame_v2_scaled(
     Ok(pixels)
 }
 
-/// Build a `LayerStyle` from an optional `SceneLayout` for root-level flex layout.
-fn root_style(scene_layout: Option<&SceneLayout>) -> LayerStyle {
-    let mut style = LayerStyle::default();
+/// Build a `CssStyle` from an optional `SceneLayout` for root-level flex layout.
+pub fn root_style(scene_layout: Option<&SceneLayout>) -> CssStyle {
+    use crate::schema::{CardAlign, CardDirection, CardJustify};
+    let mut style = CssStyle::default();
+    style.display = Some(rustmotion_core::css::style::Display::Flex);
+
     if let Some(layout) = scene_layout {
-        style.flex_direction = layout.direction.clone();
-        style.gap = layout.gap;
-        style.align_items = layout.align_items.clone();
-        style.justify_content = layout.justify_content.clone();
+        if let Some(d) = &layout.direction {
+            style.flex_direction = Some(match d {
+                CardDirection::Row => CssFlexDirection::Row,
+                CardDirection::Column => CssFlexDirection::Column,
+                CardDirection::RowReverse => CssFlexDirection::RowReverse,
+                CardDirection::ColumnReverse => CssFlexDirection::ColumnReverse,
+            });
+        }
+        if let Some(g) = layout.gap {
+            style.gap = Some(Gap::Uniform(LengthPercentage::Px(g)));
+        }
+        if let Some(a) = &layout.align_items {
+            style.align_items = Some(match a {
+                CardAlign::Start => CssAlignItems::FlexStart,
+                CardAlign::End => CssAlignItems::FlexEnd,
+                CardAlign::Center => CssAlignItems::Center,
+                CardAlign::Stretch => CssAlignItems::Stretch,
+            });
+        }
+        if let Some(j) = &layout.justify_content {
+            style.justify_content = Some(match j {
+                CardJustify::Start => CssJustifyContent::FlexStart,
+                CardJustify::End => CssJustifyContent::FlexEnd,
+                CardJustify::Center => CssJustifyContent::Center,
+                CardJustify::SpaceBetween => CssJustifyContent::SpaceBetween,
+                CardJustify::SpaceAround => CssJustifyContent::SpaceAround,
+                CardJustify::SpaceEvenly => CssJustifyContent::SpaceEvenly,
+            });
+        }
         if let Some(p) = layout.padding {
-            style.padding = Some(crate::schema::Spacing::Uniform(p));
+            style.padding = Some(Edges::Uniform(LengthPercentage::Px(p)));
         }
     }
     // Default direction is column (like a web page)
     if style.flex_direction.is_none() {
-        style.flex_direction = Some(crate::schema::CardDirection::Column);
+        style.flex_direction = Some(CssFlexDirection::Column);
     }
     style
 }
 
-/// Compute the layout tree for a set of root-level ChildComponents.
-/// Uses an implicit flex container at video dimensions (like a full-screen web page).
-/// All root children participate in flex flow (position is stripped before layout).
-/// Only children inside `Positioned` containers use absolute coordinates.
-pub fn compute_root_layout(
-    children: &[ChildComponent],
-    config: &VideoConfig,
+/// Render `root_children` through the CSS-engine pipeline:
+/// build a `BoxNode` tree, run taffy to lay it out, then paint via
+/// `paint_tree` with the `LegacyPaintDispatcher` bridging to component
+/// `Painter::paint_content` impls.
+fn render_with_new_pipeline(
+    canvas: &Canvas,
+    root_children: &[ChildComponent],
+    viewport_w: f32,
+    viewport_h: f32,
     scene_layout: Option<&SceneLayout>,
-) -> LayoutNode {
-    let constraints = Constraints::tight(config.width as f32, config.height as f32);
-    let style = root_style(scene_layout);
-    crate::layout::flex::layout_flex(children, &style, &constraints)
+    ctx: &RenderContext,
+) {
+    render_with_new_pipeline_iter(
+        canvas,
+        root_children.iter(),
+        viewport_w,
+        viewport_h,
+        scene_layout,
+        ctx,
+    );
 }
 
-/// Like `compute_root_layout`, but forces all children into flex flow
-/// (ignores absolute positions). Used for world scenes where content
-/// should be centered regardless of position attributes in the JSON.
-pub fn compute_root_layout_all_flow(
-    children: &[ChildComponent],
-    config: &VideoConfig,
+/// Iterator-based variant for callers (like world rendering) that want to
+/// pass a filtered subset of children without cloning.
+fn render_with_new_pipeline_iter<'a, I>(
+    canvas: &Canvas,
+    root_children: I,
+    viewport_w: f32,
+    viewport_h: f32,
     scene_layout: Option<&SceneLayout>,
-) -> LayoutNode {
-    let constraints = Constraints::tight(config.width as f32, config.height as f32);
-    let style = root_style(scene_layout);
-    crate::layout::flex::layout_flex_all_flow(children, &style, &constraints)
+    ctx: &RenderContext,
+) where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
+    use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+    // Mirror the legacy `root_style` so the new pipeline applies the same
+    // scene-level flex configuration (direction, gap, padding, alignment).
+    let root_css = root_style(scene_layout);
+
+    let anim = Some(BuildAnimationCtx {
+        time: ctx.time,
+        scene_duration: ctx.scene_duration,
+    });
+    let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css, anim);
+    let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
+    let dispatcher = LegacyPaintDispatcher::new(&built.components);
+    let frame = PaintFrame {
+        time: ctx.time,
+        frame_index: ctx.frame_index,
+        fps: ctx.fps,
+        video_width: ctx.video_width,
+        video_height: ctx.video_height,
+        scene_duration: ctx.scene_duration,
+    };
+    paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+}
+
+/// Paint a decorative leaf (e.g. Particle) over the full viewport without
+/// going through taffy. Resolves animations and dispatches to
+/// `Painter::paint_content` directly with a viewport-sized `BoxLayout`.
+fn paint_decorative_fullscreen(
+    canvas: &Canvas,
+    child: &ChildComponent,
+    viewport_w: f32,
+    viewport_h: f32,
+    ctx: &RenderContext,
+) {
+    use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
+    use rustmotion_core::engine::layout_pass::BoxLayout;
+    use rustmotion_core::traits::PaintCtx;
+
+    if let Some(timed) = child.component.as_timed() {
+        let (start_at, end_at) = timed.timing();
+        if let Some(s) = start_at { if ctx.time < s { return; } }
+        if let Some(e) = end_at { if ctx.time > e { return; } }
+    }
+
+    let props = match child.component.as_animatable() {
+        Some(a) => {
+            let effects = a.animation_effects();
+            if effects.is_empty() {
+                AnimatedProperties::default()
+            } else {
+                resolve_props_for_effects(effects, ctx.time, ctx.scene_duration)
+            }
+        }
+        None => AnimatedProperties::default(),
+    };
+    if props.opacity <= 0.0 { return; }
+
+    let Some(painter) = child.component.as_painter() else { return; };
+
+    let local = BoxLayout {
+        x: 0.0,
+        y: 0.0,
+        width: viewport_w,
+        height: viewport_h,
+        ..Default::default()
+    };
+    let paint_ctx = PaintCtx {
+        time: ctx.time,
+        scene_duration: ctx.scene_duration,
+        frame_index: ctx.frame_index,
+        fps: ctx.fps,
+        video_width: ctx.video_width,
+        video_height: ctx.video_height,
+        stagger_offset: 0.0,
+    };
+    canvas.save();
+    painter.paint_content(canvas, &local, &props, &paint_ctx);
+    canvas.restore();
 }
 
 /// Deserialize a scene's raw JSON children into typed ChildComponents.
@@ -268,14 +408,12 @@ pub fn deserialize_children(scene: &Scene) -> Vec<ChildComponent> {
         .collect()
 }
 
-/// Compute layout for a scene's children — ready for render_frame_v2.
+/// Deserialize a scene's children — ready for render_frame_v2.
 pub fn prepare_scene(
     scene: &Scene,
-    config: &VideoConfig,
-) -> (Vec<ChildComponent>, LayoutNode) {
-    let children = deserialize_children(scene);
-    let layout = compute_root_layout(&children, config, scene.layout.as_ref());
-    (children, layout)
+    _config: &VideoConfig,
+) -> Vec<ChildComponent> {
+    deserialize_children(scene)
 }
 
 /// Render a single frame using the v2 pipeline.
@@ -286,8 +424,8 @@ pub fn render_scene_frame(
     frame_in_scene: u32,
     scene_total_frames: u32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children, &layout)
+    let children = prepare_scene(scene, config);
+    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children)
 }
 
 pub fn render_scene_frame_scaled(
@@ -297,8 +435,8 @@ pub fn render_scene_frame_scaled(
     scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, &layout, scale_factor, None)
+    let children = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, None)
 }
 
 /// Like `render_scene_frame_scaled` but with the previous scene's resolved background for transition interpolation.
@@ -311,8 +449,8 @@ pub fn render_scene_frame_scaled_with_prev_bg(
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, &layout, scale_factor, prev_bg)
+    let children = prepare_scene(scene, config);
+    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, prev_bg)
 }
 
 /// Render a single frame of a world view: shared background, camera translation, visible scenes.
@@ -496,28 +634,22 @@ pub fn render_world_frame_scaled(
         };
         let scene_layout = scene.layout.as_ref().unwrap_or(&world_default_layout);
         let scene_children = deserialize_children(scene);
-        let layout = compute_root_layout(&scene_children, config, Some(scene_layout));
 
-        // Render: decorative children get fullscreen layout, content children get flex layout
-        for (i, child) in scene_children.iter().enumerate() {
-            if i >= layout.children.len() { break; }
-            if child.is_decorative() {
-                // Render particles fullscreen
-                let deco_layout = LayoutNode::new(0.0, 0.0, vw, vh);
-                canvas.save();
-                render_component(canvas, child, &deco_layout, &ctx)?;
-                canvas.restore();
-            } else {
-                let child_layout = &layout.children[i];
-                canvas.save();
-                canvas.translate((child_layout.x, child_layout.y));
-                render_component(canvas, child, child_layout, &ctx)?;
-                if !child.overlays.is_empty() {
-                    render_overlays(canvas, &child.overlays, child_layout, &ctx)?;
-                }
-                canvas.restore();
-            }
+        // Decorative children (particles) get a full-viewport BoxLayout and
+        // paint directly via Painter::paint_content. Flex-flow children go
+        // through the new pipeline so world scenes stay in sync with slide
+        // views.
+        for child in scene_children.iter().filter(|c| c.is_decorative()) {
+            paint_decorative_fullscreen(canvas, child, vw, vh, &ctx);
         }
+        render_with_new_pipeline_iter(
+            canvas,
+            scene_children.iter().filter(|c| !c.is_decorative()),
+            vw,
+            vh,
+            Some(scene_layout),
+            &ctx,
+        );
 
         if has_camera {
             canvas.restore();
@@ -591,7 +723,7 @@ pub fn render_scene_fg_scaled(
     _scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
-    let (children, layout) = prepare_scene(scene, config);
+    let children = prepare_scene(scene, config);
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
     let mut time = frame_in_scene as f64 / config.fps as f64;
@@ -631,7 +763,14 @@ pub fn render_scene_fg_scaled(
         ClipOp::Intersect,
         true,
     );
-    render_children(canvas, &children, &layout, &ctx)?;
+    render_with_new_pipeline(
+        canvas,
+        &children,
+        config.width as f32,
+        config.height as f32,
+        scene.layout.as_ref(),
+        &ctx,
+    );
     canvas.restore();
 
     if has_camera { canvas.restore(); }

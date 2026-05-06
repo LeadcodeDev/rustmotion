@@ -160,13 +160,12 @@ Sizing rules above are guidelines — `rustmotion validate` is the source of tru
 ```json
 {
   "type": "card",
-  "size": { "width": 920, "height": "auto" },
-  "style": { "flex-direction": "row" },
+  "style": { "width": 920, "height": "auto", "flex-direction": "row" },
   "children": [
-    { "size": { "width": 180 } },
-    { "size": { "width": 180 } },
-    { "size": { "width": 180 } },
-    { "size": { "width": 180 } }
+    { "style": { "width": 180 } },
+    { "style": { "width": 180 } },
+    { "style": { "width": 180 } },
+    { "style": { "width": 180 } }
   ]
 }
 ```
@@ -177,15 +176,13 @@ Sizing rules above are guidelines — `rustmotion validate` is the source of tru
 ```json
 {
   "type": "card",
-  "size": { "width": 1000, "height": "auto" },
-  "style": { "flex-direction": "column", "gap": 24 },
+  "style": { "width": 1000, "height": "auto", "flex-direction": "column", "gap": 24 },
   "children": [
     {
       "type": "card",
-      "size": { "width": 1000, "height": "auto" },
-      "style": { "flex-direction": "row", "align-items": "center", "gap": 24 },
+      "style": { "width": 1000, "height": "auto", "flex-direction": "row", "align-items": "center", "gap": 24 },
       "children": [
-        { "type": "icon", "size": { "width": 72, "height": 72 } },
+        { "type": "icon", "style": { "width": 72, "height": 72 } },
         { "type": "text", "style": { "font-size": 48 } }
       ]
     }

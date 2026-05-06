@@ -1,16 +1,18 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
     paint_from_hex,
 };
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_avatar_size() -> f32 {
     48.0
@@ -49,37 +51,34 @@ pub struct AvatarGroup {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(AvatarGroup {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl AvatarGroup {
-    fn visible_count(&self) -> usize {
+    pub fn visible_count(&self) -> usize {
         match self.max_display {
             Some(max) => max.min(self.avatars.len()),
             None => self.avatars.len(),
         }
     }
 
-    fn overflow_count(&self) -> usize {
+    pub fn overflow_count(&self) -> usize {
         self.avatars.len().saturating_sub(self.visible_count())
     }
 }
 
-impl Widget for AvatarGroup {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl AvatarGroup {
+    fn paint(&self, canvas: &Canvas) -> Result<()> {
         let s = self.size;
         let step = s - self.overlap;
         let visible = self.visible_count();
@@ -190,17 +189,16 @@ impl Widget for AvatarGroup {
 
         Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let visible = self.visible_count();
-        let overflow = self.overflow_count();
-        let total = visible + if overflow > 0 { 1 } else { 0 };
-        let step = self.size - self.overlap;
-        let w = if total == 0 {
-            0.0
-        } else {
-            (total - 1) as f32 * step + self.size
-        };
-        (w, self.size)
+impl Painter for AvatarGroup {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas);
     }
 }

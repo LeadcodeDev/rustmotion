@@ -1,57 +1,108 @@
-# Rule: Timeline Sequencing
+# Rule: Sequential Component Reveals
 
-## Summary
+## Critical: `start_at`, `end_at`, and `timeline` are NOT processed in the rendering pipeline
 
-Use the `timeline` field on a component's style to define sequential animation phases within a single scene. Each step triggers at a specific time with its own effects.
+These fields exist on component structs but are **silently ignored** for box-based components (card, div, text, icon, etc.) in the new CSS rendering pipeline. Using them produces no effect — the component is always visible regardless of `start_at`.
 
-## Details
+**Only `style.animation` effects are processed.**
 
-Timeline steps allow multi-phase animations without requiring separate scenes. Each step has an `at` time (in seconds) and an `animation` array. When the scene time reaches `step.at`, the step's animations activate with time resolved relative to `step.at`.
+---
 
-**Merging behavior:** Base `style.animation` effects play from the start. Timeline step effects are merged additively when they activate. Multiple steps can overlap.
+## Sequential reveals: the correct pattern
 
-## GOOD
+To make components appear sequentially (each replacing the previous with an entrance + parallax exit), use:
+1. All components at the same `position: absolute` coordinates
+2. `style.animation` with **both** entrance and exit effects, using absolute scene-time `delay` values
+3. Ascending `z-index` so later components stack on top during transitions
+
+### Why it works
+
+Animation preset keyframes use absolute scene time. Before the entrance `delay`, the preset's first keyframe returns `opacity: 0.0`, making the component invisible. No `start_at` needed.
+
+For `scale_in` with `delay: 2.0, duration: 0.5`:
+- t < 2.0 → opacity = 0 (first keyframe value at t=2.0 is 0.0)
+- t = 2.0–2.15 → opacity 0→1, scale 0→1
+- t ≥ 2.5 → opacity = 1, scale = 1
+
+### Example: 3 cards appearing one after another with parallax exit
 
 ```json
 {
   "type": "card",
+  "position": "absolute",
+  "x": 200, "y": 400,
   "style": {
-    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
-    "timeline": [
-      {
-        "at": 2.0,
-        "animation": [{ "name": "shake", "duration": 0.5 }]
-      },
-      {
-        "at": 4.0,
-        "animation": [{ "name": "fade_out", "duration": 0.8 }]
-      }
+    "width": 1500, "padding": 40, "border-radius": 20,
+    "background": "#0C1A2E", "z-index": 1,
+    "animation": [
+      { "name": "scale_in",    "delay": 0.5, "duration": 0.5 },
+      { "name": "slide_out_up","delay": 2.5, "duration": 0.55 }
     ]
-  }
+  },
+  "children": [...]
+},
+{
+  "type": "card",
+  "position": "absolute",
+  "x": 200, "y": 400,
+  "style": {
+    "width": 1500, "padding": 40, "border-radius": 20,
+    "background": "#0C1A2E", "z-index": 2,
+    "animation": [
+      { "name": "scale_in",    "delay": 2.5, "duration": 0.5 },
+      { "name": "slide_out_up","delay": 4.5, "duration": 0.55 }
+    ]
+  },
+  "children": [...]
+},
+{
+  "type": "card",
+  "position": "absolute",
+  "x": 200, "y": 400,
+  "style": {
+    "width": 1500, "padding": 40, "border-radius": 20,
+    "background": "#0C1A2E", "z-index": 3,
+    "animation": [
+      { "name": "scale_in", "delay": 4.5, "duration": 0.5 }
+    ]
+  },
+  "children": [...]
 }
 ```
 
-This creates: fade in (0-0.6s) → shake (2.0-2.5s) → fade out (4.0-4.8s).
+**Timing design:** Card N's `slide_out_up.delay` = Card N+1's `scale_in.delay`. They animate simultaneously for a smooth parallax handoff.
 
-## BAD
+**Z-index rule:** Later cards get higher z-index so they appear above the exiting card during the overlap window.
+
+---
+
+## Sequential stagger (same-direction, no exit)
+
+For items entering one by one without exits, use increasing `delay` on sibling elements — no absolute positioning needed:
 
 ```json
+{ "type": "text", "content": "First",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }] } },
+{ "type": "text", "content": "Second", "style": { "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }] } },
+{ "type": "text", "content": "Third",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.4, "duration": 0.6 }] } }
+```
+
+---
+
+## What NOT to do
+
+```json
+// ❌ start_at is ignored — card is always visible
 {
-  "style": {
-    "timeline": [
-      {
-        "at": 0.0,
-        "animation": [{ "name": "fade_in", "duration": 0.5 }]
-      }
-    ]
-  }
+  "type": "card",
+  "start_at": 2.0,
+  "timeline": [{ "at": 0.0, "animation": [{"name": "scale_in"}] }],
+  "style": { "z-index": 1 }
+}
+
+// ❌ end_at is ignored — card never disappears
+{
+  "type": "card",
+  "end_at": 3.0,
+  "style": {}
 }
 ```
-Don't use timeline for initial entrance — use `style.animation` directly. Timeline is for subsequent phases.
-
-## Tips
-
-- Timeline steps support all animation effects: presets, keyframes, wiggle, orbit, glow.
-- Use for patterns like: entrance → emphasis → exit within one scene.
-- Step `at` values are relative to the component's animation start time (which includes `start_at` and stagger delays).
-- Keep step `at` values within the scene duration.

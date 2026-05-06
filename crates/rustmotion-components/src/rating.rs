@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_max() -> u32 {
     5
@@ -51,11 +52,15 @@ pub struct Rating {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Rating {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -65,11 +70,11 @@ impl Rating {
         1.0 - (1.0 - t).powi(3)
     }
 
-    fn displayed_value(&self, ctx: &RenderContext) -> f64 {
+    fn displayed_value_at(&self, time: f64) -> f64 {
         if !self.animated {
             return self.value;
         }
-        let progress = (ctx.time / self.animation_duration).clamp(0.0, 1.0);
+        let progress = (time / self.animation_duration).clamp(0.0, 1.0);
         let eased = Self::ease_out_cubic(progress);
         self.value * eased
     }
@@ -100,16 +105,9 @@ impl Rating {
     }
 }
 
-impl Widget for Rating {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let displayed = self.displayed_value(ctx);
+impl Rating {
+    fn paint(&self, canvas: &Canvas, time: f64) {
+        let displayed = self.displayed_value_at(time);
         let outer_radius = self.size / 2.0;
 
         for i in 0..self.max {
@@ -118,21 +116,18 @@ impl Widget for Rating {
             let star_fill = displayed - i as f64;
 
             if star_fill >= 1.0 {
-                // Fully filled star
                 let path = Self::star_path(cx, cy, outer_radius);
                 let mut paint = paint_from_hex(&self.filled_color);
                 paint.set_style(PaintStyle::Fill);
                 paint.set_anti_alias(true);
                 canvas.draw_path(&path, &paint);
             } else if star_fill > 0.0 {
-                // Empty background
                 let path = Self::star_path(cx, cy, outer_radius);
                 let mut empty_paint = paint_from_hex(&self.empty_color);
                 empty_paint.set_style(PaintStyle::Fill);
                 empty_paint.set_anti_alias(true);
                 canvas.draw_path(&path, &empty_paint);
 
-                // Partial fill with clip
                 let fill_fraction = star_fill as f32;
                 let clip_x = cx - outer_radius;
                 let clip_w = self.size * fill_fraction;
@@ -148,7 +143,6 @@ impl Widget for Rating {
                 canvas.draw_path(&path, &fill_paint);
                 canvas.restore();
             } else {
-                // Empty star
                 let path = Self::star_path(cx, cy, outer_radius);
                 let mut paint = paint_from_hex(&self.empty_color);
                 paint.set_style(PaintStyle::Fill);
@@ -156,12 +150,17 @@ impl Widget for Rating {
                 canvas.draw_path(&path, &paint);
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let total_width = self.max as f32 * self.size + (self.max.saturating_sub(1)) as f32 * self.gap;
-        (total_width, self.size)
+impl Painter for Rating {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

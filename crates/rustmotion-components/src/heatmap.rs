@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::parse_hex_color;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_cell_size() -> f32 {
     14.0
@@ -54,8 +55,6 @@ pub struct Heatmap {
     /// Corner radius of each cell.
     #[serde(default = "default_cell_radius")]
     pub cell_radius: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Whether the heatmap animates in.
     #[serde(default = "default_animated")]
     pub animated: bool,
@@ -65,11 +64,15 @@ pub struct Heatmap {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Heatmap {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -98,32 +101,23 @@ fn interpolate_color(scale: &[String], t: f32) -> (u8, u8, u8) {
 }
 
 impl Heatmap {
-    fn progress(&self, ctx: &RenderContext) -> f32 {
+    fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (ctx.time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
-}
 
-impl Widget for Heatmap {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         if self.data.is_empty() || self.color_scale.is_empty() {
-            return Ok(());
+            return;
         }
 
-        let progress = self.progress(ctx);
+        let progress = self.progress_at(time);
 
         // Find min/max across all cells
         let mut min_val = f64::MAX;
@@ -169,26 +163,17 @@ impl Widget for Heatmap {
         }
 
         canvas.restore();
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let rows = self.data.len();
-        let cols = self.data.iter().map(|r| r.len()).max().unwrap_or(0);
-        let step = self.cell_size + self.cell_gap;
-        let w = if cols > 0 {
-            cols as f32 * step - self.cell_gap
-        } else {
-            0.0
-        };
-        let h = if rows > 0 {
-            rows as f32 * step - self.cell_gap
-        } else {
-            0.0
-        };
-        (w, h)
+impl Painter for Heatmap {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

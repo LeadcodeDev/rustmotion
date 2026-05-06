@@ -1,13 +1,14 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// Text alignment for table columns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -56,23 +57,25 @@ pub struct Table {
     /// Show grid borders (default: true).
     #[serde(default = "default_show_borders")]
     pub show_borders: bool,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Table {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Table {
     fn font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(14.0)
+        self.style.font_size_px_or(14.0)
     }
 
     fn row_height(&self) -> f32 {
@@ -140,33 +143,26 @@ impl Table {
     }
 }
 
-impl Widget for Table {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
+impl Table {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+        let w = layout_w;
         let col_count = self.headers.len().max(1);
         let col_widths = self.resolve_column_widths(w);
         let row_h = self.row_height();
 
         let header_color = self.header_color.as_deref().unwrap_or("#374151");
         let border_color = self.border_color.as_deref().unwrap_or("#4B5563");
-        let text_color = self.style.color.as_deref().unwrap_or("#FFFFFF");
+        let text_color = self.style.color_str_or("#FFFFFF");
         let header_text_color = self.header_text_color.as_deref().unwrap_or("#FFFFFF");
         let default_row_colors = vec!["#1F2937".to_string(), "#111827".to_string()];
         let row_colors = self.row_colors.as_ref().unwrap_or(&default_row_colors);
 
         // Clip to rounded rect if border-radius is set
-        let has_radius = self.style.border_radius.unwrap_or(0.0) > 0.0;
+        let radius_px = self.style.border_radius_px_or(0.0);
+        let has_radius = radius_px > 0.0;
         if has_radius {
-            let radius = self.style.border_radius.unwrap_or(0.0);
-            let rect = Rect::from_xywh(0.0, 0.0, w, layout.height);
-            let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
+            let rect = Rect::from_xywh(0.0, 0.0, w, layout_h);
+            let rrect = skia_safe::RRect::new_rect_xy(rect, radius_px, radius_px);
             canvas.save();
             canvas.clip_rrect(rrect, skia_safe::ClipOp::Intersect, true);
         }
@@ -257,19 +253,17 @@ impl Widget for Table {
         if has_radius {
             canvas.restore();
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-
-        let col_count = self.headers.len().max(1);
-        let w = col_count as f32 * 120.0;
-        let h = (1 + self.rows.len()) as f32 * self.row_height();
-
-        (w, h)
+impl Painter for Table {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height);
     }
 }

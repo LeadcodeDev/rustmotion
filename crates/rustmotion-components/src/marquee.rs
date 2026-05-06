@@ -1,15 +1,17 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_speed() -> f32 {
     100.0
@@ -43,8 +45,6 @@ pub struct Marquee {
     pub speed: f32,
     #[serde(default)]
     pub direction: MarqueeDirection,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     #[serde(default = "default_color")]
@@ -54,30 +54,27 @@ pub struct Marquee {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Marquee {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Marquee {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Marquee {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
 
-        let fs = self.style.font_size.unwrap_or(self.font_size);
+        let fs = self.style.font_size_px_or(self.font_size);
         let font_style = skia_safe::FontStyle::normal();
-        let family = self.style.font_family.as_deref().unwrap_or("Inter");
+        let family = self.style.font_family_or("Inter");
         let typeface = typeface_with_fallback(family, font_style)?;
         let font = skia_safe::Font::from_typeface(typeface, fs);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
@@ -90,7 +87,7 @@ impl Widget for Marquee {
             return Ok(());
         }
 
-        let color = self.style.color.as_deref().unwrap_or(&self.color);
+        let color = self.style.color_str().unwrap_or(&self.color);
         let mut text_paint = paint_from_hex(color);
         text_paint.set_anti_alias(true);
 
@@ -99,7 +96,7 @@ impl Widget for Marquee {
         let text_y = (h + ascent) / 2.0;
 
         // Calculate offset based on time and direction
-        let offset = (ctx.time as f32 * self.speed) % text_w;
+        let offset = (time as f32 * self.speed) % text_w;
         let start_x = match self.direction {
             MarqueeDirection::Left => -offset,
             MarqueeDirection::Right => offset - text_w,
@@ -138,12 +135,16 @@ impl Widget for Marquee {
         canvas.restore();
         Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let fs = self.style.font_size.unwrap_or(self.font_size);
-        (800.0, fs * 2.0)
+impl Painter for Marquee {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

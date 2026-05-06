@@ -1,15 +1,16 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Rect, RRect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
     parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_left_color() -> String {
     "#3B82F6".to_string()
@@ -63,29 +64,31 @@ pub struct Comparison {
     pub divider_color: String,
     #[serde(default = "default_divider_width")]
     pub divider_width: f32,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_border_radius")]
     pub border_radius: f32,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Comparison {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 impl Comparison {
-    fn current_divider_position(&self, ctx: &RenderContext) -> f64 {
+    fn current_divider_position_at(&self, time: f64) -> f64 {
         let from = self.animate_from.unwrap_or(self.divider_position);
         let to = self.animate_to.unwrap_or(self.divider_position);
         let start = self.animate_at.unwrap_or(0.0);
 
-        if ctx.time < start {
+        if time < start {
             return from;
         }
 
@@ -93,48 +96,36 @@ impl Comparison {
             return to;
         }
 
-        let elapsed = ctx.time - start;
+        let elapsed = time - start;
         let t = (elapsed / self.animation_duration).clamp(0.0, 1.0);
-        // Ease out cubic
         let eased = 1.0 - (1.0 - t).powi(3);
         from + (to - from) * eased
     }
 }
 
-impl Widget for Comparison {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let pos = self.current_divider_position(ctx).clamp(0.0, 1.0) as f32;
+impl Comparison {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
+        let pos = self.current_divider_position_at(time).clamp(0.0, 1.0) as f32;
         let divider_x = w * pos;
 
         let outer_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let outer_rrect = RRect::new_rect_xy(outer_rect, self.border_radius, self.border_radius);
 
-        // Clip to rounded rect
         canvas.save();
         canvas.clip_rrect(outer_rrect, skia_safe::ClipOp::Intersect, true);
 
-        // Left side
         let mut left_paint = paint_from_hex(&self.left_color);
         left_paint.set_style(PaintStyle::Fill);
         let left_rect = Rect::from_xywh(0.0, 0.0, divider_x, h);
         canvas.draw_rect(left_rect, &left_paint);
 
-        // Right side
         let mut right_paint = paint_from_hex(&self.right_color);
         right_paint.set_style(PaintStyle::Fill);
         let right_rect = Rect::from_xywh(divider_x, 0.0, w - divider_x, h);
         canvas.draw_rect(right_rect, &right_paint);
 
-        // Labels
         let font_size = (h * 0.08).max(16.0).min(36.0);
         let fm = font_mgr();
         let font_style = skia_safe::FontStyle::bold();
@@ -168,7 +159,6 @@ impl Widget for Comparison {
             );
         }
 
-        // Divider line
         let mut divider_paint = paint_from_hex(&self.divider_color);
         divider_paint.set_style(PaintStyle::Stroke);
         divider_paint.set_stroke_width(self.divider_width);
@@ -179,7 +169,6 @@ impl Widget for Comparison {
             &divider_paint,
         );
 
-        // Handle circle at center of divider
         let handle_radius = (self.divider_width * 4.0).max(8.0);
         let mut handle_paint = paint_from_hex(&self.divider_color);
         handle_paint.set_style(PaintStyle::Fill);
@@ -190,7 +179,6 @@ impl Widget for Comparison {
             &handle_paint,
         );
 
-        // Handle border
         let (r, g, b, _) = parse_hex_color(&self.divider_color);
         let mut border_paint = skia_safe::Paint::default();
         border_paint.set_style(PaintStyle::Stroke);
@@ -204,14 +192,17 @@ impl Widget for Comparison {
         );
 
         canvas.restore();
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (400.0, 300.0)
+impl Painter for Comparison {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

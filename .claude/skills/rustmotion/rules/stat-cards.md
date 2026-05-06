@@ -13,8 +13,7 @@ The `stat` component combines value + label + trend + sparkline in one card. Alw
   "trend": { "value": "+12.5%", "direction": "up" },
   "sparkline_data": [20, 25, 22, 30, 28, 35, 32, 40, 38, 45],
   "sparkline_color": "#22C55E",
-  "size": { "width": 280, "height": 180 },
-  "style": { "background": "#1E293B", "border-radius": 16 }
+  "style": { "width": 280, "height": 180, "background": "#1E293B", "border-radius": 16 }
 }
 ```
 
@@ -33,7 +32,7 @@ Counter has centering bugs inside cards. Use `stat` instead which handles layout
 ## Dashboard layout pattern
 Place 3-4 stat cards in a row with absolute positioning, 320px apart:
 ```json
-{ "type": "stat", "position": "absolute", "x": 80, "y": 100, "size": { "width": 280, "height": 180 } },
-{ "type": "stat", "position": "absolute", "x": 400, "y": 100, "size": { "width": 280, "height": 180 } },
-{ "type": "stat", "position": "absolute", "x": 720, "y": 100, "size": { "width": 280, "height": 180 } }
+{ "type": "stat", "position": "absolute", "x": 80, "y": 100, "style": { "width": 280, "height": 180 } },
+{ "type": "stat", "position": "absolute", "x": 400, "y": 100, "style": { "width": 280, "height": 180 } },
+{ "type": "stat", "position": "absolute", "x": 720, "y": 100, "style": { "width": 280, "height": 180 } }
 ```

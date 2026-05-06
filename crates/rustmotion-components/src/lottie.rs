@@ -1,11 +1,13 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::{Result, RustmotionError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
 ///
@@ -20,9 +22,6 @@ pub struct Lottie {
     /// Inline Lottie JSON data.
     #[serde(default)]
     pub data: Option<String>,
-    /// Output size (width, height). If not specified, uses the Lottie's intrinsic size.
-    #[serde(default)]
-    pub size: Option<Size>,
     /// Playback speed multiplier (1.0 = normal, 2.0 = double speed).
     #[serde(default = "default_speed")]
     pub speed: f32,
@@ -37,7 +36,11 @@ pub struct Lottie {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_speed() -> f32 {
@@ -49,7 +52,7 @@ fn default_true() -> bool {
 }
 
 rustmotion_core::impl_traits!(Lottie {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -108,22 +111,22 @@ impl Lottie {
     }
 }
 
-impl Widget for Lottie {
-    fn render(
+impl Painter for Lottie {
+    fn paint_content(
         &self,
         canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let (fr, total_frames, duration, _intrinsic_w, _intrinsic_h) = self.parse_metadata()?;
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let Ok((fr, total_frames, duration, _intrinsic_w, _intrinsic_h)) = self.parse_metadata() else {
+            return;
+        };
 
         if total_frames == 0 {
-            return Ok(());
+            return;
         }
 
-        // Calculate which frame to render
         let anim_time = ctx.time * self.speed as f64;
         let effective_time = if self.repeat && duration > 0.0 {
             anim_time % duration
@@ -138,33 +141,17 @@ impl Widget for Lottie {
         let img = if let Some(cached) = cache.get(&cache_key) {
             cached.clone()
         } else if let Some(ref frames_dir) = self.frames_dir {
-            let img = self.load_frame_from_dir(frames_dir, frame)?;
+            let Ok(img) = self.load_frame_from_dir(frames_dir, frame) else {
+                return;
+            };
             cache.insert(cache_key, img.clone());
             img
         } else {
-            return Err(RustmotionError::LottieRender {
-                reason: "Lottie component requires 'frames_dir' pointing to pre-rendered PNG frames. \
-                         You can generate frames using: npx lottie-to-frames <lottie.json> --output <dir>".to_string(),
-            });
+            return;
         };
 
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = Paint::default();
         canvas.draw_image_rect(img, None, dst, &paint);
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(ref size) = self.size {
-            return (size.width, size.height);
-        }
-
-        // Try to read intrinsic size from Lottie JSON
-        if let Ok((_, _, _, w, h)) = self.parse_metadata() {
-            return (w, h);
-        }
-
-        (200.0, 200.0)
     }
 }

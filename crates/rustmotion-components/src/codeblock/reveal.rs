@@ -1,10 +1,10 @@
 use skia_safe::{Canvas, Font, Paint, Rect, TextBlob};
 
+use rustmotion_core::engine::animator::ease;
 use rustmotion_core::engine::renderer::{draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex};
+use rustmotion_core::schema::{CodeblockHighlight, RevealMode};
+use super::Codeblock;
 use super::highlight::HighlightedLine;
-use crate::components::Codeblock;
-use crate::engine::animator::ease;
-use crate::schema::{CodeblockHighlight, RevealMode};
 
 // ─── Reveal ──────────────────────────────────────────────────────────────────
 

@@ -6,20 +6,13 @@ use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 use rustmotion_core::engine::animator::ease;
 use rustmotion_core::error::RustmotionError;
 
-/// Resolve `line-height`: values <= 10 are treated as a multiplier (CSS-like),
-/// values > 10 are absolute pixels.
-fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
-    match line_height {
-        Some(v) if v <= 10.0 => font_size * v,
-        Some(v) => v,
-        None => font_size * 1.3,
-    }
-}
-
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, LayerStyle, TextAlign, TextAnimGranularity};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign, TextAnimGranularity, TextBackground, TextShadow, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
@@ -29,11 +22,21 @@ pub struct Text {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
+    #[serde(default, rename = "text-shadow")]
+    pub text_shadow: Option<TextShadow>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
+    #[serde(default, rename = "text-background")]
+    pub text_background: Option<TextBackground>,
 }
 
 rustmotion_core::impl_traits!(Text {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -253,16 +256,35 @@ fn render_char_animation(
     }
 }
 
-impl Widget for Text {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        let font_size = self.style.font_size_or(48.0);
-        let color = self.style.color_or("#FFFFFF");
+impl Text {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_width: f32,
+        time: f64,
+        props: &AnimatedProperties,
+    ) -> Result<()> {
+        let font_size = self.style.font_size_px_or(48.0);
+        let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
-        let align = self.style.text_align_or(TextAlign::Left);
-        let line_height_val = resolve_line_height(self.style.line_height, font_size);
-        let letter_spacing = self.style.letter_spacing.unwrap_or(0.0);
+        let font_weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+        let font_style_type = match self.style.font_style {
+            Some(CssFontStyle::Italic) => FontStyleType::Italic,
+            Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
+            _ => FontStyleType::Normal,
+        };
+        let align = match self.style.text_align {
+            Some(CssTextAlign::Center) => TextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        let line_height_val = self.style.line_height_for(font_size);
+        let letter_spacing = self.style.letter_spacing_px();
 
         let fm = font_mgr();
         let slant = match font_style_type {
@@ -297,10 +319,10 @@ impl Widget for Text {
         paint.set_alpha_f(1.0);
 
         // Use layout width as wrapping constraint, combined with max_width
-        let wrap_width = if layout.width.is_finite() && layout.width > 0.0 {
+        let wrap_width = if layout_width.is_finite() && layout_width > 0.0 {
             match self.max_width {
-                Some(mw) => Some(mw.min(layout.width)),
-                None => Some(layout.width),
+                Some(mw) => Some(mw.min(layout_width)),
+                None => Some(layout_width),
             }
         } else {
             self.max_width
@@ -326,7 +348,7 @@ impl Widget for Text {
         let baseline_offset = (line_height_val + ascent - descent) / 2.0;
 
         // Prepare optional shadow and stroke paints
-        let shadow_paint = self.style.text_shadow.as_ref().map(|shadow| {
+        let shadow_paint = self.text_shadow.as_ref().map(|shadow| {
             let mut p = paint_from_hex(&shadow.color);
             if shadow.blur > 0.01 {
                 if let Some(filter) = skia_safe::image_filters::blur(
@@ -341,7 +363,7 @@ impl Widget for Text {
             (p, shadow.offset_x, shadow.offset_y)
         });
 
-        let stroke_paint = self.style.stroke.as_ref().map(|stroke| {
+        let stroke_paint = self.stroke.as_ref().map(|stroke| {
             let mut p = paint_from_hex(&stroke.color);
             p.set_style(PaintStyle::Stroke);
             p.set_stroke_width(stroke.width);
@@ -349,8 +371,8 @@ impl Widget for Text {
         });
 
         // Compute alignment width
-        let align_width = if layout.width.is_finite() && layout.width > 0.0 {
-            layout.width
+        let align_width = if layout_width.is_finite() && layout_width > 0.0 {
+            layout_width
         } else {
             let mut max_w = 0.0f32;
             for line in &lines {
@@ -373,7 +395,7 @@ impl Widget for Text {
             render_char_animation(
                 canvas, &content, &font, &emoji_font, &paint,
                 letter_spacing, align, align_width, line_height_val, baseline_offset,
-                &lines, &char_anim, ctx.time, resolved.overshoot,
+                &lines, &char_anim, time, resolved.overshoot,
             );
             return Ok(());
         }
@@ -393,7 +415,7 @@ impl Widget for Text {
             let y = i as f32 * line_height_val + baseline_offset;
 
             // Draw background highlight behind text
-            if let Some(ref bg) = self.style.text_background {
+            if let Some(ref bg) = self.text_background {
                 let bg_paint = paint_from_hex(&bg.color);
                 let (_, font_rect) = font.measure_str(line, None);
                 let bg_rect = Rect::from_xywh(
@@ -426,70 +448,16 @@ impl Widget for Text {
 
         Ok(())
     }
+}
 
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        let font_size = self.style.font_size_or(48.0);
-        let font_family = self.style.font_family_or("Inter");
-        let font_weight = self.style.font_weight_or(FontWeight::Normal);
-        let font_style_type = self.style.font_style_or(FontStyleType::Normal);
-
-        let fm = font_mgr();
-        let slant = match font_style_type {
-            FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
-            FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
-            FontStyleType::Oblique => skia_safe::font_style::Slant::Oblique,
-        };
-        let weight = match font_weight {
-            FontWeight::Bold => skia_safe::font_style::Weight::BOLD,
-            FontWeight::Normal => skia_safe::font_style::Weight::NORMAL,
-            FontWeight::Weight(w) => skia_safe::font_style::Weight::from(w as i32),
-        };
-        let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
-        let typeface = fm
-            .match_family_style(font_family, skia_font_style)
-            .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
-            .or_else(|| fm.match_family_style("Arial", skia_font_style))
-            .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_font_style).expect("No fallback font"));
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-
-        // Constraint-aware wrap: when `wrap` is not explicitly false, the
-        // effective max_width is the smaller of the user `max_width` and
-        // `constraints.max_width`. This makes the measured size always
-        // satisfy the parent's bounds.
-        let wrap_enabled = self.style.wrap.unwrap_or(true);
-        let parent_cap = if constraints.has_bounded_width() {
-            Some(constraints.max_width)
-        } else {
-            None
-        };
-        let effective_max_width = if wrap_enabled {
-            match (self.max_width, parent_cap) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            }
-        } else {
-            self.max_width
-        };
-
-        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, effective_max_width);
-        let line_height_val = resolve_line_height(self.style.line_height, font_size);
-        let mut max_w = lines.iter().map(|l| {
-            measure_text_with_fallback(l, &font, &emoji_font, 0.0)
-        }).fold(0.0f32, f32::max);
-        let mut h = lines.len() as f32 * line_height_val;
-
-        // Account for text-background padding in measurement
-        if let Some(ref bg) = self.style.text_background {
-            max_w += bg.padding * 2.0;
-            h += bg.padding;
-        }
-
-        // Final constrain — guarantees the contract that returned size <= constraints.max
-        let (max_w, h) = constraints.constrain(max_w, h);
-        (max_w, h)
+impl Painter for Text {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, ctx.time, props);
     }
 }

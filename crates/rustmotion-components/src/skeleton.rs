@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, PaintStyle, Point, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_base_color() -> String {
     "#1E293B".to_string()
@@ -42,8 +43,6 @@ impl Default for SkeletonVariant {
 pub struct Skeleton {
     #[serde(default)]
     pub variant: SkeletonVariant,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_base_color")]
     pub base_color: String,
     #[serde(default = "default_shimmer_color")]
@@ -64,7 +63,11 @@ pub struct Skeleton {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_lines() -> u32 {
@@ -80,7 +83,7 @@ fn default_line_gap() -> f32 {
 }
 
 rustmotion_core::impl_traits!(Skeleton {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -139,59 +142,46 @@ impl Skeleton {
     }
 }
 
-impl Widget for Skeleton {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Skeleton {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+        let w = layout_w;
+        let h = layout_h;
 
         match self.variant {
             SkeletonVariant::Rectangle => {
                 let rect = Rect::from_xywh(0.0, 0.0, w, h);
-                self.draw_shimmer_rect(canvas, rect, self.border_radius, ctx.time);
+                self.draw_shimmer_rect(canvas, rect, self.border_radius, time);
             }
             SkeletonVariant::Circle => {
                 let diameter = w.min(h);
                 let rect = Rect::from_xywh(0.0, 0.0, diameter, diameter);
-                self.draw_shimmer_rect(canvas, rect, diameter / 2.0, ctx.time);
+                self.draw_shimmer_rect(canvas, rect, diameter / 2.0, time);
             }
             SkeletonVariant::Text => {
                 let total_lines = self.lines.max(1);
                 for i in 0..total_lines {
                     let y = i as f32 * (self.line_height + self.line_gap);
-                    // Last line is shorter
                     let line_w = if i == total_lines - 1 {
                         w * 0.6
                     } else {
                         w
                     };
                     let rect = Rect::from_xywh(0.0, y, line_w, self.line_height);
-                    self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, ctx.time);
+                    self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, time);
                 }
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        match self.variant {
-            SkeletonVariant::Rectangle => (200.0, 40.0),
-            SkeletonVariant::Circle => (48.0, 48.0),
-            SkeletonVariant::Text => {
-                let h = self.lines.max(1) as f32 * (self.line_height + self.line_gap)
-                    - self.line_gap;
-                (300.0, h)
-            }
-        }
+impl Painter for Skeleton {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Canvas;
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A cursor waypoint with position and time.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -54,7 +55,11 @@ pub struct Cursor {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_cursor_width() -> f32 {
@@ -90,7 +95,7 @@ fn default_path_easing() -> String {
 }
 
 rustmotion_core::impl_traits!(Cursor {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -189,19 +194,16 @@ fn catmull_rom(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
-impl Widget for Cursor {
-    fn render(
+impl Painter for Cursor {
+    fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
         let click_times = self.click_times();
 
-        // Blink logic: visible during first half of each blink cycle
-        // Disable blink during click animation
         let in_click = click_times.iter().any(|&t| {
             let dt = ctx.time - t;
             dt >= 0.0 && dt < self.click_duration as f64
@@ -210,18 +212,16 @@ impl Widget for Cursor {
         if self.blink > 0.0 && !in_click {
             let cycle = (ctx.time as f32 % (self.blink * 2.0)) / self.blink;
             if cycle >= 1.0 {
-                return Ok(()); // invisible half of blink
+                return;
             }
         }
 
-        // Auto-path offset
         let (path_dx, path_dy) = if !self.auto_path.is_empty() {
             self.auto_path_offset(ctx.time)
         } else {
             (0.0, 0.0)
         };
 
-        // Click bounce: scale up then back down
         let click_scale = if in_click {
             let closest_click = click_times.iter()
                 .filter(|&&t| ctx.time >= t && ctx.time < t + self.click_duration as f64)
@@ -229,7 +229,6 @@ impl Widget for Cursor {
                 .last()
                 .unwrap_or(0.0);
             let progress = ((ctx.time - closest_click) / self.click_duration as f64) as f32;
-            // Bounce: scale up to 1.5x at progress=0.3, then back to 1.0
             if progress < 0.3 {
                 1.0 + 0.5 * (progress / 0.3)
             } else {
@@ -239,7 +238,6 @@ impl Widget for Cursor {
             1.0
         };
 
-        // Apply auto-path translation
         if path_dx.abs() > 0.001 || path_dy.abs() > 0.001 {
             canvas.save();
             canvas.translate((path_dx, path_dy));
@@ -266,11 +264,5 @@ impl Widget for Cursor {
         if path_dx.abs() > 0.001 || path_dy.abs() > 0.001 {
             canvas.restore();
         }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.width, self.height)
     }
 }

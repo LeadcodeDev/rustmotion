@@ -23,3 +23,5 @@ similar = "2"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 notify = "7"
+taffy = "0.10"
+cosmic-text = "0.19"

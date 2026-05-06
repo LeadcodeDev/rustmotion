@@ -2,7 +2,8 @@
 //! Returns (errors, warnings); errors block rendering, warnings are advisory only.
 
 use rustmotion::components::{ChildComponent, Component};
-use rustmotion::schema::{AnimationEffect, CardDisplay, CharAnimationTiming, ResolvedScenario};
+use rustmotion::core::css::style::Display as CssDisplay;
+use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario};
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
@@ -165,7 +166,7 @@ fn validate_children(
                 }
             }
             Component::Card(card) => {
-                if matches!(card.style.display, Some(CardDisplay::Grid))
+                if matches!(card.style.display, Some(CssDisplay::Grid))
                     && card.style.grid_template_columns.is_none()
                 {
                     errors.push(format!("{}: grid display without grid-template-columns", p));
@@ -232,7 +233,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::Spin(t)
         | AnimationEffect::FlipInX(t)
         | AnimationEffect::FlipInY(t)
-        | AnimationEffect::TiltIn(t)
         | AnimationEffect::DrawIn(t)
         | AnimationEffect::StrokeReveal(t)
         | AnimationEffect::Typewriter(t)
@@ -245,6 +245,8 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
                 Some((t.delay, t.duration))
             }
         }
+
+        AnimationEffect::TiltIn(t) => Some((t.delay, t.duration)),
 
         // Char animations: check delay + duration (conservative — stagger not factored since
         // char count is unknown at validation time).

@@ -3,43 +3,57 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Point};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{build_shape_path, color4f_from_hex, draw_shape_path, font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{Fill, GradientType, LayerStyle, ShapeText, ShapeType, Size, TextAlign, FontWeight};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{Fill, GradientType, ShapeText, ShapeType, Stroke, TextAlign, TimelineStep, FontWeight};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Shape {
     pub shape: ShapeType,
     #[serde(default)]
-    pub size: Size,
-    #[serde(default)]
     pub text: Option<ShapeText>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
+    #[serde(default)]
+    pub fill: Option<Fill>,
+    #[serde(default)]
+    pub stroke: Option<Stroke>,
 }
 
 rustmotion_core::impl_traits!(Shape {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Shape {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Painter for Shape {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
         let w = layout.width;
         let h = layout.height;
-        let corner_radius = self.style.border_radius;
+        let corner_radius = self.style.border_radius_px();
 
-        // Fill
-        if let Some(fill) = &self.style.fill {
+        if let Some(fill) = &self.fill {
             let mut paint = match fill {
                 Fill::Solid(color) => paint_from_hex(color),
                 Fill::Gradient(gradient) => {
-                    let colors: Vec<skia_safe::Color4f> = gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
+                    let colors: Vec<skia_safe::Color4f> =
+                        gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
                     let stops: Option<Vec<f32>> = gradient.stops.clone();
                     let mut paint = Paint::default();
                     paint.set_anti_alias(true);
@@ -94,14 +108,12 @@ impl Widget for Shape {
             draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
-        // Stroke (with optional draw_progress for stroke animation)
-        if let Some(stroke) = &self.style.stroke {
+        if let Some(stroke) = &self.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
             let stroke_w = if props.stroke_width >= 0.0 { props.stroke_width } else { stroke.width };
             paint.set_stroke_width(stroke_w);
 
-            // Apply draw_progress: animate stroke appearance using dash path effect
             if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
                 if let Some(path) = build_shape_path(&self.shape, 0.0, 0.0, w, h, corner_radius) {
                     let mut measure = skia_safe::PathMeasure::new(&path, false, None);
@@ -119,16 +131,9 @@ impl Widget for Shape {
             draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
         }
 
-        // Text inside shape
         if let Some(text) = &self.text {
-            render_shape_text(canvas, text, 0.0, 0.0, w, h)?;
+            let _ = render_shape_text(canvas, text, 0.0, 0.0, w, h);
         }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.size.width, self.size.height)
     }
 }
 

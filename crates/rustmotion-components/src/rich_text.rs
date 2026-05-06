@@ -1,12 +1,14 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle};
 
+use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{FontStyleType, FontWeight, LayerStyle, TextAlign};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A single styled span within a rich_text component.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,11 +37,15 @@ pub struct RichText {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(RichText {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -74,15 +80,6 @@ fn make_font(
     Font::from_typeface(typeface, size)
 }
 
-/// Resolve line height from optional value and font size.
-fn resolve_line_height(line_height: Option<f32>, font_size: f32) -> f32 {
-    match line_height {
-        Some(v) if v <= 10.0 => font_size * v,
-        Some(v) => v,
-        None => font_size * 1.3,
-    }
-}
-
 /// A prepared span ready for rendering (with resolved font, paint, measurements).
 struct PreparedSpan {
     text: String,
@@ -92,22 +89,28 @@ struct PreparedSpan {
     width: f32,
 }
 
-impl Widget for RichText {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let default_size = self.style.font_size_or(48.0);
-        let default_color = self.style.color_or("#FFFFFF");
+impl RichText {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, props: &AnimatedProperties) {
+        let default_size = self.style.font_size_px_or(48.0);
+        let default_color = self.style.color_str_or("#FFFFFF");
         let default_family = self.style.font_family_or("Inter");
-        let default_weight = self.style.font_weight_or(FontWeight::Normal);
-        let default_font_style = self.style.font_style_or(FontStyleType::Normal);
-        let align = self.style.text_align_or(TextAlign::Left);
-        let line_height_val = resolve_line_height(self.style.line_height, default_size);
+        let default_weight = match &self.style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+        let default_font_style = match self.style.font_style {
+            Some(CssFontStyle::Italic) => FontStyleType::Italic,
+            Some(CssFontStyle::Oblique) => FontStyleType::Oblique,
+            _ => FontStyleType::Normal,
+        };
+        let align = match self.style.text_align {
+            Some(CssTextAlign::Center) => TextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        let line_height_val = self.style.line_height_for(default_size);
 
         let emoji_tf = emoji_typeface();
 
@@ -127,11 +130,11 @@ impl Widget for RichText {
         }).collect();
 
         // Typewriter animation: truncate spans based on visible_chars_progress
-        if _props.visible_chars_progress >= 0.0 {
+        if props.visible_chars_progress >= 0.0 {
             let total_chars: usize = prepared.iter().map(|ps| ps.text.chars().count()).sum();
-            let visible = ((_props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
+            let visible = ((props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
             if visible == 0 {
-                return Ok(());
+                return;
             }
             if visible < total_chars {
                 let mut remaining = visible;
@@ -154,10 +157,10 @@ impl Widget for RichText {
             }
         }
 
-        let wrap_width = if layout.width.is_finite() && layout.width > 0.0 {
+        let wrap_width = if layout_width.is_finite() && layout_width > 0.0 {
             match self.max_width {
-                Some(mw) => mw.min(layout.width),
-                None => layout.width,
+                Some(mw) => mw.min(layout_width),
+                None => layout_width,
             }
         } else {
             self.max_width.unwrap_or(f32::INFINITY)
@@ -191,8 +194,8 @@ impl Widget for RichText {
             }
         }
 
-        let align_width = if layout.width.is_finite() && layout.width > 0.0 {
-            layout.width
+        let align_width = if layout_width.is_finite() && layout_width > 0.0 {
+            layout_width
         } else {
             lines.iter().map(|l| l.width).fold(0.0f32, f32::max)
         };
@@ -231,36 +234,17 @@ impl Widget for RichText {
                 );
             }
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let default_size = self.style.font_size_or(48.0);
-        let default_family = self.style.font_family_or("Inter");
-        let default_weight = self.style.font_weight_or(FontWeight::Normal);
-        let default_font_style = self.style.font_style_or(FontStyleType::Normal);
-        let line_height_val = resolve_line_height(self.style.line_height, default_size);
-
-        let emoji_tf = emoji_typeface();
-
-        let mut total_width = 0.0f32;
-        for span in &self.spans {
-            let size = span.font_size.unwrap_or(default_size);
-            let family = span.font_family.as_deref().unwrap_or(default_family);
-            let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
-            let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
-            let letter_spacing = span.letter_spacing.unwrap_or(0.0);
-            let font = make_font(family, weight, fstyle, size);
-            let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), size));
-            total_width += measure_text_with_fallback(&span.text, &font, &emoji_font, letter_spacing);
-        }
-
-        // Simple single-line measurement (wrapping handled at render time)
-        let wrap_width = self.max_width.unwrap_or(total_width);
-        let num_lines = (total_width / wrap_width).ceil().max(1.0) as usize;
-        let h = num_lines as f32 * line_height_val;
-
-        (total_width.min(wrap_width), h)
+impl Painter for RichText {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, props);
     }
 }

@@ -1,14 +1,16 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_width() -> f32 {
     360.0
@@ -82,11 +84,15 @@ pub struct Notification {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Notification {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -99,11 +105,11 @@ impl Notification {
     }
 
     fn title_font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(16.0)
+        self.style.font_size_px_or(16.0)
     }
 
     fn message_font_size(&self) -> f32 {
-        self.style.font_size.unwrap_or(16.0) * 0.85
+        self.style.font_size_px_or(16.0) * 0.85
     }
 
     fn make_font(&self, bold: bool, size: f32) -> skia_safe::Font {
@@ -119,17 +125,6 @@ impl Notification {
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
         skia_safe::Font::from_typeface(typeface, size)
-    }
-
-    fn compute_height(&self) -> f32 {
-        let v_pad = 16.0;
-        let title_fs = self.title_font_size();
-        let mut h = v_pad * 2.0 + title_fs * 1.3;
-        if self.message.is_some() {
-            let msg_fs = self.message_font_size();
-            h += 4.0 + msg_fs * 1.3;
-        }
-        h
     }
 
     fn compute_opacity(&self, time: f64) -> f32 {
@@ -229,18 +224,11 @@ impl Notification {
     }
 }
 
-impl Widget for Notification {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let opacity = self.compute_opacity(ctx.time);
+impl Notification {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) -> Result<()> {
+        let w = layout_w;
+        let h = layout_h;
+        let opacity = self.compute_opacity(time);
 
         if opacity <= 0.0 {
             return Ok(());
@@ -252,8 +240,8 @@ impl Widget for Notification {
         let mut stack_y = 0.0_f32;
         let transition_dur = self.slide_duration;
         for &push_time in &self.push_at {
-            if ctx.time >= push_time {
-                let t = ((ctx.time - push_time) / transition_dur).clamp(0.0, 1.0) as f32;
+            if time >= push_time {
+                let t = ((time - push_time) / transition_dur).clamp(0.0, 1.0) as f32;
                 let eased = t * t * (3.0 - 2.0 * t); // smoothstep
                 stack_y += slot_size * eased;
             }
@@ -269,8 +257,8 @@ impl Widget for Notification {
             canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&layer_paint));
         }
 
-        let bg_color = self.style.background.as_deref().unwrap_or("#1E293B");
-        let radius = self.style.border_radius.unwrap_or(12.0);
+        let bg_color = self.style.background_color_str().unwrap_or("#1E293B");
+        let radius = self.style.border_radius_px_or(12.0);
         let accent_color = self.resolved_accent_color();
         let accent_width = 4.0;
 
@@ -316,7 +304,7 @@ impl Widget for Notification {
         let title_fs = self.title_font_size();
         let emoji_font_title =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, title_fs));
-        let title_color = self.style.color.as_deref().unwrap_or("#FFFFFF");
+        let title_color = self.style.color_str_or("#FFFFFF");
         let mut title_paint = paint_from_hex(title_color);
         title_paint.set_anti_alias(true);
 
@@ -359,13 +347,21 @@ impl Widget for Notification {
         }
 
         if opacity < 1.0 {
-            canvas.restore(); // layer
+            canvas.restore();
         }
         canvas.restore();
         Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.width, self.compute_height())
+impl Painter for Notification {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }

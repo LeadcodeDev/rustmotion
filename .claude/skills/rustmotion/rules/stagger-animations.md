@@ -1,6 +1,6 @@
-# Rule: Stagger Animations with style.animation.delay
+# Rule: Stagger Animations with animation.delay
 
-To create sequential entrance effects (items appearing one by one), use `style.animation.delay` with increasing values. Use 0.15–0.3s increments for smooth staggering.
+To create sequential entrance effects (items appearing one by one), use `animation.delay` with increasing values. Use 0.15–0.3s increments for smooth staggering.
 
 **GOOD:**
 ```json

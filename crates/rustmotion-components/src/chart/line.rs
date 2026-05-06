@@ -34,7 +34,7 @@ impl Chart {
             .iter()
             .filter_map(|d| d.label.clone())
             .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false);
 
         let mut path = Path::new();
         let mut fill_path = Path::new();
@@ -124,7 +124,7 @@ impl Chart {
             .iter()
             .filter_map(|d| d.label.clone())
             .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels);
+        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false);
 
         // Compute points
         let pts: Vec<(f32, f32)> = self

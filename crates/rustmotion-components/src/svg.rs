@@ -1,13 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Svg {
@@ -15,26 +15,32 @@ pub struct Svg {
     pub src: Option<String>,
     #[serde(default)]
     pub data: Option<String>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Svg {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Svg {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
-        let (target_w_opt, target_h_opt) = match &self.size {
-            Some(size) => (Some(size.width as u32), Some(size.height as u32)),
-            None => (None, None),
-        };
+impl Painter for Svg {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let target_w_opt: Option<u32> = if layout.width > 0.0 { Some(layout.width as u32) } else { None };
+        let target_h_opt: Option<u32> = if layout.height > 0.0 { Some(layout.height as u32) } else { None };
 
         let cache_key = if let Some(ref src) = self.src {
             format!("svg:{}:{}x{}", src, target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
@@ -45,7 +51,7 @@ impl Widget for Svg {
             data.hash(&mut hasher);
             format!("svg-inline:{}:{}x{}", hasher.finish(), target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
         } else {
-            return Err(RustmotionError::SvgMissingSrc.into());
+            return;
         };
 
         let cache = asset_cache();
@@ -53,24 +59,22 @@ impl Widget for Svg {
             cached.clone()
         } else {
             let svg_data = if let Some(ref src) = self.src {
-                std::fs::read(src)
-                    .map_err(|e| RustmotionError::SvgLoad { path: src.clone(), reason: e.to_string() })?
+                let Ok(data) = std::fs::read(src) else { return };
+                data
             } else if let Some(ref data) = self.data {
                 data.as_bytes().to_vec()
             } else {
-                unreachable!()
+                return;
             };
 
             let opt = usvg::Options::default();
-            let tree = usvg::Tree::from_data(&svg_data, &opt)
-                .map_err(|e| RustmotionError::SvgParse { reason: e.to_string() })?;
+            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else { return };
 
             let svg_size = tree.size();
             let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
             let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
 
-            let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
-                .ok_or_else(|| RustmotionError::PixmapCreation { target: "SVG".to_string() })?;
+            let Some(mut pixmap) = tiny_skia::Pixmap::new(target_w, target_h) else { return };
 
             let scale_x = target_w as f32 / svg_size.width();
             let scale_y = target_h as f32 / svg_size.height();
@@ -85,8 +89,9 @@ impl Widget for Svg {
                 skia_safe::AlphaType::Premul,
                 None,
             );
-            let decoded = skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
-                .ok_or_else(|| RustmotionError::SkiaImageCreation { target: "SVG".to_string() })?;
+            let Some(decoded) =
+                skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
+            else { return };
             cache.insert(cache_key, decoded.clone());
             decoded
         };
@@ -94,14 +99,5 @@ impl Widget for Svg {
         let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
         let paint = Paint::default();
         canvas.draw_image_rect(img, None, dst, &paint);
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match &self.size {
-            Some(s) => (s.width, s.height),
-            None => (100.0, 100.0),
-        }
     }
 }

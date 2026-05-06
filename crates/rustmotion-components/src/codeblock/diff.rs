@@ -1,15 +1,14 @@
-use crate::error::Result;
 use similar::{ChangeTag, TextDiff};
 use skia_safe::{Canvas, Font, PaintStyle, Rect};
 use syntect::highlighting::Theme;
 
+use rustmotion_core::engine::animator::ease;
 use rustmotion_core::engine::renderer::paint_from_hex;
+use rustmotion_core::schema::EasingType;
+use super::Codeblock;
 use super::dimensions::lerp;
 use super::highlight::highlight_code;
 use super::reveal::{draw_line_number_at, draw_single_highlighted_line};
-use crate::components::Codeblock;
-use crate::engine::animator::ease;
-use crate::schema::EasingType;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -19,7 +18,7 @@ pub(super) struct TransitionInfo {
     pub(super) progress: f64,
     #[allow(dead_code)]
     pub(super) easing: EasingType,
-    pub(super) cursor_config: Option<crate::schema::CodeblockCursor>,
+    pub(super) cursor_config: Option<rustmotion_core::schema::CodeblockCursor>,
 }
 
 #[derive(Debug)]
@@ -166,7 +165,7 @@ pub(super) fn render_diff_transition(
     pad_left: f32,
     block_x: f32,
     trans: &TransitionInfo,
-) -> Result<()> {
+) {
     let progress = trans.progress as f32;
     let (_sw, metrics) = font.metrics();
     let ascent = -metrics.ascent;
@@ -365,8 +364,6 @@ pub(super) fn render_diff_transition(
             }
         }
     }
-
-    Ok(())
 }
 
 // ─── Line diff computation ───────────────────────────────────────────────────

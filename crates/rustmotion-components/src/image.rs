@@ -1,44 +1,50 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
-use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{ImageFit, LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{ImageFit, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Image {
     pub src: String,
     #[serde(default)]
-    pub size: Option<Size>,
-    #[serde(default)]
     pub fit: ImageFit,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Image {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Image {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, _ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Painter for Image {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
         let cache = asset_cache();
         let img = if let Some(cached) = cache.get(&self.src) {
             cached.clone()
         } else {
-            let data = std::fs::read(&self.src)
-                .map_err(|e| RustmotionError::ImageLoad { path: self.src.clone(), reason: e.to_string() })?;
+            let Ok(data) = std::fs::read(&self.src) else { return };
             let skia_data = skia_safe::Data::new_copy(&data);
-            let decoded = skia_safe::Image::from_encoded(skia_data)
-                .ok_or_else(|| RustmotionError::ImageDecode { path: self.src.clone() })?;
+            let Some(decoded) = skia_safe::Image::from_encoded(skia_data) else { return };
             cache.insert(self.src.clone(), decoded.clone());
             decoded
         };
@@ -78,15 +84,6 @@ impl Widget for Image {
             canvas.restore();
         } else {
             canvas.draw_image_rect(img, None, dst, &paint);
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match &self.size {
-            Some(s) => (s.width, s.height),
-            None => (100.0, 100.0),
         }
     }
 }

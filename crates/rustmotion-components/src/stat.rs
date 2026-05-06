@@ -1,15 +1,16 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, Path, Point, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
     measure_text_with_fallback, paint_from_hex, parse_hex_color,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_value_font_size() -> f32 {
     48.0
@@ -61,8 +62,6 @@ pub struct Stat {
     pub sparkline_data: Vec<f64>,
     #[serde(default)]
     pub sparkline_color: Option<String>,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(default = "default_value_font_size")]
     pub value_font_size: f32,
     #[serde(default = "default_label_font_size")]
@@ -74,34 +73,31 @@ pub struct Stat {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Stat {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Stat {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
+impl Stat {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+        let w = layout_w;
+        let h = layout_h;
         let fm = font_mgr();
 
         // Background if set
-        if let Some(bg) = &self.style.background {
+        if let Some(bg) = self.style.background_color_str() {
             let mut bg_paint = paint_from_hex(bg);
             bg_paint.set_style(PaintStyle::Fill);
             bg_paint.set_anti_alias(true);
-            let radius = self.style.border_radius.unwrap_or(12.0);
+            let radius = self.style.border_radius_px_or(12.0);
             let rect = Rect::from_xywh(0.0, 0.0, w, h);
             let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
             canvas.draw_rrect(rrect, &bg_paint);
@@ -318,14 +314,17 @@ impl Widget for Stat {
             line_paint.set_stroke_join(skia_safe::paint::Join::Round);
             canvas.draw_path(&line_path, &line_paint);
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        (240.0, 140.0)
+impl Painter for Stat {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, layout.width, layout.height);
     }
 }

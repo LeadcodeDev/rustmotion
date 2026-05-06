@@ -1,12 +1,13 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep as AnimTimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A horizontal or vertical pipeline/timeline component.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -46,7 +47,11 @@ pub struct Timeline {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<AnimTimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -84,22 +89,15 @@ fn default_sublabel_color() -> String { "#8B949E".to_string() }
 fn default_node_color() -> String { "#58A6FF".to_string() }
 
 rustmotion_core::impl_traits!(Timeline {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Timeline {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Timeline {
+    fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
         let n = self.steps.len();
-        if n == 0 { return Ok(()); }
+        if n == 0 { return; }
 
         let fm = font_mgr();
         let typeface = fm.match_family_style("Inter", FontStyle::normal())
@@ -119,27 +117,10 @@ impl Widget for Timeline {
 
         match self.direction {
             TimelineDirection::Horizontal => {
-                self.render_horizontal(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent, ctx);
+                self.render_horizontal(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent);
             }
             TimelineDirection::Vertical => {
-                self.render_vertical(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent, ctx);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        match self.direction {
-            TimelineDirection::Horizontal => {
-                let h = self.node_radius * 2.0 + self.font_size * 2.5 + 20.0;
-                (self.width, h)
-            }
-            TimelineDirection::Vertical => {
-                let n = self.steps.len().max(1);
-                let spacing = 80.0;
-                let h = n as f32 * spacing;
-                (self.width, h)
+                self.render_vertical(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent);
             }
         }
     }
@@ -157,7 +138,6 @@ impl Timeline {
         emoji_font: &Option<Font>,
         sublabel_font: &Font,
         ascent: f32,
-        _ctx: &RenderContext,
     ) {
         let total_w = self.width;
         let bar_y = r; // Center of nodes
@@ -247,7 +227,6 @@ impl Timeline {
         emoji_font: &Option<Font>,
         _sublabel_font: &Font,
         _ascent: f32,
-        _ctx: &RenderContext,
     ) {
         let spacing = 80.0;
         let bar_x = r;
@@ -307,5 +286,17 @@ impl Timeline {
             label_paint.set_anti_alias(true);
             draw_text_with_fallback(canvas, &step.label, font, &None, 0.0, lx, ly, &label_paint);
         }
+    }
+}
+
+impl Painter for Timeline {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, props);
     }
 }

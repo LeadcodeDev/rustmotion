@@ -38,3 +38,37 @@ The `icon` field must use the `"prefix:name"` format.
 - Use `simple-icons` for brand/company logos (e.g. `simple-icons:github`, `simple-icons:docker`)
 - Use `devicon` for programming language logos (e.g. `devicon:rust`, `devicon:python`)
 - All icons are monochrome and colored via `style.color`
+
+## animation belongs inside style
+
+`animation`, `width`, `height` are placed **inside `style`**, not at the component root.
+
+**BAD — animation at root (old schema, now invalid):**
+```json
+{
+  "type": "icon",
+  "icon": "lucide:sparkles",
+  "animation": [{ "name": "fade_in" }],
+  "style": {
+    "color": "#C084FC"
+  }
+}
+```
+
+**GOOD — animation inside style:**
+```json
+{
+  "type": "icon",
+  "icon": "lucide:sparkles",
+  "style": {
+    "color": "#C084FC",
+    "z-index": 2,
+    "animation": [
+      { "name": "fade_in", "duration": 0.4 },
+      { "name": "wiggle", "property": "translate_y", "amplitude": 10, "frequency": 1.2, "seed": 33 }
+    ]
+  }
+}
+```
+
+This rule applies to **all components**: `badge`, `icon`, `shape`, `card`, `text`, etc. — `animation` is always inside `style`.

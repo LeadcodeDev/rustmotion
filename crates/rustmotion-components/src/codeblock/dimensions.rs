@@ -1,7 +1,6 @@
 use skia_safe::Font;
 
-use crate::components::Codeblock;
-use crate::schema::Spacing;
+use super::Codeblock;
 
 /// Computed dimensions for a code block
 #[allow(dead_code)]
@@ -16,13 +15,12 @@ pub(super) struct CodeDimensions {
 pub(super) fn compute_code_dimensions(
     code: &str,
     font: &Font,
-    padding: &Spacing,
+    padding: (f32, f32, f32, f32),
     chrome_height: f32,
     layer: &Codeblock,
 ) -> CodeDimensions {
-    let font_size = layer.style.font_size.unwrap_or(14.0);
-    let line_height = layer.style.line_height.unwrap_or(1.5);
-    let actual_line_height = font_size * line_height;
+    let font_size = layer.style.font_size_px_or(14.0);
+    let actual_line_height = layer.style.line_height_for(font_size);
     let lines: Vec<&str> = code.lines().collect();
     let line_count = lines.len().max(1);
 
@@ -39,7 +37,7 @@ pub(super) fn compute_code_dimensions(
         .map(|l| font.measure_str(l, None).0)
         .fold(0.0f32, f32::max);
 
-    let (pad_top, pad_right, pad_bottom, pad_left) = padding.resolve();
+    let (pad_top, pad_right, pad_bottom, pad_left) = padding;
     let content_width = max_line_width + gutter_width + pad_left + pad_right;
     let content_height = line_count as f32 * actual_line_height + pad_top + pad_bottom;
 

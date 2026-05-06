@@ -15,7 +15,7 @@ use super::style::{FontWeight, TextAlign, VerticalAlign};
 /// { "name": "glow", "color": "#F68F2B", "radius": 16, "intensity": 1.2 }
 /// { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 2 }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "name", rename_all = "snake_case")]
 pub enum AnimationEffect {
     // --- Entrance presets ---
@@ -55,7 +55,7 @@ pub enum AnimationEffect {
     FlipInY(AnimationTiming),
     FlipOutX(AnimationTiming),
     FlipOutY(AnimationTiming),
-    TiltIn(AnimationTiming),
+    TiltIn(TiltInConfig),
     // --- Stroke presets ---
     DrawIn(AnimationTiming),
     StrokeReveal(AnimationTiming),
@@ -118,7 +118,7 @@ impl AnimationEffect {
             Self::FlipInY(t) => Some((AnimationPreset::FlipInY, t)),
             Self::FlipOutX(t) => Some((AnimationPreset::FlipOutX, t)),
             Self::FlipOutY(t) => Some((AnimationPreset::FlipOutY, t)),
-            Self::TiltIn(t) => Some((AnimationPreset::TiltIn, t)),
+            Self::TiltIn(_) => None,
             Self::DrawIn(t) => Some((AnimationPreset::DrawIn, t)),
             Self::StrokeReveal(t) => Some((AnimationPreset::StrokeReveal, t)),
             Self::Float3d(t) => Some((AnimationPreset::Float3d, t)),
@@ -132,6 +132,7 @@ impl AnimationEffect {
 
 /// Timing configuration for preset animations.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -151,6 +152,29 @@ fn default_animation_duration() -> f64 {
     0.8
 }
 
+/// Configuration for the `tilt_in` animation with configurable 3D transform values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TiltInConfig {
+    #[serde(default)]
+    pub delay: f64,
+    #[serde(default = "default_animation_duration")]
+    pub duration: f64,
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+    /// Initial rotate_x angle in degrees (default: 15.0).
+    #[serde(default)]
+    pub rotate_x: Option<f64>,
+    /// Initial rotate_y angle in degrees (default: -15.0).
+    #[serde(default)]
+    pub rotate_y: Option<f64>,
+    /// Perspective depth in px (default: 1000.0).
+    #[serde(default)]
+    pub perspective: Option<f64>,
+    /// Initial scale value (default: 0.9).
+    #[serde(default)]
+    pub scale_from: Option<f64>,
+}
+
 impl Default for AnimationTiming {
     fn default() -> Self {
         Self {
@@ -164,6 +188,7 @@ impl Default for AnimationTiming {
 
 /// Timing configuration for char animation effect variants (used inside style.animation).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct CharAnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -195,6 +220,7 @@ fn default_char_duration_f64() -> f64 {
 
 /// Per-character or per-word text animation configuration (legacy root-level prop).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct CharAnimation {
     /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up".
     #[serde(default = "default_char_preset")]
@@ -219,6 +245,7 @@ pub struct CharAnimation {
 /// Granularity for text animation: per character or per word.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
+#[derive(PartialEq)]
 pub enum TextAnimGranularity {
     /// Animate each character individually (default).
     #[default]
@@ -229,6 +256,7 @@ pub enum TextAnimGranularity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
+#[derive(PartialEq)]
 pub enum CharAnimPreset {
     /// Each character scales from 0 to 1.
     #[default]
@@ -271,6 +299,7 @@ impl AnimationTiming {
 
 /// Custom keyframe animations configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct KeyframesConfig {
     pub keyframes: Vec<Animation>,
     #[serde(default)]
@@ -283,6 +312,7 @@ pub struct KeyframesConfig {
 
 /// Motion blur configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct MotionBlurConfig {
     #[serde(default)]
     pub intensity: f32,
@@ -293,6 +323,7 @@ pub struct MotionBlurConfig {
 /// Configuration for a 3D orbit/floating animation effect.
 /// Creates circular or elliptical motion with pseudo-depth (scale + opacity modulation).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct OrbitConfig {
     /// Horizontal radius of the orbit in pixels.
     #[serde(default = "default_orbit_radius")]
@@ -327,6 +358,7 @@ fn default_orbit_depth() -> f64 { 0.15 }
 // --- Wiggle Config ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct WiggleConfig {
     pub property: String,
     pub amplitude: f64,
@@ -592,6 +624,7 @@ fn default_drop_shadow_color() -> String {
 
 /// Glow effect (colored luminous halo around the element)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(PartialEq)]
 pub struct GlowConfig {
     /// Glow color (hex string, e.g. "#5C39EE")
     #[serde(default = "default_glow_color")]

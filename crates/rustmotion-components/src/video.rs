@@ -1,19 +1,19 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{extract_video_frame, find_closest_frame, video_frame_cache};
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{ImageFit, LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::{ImageFit, TimelineStep};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_volume() -> f32 { 1.0 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Video {
     pub src: String,
-    pub size: Size,
     #[serde(default)]
     pub trim_start: Option<f64>,
     #[serde(default)]
@@ -29,17 +29,27 @@ pub struct Video {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Video {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Video {
-    fn render(&self, canvas: &Canvas, layout: &LayoutNode, ctx: &RenderContext, _props: &rustmotion_core::engine::animator::AnimatedProperties, _pipeline: &dyn rustmotion_core::traits::RenderPipeline) -> Result<()> {
+impl Painter for Video {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
         let rate = self.playback_rate.unwrap_or(1.0);
         let trim_start = self.trim_start.unwrap_or(0.0);
         let source_time = trim_start + ctx.time * rate;
@@ -64,23 +74,18 @@ impl Widget for Video {
                     let paint = Paint::default();
                     canvas.draw_image_rect(img, None, dst, &paint);
                 }
-                return Ok(());
+                return;
             }
         }
 
-        // Fallback: extract single frame via ffmpeg
-        let frame_data = extract_video_frame(&self.src, source_time, width, height)?;
+        let Ok(frame_data) = extract_video_frame(&self.src, source_time, width, height) else {
+            return;
+        };
         let skia_data = skia_safe::Data::new_copy(&frame_data);
         if let Some(img) = skia_safe::Image::from_encoded(skia_data) {
             let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
             let paint = Paint::default();
             canvas.draw_image_rect(img, None, dst, &paint);
         }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        (self.size.width, self.size.height)
     }
 }

@@ -1,14 +1,15 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 fn default_slider_value() -> f64 {
     0.5
@@ -62,11 +63,15 @@ pub struct Slider {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Slider {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
@@ -76,10 +81,10 @@ impl Slider {
         1.0 - (1.0 - t).powi(3)
     }
 
-    fn current_value(&self, ctx: &RenderContext) -> f64 {
+    fn current_value_at(&self, time: f64) -> f64 {
         match (self.animate_to, self.animate_at) {
-            (Some(target), Some(start_time)) if ctx.time >= start_time => {
-                let elapsed = ctx.time - start_time;
+            (Some(target), Some(start_time)) if time >= start_time => {
+                let elapsed = time - start_time;
                 let progress = (elapsed / self.animation_duration).clamp(0.0, 1.0);
                 let eased = Self::ease_out_cubic(progress);
                 self.value + (target - self.value) * eased
@@ -89,23 +94,15 @@ impl Slider {
     }
 }
 
-impl Widget for Slider {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        _layout: &LayoutNode,
-        ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
+impl Slider {
+    fn paint(&self, canvas: &Canvas, time: f64) {
         let w = self.width;
         let h = self.height;
         let thumb_r = self.thumb_size / 2.0;
         let track_y = thumb_r - h / 2.0;
         let radius = h / 2.0;
-        let current = self.current_value(ctx).clamp(0.0, 1.0) as f32;
+        let current = self.current_value_at(time).clamp(0.0, 1.0) as f32;
 
-        // Track background
         let mut track_paint = paint_from_hex(&self.track_color);
         track_paint.set_style(PaintStyle::Fill);
         track_paint.set_anti_alias(true);
@@ -114,7 +111,6 @@ impl Widget for Slider {
         let track_rrect = RRect::new_rect_xy(track_rect, radius, radius);
         canvas.draw_rrect(track_rrect, &track_paint);
 
-        // Fill portion
         if current > 0.001 {
             let mut fill_paint = paint_from_hex(&self.fill_color);
             fill_paint.set_style(PaintStyle::Fill);
@@ -129,7 +125,6 @@ impl Widget for Slider {
             canvas.restore();
         }
 
-        // Thumb
         let thumb_cx = w * current;
         let thumb_cy = thumb_r;
 
@@ -138,7 +133,6 @@ impl Widget for Slider {
         thumb_paint.set_anti_alias(true);
         canvas.draw_circle((thumb_cx, thumb_cy), thumb_r, &thumb_paint);
 
-        // Value text
         if self.show_value {
             let text = format!("{}%", (current * 100.0).round() as i32);
             let font_size = (self.thumb_size * 0.7).max(12.0);
@@ -165,18 +159,17 @@ impl Widget for Slider {
                 canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
             );
         }
-
-        Ok(())
     }
+}
 
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        let total_height = self.thumb_size;
-        let value_extra = if self.show_value {
-            let font_size = (self.thumb_size * 0.7).max(12.0);
-            font_size + 4.0
-        } else {
-            0.0
-        };
-        (self.width, total_height + value_extra)
+impl Painter for Slider {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        _layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
+        self.paint(canvas, ctx.time);
     }
 }

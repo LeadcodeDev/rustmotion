@@ -1,13 +1,15 @@
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Path, Rect, RRect};
 
+use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{asset_cache, paint_from_hex};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::{LayerStyle, Size};
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -59,23 +61,23 @@ pub struct Mockup {
     pub src: String,
     #[serde(default)]
     pub theme: MockupTheme,
-    #[serde(default)]
-    pub size: Option<Size>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 rustmotion_core::impl_traits!(Mockup {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
 struct DeviceMetrics {
-    default_width: f32,
-    default_height: f32,
     corner_radius: f32,
     bezel_top: f32,
     bezel_bottom: f32,
@@ -86,75 +88,30 @@ impl MockupDevice {
     fn metrics(&self) -> DeviceMetrics {
         match self {
             MockupDevice::Iphone => DeviceMetrics {
-                default_width: 375.0,
-                default_height: 812.0,
                 corner_radius: 40.0,
                 bezel_top: 44.0,
                 bezel_bottom: 34.0,
                 bezel_side: 12.0,
             },
             MockupDevice::Android => DeviceMetrics {
-                default_width: 360.0,
-                default_height: 800.0,
                 corner_radius: 35.0,
                 bezel_top: 32.0,
                 bezel_bottom: 24.0,
                 bezel_side: 10.0,
             },
             MockupDevice::Laptop => DeviceMetrics {
-                default_width: 800.0,
-                default_height: 550.0,
                 corner_radius: 12.0,
                 bezel_top: 32.0,
                 bezel_bottom: 32.0,
                 bezel_side: 16.0,
             },
             MockupDevice::Browser => DeviceMetrics {
-                default_width: 800.0,
-                default_height: 600.0,
                 corner_radius: 10.0,
                 bezel_top: 40.0,
                 bezel_bottom: 0.0,
                 bezel_side: 0.0,
             },
         }
-    }
-}
-
-impl Widget for Mockup {
-    fn render(
-        &self,
-        canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
-        _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let w = layout.width;
-        let h = layout.height;
-        let m = self.device.metrics();
-
-        match self.device {
-            MockupDevice::Iphone | MockupDevice::Android => {
-                self.render_phone(canvas, w, h, &m)?;
-            }
-            MockupDevice::Laptop => {
-                self.render_laptop(canvas, w, h, &m)?;
-            }
-            MockupDevice::Browser => {
-                self.render_browser(canvas, w, h, &m)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, _constraints: &Constraints) -> (f32, f32) {
-        if let Some(size) = &self.size {
-            return (size.width, size.height);
-        }
-        let m = self.device.metrics();
-        (m.default_width, m.default_height)
     }
 }
 
@@ -416,5 +373,25 @@ impl Mockup {
         canvas.restore();
 
         Ok(())
+    }
+}
+
+impl Painter for Mockup {
+    fn paint_content(
+        &self,
+        canvas: &Canvas,
+        layout: &BoxLayout,
+        _props: &AnimatedProperties,
+        _ctx: &PaintCtx,
+    ) {
+        let w = layout.width;
+        let h = layout.height;
+        let m = self.device.metrics();
+
+        let _ = match self.device {
+            MockupDevice::Iphone | MockupDevice::Android => self.render_phone(canvas, w, h, &m),
+            MockupDevice::Laptop => self.render_laptop(canvas, w, h, &m),
+            MockupDevice::Browser => self.render_browser(canvas, w, h, &m),
+        };
     }
 }

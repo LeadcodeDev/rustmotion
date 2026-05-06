@@ -1,12 +1,12 @@
-use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, PaintStyle, Path, Rect};
 
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::layout::{Constraints, LayoutNode};
-use rustmotion_core::schema::LayerStyle;
-use rustmotion_core::traits::{RenderContext, TimingConfig, Widget};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -48,7 +48,11 @@ pub struct Divider {
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
-    pub style: LayerStyle,
+    pub style: CssStyle,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub stagger: Option<f32>,
 }
 
 fn default_thickness() -> f32 {
@@ -56,21 +60,20 @@ fn default_thickness() -> f32 {
 }
 
 rustmotion_core::impl_traits!(Divider {
-    Animatable => style,
+    Animatable => animation,
     Timed => timing,
     Styled => style,
 });
 
-impl Widget for Divider {
-    fn render(
+impl Painter for Divider {
+    fn paint_content(
         &self,
         canvas: &Canvas,
-        layout: &LayoutNode,
-        _ctx: &RenderContext,
+        layout: &BoxLayout,
         _props: &rustmotion_core::engine::animator::AnimatedProperties,
-        _pipeline: &dyn rustmotion_core::traits::RenderPipeline,
-    ) -> Result<()> {
-        let color = self.style.color.as_deref().unwrap_or("#FFFFFF");
+        _ctx: &PaintCtx,
+    ) {
+        let color = self.style.color_str_or("#FFFFFF");
         let mut paint = paint_from_hex(color);
         paint.set_anti_alias(true);
 
@@ -112,21 +115,6 @@ impl Widget for Divider {
                     path.line_to((x, layout.height));
                 }
                 canvas.draw_path(&path, &paint);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn measure(&self, constraints: &Constraints) -> (f32, f32) {
-        match self.direction {
-            DividerDirection::Horizontal => {
-                let w = self.length.unwrap_or(constraints.max_width);
-                (w, self.thickness)
-            }
-            DividerDirection::Vertical => {
-                let h = self.length.unwrap_or(constraints.max_height);
-                (self.thickness, h)
             }
         }
     }
