@@ -16,8 +16,8 @@
 //! paint without coupling `rustmotion-core` to all 51 component types.
 
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle,
-    Path, Point, RRect, Rect,
+    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, M44, Paint, PaintStyle,
+    Path, Point, RRect, Rect, V3,
 };
 
 use crate::css::style::{
@@ -114,12 +114,14 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
     canvas.save();
 
     // 2. transform
-    if let Some(transform) = node.css.transform.as_ref() {
+    if node.css.transform.is_some() || node.css.perspective.is_some() {
         let pivot = (
             box_layout.x + box_layout.width / 2.0,
             box_layout.y + box_layout.height / 2.0,
         );
-        apply_transform(canvas, transform, pivot, &length_ctx);
+        let transform_list = node.css.transform.as_deref().unwrap_or(&[]);
+        let perspective_d = node.css.perspective.as_ref().map(|l| l.resolve(&length_ctx).max(1.0));
+        apply_transform(canvas, transform_list, perspective_d, pivot, &length_ctx);
     }
 
     // 3. opacity layer
@@ -202,61 +204,154 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
 
 // ---- Transform ----
 
+fn has_3d_transform(list: &[TransformFn]) -> bool {
+    list.iter().any(|t| {
+        matches!(
+            t,
+            TransformFn::RotateX { .. }
+                | TransformFn::RotateY { .. }
+                | TransformFn::Rotate3d { .. }
+                | TransformFn::Scale3d { .. }
+                | TransformFn::ScaleZ { .. }
+                | TransformFn::TranslateZ { .. }
+                | TransformFn::Perspective { .. }
+                | TransformFn::Matrix3d { .. }
+        )
+    })
+}
+
 fn apply_transform(
     canvas: &Canvas,
     list: &[TransformFn],
+    perspective_d: Option<f32>,
     pivot: (f32, f32),
     ctx: &LengthContext,
 ) {
-    canvas.translate(Point::new(pivot.0, pivot.1));
-    for tr in list {
-        match tr {
-            TransformFn::Translate { x, y } => {
-                canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
+    if perspective_d.is_none() && !has_3d_transform(list) {
+        // Fast path: 2D-only, use the native Skia 2D canvas API.
+        canvas.translate(Point::new(pivot.0, pivot.1));
+        for tr in list {
+            match tr {
+                TransformFn::Translate { x, y } => {
+                    canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
+                }
+                TransformFn::TranslateX { x } => {
+                    canvas.translate(Point::new(x.resolve(ctx), 0.0));
+                }
+                TransformFn::TranslateY { y } => {
+                    canvas.translate(Point::new(0.0, y.resolve(ctx)));
+                }
+                TransformFn::Translate3d { x, y, .. } => {
+                    canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
+                }
+                TransformFn::Scale { x, y } => {
+                    canvas.scale((*x, *y));
+                }
+                TransformFn::ScaleX { x } => {
+                    canvas.scale((*x, 1.0));
+                }
+                TransformFn::ScaleY { y } => {
+                    canvas.scale((1.0, *y));
+                }
+                TransformFn::Rotate { deg } | TransformFn::RotateZ { deg } => {
+                    canvas.rotate(*deg, None);
+                }
+                TransformFn::Skew { x, y } => {
+                    canvas.skew((x.to_radians().tan(), y.to_radians().tan()));
+                }
+                TransformFn::SkewX { x } => {
+                    canvas.skew((x.to_radians().tan(), 0.0));
+                }
+                TransformFn::SkewY { y } => {
+                    canvas.skew((0.0, y.to_radians().tan()));
+                }
+                TransformFn::Matrix { values: v } => {
+                    let m = skia_safe::Matrix::new_all(
+                        v[0], v[2], v[4], v[1], v[3], v[5], 0.0, 0.0, 1.0,
+                    );
+                    canvas.concat(&m);
+                }
+                _ => {}
             }
-            TransformFn::TranslateX { x } => {
-                canvas.translate(Point::new(x.resolve(ctx), 0.0));
-            }
-            TransformFn::TranslateY { y } => {
-                canvas.translate(Point::new(0.0, y.resolve(ctx)));
-            }
-            TransformFn::TranslateZ { .. } => { /* requires 3D matrix */ }
-            TransformFn::Translate3d { x, y, .. } => {
-                canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
-            }
-            TransformFn::Scale { x, y } => {
-                canvas.scale((*x, *y));
-            }
-            TransformFn::ScaleX { x } => {
-                canvas.scale((*x, 1.0));
-            }
-            TransformFn::ScaleY { y } => {
-                canvas.scale((1.0, *y));
-            }
-            TransformFn::Rotate { deg } | TransformFn::RotateZ { deg } => {
-                canvas.rotate(*deg, None);
-            }
-            TransformFn::Skew { x, y } => {
-                canvas.skew((x.to_radians().tan(), y.to_radians().tan()));
-            }
-            TransformFn::SkewX { x } => {
-                canvas.skew((x.to_radians().tan(), 0.0));
-            }
-            TransformFn::SkewY { y } => {
-                canvas.skew((0.0, y.to_radians().tan()));
-            }
-            // 3D not yet wired through Skia M44 — TODO step ≥ 14
-            TransformFn::RotateX { .. }
-            | TransformFn::RotateY { .. }
-            | TransformFn::Rotate3d { .. }
-            | TransformFn::Scale3d { .. }
-            | TransformFn::ScaleZ { .. }
-            | TransformFn::Perspective { .. }
-            | TransformFn::Matrix { .. }
-            | TransformFn::Matrix3d { .. } => {}
         }
+        canvas.translate(Point::new(-pivot.0, -pivot.1));
+    } else {
+        // 3D path: compose a single M44 and apply via concat_44 for true perspective.
+        let mut m = M44::new_identity();
+        m.pre_concat(&M44::translate(pivot.0, pivot.1, 0.0));
+        if let Some(d) = perspective_d {
+            m.pre_concat(&css_perspective_m44(d));
+        }
+        for tr in list {
+            m.pre_concat(&transform_to_m44(tr, ctx));
+        }
+        m.pre_concat(&M44::translate(-pivot.0, -pivot.1, 0.0));
+        canvas.concat_44(&m);
     }
-    canvas.translate(Point::new(-pivot.0, -pivot.1));
+}
+
+/// CSS `perspective(d)` projection matrix in row-major form.
+/// Maps (x, y, z, 1) → w' = 1 - z/d; perspective divide yields depth scaling.
+fn css_perspective_m44(d: f32) -> M44 {
+    M44::row_major(&[
+        1.0, 0.0,       0.0, 0.0,
+        0.0, 1.0,       0.0, 0.0,
+        0.0, 0.0,       1.0, 0.0,
+        0.0, 0.0, -1.0 / d, 1.0,
+    ])
+}
+
+fn transform_to_m44(tr: &TransformFn, ctx: &LengthContext) -> M44 {
+    match tr {
+        TransformFn::Translate { x, y } => {
+            M44::translate(x.resolve(ctx), y.resolve(ctx), 0.0)
+        }
+        TransformFn::TranslateX { x } => M44::translate(x.resolve(ctx), 0.0, 0.0),
+        TransformFn::TranslateY { y } => M44::translate(0.0, y.resolve(ctx), 0.0),
+        TransformFn::TranslateZ { z } => M44::translate(0.0, 0.0, z.resolve(ctx)),
+        TransformFn::Translate3d { x, y, z } => {
+            M44::translate(x.resolve(ctx), y.resolve(ctx), z.resolve(ctx))
+        }
+        TransformFn::Scale { x, y } => M44::scale(*x, *y, 1.0),
+        TransformFn::ScaleX { x } => M44::scale(*x, 1.0, 1.0),
+        TransformFn::ScaleY { y } => M44::scale(1.0, *y, 1.0),
+        TransformFn::ScaleZ { z } => M44::scale(1.0, 1.0, *z),
+        TransformFn::Scale3d { x, y, z } => M44::scale(*x, *y, *z),
+        TransformFn::Rotate { deg } | TransformFn::RotateZ { deg } => {
+            M44::rotate(V3::new(0.0, 0.0, 1.0), deg.to_radians())
+        }
+        TransformFn::RotateX { deg } => M44::rotate(V3::new(1.0, 0.0, 0.0), deg.to_radians()),
+        TransformFn::RotateY { deg } => M44::rotate(V3::new(0.0, 1.0, 0.0), deg.to_radians()),
+        TransformFn::Rotate3d { x, y, z, deg } => {
+            M44::rotate(V3::new(*x, *y, *z), deg.to_radians())
+        }
+        TransformFn::Skew { x, y } => M44::row_major(&[
+            1.0, x.to_radians().tan(), 0.0, 0.0,
+            y.to_radians().tan(), 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]),
+        TransformFn::SkewX { x } => M44::row_major(&[
+            1.0, x.to_radians().tan(), 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]),
+        TransformFn::SkewY { y } => M44::row_major(&[
+            1.0, 0.0, 0.0, 0.0,
+            y.to_radians().tan(), 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]),
+        TransformFn::Perspective { length } => css_perspective_m44(length.resolve(ctx).max(1.0)),
+        TransformFn::Matrix { values: v } => M44::row_major(&[
+            v[0], v[2], 0.0, v[4],
+            v[1], v[3], 0.0, v[5],
+            0.0,  0.0,  1.0, 0.0,
+            0.0,  0.0,  0.0, 1.0,
+        ]),
+        TransformFn::Matrix3d { values: v } => M44::col_major(v),
+    }
 }
 
 // ---- Background ----

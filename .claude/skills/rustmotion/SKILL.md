@@ -480,6 +480,32 @@ Each scene is an **implicit flex container** at video dimensions. All children p
 
 **`layout` options:** `direction` (column/row), `gap`, `align_items` (start/center/end/stretch), `justify_content` (start/center/end/space_between/space_around/space_evenly), `padding`
 
+#### Layout Strategy: Prefer Flex/Grid — Absolute is a last resort
+
+Think of scene composition exactly like HTML/CSS: **prefer normal flow** (flex column/row, gap, nested cards) over absolute positioning. The scene itself is a flex column; children stack naturally.
+
+**Use flex/grid for:**
+- Main content stacking (hero text + subtitle + CTA button)
+- Side-by-side cards (`flex-direction: row`)
+- Grid of cards (2×2, 3×1, etc.) — use `display: grid` inside a card
+- Icon + text pairs inside a card
+
+**Use `position: "absolute"` ONLY for:**
+- Decorative background elements (ambient blobs, particles, shapes) that shouldn't affect flow
+- Floating UI badges or tooltips that visually overlay content
+- Elements that need to live at a precise pixel position regardless of surrounding content
+
+**Anti-pattern to avoid:**
+```json
+// BAD — using absolute for everything like old-school CSS
+{ "type": "text", "content": "Title", "position": "absolute", "x": 200, "y": 400 }
+
+// GOOD — let it flow in the flex column
+{ "type": "text", "content": "Title", "style": { "font-size": 84, "text-align": "center" } }
+```
+
+**Decorative/background shapes must always be absolute** — a non-absolute shape or particle in the flex flow consumes height and can push content off-center or to the bottom of the screen. Always add `"position": "absolute", "x": 0, "y": 0` to ambient shapes and particles.
+
 #### Include (Composable Scenarios)
 
 Scene entries can reference external scenario files to inject their scenes inline:
