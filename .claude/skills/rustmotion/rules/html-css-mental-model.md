@@ -17,7 +17,7 @@ L'API JSON de Rustmotion est un superset de HTML/CSS. Chaque scène est un flex 
 | `<div>` neutre | `{"type": "div"}` | Layout pur, sans décoration visuelle |
 | `<div class="card">` avec fond, border-radius | `{"type": "card"}` | Container avec styling visuel |
 | `<div style="display:flex; flex-direction:row; gap:24px">` | `{"type": "div", "style": {"flex-direction": "row", "gap": 24}}` | Ligne horizontale |
-| `<div style="display:grid; grid-template-columns:1fr 1fr">` | `{"type": "div", "style": {"display": "grid", "grid-template-columns": [{"fr":1},{"fr":1}]}}` | Grille |
+| `<div style="display:grid; grid-template-columns:1fr 1fr">` | `{"type": "div", "style": {"display": "grid", "grid-template-columns": ["1fr","1fr"]}}` | Grille |
 
 **Règle de choix** :
 - `div` → grouper des enfants sans fond, border-radius, ou ombre. Flex par défaut.
@@ -90,9 +90,9 @@ Tout ce qui est **espace, alignement, distribution** se règle via les propriét
 | Pousser un enfant à droite | `margin-left: "auto"` | Cet enfant | `"margin-left": "auto"` |
 | Élément prend tout l'espace restant | `flex-grow: 1` | L'enfant | `"flex-grow": 1` |
 | Alignement différent pour un seul enfant | `align-self` | L'enfant | `"align-self": "flex-end"` |
-| 2 colonnes égales | `grid-template-columns` | Parent grid | `[{"fr":1},{"fr":1}]` |
-| 3 colonnes proportionnelles | `grid-template-columns` | Parent grid | `[{"fr":2},{"fr":1},{"fr":1}]` |
-| Colonne de taille fixe + reste | `grid-template-columns` | Parent grid | `[240, {"fr":1}]` |
+| 2 colonnes égales | `grid-template-columns` | Parent grid | `["1fr","1fr"]` |
+| 3 colonnes proportionnelles | `grid-template-columns` | Parent grid | `["2fr","1fr","1fr"]` |
+| Colonne de taille fixe + reste | `grid-template-columns` | Parent grid | `[240, "1fr"]` |
 
 ### Règle de décision
 
@@ -228,8 +228,8 @@ Besoin d'une exception pour UN seul enfant ?
       "style": {
         "width": 960, "height": 900,
         "display": "grid",
-        "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
-        "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+        "grid-template-columns": ["1fr", "1fr"],
+        "grid-template-rows": ["1fr", "1fr"],
         "gap": 24, "padding": 0, "background": "#00000000"
       },
       "children": [

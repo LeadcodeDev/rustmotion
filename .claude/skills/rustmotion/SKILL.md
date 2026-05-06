@@ -48,7 +48,7 @@ Rustmotion's JSON API is a direct superset of HTML/CSS. When composing a scene, 
 | `<div>` neutre — layout pur, zéro décoration visuelle | `{"type":"div"}` — flex par défaut, pas de fond/border-radius/ombre |
 | `<div class="card">` — avec fond, border-radius, ombre | `{"type":"card"}` — flex par défaut, styling visuel |
 | `<div style="display:flex;flex-direction:row;gap:24px">` | `{"type":"div","style":{"flex-direction":"row","gap":24}}` |
-| `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"div","style":{"display":"grid","grid-template-columns":[{"fr":1},{"fr":1}],"gap":16}}` |
+| `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"div","style":{"display":"grid","grid-template-columns":["1fr","1fr"],"gap":16}}` |
 | `<h1>Title</h1>` — inline, no position | `{"type":"text","content":"Title"}` — flow child, no `x`/`y` |
 | `<div style="position:absolute;top:400px;left:0;width:100%;height:100%">` | `{"position":"absolute","x":0,"y":400,"style":{"width":1080,"height":1920}}` |
 | `margin`, `padding`, `gap` | same names — spacing between and around elements |
@@ -74,7 +74,7 @@ Tout espace, alignement, et distribution se règle via des propriétés sur le *
 | Centrer verticalement | `justify-content: "center"` (column) | Parent |
 | Élément prend tout l'espace restant | `flex-grow: 1` | L'enfant |
 | Pousser un enfant à droite | `margin-left: "auto"` | Cet enfant |
-| 2 colonnes égales | `display: grid` + `grid-template-columns: [{"fr":1},{"fr":1}]` | Parent |
+| 2 colonnes égales | `display: grid` + `grid-template-columns: ["1fr","1fr"]` | Parent |
 | Exception d'alignement pour 1 enfant | `align-self` | Cet enfant |
 
 **Anti-pattern : penser en coordonnées**

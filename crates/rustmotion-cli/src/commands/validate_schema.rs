@@ -233,7 +233,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::Spin(t)
         | AnimationEffect::FlipInX(t)
         | AnimationEffect::FlipInY(t)
-        | AnimationEffect::TiltIn(t)
         | AnimationEffect::DrawIn(t)
         | AnimationEffect::StrokeReveal(t)
         | AnimationEffect::Typewriter(t)
@@ -246,6 +245,8 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
                 Some((t.delay, t.duration))
             }
         }
+
+        AnimationEffect::TiltIn(t) => Some((t.delay, t.duration)),
 
         // Char animations: check delay + duration (conservative — stagger not factored since
         // char count is unknown at validation time).

@@ -55,7 +55,7 @@ pub enum AnimationEffect {
     FlipInY(AnimationTiming),
     FlipOutX(AnimationTiming),
     FlipOutY(AnimationTiming),
-    TiltIn(AnimationTiming),
+    TiltIn(TiltInConfig),
     // --- Stroke presets ---
     DrawIn(AnimationTiming),
     StrokeReveal(AnimationTiming),
@@ -118,7 +118,7 @@ impl AnimationEffect {
             Self::FlipInY(t) => Some((AnimationPreset::FlipInY, t)),
             Self::FlipOutX(t) => Some((AnimationPreset::FlipOutX, t)),
             Self::FlipOutY(t) => Some((AnimationPreset::FlipOutY, t)),
-            Self::TiltIn(t) => Some((AnimationPreset::TiltIn, t)),
+            Self::TiltIn(_) => None,
             Self::DrawIn(t) => Some((AnimationPreset::DrawIn, t)),
             Self::StrokeReveal(t) => Some((AnimationPreset::StrokeReveal, t)),
             Self::Float3d(t) => Some((AnimationPreset::Float3d, t)),
@@ -150,6 +150,29 @@ pub struct AnimationTiming {
 
 fn default_animation_duration() -> f64 {
     0.8
+}
+
+/// Configuration for the `tilt_in` animation with configurable 3D transform values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TiltInConfig {
+    #[serde(default)]
+    pub delay: f64,
+    #[serde(default = "default_animation_duration")]
+    pub duration: f64,
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+    /// Initial rotate_x angle in degrees (default: 15.0).
+    #[serde(default)]
+    pub rotate_x: Option<f64>,
+    /// Initial rotate_y angle in degrees (default: -15.0).
+    #[serde(default)]
+    pub rotate_y: Option<f64>,
+    /// Perspective depth in px (default: 1000.0).
+    #[serde(default)]
+    pub perspective: Option<f64>,
+    /// Initial scale value (default: 0.9).
+    #[serde(default)]
+    pub scale_from: Option<f64>,
 }
 
 impl Default for AnimationTiming {

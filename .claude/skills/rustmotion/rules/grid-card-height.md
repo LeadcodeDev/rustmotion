@@ -12,8 +12,8 @@ Grid cells stretch to fill their row height. When the grid container has `height
     "width": 1200,
     "height": 400,
     "display": "grid",
-    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }, { "fr": 1 }],
-    "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+    "grid-template-columns": ["1fr", "1fr", "1fr"],
+    "grid-template-rows": ["1fr", "1fr"],
     "gap": 24
   },
   "children": [ ... ]
@@ -28,7 +28,7 @@ Grid cells stretch to fill their row height. When the grid container has `height
     "width": 1200,
     "height": "auto",
     "display": "grid",
-    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }, { "fr": 1 }],
+    "grid-template-columns": ["1fr", "1fr", "1fr"],
     "gap": 24
   },
   "children": [ ... ]
@@ -45,5 +45,5 @@ Grid cells stretch to fill their row height. When the grid container has `height
 ## Tips
 
 - Calculate container height: `(row_count × estimated_card_height) + ((row_count - 1) × gap) + (padding × 2)`
-- Use `grid-template-rows` with `{ "fr": 1 }` entries to distribute rows evenly within the explicit height
+- Use `grid-template-rows` with `"1fr"` entries to distribute rows evenly within the explicit height
 - For single-row grids, a flex row with `"flex-direction": "row"` may be simpler
