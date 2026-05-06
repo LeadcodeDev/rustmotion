@@ -38,6 +38,50 @@ rustmotion schema                                   # Print JSON Schema
 
 ---
 
+## Mental Model: Think HTML/CSS, not canvas
+
+Rustmotion's JSON API is a direct superset of HTML/CSS. When composing a scene, **think "how would I write this in HTML/CSS?" first** — then translate. Do not think in terms of pixel coordinates; think in terms of flow, flex, and grid.
+
+| HTML/CSS | Rustmotion JSON |
+|---|---|
+| `<body style="display:flex;flex-direction:column;align-items:center;justify-content:center">` | `"layout": {"direction": "column", "align_items": "center", "justify_content": "center"}` |
+| `<div style="display:flex;flex-direction:row;gap:24px;padding:32px">` | `{"type":"card","style":{"flex-direction":"row","gap":24,"padding":32}}` |
+| `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"card","style":{"display":"grid","grid-template-columns":[{"fr":1},{"fr":1}],"gap":16}}` |
+| `<h1>Title</h1>` — inline, no position | `{"type":"text","content":"Title"}` — flow child, no `x`/`y` |
+| `<div style="position:absolute;top:400px;left:0;width:100%;height:100%">` | `{"position":"absolute","x":0,"y":400,"style":{"width":1080,"height":1920}}` |
+| `margin`, `padding`, `gap` | same names — spacing between and around elements |
+
+### Flow vs Absolute — la règle d'or
+
+```
+Normal flow (default)       → title, cards, icons, text, buttons, grids
+position: "absolute"        → background blobs, particle layers, floating badge overlays
+```
+
+Children without `position` participate in the flex/grid flow and are centered automatically by the parent layout. Children with `position: "absolute"` are removed from the flow and placed at exact `x`/`y` coordinates.
+
+**Anti-pattern : penser en coordonnées**
+```json
+// ❌ — positionnement absolu partout, comme un éditeur graphique
+{ "type": "text", "content": "Titre", "position": "absolute", "x": 200, "y": 400 }
+{ "type": "text", "content": "Sous-titre", "position": "absolute", "x": 200, "y": 530 }
+{ "type": "card", "position": "absolute", "x": 90, "y": 700, "style": { "width": 900 } }
+```
+
+**Pattern correct : penser en HTML/CSS**
+```json
+// ✅ — flux naturel, centrage automatique, lisible
+{ "layout": { "direction": "column", "align_items": "center", "justify_content": "center" },
+  "children": [
+    { "type": "text", "content": "Titre", "style": { "font-size": 96, "text-align": "center" } },
+    { "type": "text", "content": "Sous-titre", "style": { "font-size": 48 } },
+    { "type": "card", "style": { "width": 900, "padding": 48, "gap": 24 }, "children": [...] }
+  ]
+}
+```
+
+---
+
 ## Video Creation Wizard
 
 When the user provides a **video idea or subject** (not a technical question), activate this guided wizard flow. Examples of triggers: "je veux créer une vidéo pour...", "make a video about...", "une vidéo de présentation de...", or any prompt describing video content to produce.
@@ -108,6 +152,7 @@ The user validates or adjusts the plan before proceeding.
 ### Phase 3: Iterative scene-by-scene construction
 
 **Pre-generation checklist** — verify before writing each scene's JSON:
+0. **HTML/CSS mental model** — sketch the layout mentally as HTML divs before writing JSON. Every element should have a reason to be in flow OR absolute. If you're reaching for `x`/`y` on a main content element, stop and restructure with flex/grid.
 1. All font sizes meet the floor for the target device (see [rules/typography-readability.md](rules/typography-readability.md))
 2. `start_at + delay + duration ≤ scene_duration` for every animation (see [rules/animation-completion-budget.md](rules/animation-completion-budget.md))
 3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
@@ -152,6 +197,7 @@ For each scene in the validated plan:
 
 Read individual rule files for detailed explanations, GOOD/BAD examples, and constraints:
 
+- [rules/html-css-mental-model.md](rules/html-css-mental-model.md) - **CRITICAL:** Think HTML/CSS — flow layout first, absolute only for decorative/overlay elements
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `wrap`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
