@@ -1,6 +1,6 @@
-# Rule: Use card/flex/container for Layout
+# Rule: Use card/flex/div for Layout
 
-`card` and `flex` (alias for `card`) use a CSS flexbox engine that auto-positions children. Use `card` for visual containers (background, border, shadow), `flex` for pure layout, and `container` for invisible grouping with shared transforms (no background, no border, no clipping).
+`card` and `flex` (alias for `card`) use a CSS flexbox engine that auto-positions children. Use `card` for visual containers (background, border, shadow), `div` for invisible grouping and pure layout (no background, no border, no clipping).
 
 ## Scene = Implicit Flex Container
 

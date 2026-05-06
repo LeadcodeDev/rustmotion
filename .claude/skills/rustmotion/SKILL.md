@@ -45,8 +45,10 @@ Rustmotion's JSON API is a direct superset of HTML/CSS. When composing a scene, 
 | HTML/CSS | Rustmotion JSON |
 |---|---|
 | `<body style="display:flex;flex-direction:column;align-items:center;justify-content:center">` | `"layout": {"direction": "column", "align_items": "center", "justify_content": "center"}` |
-| `<div style="display:flex;flex-direction:row;gap:24px;padding:32px">` | `{"type":"card","style":{"flex-direction":"row","gap":24,"padding":32}}` |
-| `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"card","style":{"display":"grid","grid-template-columns":[{"fr":1},{"fr":1}],"gap":16}}` |
+| `<div>` neutre — layout pur, zéro décoration visuelle | `{"type":"div"}` — flex par défaut, pas de fond/border-radius/ombre |
+| `<div class="card">` — avec fond, border-radius, ombre | `{"type":"card"}` — flex par défaut, styling visuel |
+| `<div style="display:flex;flex-direction:row;gap:24px">` | `{"type":"div","style":{"flex-direction":"row","gap":24}}` |
+| `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">` | `{"type":"div","style":{"display":"grid","grid-template-columns":[{"fr":1},{"fr":1}],"gap":16}}` |
 | `<h1>Title</h1>` — inline, no position | `{"type":"text","content":"Title"}` — flow child, no `x`/`y` |
 | `<div style="position:absolute;top:400px;left:0;width:100%;height:100%">` | `{"position":"absolute","x":0,"y":400,"style":{"width":1080,"height":1920}}` |
 | `margin`, `padding`, `gap` | same names — spacing between and around elements |
@@ -60,9 +62,24 @@ position: "absolute"        → background blobs, particle layers, floating badg
 
 Children without `position` participate in the flex/grid flow and are centered automatically by the parent layout. Children with `position: "absolute"` are removed from the flow and placed at exact `x`/`y` coordinates.
 
+### Positionnement relatif : choisir le bon outil
+
+Tout espace, alignement, et distribution se règle via des propriétés sur le **parent** — jamais via `x`/`y` sur les enfants.
+
+| Besoin | Propriété | Sur qui |
+|---|---|---|
+| Espace entre enfants | `gap` | Parent flex/grid |
+| Espace entre contenu et bordure | `padding` | Le container |
+| Centrer horizontalement | `align-items: "center"` (column) ou `justify-content: "center"` (row) | Parent |
+| Centrer verticalement | `justify-content: "center"` (column) | Parent |
+| Élément prend tout l'espace restant | `flex-grow: 1` | L'enfant |
+| Pousser un enfant à droite | `margin-left: "auto"` | Cet enfant |
+| 2 colonnes égales | `display: grid` + `grid-template-columns: [{"fr":1},{"fr":1}]` | Parent |
+| Exception d'alignement pour 1 enfant | `align-self` | Cet enfant |
+
 **Anti-pattern : penser en coordonnées**
 ```json
-// ❌ — positionnement absolu partout, comme un éditeur graphique
+// ❌ — x/y partout, fragile, recalcul manuel à chaque changement
 { "type": "text", "content": "Titre", "position": "absolute", "x": 200, "y": 400 }
 { "type": "text", "content": "Sous-titre", "position": "absolute", "x": 200, "y": 530 }
 { "type": "card", "position": "absolute", "x": 90, "y": 700, "style": { "width": 900 } }
@@ -70,8 +87,8 @@ Children without `position` participate in the flex/grid flow and are centered a
 
 **Pattern correct : penser en HTML/CSS**
 ```json
-// ✅ — flux naturel, centrage automatique, lisible
-{ "layout": { "direction": "column", "align_items": "center", "justify_content": "center" },
+// ✅ — gap + padding + flex, rien à calculer, s'adapte automatiquement
+{ "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 32 },
   "children": [
     { "type": "text", "content": "Titre", "style": { "font-size": 96, "text-align": "center" } },
     { "type": "text", "content": "Sous-titre", "style": { "font-size": 48 } },
@@ -145,14 +162,14 @@ Each scene must include:
 | CTA / call to action | `badge` + glow + `particle` confetti |
 | Hero / intro | `text` with `char_scale_in` + main `icon` (hero role: 160-200px mobile / 80-100px desktop) |
 | Transition / ambiance | `particle` stars/confetti + `animated-background` |
-| Grouped transforms | `container` wrapping children + shared `timeline` scale/fade |
+| Grouped transforms | `div` wrapping children + shared `timeline` scale/fade |
 
 The user validates or adjusts the plan before proceeding.
 
 ### Phase 3: Iterative scene-by-scene construction
 
 **Pre-generation checklist** — verify before writing each scene's JSON:
-0. **HTML/CSS mental model** — sketch the layout mentally as HTML divs before writing JSON. Every element should have a reason to be in flow OR absolute. If you're reaching for `x`/`y` on a main content element, stop and restructure with flex/grid.
+0. **HTML/CSS mental model** — sketch the layout mentally as HTML divs before writing JSON. Every element should have a reason to be in flow OR absolute. If you're reaching for `x`/`y` on a main content element, stop and restructure: use `gap` for spacing between siblings, `padding` for inner spacing, `align-items`/`justify-content` for centering, `flex-grow` for elastic elements. `x`/`y` is reserved for decorative blobs and overlays only. See [rules/html-css-mental-model.md](rules/html-css-mental-model.md).
 1. All font sizes meet the floor for the target device (see [rules/typography-readability.md](rules/typography-readability.md))
 2. `start_at + delay + duration ≤ scene_duration` for every animation (see [rules/animation-completion-budget.md](rules/animation-completion-budget.md))
 3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
@@ -1104,18 +1121,17 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 
 `position` is only valid inside `positioned` containers. Card children are laid out using flex/grid style properties.
 
-### 12. `container`
+### 12. `div`
 
-Invisible wrapper — groups children for shared transforms (scale, opacity, rotation). Like `card`/`flex` but with **no background, no border, no shadow, no clipping**. Children can overflow freely.
+Invisible flex wrapper — groupe des enfants pour un layout pur ou des transforms partagés. Comme `card`/`flex` mais **sans background, border, shadow, ni clipping**. Équivalent de `<div>` en HTML.
 
-Use `container` when you need to apply a single animation/timeline to a group of elements (e.g., scale-out all foreground content together).
+Utiliser `div` quand il faut grouper des éléments sans décoration visuelle (ex: grille de cards, ligne d'icônes, animation partagée sur un groupe).
 
 ```json
 {
-  "type": "container",
+  "type": "div",
   "style": {
-    "width": "auto",
-    "height": "auto",
+    "flex-direction": "column",
     "align-items": "center",
     "gap": 36,
     "timeline": [
@@ -1132,7 +1148,7 @@ Use `container` when you need to apply a single animation/timeline to a group of
 }
 ```
 
-Supports all flex layout properties (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`) and all animation/timeline properties. Prefer `container` over `card` with transparent background when no visual styling is needed.
+Supporte toutes les propriétés CSS flex/grid (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`, `display: "grid"`, `grid-template-columns`) et toutes les propriétés d'animation/timeline. Préférer `div` à `card` avec fond transparent pour tout layout sans styling visuel.
 
 ### 12. `codeblock`
 

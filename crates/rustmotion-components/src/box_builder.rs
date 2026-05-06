@@ -263,7 +263,7 @@ fn apply_default_display(component: &Component, css: &mut CssStyle) {
         return;
     }
     css.display = match component {
-        Component::Card(_) | Component::Flex(_) => Some(Display::Flex),
+        Component::Card(_) | Component::Flex(_) | Component::Container(_) => Some(Display::Flex),
         Component::Grid(_) => Some(Display::Grid),
         _ => return,
     };

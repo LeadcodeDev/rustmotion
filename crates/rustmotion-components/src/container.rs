@@ -9,8 +9,10 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 use crate::ChildComponent;
 
-/// Invisible container — groups children and applies transforms (scale, opacity, etc.)
-/// to the group as a whole. Equivalent of an HTML `<div>` with no visual styling.
+/// Invisible flex container — the HTML `<div>` equivalent.
+/// No visual defaults (no background, border-radius, or shadow).
+/// Gets `display: flex` automatically, like every other layout container.
+/// Accepts `"type": "div"` as an alias in JSON.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ContainerComponent {
     #[serde(default)]

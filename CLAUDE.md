@@ -36,7 +36,9 @@ CLI :
 `text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
 
 ### Conteneurs
-`card`, `flex`, `grid`, `container`, `positioned`
+`card`, `flex`, `grid`, `div` (alias de `container`), `container`, `positioned`
+
+> `div` = layout pur sans décoration visuelle (HTML `<div>`). `card` = même chose mais avec fond/border-radius/ombre attendus.
 
 ### Data Visualization
 - `chart` — 12 types: bar, line, pie, donut, horizontal_bar, area, stacked_bar, radar, scatter, radial_bar, funnel, waterfall. Supporte axes/grilles/labels.

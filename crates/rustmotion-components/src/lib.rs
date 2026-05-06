@@ -231,6 +231,7 @@ pub enum Component {
     Flex(Flex),
     Grid(Grid),
     Card(Card),
+    #[serde(rename = "div")]
     Container(ContainerComponent),
 }
 
