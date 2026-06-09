@@ -35,7 +35,7 @@ pub fn StudioApp() -> Element {
                 .unwrap_or(0);
             let jpeg = {
                 let m = handler_shared.lock().unwrap();
-                render_frame(&m.scenario, &m.tasks, idx, 1.0).0
+                render_frame(&m.scenario, &m.tasks, idx, 1.0)
             };
             responder.respond(
                 Response::builder()

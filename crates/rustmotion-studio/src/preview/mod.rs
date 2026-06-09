@@ -2,7 +2,6 @@ mod app_ui;
 mod edit;
 mod frames;
 mod model;
-mod perf;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,47 +20,6 @@ pub fn run_preview(
     watch: bool,
 ) -> Result<()> {
     run_preview_inner(scenario, input_path, watch, None)
-}
-
-/// Headless benchmark: render+encode a batch of frames and print median
-/// latencies. No window — used to judge the webview transport budget.
-pub fn run_bench(scenario: ResolvedScenario) {
-    let tasks = rustmotion::encode::build_frame_tasks(&scenario);
-    let n = tasks.len().min(120) as u32;
-    println!(
-        "scenario: {}x{}, {} frames (measuring {})",
-        scenario.video.width,
-        scenario.video.height,
-        tasks.len(),
-        n
-    );
-    let mut render = Vec::new();
-    let mut encode = Vec::new();
-    let mut bytes = 0usize;
-    for f in 0..n {
-        let (jpeg, _w, _h, r, e) = frames::render_frame(&scenario, &tasks, f, 1.0);
-        render.push(r);
-        encode.push(e);
-        bytes += jpeg.len();
-    }
-    let mr = perf::median(render);
-    let me = perf::median(encode);
-    let total = mr + me;
-    println!("median render: {:?}", mr);
-    println!("median encode: {:?}", me);
-    println!("median total:  {:?}", total);
-    println!(
-        "avg jpeg size: {} KB",
-        if n > 0 { bytes / n as usize / 1024 } else { 0 }
-    );
-    println!(
-        "=> max fps (render+encode only): {:.1}",
-        if total.as_secs_f64() > 0.0 {
-            1.0 / total.as_secs_f64()
-        } else {
-            0.0
-        }
-    );
 }
 
 pub fn run_preview_with_error(
