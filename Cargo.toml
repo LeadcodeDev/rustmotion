@@ -7,3 +7,18 @@ members = [
     "crates/rustmotion-cli",
     "crates/rustmotion-studio",
 ]
+
+# Optimize dependencies even in dev builds. Our own crates stay at opt-level 0
+# (fast incremental + debuggable), but heavy compute in deps (image encoding,
+# etc.) runs optimized — without this, `cargo run` image encode is ~20x slower.
+# Disabling overflow/debug checks on deps matters as much as opt-level for the
+# encode hot loop.
+[profile.dev.package."*"]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+# The image crate's encoders are generic and monomorphize into the calling
+# crate, so the studio itself must be optimized for fast preview encoding.
+[profile.dev.package.rustmotion-studio]
+opt-level = 3
