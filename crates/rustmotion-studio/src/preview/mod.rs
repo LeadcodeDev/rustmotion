@@ -1,4 +1,5 @@
 mod app_ui;
+mod edit;
 mod frames;
 mod model;
 mod perf;
@@ -108,7 +109,11 @@ fn run_preview_inner(
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
-    let shared: Shared = Arc::new(Mutex::new(StudioModel::new(scenario, initial_error)));
+    let shared: Shared = Arc::new(Mutex::new(StudioModel::new(
+        scenario,
+        initial_error,
+        input_path.clone(),
+    )));
 
     // Optional file watcher: on change, reload and swap into the shared model.
     if watch {
@@ -148,7 +153,7 @@ fn watch_loop(path: PathBuf, shared: Shared) {
         if let Ok(scenario) = rustmotion::loader::load_scenario(&path) {
             if let Ok(mut m) = shared.lock() {
                 let generation = m.generation.wrapping_add(1);
-                *m = StudioModel::new(scenario, None);
+                *m = StudioModel::new(scenario, None, Some(path.clone()));
                 m.generation = generation;
             }
         }

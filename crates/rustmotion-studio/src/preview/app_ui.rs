@@ -94,13 +94,27 @@ pub fn StudioApp() -> Element {
     let is_playing = playing();
 
     // Real element hotspots for the current frame (render only, no encode).
-    // Task 3 supplies the real scene prefix from the raw JSON.
     let hits = {
         let m = shared.lock().unwrap();
-        super::frames::frame_hits(&m.scenario, &m.tasks, cur, "")
+        let prefix = super::frames::scene_prefix(&m.raw, &m.tasks, cur);
+        super::frames::frame_hits(&m.scenario, &m.tasks, cur, &prefix)
     };
-    let selected_kind = selected()
-        .and_then(|id| hits.iter().find(|h| h.node_id == id).map(|h| h.kind.clone()));
+    let selected_hit = selected().and_then(|id| hits.iter().find(|h| h.node_id == id).cloned());
+    let selected_kind = selected_hit.as_ref().map(|h| h.kind.clone());
+
+    // Inspector data for the selected element: its current style prop values.
+    let inspector = selected_hit
+        .as_ref()
+        .and_then(|h| h.pointer.clone())
+        .map(|pointer| {
+            let m = shared.lock().unwrap();
+            let color = super::edit::read_style(&m.raw, &pointer, "color").unwrap_or_default();
+            let font_size =
+                super::edit::read_style(&m.raw, &pointer, "font-size").unwrap_or_default();
+            let background =
+                super::edit::read_style(&m.raw, &pointer, "background").unwrap_or_default();
+            (pointer, color, font_size, background)
+        });
 
     if let Some(e) = err {
         return rsx! {
@@ -168,10 +182,68 @@ pub fn StudioApp() -> Element {
                 div { style: "min-width:120px; text-align:right; color:#7a7f8a;",
                     "{cur} / {max}"
                 }
-                if let Some(kind) = selected_kind {
+                if let Some(kind) = selected_kind.as_deref() {
                     div { style: "min-width:120px; color:#4c8dff;", "selected: {kind}" }
                 }
             }
+            if let Some((pointer, color, font_size, background)) = inspector {
+                div { style: "position:fixed; top:0; right:0; width:248px; height:100vh; background:#13161d; border-left:1px solid #1c1f27; padding:16px; box-sizing:border-box; display:flex; flex-direction:column; gap:14px; overflow:auto;",
+                    div { style: "color:#4c8dff; font-weight:600;", "Inspector" }
+                    if let Some(kind) = selected_kind.as_deref() {
+                        div { style: "color:#7a7f8a;", "{kind}" }
+                    }
+                    label { style: "display:flex; flex-direction:column; gap:4px;",
+                        "color"
+                        input {
+                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                            value: "{color}",
+                            onchange: {
+                                let shared = shared.clone();
+                                let p = pointer.clone();
+                                move |e| write_prop(&shared, &p, "color", &e.value())
+                            }
+                        }
+                    }
+                    label { style: "display:flex; flex-direction:column; gap:4px;",
+                        "font-size"
+                        input {
+                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                            value: "{font_size}",
+                            onchange: {
+                                let shared = shared.clone();
+                                let p = pointer.clone();
+                                move |e| write_prop(&shared, &p, "font-size", &e.value())
+                            }
+                        }
+                    }
+                    label { style: "display:flex; flex-direction:column; gap:4px;",
+                        "background"
+                        input {
+                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                            value: "{background}",
+                            onchange: {
+                                let shared = shared.clone();
+                                let p = pointer.clone();
+                                move |e| write_prop(&shared, &p, "background", &e.value())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Write a single style property back to the scenario file. The file watcher
+/// then reloads the model and refreshes the preview.
+fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap();
+        (m.path.clone(), m.raw.clone())
+    };
+    if let (Some(path), Some(updated)) = (path, super::edit::set_style(raw, pointer, prop, value)) {
+        if let Ok(text) = serde_json::to_string_pretty(&updated) {
+            let _ = std::fs::write(&path, text);
         }
     }
 }
