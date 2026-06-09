@@ -27,7 +27,7 @@ use crate::css::style::{
     Color, CssStyle, Edges, Overflow, TransformFn,
 };
 use crate::css::units::{LengthContext, LengthPercentage, ParsedLength};
-use crate::engine::box_tree::{BoxKind, BoxNode};
+use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
 /// Frame-level paint context (timing + viewport).
@@ -55,7 +55,7 @@ pub struct HitRect {
 /// One clickable node: its layout id and on-screen bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitNode {
-    pub node_id: crate::engine::box_tree::NodeId,
+    pub node_id: NodeId,
     pub rect: HitRect,
 }
 
@@ -180,7 +180,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
             box_layout.width,
             box_layout.height,
         );
-        let dev = canvas.total_matrix().map_rect(local).0;
+        let dev = canvas.local_to_device_as_3x3().map_rect(local).0;
         hits.borrow_mut().push(HitNode {
             node_id: node.id,
             rect: HitRect {
@@ -890,6 +890,61 @@ mod hit_tests {
         assert!((h.rect.y - 30.0).abs() < 0.5, "y = {}", h.rect.y);
         assert!((h.rect.w - 100.0).abs() < 0.5, "w = {}", h.rect.w);
         assert!((h.rect.h - 80.0).abs() < 0.5, "h = {}", h.rect.h);
+    }
+
+    #[test]
+    fn hitmap_reflects_node_transform() {
+        use crate::css::style::TransformFn;
+
+        // Same leaf as the untransformed test, but with transform: scale(2).
+        // The engine applies transforms around the node's center, so a 100x80
+        // box scaled 2x grows to 200x160 (centered on the same point).
+        let leaf = BoxNode {
+            id: 0,
+            kind: BoxKind::Component(Arc::new(1u32)),
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(40.0)),
+                top: Some(CLP::Px(30.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(80.0))),
+                transform: Some(vec![TransformFn::Scale { x: 2.0, y: 2.0 }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(400.0))),
+                height: Some(CSize::Length(CLP::Px(400.0))),
+                ..Default::default()
+            },
+            children: vec![leaf],
+            intrinsic: None,
+        };
+        root.assign_ids(0);
+
+        let layout = run_layout(&root, (400.0, 400.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).unwrap();
+        let hits = paint_tree_with_hits(
+            surface.canvas(),
+            &root,
+            &layout,
+            &test_frame(400, 400),
+            &NoopDispatcher,
+        );
+
+        assert_eq!(hits.len(), 1);
+        let h = &hits[0];
+        // Scaled 2x: width 100->200, height 80->160. Assert the dimensions
+        // (these prove the canvas transform is reflected in the hit rect).
+        assert!((h.rect.w - 200.0).abs() < 1.0, "w = {}", h.rect.w);
+        assert!((h.rect.h - 160.0).abs() < 1.0, "h = {}", h.rect.h);
     }
 }
 
