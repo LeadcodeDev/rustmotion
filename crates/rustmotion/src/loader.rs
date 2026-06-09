@@ -39,3 +39,48 @@ pub fn load_scenario_from_source(
         }
     }
 }
+
+/// Load a scenario authored in the HTML/CSS dialect: transpile to the scenario
+/// JSON value, deserialize into `Scenario`, then resolve includes — reusing the
+/// exact same pipeline as the JSON loader.
+pub fn load_scenario_from_html(input: &PathBuf) -> Result<ResolvedScenario> {
+    let html = std::fs::read_to_string(input)
+        .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
+    let value = rustmotion_html::html_to_scenario_value(&html)
+        .map_err(|e| RustmotionError::HtmlParse(e.to_string()))?;
+    let scenario: Scenario = serde_json::from_value(value).map_err(RustmotionError::from)?;
+    include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
+}
+
+/// Dispatch by file extension: `.html`/`.htm` use the HTML transpiler, everything
+/// else uses the JSON loader. Single entry point for all CLI commands.
+pub fn load_input(input: &PathBuf) -> Result<ResolvedScenario> {
+    match input.extension().and_then(|e| e.to_str()) {
+        Some("html") | Some("htm") => load_scenario_from_html(input),
+        _ => load_scenario(input),
+    }
+}
+
+#[cfg(test)]
+mod html_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn loads_html_scenario_into_resolved() {
+        let html = r##"<rustmotion width="1920" height="1080" fps="30" background="#0f172a">
+            <scene duration="4"><h1 style="font-size:96; color:#ffffff">Hi</h1></scene>
+        </rustmotion>"##;
+        let dir = std::env::temp_dir();
+        let path = dir.join("rm_html_loader_test.html");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(html.as_bytes()).unwrap();
+
+        let resolved = load_input(&path).expect("html loads");
+        assert_eq!(resolved.video.width, 1920);
+        assert_eq!(resolved.views.len(), 1);
+        assert_eq!(resolved.views[0].scenes.len(), 1);
+        assert_eq!(resolved.views[0].scenes[0].duration, 4.0);
+        let _ = std::fs::remove_file(&path);
+    }
+}

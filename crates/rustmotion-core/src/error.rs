@@ -22,6 +22,10 @@ pub enum RustmotionError {
         source: serde_json::Error,
     },
 
+    // --- HTML transpile ---
+    #[error("HTML transpile error: {0}")]
+    HtmlParse(String),
+
     // --- Asset loading ---
     #[error("Failed to load image '{path}': {reason}")]
     ImageLoad { path: String, reason: String },

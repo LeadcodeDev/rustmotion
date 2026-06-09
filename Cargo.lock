@@ -4758,6 +4758,7 @@ dependencies = [
  "rubato",
  "rustmotion-components",
  "rustmotion-core",
+ "rustmotion-html",
  "serde",
  "serde_json",
  "similar",
