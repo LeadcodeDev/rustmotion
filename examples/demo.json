@@ -1,7 +1,11 @@
 {
   "video": { "width": 1920, "height": 1080, "background": "#1b2030", "fps": 30 },
   "scenes": [
-    { "duration": 1.5, "background": "#2a6cf0" },
-    { "duration": 1.5, "background": "#16a36b" }
+    { "duration": 0.5, "background": "#2a6cf0" },
+    { "duration": 0.5, "background": "#16a36b" },
+    { "duration": 0.5, "background": "#e0533a" },
+    { "duration": 0.5, "background": "#b041f0" },
+    { "duration": 0.5, "background": "#f2b134" },
+    { "duration": 0.5, "background": "#e23a6e" }
   ]
 }
