@@ -17,6 +17,10 @@ pub fn StudioApp() -> Element {
     let mut playing = use_signal(|| false);
     let rev = use_signal(|| 0u64);
     let mut selected = use_signal(|| None::<u32>);
+    // Debounce state for inspector edits. NOT read in the render body, so
+    // typing does not re-render (which would reset the controlled input).
+    let edit_gen = use_signal(|| 0u64);
+    let pending = use_signal(|| None::<(String, String, String)>);
 
     // Asset handler: GET /frame/{idx} -> PNG of that frame.
     let handler_shared = shared.clone();
@@ -197,10 +201,10 @@ pub fn StudioApp() -> Element {
                         input {
                             style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
                             value: "{color}",
-                            onchange: {
+                            oninput: {
                                 let shared = shared.clone();
                                 let p = pointer.clone();
-                                move |e| write_prop(&shared, &p, "color", &e.value())
+                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "color", e.value())
                             }
                         }
                     }
@@ -209,10 +213,10 @@ pub fn StudioApp() -> Element {
                         input {
                             style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
                             value: "{font_size}",
-                            onchange: {
+                            oninput: {
                                 let shared = shared.clone();
                                 let p = pointer.clone();
-                                move |e| write_prop(&shared, &p, "font-size", &e.value())
+                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "font-size", e.value())
                             }
                         }
                     }
@@ -221,10 +225,10 @@ pub fn StudioApp() -> Element {
                         input {
                             style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
                             value: "{background}",
-                            onchange: {
+                            oninput: {
                                 let shared = shared.clone();
                                 let p = pointer.clone();
-                                move |e| write_prop(&shared, &p, "background", &e.value())
+                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "background", e.value())
                             }
                         }
                     }
@@ -232,6 +236,32 @@ pub fn StudioApp() -> Element {
             }
         }
     }
+}
+
+/// Debounced inspector write: records the latest edit and, after a quiet
+/// period, writes it. Each keystroke bumps `edit_gen`; only the spawned task
+/// whose generation is still current performs the write, so rapid typing
+/// collapses to a single write 350 ms after the last keystroke.
+fn schedule_write(
+    shared: &Shared,
+    mut edit_gen: Signal<u64>,
+    mut pending: Signal<Option<(String, String, String)>>,
+    pointer: String,
+    prop: &'static str,
+    value: String,
+) {
+    pending.set(Some((pointer, prop.to_string(), value)));
+    let g = edit_gen() + 1;
+    edit_gen.set(g);
+    let shared = shared.clone();
+    spawn(async move {
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        if edit_gen() == g {
+            if let Some((ptr, p, v)) = pending() {
+                write_prop(&shared, &ptr, &p, &v);
+            }
+        }
+    });
 }
 
 /// Write a single style property back to the scenario file. The file watcher
