@@ -73,7 +73,6 @@ pub fn frame_hits(
 
 /// JSON-Pointer prefix to the scene of the given frame, derived from the raw
 /// scenario JSON (handles both top-level `scenes` and `composition`).
-#[allow(dead_code)] // wired into app_ui in the inspector task
 pub fn scene_prefix(
     raw: &serde_json::Value,
     tasks: &[rustmotion::encode::video::FrameTask],

@@ -6,13 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-/// Which top-level view is shown.
-#[derive(Clone, Copy, PartialEq)]
-pub enum View {
-    Library,
-    Editor,
-}
-
 /// Control message to the single re-targetable file watcher.
 pub enum WatchMsg {
     Retarget(PathBuf),
@@ -139,7 +132,7 @@ pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     if tasks.is_empty() {
         return None;
     }
-    Some(super::frames::render_frame(&scenario, &tasks, 0, 0.25))
+    Some(crate::editor::frames::render_frame(&scenario, &tasks, 0, 0.25))
 }
 
 /// Cheap check: is this JSON a Rustmotion scenario? Avoids the heavier

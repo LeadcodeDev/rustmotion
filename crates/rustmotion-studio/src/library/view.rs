@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{FilePlus, Folder, Import, Plus, Search};
+use dioxus_icons::lucide::{Folder, Import, Plus, Search};
 
-use super::library::{SharedLibrary, View};
-use super::model::{Shared, StudioModel};
+use crate::library::{ScenarioEntry, SharedLibrary};
+use crate::scenario::{empty_scenario, Shared, StudioModel, View};
 
 const NEW_SCENARIO: &str = r##"{
   "video": { "width": 1920, "height": 1080, "background": "#0f172a" },
@@ -27,7 +27,7 @@ pub fn Library(view: Signal<View>) -> Element {
     let mut query = use_signal(String::new);
 
     // Build sections: a "Recent" pseudo-group first, then the workspace groups.
-    let sections: Vec<(String, Vec<super::library::ScenarioEntry>)> = {
+    let sections: Vec<(String, Vec<ScenarioEntry>)> = {
         let lib = library.lock().unwrap();
         let mut s = Vec::new();
         if !lib.recents.is_empty() {
@@ -53,11 +53,11 @@ pub fn Library(view: Signal<View>) -> Element {
     rsx! {
         div { style: "display:flex; height:100vh; overflow:hidden;",
             // ── Sidebar ──────────────────────────────────────────────
-            div { style: "width:280px; flex:none; background:#13161d; border-right:1px solid #1c1f27; display:flex; flex-direction:column; padding:14px;",
+            div { style: "width:280px; flex:none; background:var(--rm-surface); border-right:1px solid var(--rm-border); display:flex; flex-direction:column; padding:14px;",
                 div { style: "display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;",
-                    div { style: "font-weight:700; color:#fff;", "Rustmotion" }
+                    div { style: "font-weight:700; color:var(--rm-text-strong);", "Rustmotion" }
                     button {
-                        style: "display:flex; align-items:center; gap:4px; padding:4px 8px; cursor:pointer; background:#1c2230; color:#cfd3dc; border:1px solid #2a2f3a; border-radius:6px;",
+                        style: "display:flex; align-items:center; gap:4px; padding:4px 8px; cursor:pointer; background:var(--rm-surface-3); color:var(--rm-text); border:1px solid var(--rm-border-2); border-radius:6px;",
                         onclick: {
                             let shared = shared.clone();
                             let library = library.clone();
@@ -68,7 +68,7 @@ pub fn Library(view: Signal<View>) -> Element {
                     }
                 }
                 button {
-                    style: "display:flex; align-items:center; gap:6px; padding:6px 8px; margin-bottom:12px; cursor:pointer; background:none; color:#cfd3dc; border:1px solid #2a2f3a; border-radius:6px;",
+                    style: "display:flex; align-items:center; gap:6px; padding:6px 8px; margin-bottom:12px; cursor:pointer; background:none; color:var(--rm-text); border:1px solid var(--rm-border-2); border-radius:6px;",
                     onclick: {
                         let shared = shared.clone();
                         let library = library.clone();
@@ -77,20 +77,20 @@ pub fn Library(view: Signal<View>) -> Element {
                     Import { size: 14 }
                     "Import file…"
                 }
-                div { style: "color:#7a7f8a; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin:8px 0;", "Folders" }
+                div { style: "color:var(--rm-text-muted); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin:8px 0;", "Folders" }
                 div { style: "overflow:auto; display:flex; flex-direction:column; gap:2px;",
                     for (i, (name, group_entries)) in sections.iter().enumerate() {
                         button {
                             key: "{name}-{i}",
                             style: format!(
                                 "display:flex; align-items:center; gap:8px; padding:7px 8px; cursor:pointer; border:none; border-radius:6px; text-align:left; color:{}; background:{};",
-                                if i == sel { "#fff" } else { "#cfd3dc" },
-                                if i == sel { "#1c2230" } else { "transparent" }
+                                if i == sel { "var(--rm-text-strong)" } else { "var(--rm-text)" },
+                                if i == sel { "var(--rm-surface-3)" } else { "transparent" }
                             ),
                             onclick: move |_| selected.set(i),
                             Folder { size: 16 }
                             div { style: "flex:1;", "{name}" }
-                            div { style: "color:#7a7f8a; font-size:11px;", "{group_entries.len()}" }
+                            div { style: "color:var(--rm-text-muted); font-size:11px;", "{group_entries.len()}" }
                         }
                     }
                 }
@@ -98,11 +98,11 @@ pub fn Library(view: Signal<View>) -> Element {
             // ── Main area ────────────────────────────────────────────
             div { style: "flex:1; display:flex; flex-direction:column; overflow:hidden;",
                 div { style: "display:flex; align-items:center; justify-content:space-between; padding:20px 28px; gap:16px;",
-                    div { style: "font-size:24px; font-weight:700; color:#fff;", "{section_name}" }
-                    div { style: "display:flex; align-items:center; gap:6px; background:#13161d; border:1px solid #2a2f3a; border-radius:8px; padding:6px 10px; min-width:240px;",
+                    div { style: "font-size:24px; font-weight:700; color:var(--rm-text-strong);", "{section_name}" }
+                    div { style: "display:flex; align-items:center; gap:6px; background:var(--rm-surface); border:1px solid var(--rm-border-2); border-radius:8px; padding:6px 10px; min-width:240px;",
                         Search { size: 15 }
                         input {
-                            style: "flex:1; background:none; border:none; outline:none; color:#cfd3dc; font:inherit;",
+                            style: "flex:1; background:none; border:none; outline:none; color:var(--rm-text); font:inherit;",
                             placeholder: "Search",
                             value: "{query}",
                             oninput: move |e| query.set(e.value()),
@@ -111,7 +111,7 @@ pub fn Library(view: Signal<View>) -> Element {
                 }
                 div { style: "flex:1; overflow:auto; padding:0 28px 28px;",
                     if visible.is_empty() {
-                        div { style: "color:#7a7f8a; padding:24px;", "No scenarios here." }
+                        div { style: "color:var(--rm-text-muted); padding:24px;", "No scenarios here." }
                     }
                     div { style: "display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:18px;",
                         for entry in visible.iter().cloned() {
@@ -124,13 +124,13 @@ pub fn Library(view: Signal<View>) -> Element {
                                     let path = entry.path.clone();
                                     move |_| open_scenario(&shared, &library, view, path.clone())
                                 },
-                                div { style: "aspect-ratio:16/9; background:#0f1218; border:1px solid #1c1f27; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;",
+                                div { style: "aspect-ratio:16/9; background:var(--rm-surface-2); border:1px solid var(--rm-border); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center;",
                                     img {
                                         src: "/thumb/{entry.flat_index}",
                                         style: "width:100%; height:100%; object-fit:cover; display:block;",
                                     }
                                 }
-                                div { style: "color:#cfd3dc; font-size:13px;", "{entry.name}" }
+                                div { style: "color:var(--rm-text); font-size:13px;", "{entry.name}" }
                             }
                         }
                     }
@@ -144,7 +144,7 @@ pub fn Library(view: Signal<View>) -> Element {
 fn open_scenario(shared: &Shared, library: &SharedLibrary, mut view: Signal<View>, path: PathBuf) {
     let (scenario, error) = match rustmotion::loader::load_scenario(&path) {
         Ok(s) => (s, None),
-        Err(e) => (super::model::empty_scenario(), Some(e.to_string())),
+        Err(e) => (empty_scenario(), Some(e.to_string())),
     };
     {
         let mut m = shared.lock().unwrap();

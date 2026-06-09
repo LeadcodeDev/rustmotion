@@ -1,7 +1,10 @@
+mod app;
 mod components;
-mod preview;
+mod editor;
+mod library;
+mod scenario;
 
-pub use preview::{run_preview, run_preview_with_error};
+pub use app::{run_preview, run_preview_with_error};
 
 use std::path::PathBuf;
 
@@ -32,11 +35,9 @@ pub fn run() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     match cli.file {
         Some(f) => match load_scenario(&f) {
-            Ok(scenario) => {
-                preview::run_preview_root(scenario, None, Some(f), workspace, true, true)
-            }
-            Err(e) => preview::run_preview_root(
-                preview::empty_scenario(),
+            Ok(scenario) => app::run_preview_root(scenario, None, Some(f), workspace, true, true),
+            Err(e) => app::run_preview_root(
+                scenario::empty_scenario(),
                 Some(format!("{}", e)),
                 Some(f),
                 workspace,
@@ -44,13 +45,6 @@ pub fn run() -> Result<()> {
                 true,
             ),
         },
-        None => preview::run_preview_root(
-            preview::empty_scenario(),
-            None,
-            None,
-            workspace,
-            false,
-            true,
-        ),
+        None => app::run_preview_root(scenario::empty_scenario(), None, None, workspace, false, true),
     }
 }

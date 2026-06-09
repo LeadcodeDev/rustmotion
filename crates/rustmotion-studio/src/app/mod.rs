@@ -1,9 +1,6 @@
-mod app_ui;
-mod edit;
-mod frames;
-mod home;
-mod library;
-mod model;
+//! The application shell: process entry points, the launch wiring, and the
+//! re-targetable file watcher.
+
 mod root;
 
 use std::path::PathBuf;
@@ -14,11 +11,9 @@ use rustmotion::engine;
 use rustmotion::error::Result;
 use rustmotion::schema::ResolvedScenario;
 
-use library::{LibraryState, SharedLibrary, WatchMsg};
-use model::{Shared, StudioModel};
+use crate::library::{LibraryState, SharedLibrary, WatchMsg};
+use crate::scenario::{empty_scenario, Shared, StudioModel};
 use root::StudioRoot;
-
-pub use model::empty_scenario;
 
 fn default_workspace() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -43,7 +38,7 @@ pub fn run_preview_with_error(
 ) -> Result<()> {
     let workspace = workspace_for(&input_path);
     run_preview_root(
-        model::empty_scenario(),
+        empty_scenario(),
         Some(initial_error),
         input_path,
         workspace,
