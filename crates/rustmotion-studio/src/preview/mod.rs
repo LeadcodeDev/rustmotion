@@ -1,24 +1,17 @@
-mod app;
-mod render_worker;
-mod ui;
+mod app_ui;
+mod frames;
+mod model;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use winit::event_loop::EventLoop;
-use winit::keyboard::ModifiersState;
-
-use rustmotion::encode;
 use rustmotion::engine;
 use rustmotion::error::Result;
-use rustmotion::error::RustmotionError;
 use rustmotion::schema::ResolvedScenario;
 
-use app::PreviewApp;
-use render_worker::{RenderRequest, render_thread};
-use ui::ExportState;
+use app_ui::StudioApp;
+use model::{Shared, StudioModel};
 
 pub fn run_preview(
     scenario: ResolvedScenario,
@@ -33,7 +26,7 @@ pub fn run_preview_with_error(
     input_path: Option<PathBuf>,
     watch: bool,
 ) -> Result<()> {
-    use rustmotion::schema::{VideoConfig, ResolvedView, ViewType};
+    use rustmotion::schema::{ResolvedView, VideoConfig, ViewType};
     let scenario = ResolvedScenario {
         video: VideoConfig {
             width: 1920,
@@ -64,7 +57,7 @@ fn run_preview_inner(
     watch: bool,
     initial_error: Option<String>,
 ) -> Result<()> {
-    // Prefetch assets
+    // Prefetch assets (unchanged from the winit version).
     for view in &scenario.views {
         engine::prefetch_icons(&view.scenes);
         engine::preextract_video_frames(&view.scenes, scenario.video.fps);
@@ -73,99 +66,52 @@ fn run_preview_inner(
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
 
-    let fps = scenario.video.fps;
-    let video_width = scenario.video.width;
-    let video_height = scenario.video.height;
-    let total_frames = encode::build_frame_tasks(&scenario).len() as u32;
+    let shared: Shared = Arc::new(Mutex::new(StudioModel::new(scenario, initial_error)));
 
-    // Channels
-    let (req_tx, req_rx) = mpsc::channel::<RenderRequest>();
-    let (resp_tx, resp_rx) = mpsc::channel();
-    let (reload_resp_tx, reload_resp_rx) = mpsc::channel();
-
-    // Spawn render thread
-    std::thread::spawn(move || {
-        render_thread(req_rx, resp_tx, reload_resp_tx, scenario);
-    });
-
-    // File watcher (optional)
-    let file_change_rx = if watch {
-        if let Some(ref path) = input_path {
-            let (tx, rx) = mpsc::channel();
-            let watch_path = path.clone();
-            std::thread::spawn(move || {
-                use notify::{RecursiveMode, Watcher};
-                let mut watcher = notify::recommended_watcher(
-                    move |res: std::result::Result<notify::Event, notify::Error>| {
-                        if let Ok(event) = res {
-                            if event.kind.is_modify() || event.kind.is_create() {
-                                let _ = tx.send(());
-                            }
-                        }
-                    },
-                )
-                .expect("Failed to create file watcher");
-                watcher
-                    .watch(watch_path.as_ref(), RecursiveMode::NonRecursive)
-                    .expect("Failed to watch file");
-                loop {
-                    std::thread::sleep(Duration::from_secs(3600));
-                }
-            });
-            Some(rx)
-        } else {
-            None
+    // Optional file watcher: on change, reload and swap into the shared model.
+    if watch {
+        if let Some(path) = input_path.clone() {
+            let shared_w = shared.clone();
+            std::thread::spawn(move || watch_loop(path, shared_w));
         }
-    } else {
-        None
-    };
+    }
 
-    let event_loop = EventLoop::new()
-        .map_err(|e| RustmotionError::PreviewWindow {
-            reason: e.to_string(),
-        })?;
-
-    let mut app = PreviewApp {
-        total_frames,
-        fps,
-        video_width,
-        video_height,
-        input_path,
-        current_frame: 0,
-        playing: false,
-        last_frame_time: Instant::now(),
-        frame_duration: Duration::from_secs_f64(1.0 / fps.max(1) as f64),
-        frame_cache: HashMap::new(),
-        rendered_width: video_width,
-        rendered_height: video_height,
-        last_displayed_frame: None,
-        render_tx: req_tx,
-        render_rx: resp_rx,
-        reload_rx: reload_resp_rx,
-        pending_frame: None,
-        file_change_rx,
-        window: None,
-        surface: None,
-        display_width: video_width,
-        display_height: video_height,
-        scale: 1.0,
-        modifiers: ModifiersState::empty(),
-        timeline_dragging: false,
-        cursor_x: 0.0,
-        cursor_y: 0.0,
-        error_message: initial_error,
-        export_state: ExportState::Idle,
-        export_done_rx: None,
-        export_progress: 0.0,
-        export_progress_label: String::new(),
-        export_progress_rx: None,
-    };
-
-    event_loop
-        .run_app(&mut app)
-        .map_err(|e| RustmotionError::PreviewWindow {
-            reason: e.to_string(),
-        })?;
+    // Launch the Dioxus desktop app, providing the shared model as root context.
+    dioxus::LaunchBuilder::desktop()
+        .with_context(shared)
+        .launch(StudioApp);
 
     Ok(())
+}
+
+fn watch_loop(path: PathBuf, shared: Shared) {
+    use notify::{RecursiveMode, Watcher};
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = match notify::recommended_watcher(
+        move |res: std::result::Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                if event.kind.is_modify() || event.kind.is_create() {
+                    let _ = tx.send(());
+                }
+            }
+        },
+    ) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    if watcher.watch(path.as_ref(), RecursiveMode::NonRecursive).is_err() {
+        return;
+    }
+    while rx.recv().is_ok() {
+        if let Ok(scenario) = rustmotion::loader::load_scenario(&path) {
+            if let Ok(mut m) = shared.lock() {
+                let generation = m.generation.wrapping_add(1);
+                *m = StudioModel::new(scenario, None);
+                m.generation = generation;
+            }
+        }
+        // Drain rapid duplicate events.
+        std::thread::sleep(Duration::from_millis(50));
+        while rx.try_recv().is_ok() {}
+    }
 }
