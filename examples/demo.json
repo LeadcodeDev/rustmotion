@@ -1,5 +1,5 @@
 {
-  "video": { "width": 1280, "height": 720, "background": "#1b2030", "fps": 30 },
+  "video": { "width": 1920, "height": 1080, "background": "#1b2030", "fps": 30 },
   "scenes": [
     { "duration": 1.5, "background": "#2a6cf0" },
     { "duration": 1.5, "background": "#16a36b" }

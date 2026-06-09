@@ -38,10 +38,10 @@ pub fn run_bench(scenario: ResolvedScenario) {
     let mut encode = Vec::new();
     let mut bytes = 0usize;
     for f in 0..n {
-        let (png, _w, _h, r, e) = frames::render_png(&scenario, &tasks, f, 1.0);
+        let (jpeg, _w, _h, r, e) = frames::render_frame(&scenario, &tasks, f, 1.0);
         render.push(r);
         encode.push(e);
-        bytes += png.len();
+        bytes += jpeg.len();
     }
     let mr = perf::median(render);
     let me = perf::median(encode);
@@ -50,7 +50,7 @@ pub fn run_bench(scenario: ResolvedScenario) {
     println!("median encode: {:?}", me);
     println!("median total:  {:?}", total);
     println!(
-        "avg png size:  {} KB",
+        "avg jpeg size: {} KB",
         if n > 0 { bytes / n as usize / 1024 } else { 0 }
     );
     println!(

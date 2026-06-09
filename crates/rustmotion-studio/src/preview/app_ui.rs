@@ -3,7 +3,7 @@ use std::time::Duration;
 use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder};
 use dioxus::prelude::*;
 
-use super::frames::render_png;
+use super::frames::render_frame;
 use super::model::Shared;
 
 /// Root component. Reads the shared studio model from context, registers an
@@ -30,14 +30,14 @@ pub fn StudioApp() -> Element {
                 .and_then(|s| s.split('?').next())
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            let png = {
+            let jpeg = {
                 let m = handler_shared.lock().unwrap();
-                render_png(&m.scenario, &m.tasks, idx, 1.0).0
+                render_frame(&m.scenario, &m.tasks, idx, 1.0).0
             };
             responder.respond(
                 Response::builder()
-                    .header("Content-Type", "image/png")
-                    .body(png)
+                    .header("Content-Type", "image/jpeg")
+                    .body(jpeg)
                     .unwrap(),
             );
         },
