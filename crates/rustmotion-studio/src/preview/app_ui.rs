@@ -19,10 +19,6 @@ pub fn StudioApp() -> Element {
     // Selection stores (node_id, pointer, kind) so the inspector stays open via
     // the stored pointer even if the element collapses out of the hit-map.
     let mut selected = use_signal(|| None::<(u32, String, String)>);
-    // Debounce state for inspector edits. NOT read in the render body, so
-    // typing does not re-render (which would reset the controlled input).
-    let edit_gen = use_signal(|| 0u64);
-    let pending = use_signal(|| None::<(String, String, String)>);
 
     // Asset handler: GET /frame/{idx} -> PNG of that frame.
     let handler_shared = shared.clone();
@@ -208,42 +204,59 @@ pub fn StudioApp() -> Element {
                     if let Some(kind) = selected_kind.as_deref() {
                         div { style: "color:#7a7f8a;", "{kind}" }
                     }
-                    label { style: "display:flex; flex-direction:column; gap:4px;",
-                        "color"
-                        input {
-                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
-                            value: "{color}",
-                            oninput: {
-                                let shared = shared.clone();
-                                let p = pointer.clone();
-                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "color", e.value())
-                            }
-                        }
-                    }
-                    label { style: "display:flex; flex-direction:column; gap:4px;",
-                        "font-size"
-                        input {
-                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
-                            value: "{font_size}",
-                            oninput: {
-                                let shared = shared.clone();
-                                let p = pointer.clone();
-                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "font-size", e.value())
-                            }
-                        }
-                    }
-                    label { style: "display:flex; flex-direction:column; gap:4px;",
-                        "background"
-                        input {
-                            style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
-                            value: "{background}",
-                            oninput: {
-                                let shared = shared.clone();
-                                let p = pointer.clone();
-                                move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "background", e.value())
-                            }
-                        }
-                    }
+                    // Fields live in a child component so they're memoized by
+                    // their props and do NOT re-render on playback frame changes
+                    // (which would steal focus / reset the input while typing).
+                    InspectorFields { pointer, color, font_size, background }
+                }
+            }
+        }
+    }
+}
+
+/// The inspector's editable fields, isolated in a child component so they are
+/// memoized by their props and don't re-render on playback frame changes
+/// (which would steal focus / reset the input mid-typing).
+#[component]
+fn InspectorFields(pointer: String, color: String, font_size: String, background: String) -> Element {
+    let shared = use_context::<Shared>();
+    let edit_gen = use_signal(|| 0u64);
+    let pending = use_signal(|| None::<(String, String, String)>);
+
+    rsx! {
+        label { style: "display:flex; flex-direction:column; gap:4px;",
+            "color"
+            input {
+                style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                value: "{color}",
+                oninput: {
+                    let shared = shared.clone();
+                    let p = pointer.clone();
+                    move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "color", e.value())
+                }
+            }
+        }
+        label { style: "display:flex; flex-direction:column; gap:4px;",
+            "font-size"
+            input {
+                style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                value: "{font_size}",
+                oninput: {
+                    let shared = shared.clone();
+                    let p = pointer.clone();
+                    move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "font-size", e.value())
+                }
+            }
+        }
+        label { style: "display:flex; flex-direction:column; gap:4px;",
+            "background"
+            input {
+                style: "padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a;",
+                value: "{background}",
+                oninput: {
+                    let shared = shared.clone();
+                    let p = pointer.clone();
+                    move |e| schedule_write(&shared, edit_gen, pending, p.clone(), "background", e.value())
                 }
             }
         }
