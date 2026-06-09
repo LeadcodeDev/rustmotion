@@ -6,6 +6,7 @@ members = [
     "crates/rustmotion",
     "crates/rustmotion-cli",
     "crates/rustmotion-studio",
+    "crates/rustmotion-html",
 ]
 
 # Optimize dependencies even in dev builds. Our own crates stay at opt-level 0

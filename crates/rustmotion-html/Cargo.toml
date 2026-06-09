@@ -1,0 +1,10 @@
+[package]
+name = "rustmotion-html"
+version = "0.6.0"
+edition = "2021"
+description = "HTML/CSS front-end transpiler for rustmotion scenarios"
+license = "MIT"
+repository = "https://github.com/LeadcodeDev/rustmotion"
+
+[dependencies]
+serde_json = "1"
