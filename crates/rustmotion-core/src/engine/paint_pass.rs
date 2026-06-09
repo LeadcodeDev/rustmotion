@@ -865,6 +865,7 @@ mod hit_tests {
             },
             children: vec![],
             intrinsic: None,
+            source_path: None,
         };
         let mut root = BoxNode {
             id: 0,
@@ -878,6 +879,7 @@ mod hit_tests {
             },
             children: vec![leaf],
             intrinsic: None,
+            source_path: None,
         };
         root.assign_ids(0);
 
@@ -922,6 +924,7 @@ mod hit_tests {
             },
             children: vec![],
             intrinsic: None,
+            source_path: None,
         };
         let mut root = BoxNode {
             id: 0,
@@ -935,6 +938,7 @@ mod hit_tests {
             },
             children: vec![leaf],
             intrinsic: None,
+            source_path: None,
         };
         root.assign_ids(0);
 
