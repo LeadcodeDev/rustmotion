@@ -43,6 +43,45 @@ pub fn render_frame_task(config: &VideoConfig, scenario: &Scenario, task: &Frame
     render_frame_task_scaled(config, scenario, task, 1.0)
 }
 
+/// Per-frame enriched hit-map for the studio overlay. Only `Normal` frames
+/// produce hits; transitions/world frames return an empty Vec for now.
+pub fn render_frame_task_hits(
+    scenario: &Scenario,
+    task: &FrameTask,
+) -> Vec<rustmotion_core::engine::paint_pass::EnrichedHit> {
+    use crate::engine::render::render_scene_hits;
+    match task {
+        FrameTask::Normal { view_idx, scene_idx, frame_in_scene, .. } => {
+            let scene = &scenario.views[*view_idx].scenes[*scene_idx];
+            render_scene_hits(&scenario.video, scene, *frame_in_scene)
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod hit_tests {
+    use super::*;
+
+    const SCENARIO: &str = r##"{
+        "video": { "width": 800, "height": 600, "background": "#101418" },
+        "scenes": [ { "duration": 1.0, "children": [
+            { "type": "text", "content": "Hello", "style": { "font-size": 48 } }
+        ] } ]
+    }"##;
+
+    #[test]
+    fn normal_frame_returns_text_hit() {
+        let scenario = crate::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = crate::encode::build_frame_tasks(&scenario);
+        let hits = render_frame_task_hits(&scenario, &tasks[0]);
+        assert!(
+            hits.iter().any(|h| h.kind == "text"),
+            "expected a text hit, got {hits:?}"
+        );
+    }
+}
+
 pub fn render_frame_task_scaled(
     config: &VideoConfig,
     scenario: &Scenario,
