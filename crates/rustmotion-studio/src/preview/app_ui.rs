@@ -16,6 +16,7 @@ pub fn StudioApp() -> Element {
     let mut current = use_signal(|| 0u32);
     let mut playing = use_signal(|| false);
     let rev = use_signal(|| 0u64);
+    let mut selected = use_signal(|| false);
 
     // Asset handler: GET /frame/{idx} -> PNG of that frame.
     let handler_shared = shared.clone();
@@ -89,6 +90,17 @@ pub fn StudioApp() -> Element {
     let r = rev();
     let is_playing = playing();
 
+    // Hardcoded hotspot in percent of the frame — proves the overlay coordinate
+    // model. The real studio will fill these from the engine hit-map.
+    let hotspot_border = if selected() {
+        "2px solid #4c8dff; background:rgba(76,141,255,0.15)"
+    } else {
+        "1px dashed rgba(255,255,255,0.45)"
+    };
+    let hotspot_style = format!(
+        "position:absolute; left:20%; top:30%; width:40%; height:14%; box-sizing:border-box; cursor:pointer; border:{hotspot_border};"
+    );
+
     if let Some(e) = err {
         return rsx! {
             div { style: "padding:24px; color:#ff6b6b; background:#0c0d10; min-height:100vh; font:13px sans-serif;",
@@ -100,9 +112,17 @@ pub fn StudioApp() -> Element {
     rsx! {
         div { style: "margin:0; background:#0c0d10; min-height:100vh; color:#cfd3dc; font:13px -apple-system,sans-serif; display:flex; flex-direction:column;",
             div { style: "flex:1; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
-                img {
-                    src: "/frame/{cur}?v={r}",
-                    style: "display:block; max-width:100%; max-height:78vh; height:auto; box-shadow:0 8px 40px rgba(0,0,0,0.5);",
+                div { style: "position:relative; display:inline-block; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
+                    img {
+                        src: "/frame/{cur}?v={r}",
+                        style: "display:block; max-width:100%; max-height:78vh; height:auto;",
+                    }
+                    div { style: "position:absolute; inset:0;",
+                        div {
+                            style: "{hotspot_style}",
+                            onclick: move |_| selected.set(!selected()),
+                        }
+                    }
                 }
             }
             div { style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid #1c1f27; background:#10131a;",
