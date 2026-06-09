@@ -14,8 +14,12 @@ path = "src/bin/main.rs"
 [dependencies]
 rustmotion = { path = "../rustmotion" }
 dioxus = { version = "0.7", features = ["desktop"] }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version = "0.0.1", default-features = false }
 clap = { version = "4", features = ["derive"] }
 notify = "7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["time"] }
+dioxus-icons = { version = "0.1.0", default-features = false }
+rfd = "0.17"
+dirs = "6.0.0"

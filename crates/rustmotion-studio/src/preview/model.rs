@@ -45,3 +45,32 @@ impl StudioModel {
         }
     }
 }
+
+/// A minimal placeholder scenario (no scenes). Used as the initial model when
+/// the studio launches into the library with no file open, and for the
+/// error-display model. The editor isn't shown for it; thumbnail/frame
+/// rendering guards against the empty task list.
+pub fn empty_scenario() -> ResolvedScenario {
+    use rustmotion::schema::{EasingType, ResolvedView, VideoConfig, ViewType};
+    ResolvedScenario {
+        video: VideoConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            background: "#000000".to_string(),
+            codec: None,
+            crf: None,
+        },
+        audio: vec![],
+        fonts: vec![],
+        views: vec![ResolvedView {
+            view_type: ViewType::Slide,
+            scenes: vec![],
+            transition: None,
+            background: Default::default(),
+            camera_easing: EasingType::Linear,
+            camera_pan_duration: 0.0,
+        }],
+        included_paths: vec![],
+    }
+}

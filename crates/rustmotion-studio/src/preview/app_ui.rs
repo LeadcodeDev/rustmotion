@@ -4,13 +4,14 @@ use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, Requ
 use dioxus::prelude::*;
 
 use super::frames::render_frame;
+use super::library::View;
 use super::model::Shared;
 
-/// Root component. Reads the shared studio model from context, registers an
-/// asset handler that renders frames to PNG on demand, and provides playback,
-/// scrubbing, and hot-reload of the current frame.
+/// The editor view. Reads the shared studio model from context, registers an
+/// asset handler that renders frames to JPEG on demand, and provides playback,
+/// scrubbing, hot-reload, inspector, and annotations.
 #[component]
-pub fn StudioApp() -> Element {
+pub fn StudioApp(view: Signal<View>) -> Element {
     let shared = use_context::<Shared>();
 
     let mut current = use_signal(|| 0u32);
@@ -163,6 +164,11 @@ pub fn StudioApp() -> Element {
                 }
             }
             div { style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid #1c1f27; background:#10131a;",
+                button {
+                    style: "padding:6px 10px; cursor:pointer;",
+                    onclick: move |_| view.set(View::Library),
+                    "‹ Library"
+                }
                 button {
                     style: "min-width:64px; padding:6px 10px; cursor:pointer;",
                     onclick: move |_| playing.set(!playing()),

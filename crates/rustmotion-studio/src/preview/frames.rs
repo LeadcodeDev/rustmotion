@@ -9,7 +9,10 @@ pub fn render_frame(
     frame: u32,
     scale: f32,
 ) -> Vec<u8> {
-    let idx = (frame as usize).min(tasks.len().saturating_sub(1));
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+    let idx = (frame as usize).min(tasks.len() - 1);
     let task = &tasks[idx];
     let rgba = rustmotion::encode::render_frame_task_scaled(&scenario.video, scenario, task, scale)
         .expect("render frame");
