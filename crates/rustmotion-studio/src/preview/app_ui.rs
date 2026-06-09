@@ -37,6 +37,9 @@ pub fn StudioApp() -> Element {
             responder.respond(
                 Response::builder()
                     .header("Content-Type", "image/jpeg")
+                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Expires", "0")
                     .body(jpeg)
                     .unwrap(),
             );
