@@ -70,6 +70,8 @@ pub struct EnrichedHit {
     pub node_id: NodeId,
     pub kind: String,
     pub rect: HitRect,
+    /// JSON path relative to the scene's `children`, e.g. "/children/2".
+    pub pointer: Option<String>,
 }
 
 /// Hook to delegate component-specific painting. Implemented by the

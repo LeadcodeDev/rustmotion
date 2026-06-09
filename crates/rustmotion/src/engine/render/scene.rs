@@ -517,16 +517,14 @@ pub fn render_scene_hits(
 
     hits.into_iter()
         .filter_map(|h| {
-            built
-                .components
-                .get(h.node_id as usize)
-                .copied()
-                .flatten()
-                .map(|child| EnrichedHit {
-                    node_id: h.node_id,
-                    kind: component_kind(&child.component).to_string(),
-                    rect: h.rect,
-                })
+            let child = built.components.get(h.node_id as usize).copied().flatten()?;
+            let pointer = built.root.find(h.node_id).and_then(|n| n.source_path.clone());
+            Some(EnrichedHit {
+                node_id: h.node_id,
+                kind: component_kind(&child.component).to_string(),
+                rect: h.rect,
+                pointer,
+            })
         })
         .collect()
 }

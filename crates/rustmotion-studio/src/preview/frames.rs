@@ -45,14 +45,18 @@ pub struct HitPct {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Full JSON Pointer into the source scenario, e.g. "/scenes/0/children/2".
+    pub pointer: Option<String>,
 }
 
 /// Compute the current frame's clickable element boxes in percentage coords
-/// (render only — no JPEG encode, so this is cheap per frame).
+/// (render only — no JPEG encode, so this is cheap per frame). `scene_prefix`
+/// is the JSON-Pointer prefix of the current scene (see [`scene_prefix`]).
 pub fn frame_hits(
     scenario: &ResolvedScenario,
     tasks: &[rustmotion::encode::video::FrameTask],
     frame: u32,
+    scene_prefix: &str,
 ) -> Vec<HitPct> {
     if tasks.is_empty() {
         return Vec::new();
@@ -70,8 +74,33 @@ pub fn frame_hits(
             y: (h.rect.y / vh) * 100.0,
             w: (h.rect.w / vw) * 100.0,
             h: (h.rect.h / vh) * 100.0,
+            pointer: h.pointer.map(|rel| format!("{scene_prefix}{rel}")),
         })
         .collect()
+}
+
+/// JSON-Pointer prefix to the scene of the given frame, derived from the raw
+/// scenario JSON (handles both top-level `scenes` and `composition`).
+#[allow(dead_code)] // wired into app_ui in the inspector task
+pub fn scene_prefix(
+    raw: &serde_json::Value,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+) -> String {
+    use rustmotion::encode::video::FrameTask;
+    if tasks.is_empty() {
+        return String::new();
+    }
+    let idx = (frame as usize).min(tasks.len() - 1);
+    if let FrameTask::Normal { view_idx, scene_idx, .. } = &tasks[idx] {
+        if raw.get("composition").is_some() {
+            format!("/composition/{view_idx}/scenes/{scene_idx}")
+        } else {
+            format!("/scenes/{scene_idx}")
+        }
+    } else {
+        String::new()
+    }
 }
 
 #[cfg(test)]
@@ -98,8 +127,22 @@ mod tests {
         let json = r##"{ "video": { "width": 800, "height": 600, "background": "#101418" }, "scenes": [ { "duration": 1.0, "children": [ { "type": "text", "content": "Hi", "style": { "font-size": 40 } } ] } ] }"##;
         let scenario = rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap();
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
-        let hits = frame_hits(&scenario, &tasks, 0);
-        assert!(hits.iter().any(|h| h.kind == "text"), "got {hits:?}");
+        let hits = frame_hits(&scenario, &tasks, 0, "/scenes/0");
+        let text = hits.iter().find(|h| h.kind == "text").expect("text hit");
         assert!(hits.iter().all(|h| h.x >= 0.0 && h.x <= 100.0 && h.w <= 100.0));
+        assert!(
+            text.pointer.as_deref().unwrap().starts_with("/scenes/0/children/"),
+            "pointer = {:?}",
+            text.pointer
+        );
+    }
+
+    #[test]
+    fn scene_prefix_handles_top_level_scenes() {
+        let json = r##"{ "video": { "width": 1, "height": 1 }, "scenes": [ { "duration": 1.0 } ] }"##;
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(json).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        assert_eq!(scene_prefix(&raw, &tasks, 0), "/scenes/0");
     }
 }

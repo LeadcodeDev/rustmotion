@@ -94,9 +94,10 @@ pub fn StudioApp() -> Element {
     let is_playing = playing();
 
     // Real element hotspots for the current frame (render only, no encode).
+    // Task 3 supplies the real scene prefix from the raw JSON.
     let hits = {
         let m = shared.lock().unwrap();
-        super::frames::frame_hits(&m.scenario, &m.tasks, cur)
+        super::frames::frame_hits(&m.scenario, &m.tasks, cur, "")
     };
     let selected_kind = selected()
         .and_then(|id| hits.iter().find(|h| h.node_id == id).map(|h| h.kind.clone()));
