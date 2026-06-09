@@ -63,6 +63,15 @@ pub struct HitNode {
 /// are visually on top).
 pub type HitMap = Vec<HitNode>;
 
+/// A hit enriched with a component kind label, ready for the studio overlay.
+/// `node_id` is stable within a single rendered frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrichedHit {
+    pub node_id: NodeId,
+    pub kind: String,
+    pub rect: HitRect,
+}
+
 /// Hook to delegate component-specific painting. Implemented by the
 /// higher-level crate that owns the actual `Component` enum.
 pub trait PaintDispatcher {

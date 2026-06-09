@@ -540,6 +540,68 @@ fn component_style(c: &Component) -> &CssStyle {
     }
 }
 
+/// Short kind label for a component (for studio selection / inspector display).
+pub fn component_kind(c: &Component) -> &'static str {
+    use Component::*;
+    match c {
+        Text(_) => "text",
+        Shape(_) => "shape",
+        Image(_) => "image",
+        Icon(_) => "icon",
+        Svg(_) => "svg",
+        Video(_) => "video",
+        Gif(_) => "gif",
+        Counter(_) => "counter",
+        Cursor(_) => "cursor",
+        Caption(_) => "caption",
+        Codeblock(_) => "codeblock",
+        Connector(_) => "connector",
+        Avatar(_) => "avatar",
+        AvatarGroup(_) => "avatar_group",
+        Arrow(_) => "arrow",
+        Badge(_) => "badge",
+        Callout(_) => "callout",
+        Chart(_) => "chart",
+        Comparison(_) => "comparison",
+        Countdown(_) => "countdown",
+        Divider(_) => "divider",
+        DotMap(_) => "dot_map",
+        Gauge(_) => "gauge",
+        GradientText(_) => "gradient_text",
+        Heatmap(_) => "heatmap",
+        Kbd(_) => "kbd",
+        Line(_) => "line",
+        List(_) => "list",
+        Lottie(_) => "lottie",
+        Marquee(_) => "marquee",
+        Mockup(_) => "mockup",
+        Notification(_) => "notification",
+        Particle(_) => "particle",
+        PillNav(_) => "pill_nav",
+        Progress(_) => "progress",
+        QrCode(_) => "qrcode",
+        Rating(_) => "rating",
+        Skeleton(_) => "skeleton",
+        Slider(_) => "slider",
+        Sparkline(_) => "sparkline",
+        Stat(_) => "stat",
+        Stepper(_) => "stepper",
+        Switch(_) => "switch",
+        RichText(_) => "rich_text",
+        Table(_) => "table",
+        TagCloud(_) => "tag_cloud",
+        Terminal(_) => "terminal",
+        Timeline(_) => "timeline",
+        Tooltip(_) => "tooltip",
+        Treemap(_) => "treemap",
+        Positioned(_) => "positioned",
+        Flex(_) => "flex",
+        Grid(_) => "grid",
+        Card(_) => "card",
+        Container(_) => "container",
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -588,6 +650,11 @@ mod tests {
         let built = build_scene(&[], (1920.0, 1080.0));
         assert_eq!(built.root.children.len(), 0);
         assert_eq!(built.components.len(), 1); // synthetic root slot
+    }
+
+    #[test]
+    fn component_kind_labels() {
+        assert_eq!(component_kind(&make_shape(100.0, 50.0).component), "shape");
     }
 
     #[test]
