@@ -36,6 +36,44 @@ pub fn render_frame(
     (jpeg, w, h, render_time, encode_time)
 }
 
+/// A clickable element box in percentage-of-frame coords, with its kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HitPct {
+    pub node_id: u32,
+    pub kind: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Compute the current frame's clickable element boxes in percentage coords
+/// (render only — no JPEG encode, so this is cheap per frame).
+pub fn frame_hits(
+    scenario: &ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+) -> Vec<HitPct> {
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+    let idx = (frame as usize).min(tasks.len() - 1);
+    let task = &tasks[idx];
+    let vw = scenario.video.width as f32;
+    let vh = scenario.video.height as f32;
+    rustmotion::encode::render_frame_task_hits(scenario, task)
+        .into_iter()
+        .map(|h| HitPct {
+            node_id: h.node_id,
+            kind: h.kind,
+            x: (h.rect.x / vw) * 100.0,
+            y: (h.rect.y / vh) * 100.0,
+            w: (h.rect.w / vw) * 100.0,
+            h: (h.rect.h / vh) * 100.0,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +91,15 @@ mod tests {
         assert!(jpeg.len() > 2);
         // JPEG SOI marker.
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "must be a JPEG");
+    }
+
+    #[test]
+    fn frame_hits_are_in_percent_and_have_kind() {
+        let json = r##"{ "video": { "width": 800, "height": 600, "background": "#101418" }, "scenes": [ { "duration": 1.0, "children": [ { "type": "text", "content": "Hi", "style": { "font-size": 40 } } ] } ] }"##;
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let hits = frame_hits(&scenario, &tasks, 0);
+        assert!(hits.iter().any(|h| h.kind == "text"), "got {hits:?}");
+        assert!(hits.iter().all(|h| h.x >= 0.0 && h.x <= 100.0 && h.w <= 100.0));
     }
 }

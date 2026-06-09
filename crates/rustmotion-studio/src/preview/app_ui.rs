@@ -16,7 +16,7 @@ pub fn StudioApp() -> Element {
     let mut current = use_signal(|| 0u32);
     let mut playing = use_signal(|| false);
     let rev = use_signal(|| 0u64);
-    let mut selected = use_signal(|| false);
+    let mut selected = use_signal(|| None::<u32>);
 
     // Asset handler: GET /frame/{idx} -> PNG of that frame.
     let handler_shared = shared.clone();
@@ -93,16 +93,13 @@ pub fn StudioApp() -> Element {
     let r = rev();
     let is_playing = playing();
 
-    // Hardcoded hotspot in percent of the frame — proves the overlay coordinate
-    // model. The real studio will fill these from the engine hit-map.
-    let hotspot_border = if selected() {
-        "2px solid #4c8dff; background:rgba(76,141,255,0.15)"
-    } else {
-        "1px dashed rgba(255,255,255,0.45)"
+    // Real element hotspots for the current frame (render only, no encode).
+    let hits = {
+        let m = shared.lock().unwrap();
+        super::frames::frame_hits(&m.scenario, &m.tasks, cur)
     };
-    let hotspot_style = format!(
-        "position:absolute; left:20%; top:30%; width:40%; height:14%; box-sizing:border-box; cursor:pointer; border:{hotspot_border};"
-    );
+    let selected_kind = selected()
+        .and_then(|id| hits.iter().find(|h| h.node_id == id).map(|h| h.kind.clone()));
 
     if let Some(e) = err {
         return rsx! {
@@ -121,9 +118,20 @@ pub fn StudioApp() -> Element {
                         style: "display:block; max-width:100%; max-height:78vh; height:auto;",
                     }
                     div { style: "position:absolute; inset:0;",
-                        div {
-                            style: "{hotspot_style}",
-                            onclick: move |_| selected.set(!selected()),
+                        for hit in hits.iter() {
+                            div {
+                                key: "{hit.node_id}",
+                                style: format!(
+                                    "position:absolute; left:{}%; top:{}%; width:{}%; height:{}%; box-sizing:border-box; cursor:pointer; border:{};",
+                                    hit.x, hit.y, hit.w, hit.h,
+                                    if selected() == Some(hit.node_id) { "2px solid #4c8dff; background:rgba(76,141,255,0.15)" }
+                                    else { "1px dashed rgba(255,255,255,0.22)" }
+                                ),
+                                onclick: {
+                                    let id = hit.node_id;
+                                    move |_| selected.set(Some(id))
+                                },
+                            }
                         }
                     }
                 }
@@ -158,6 +166,9 @@ pub fn StudioApp() -> Element {
                 }
                 div { style: "min-width:120px; text-align:right; color:#7a7f8a;",
                     "{cur} / {max}"
+                }
+                if let Some(kind) = selected_kind {
+                    div { style: "min-width:120px; color:#4c8dff;", "selected: {kind}" }
                 }
             }
         }
