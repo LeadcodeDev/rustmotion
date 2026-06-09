@@ -4837,6 +4837,7 @@ dependencies = [
  "html5ever",
  "markup5ever_rcdom",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
