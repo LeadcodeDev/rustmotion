@@ -61,6 +61,21 @@ pub fn load_input(input: &PathBuf) -> Result<ResolvedScenario> {
     }
 }
 
+/// Transpile an HTML-dialect string into the scenario JSON value, for callers
+/// that need the raw value (e.g. the validation pipeline reads it by pointer).
+pub fn html_to_scenario_json(html: &str) -> Result<serde_json::Value> {
+    rustmotion_html::html_to_scenario_value(html)
+        .map_err(|e| RustmotionError::HtmlParse(e.to_string()))
+}
+
+/// True if the path uses the HTML dialect (`.html`/`.htm`).
+pub fn is_html_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("html") | Some("htm")
+    )
+}
+
 #[cfg(test)]
 mod html_tests {
     use super::*;

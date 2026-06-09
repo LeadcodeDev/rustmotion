@@ -84,6 +84,14 @@ pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
                 path: path.display().to_string(),
                 source: e,
             })?;
+            // HTML input is transpiled to the scenario JSON first, then validated
+            // through the identical JSON pipeline below.
+            let s = if rustmotion::loader::is_html_path(path) {
+                let value = rustmotion::loader::html_to_scenario_json(&s)?;
+                serde_json::to_string(&value).map_err(RustmotionError::from)?
+            } else {
+                s
+            };
             (s, Some(path.to_path_buf()), IncludeSource::File(path.to_path_buf()))
         }
         ValidationSource::Inline(json) => (json.to_string(), None, IncludeSource::Inline),
