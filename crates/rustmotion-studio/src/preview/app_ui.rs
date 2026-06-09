@@ -19,6 +19,7 @@ pub fn StudioApp() -> Element {
     // Selection stores (node_id, pointer, kind) so the inspector stays open via
     // the stored pointer even if the element collapses out of the hit-map.
     let mut selected = use_signal(|| None::<(u32, String, String)>);
+    let mut show_annotations = use_signal(|| false);
 
     // Asset handler: GET /frame/{idx} -> PNG of that frame.
     let handler_shared = shared.clone();
@@ -115,6 +116,11 @@ pub fn StudioApp() -> Element {
         (pointer, color, font_size, background)
     });
 
+    let annotations = {
+        let m = shared.lock().unwrap();
+        super::edit::list_annotations(&m.raw)
+    };
+
     if let Some(e) = err {
         return rsx! {
             div { style: "padding:24px; color:#ff6b6b; background:#0c0d10; min-height:100vh; font:13px sans-serif;",
@@ -187,6 +193,11 @@ pub fn StudioApp() -> Element {
                 div { style: "min-width:120px; text-align:right; color:#7a7f8a;",
                     "{cur} / {max}"
                 }
+                button {
+                    style: "padding:6px 10px; cursor:pointer;",
+                    onclick: move |_| show_annotations.set(!show_annotations()),
+                    "Comments ({annotations.len()})"
+                }
                 if let Some(kind) = selected_kind.as_deref() {
                     div { style: "min-width:120px; color:#4c8dff;", "selected: {kind}" }
                 }
@@ -207,10 +218,55 @@ pub fn StudioApp() -> Element {
                     // Fields live in a child component so they're memoized by
                     // their props and do NOT re-render on playback frame changes
                     // (which would steal focus / reset the input while typing).
-                    InspectorFields { pointer, color, font_size, background }
+                    InspectorFields { pointer: pointer.clone(), color, font_size, background }
+                    AnnotationBox { pointer, kind: selected_kind.clone().unwrap_or_default(), current }
+                }
+            }
+            if show_annotations() {
+                div { style: "position:fixed; top:0; left:0; width:280px; height:100vh; background:#13161d; border-right:1px solid #1c1f27; padding:16px; box-sizing:border-box; overflow:auto; display:flex; flex-direction:column; gap:10px;",
+                    div { style: "color:#4c8dff; font-weight:600;", "Comments" }
+                    if annotations.is_empty() {
+                        div { style: "color:#7a7f8a;", "No comments yet." }
+                    }
+                    for (id, note, frame, kind) in annotations.iter().cloned() {
+                        div {
+                            key: "{id}",
+                            style: "border:1px solid #2a2f3a; border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;",
+                            div { style: "color:#7a7f8a; font-size:11px;", "{kind} · frame {frame}" }
+                            div { "{note}" }
+                            div { style: "display:flex; gap:8px;",
+                                button {
+                                    style: "cursor:pointer; padding:2px 8px;",
+                                    onclick: move |_| current.set(frame as u32),
+                                    "Go to frame"
+                                }
+                                button {
+                                    style: "cursor:pointer; padding:2px 8px; color:#ff6b6b;",
+                                    onclick: {
+                                        let shared = shared.clone();
+                                        let id = id.clone();
+                                        move |_| delete_annotation(&shared, &id)
+                                    },
+                                    "Delete"
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+/// Remove an annotation by id from the scenario file (the watcher reloads).
+fn delete_annotation(shared: &Shared, id: &str) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap();
+        (m.path.clone(), m.raw.clone())
+    };
+    let raw = super::edit::remove_annotation(raw, id);
+    if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
+        let _ = std::fs::write(&path, t);
     }
 }
 
@@ -261,6 +317,70 @@ fn InspectorFields(pointer: String, color: String, font_size: String, background
             }
         }
     }
+}
+
+/// The "leave a comment for the agent" capture box, isolated in a child so its
+/// textarea keeps focus during playback. Reads the playhead (`current`) only in
+/// the submit handler, so it isn't subscribed to it.
+#[component]
+fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Element {
+    let shared = use_context::<Shared>();
+    let mut note = use_signal(String::new);
+
+    let submit = move |_| {
+        let text = note();
+        if text.trim().is_empty() {
+            return;
+        }
+        let frame = current();
+        let (path, raw, view, scene) = {
+            let m = shared.lock().unwrap();
+            let (view, scene) = match m.tasks.get(frame as usize) {
+                Some(rustmotion::encode::video::FrameTask::Normal {
+                    view_idx,
+                    scene_idx,
+                    ..
+                }) => (*view_idx, *scene_idx),
+                _ => (0, 0),
+            };
+            (m.path.clone(), m.raw.clone(), view, scene)
+        };
+        let ann = serde_json::json!({
+            "id": annotation_id(), "note": text, "status": "open", "frame": frame,
+            "view": view, "scene": scene,
+            "target": { "pointer": pointer, "kind": kind }
+        });
+        let raw = super::edit::append_annotation(raw, ann);
+        if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
+            let _ = std::fs::write(&path, t);
+            note.set(String::new());
+        }
+    };
+
+    rsx! {
+        div { style: "border-top:1px solid #1c1f27; padding-top:12px; display:flex; flex-direction:column; gap:8px;",
+            div { style: "color:#7a7f8a;", "Leave a comment for the agent" }
+            textarea {
+                style: "min-height:64px; padding:6px; background:#0c0d10; color:#cfd3dc; border:1px solid #2a2f3a; resize:vertical; font:inherit;",
+                value: "{note}",
+                oninput: move |e| note.set(e.value()),
+            }
+            button {
+                style: "padding:6px 10px; cursor:pointer; align-self:flex-end;",
+                onclick: submit,
+                "Add comment"
+            }
+        }
+    }
+}
+
+/// Unique-ish id for a new annotation.
+fn annotation_id() -> String {
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("an_{n:x}")
 }
 
 /// Debounced inspector write: records the latest edit and, after a quiet

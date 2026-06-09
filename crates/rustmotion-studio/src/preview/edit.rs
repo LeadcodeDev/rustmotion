@@ -24,6 +24,51 @@ pub fn set_style(mut raw: Value, pointer: &str, prop: &str, value: &str) -> Opti
     Some(raw)
 }
 
+/// Append an annotation object to `raw["annotations"]` (creating the array if
+/// absent). Returns the mutated clone.
+pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
+    if let Some(obj) = raw.as_object_mut() {
+        let arr = obj
+            .entry("annotations")
+            .or_insert_with(|| Value::Array(vec![]));
+        if let Value::Array(a) = arr {
+            a.push(annotation);
+        }
+    }
+    raw
+}
+
+/// Remove the annotation with the given id from `raw["annotations"]`.
+pub fn remove_annotation(mut raw: Value, id: &str) -> Value {
+    if let Some(Value::Array(a)) = raw.get_mut("annotations") {
+        a.retain(|x| x.get("id").and_then(|v| v.as_str()) != Some(id));
+    }
+    raw
+}
+
+/// List the annotations as (id, note, frame, kind) tuples for the panel.
+pub fn list_annotations(raw: &Value) -> Vec<(String, String, u64, String)> {
+    raw.get("annotations")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|x| {
+                    let id = x.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let note = x.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let frame = x.get("frame").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let kind = x
+                        .get("target")
+                        .and_then(|t| t.get("kind"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (id, note, frame, kind)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +110,21 @@ mod tests {
             read_style(&updated, "/scenes/0/children/0", "font-size").as_deref(),
             Some("48")
         );
+    }
+
+    #[test]
+    fn append_then_list_then_remove() {
+        let raw = json!({ "video": { "width": 1, "height": 1 }, "scenes": [] });
+        let ann = json!({ "id": "an_1", "note": "smaller", "status": "open", "frame": 5,
+            "target": { "pointer": "/scenes/0/children/0", "kind": "text" } });
+        let raw = append_annotation(raw, ann);
+        let list = list_annotations(&raw);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, "an_1");
+        assert_eq!(list[0].1, "smaller");
+        assert_eq!(list[0].2, 5);
+        assert_eq!(list[0].3, "text");
+        let raw = remove_annotation(raw, "an_1");
+        assert!(list_annotations(&raw).is_empty());
     }
 }
