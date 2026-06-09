@@ -70,8 +70,8 @@
                     "text-align": "center",
                     "animation": [
                       {
-                        "name": "fade_in_up",
-                        "delay": 0.5,
+                        "name": "fade_in",
+                        "delay": 0.45,
                         "duration": 0.5
                       }
                     ]
@@ -96,7 +96,14 @@
                       "type": "badge",
                       "text": "Text & Rich Text",
                       "style": {
-                        "background": "#6366f1"
+                        "background": "#6366f1",
+                        "animation": [
+                          {
+                            "name": "fade_in",
+                            "delay": 0.6,
+                            "duration": 0.5
+                          }
+                        ]
                       }
                     },
                     {
@@ -930,54 +937,5 @@
       ]
     }
   ],
-  "annotations": [
-    {
-      "id": "an_18b77c5764bcdb50",
-      "note": "Je veux que ce texte soit en rouge",
-      "status": "resolved",
-      "frame": 0,
-      "view": 0,
-      "scene": 0,
-      "target": {
-        "pointer": "/composition/0/scenes/0/children/0/children/1",
-        "kind": "text"
-      }
-    },
-    {
-      "id": "an_18b77c6e08171228",
-      "note": "Je veux que le titre apparaisse avec un « fade\"",
-      "status": "resolved",
-      "frame": 0,
-      "view": 0,
-      "scene": 0,
-      "target": {
-        "pointer": "/composition/0/scenes/0/children/0/children/1",
-        "kind": "text"
-      }
-    },
-    {
-      "id": "an_18b77e3798c39c90",
-      "note": "Applique une apparition en fade avec un micro-délai pour décaler par rapport au titre",
-      "status": "open",
-      "frame": 0,
-      "view": 0,
-      "scene": 0,
-      "target": {
-        "pointer": "/composition/0/scenes/0/children/0/children/2",
-        "kind": "text"
-      }
-    },
-    {
-      "id": "an_18b77e3c342424d0",
-      "note": "Applique une apparition en fade avec un micro-délai pour décaler par rapport à la description",
-      "status": "open",
-      "frame": 0,
-      "view": 0,
-      "scene": 0,
-      "target": {
-        "pointer": "/composition/0/scenes/0/children/0/children/3/children/0",
-        "kind": "badge"
-      }
-    }
-  ]
+  "annotations": []
 }
