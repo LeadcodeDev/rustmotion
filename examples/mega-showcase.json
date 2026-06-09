@@ -1,0 +1,2275 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0b0f1a"
+  },
+  "backgrounds": {
+    "rings": {
+      "preset": "concentric_circles",
+      "colors": [
+        "#0b0f1a",
+        "#171a3a",
+        "#0b0f1a"
+      ],
+      "speed": 12,
+      "element_size": 1.5,
+      "count": 5,
+      "gradient_type": "radial"
+    }
+  },
+  "scenes": [
+    {
+      "duration": 4.5,
+      "background": {
+        "$ref": "rings"
+      },
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 28
+      },
+      "children": [
+        {
+          "type": "particle",
+          "particle_type": "stars",
+          "count": 60,
+          "speed": 0.6,
+          "seed": 7,
+          "position": "absolute",
+          "x": 0,
+          "y": 0,
+          "style": {
+            "width": 1920,
+            "height": 1080
+          }
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:clapperboard",
+          "style": {
+            "width": 110,
+            "height": 110,
+            "color": "#818cf8",
+            "animation": [
+              {
+                "name": "scale_in",
+                "duration": 0.7
+              },
+              {
+                "name": "glow",
+                "color": "#6366f1",
+                "radius": 24,
+                "intensity": 1.8
+              },
+              {
+                "name": "wiggle",
+                "property": "rotation",
+                "amplitude": 6,
+                "frequency": 0.6,
+                "seed": 3
+              }
+            ]
+          }
+        },
+        {
+          "type": "gradient_text",
+          "content": "Rustmotion Mega Showcase",
+          "colors": [
+            "#60a5fa",
+            "#a78bfa",
+            "#f472b6"
+          ],
+          "angle": 90,
+          "animate_angle": true,
+          "speed": 0.25,
+          "style": {
+            "font-size": 92,
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "char_scale_in",
+                "stagger": 0.02,
+                "duration": 0.4,
+                "delay": 0.3,
+                "easing": "ease_out"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "One file. 40+ components. Skia rendering with CSS layout.",
+          "max_width": 1200,
+          "style": {
+            "font-size": 36,
+            "color": "#cbd5e1",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 0.9,
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "flex-direction": "row",
+            "gap": 14,
+            "justify-content": "center",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 1.2,
+                "duration": 0.5
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "badge",
+              "text": "Charts",
+              "icon": "lucide:bar-chart-3",
+              "style": {
+                "background": "#6366f1",
+                "font-size": 22
+              }
+            },
+            {
+              "type": "badge",
+              "text": "UI Controls",
+              "dot": true,
+              "dot_color": "#22c55e",
+              "style": {
+                "background": "#10b981",
+                "font-size": 22
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Code",
+              "icon": "lucide:code",
+              "style": {
+                "background": "#f59e0b",
+                "font-size": 22
+              }
+            },
+            {
+              "type": "badge",
+              "text": "Diagrams",
+              "icon": "lucide:git-branch",
+              "style": {
+                "background": "#ec4899",
+                "font-size": 22
+              }
+            }
+          ]
+        },
+        {
+          "type": "divider",
+          "direction": "horizontal",
+          "thickness": 2,
+          "length": 520,
+          "line_style": "solid",
+          "style": {
+            "color": "#334155",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 1.5,
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "marquee",
+          "content": "text · shape · icon · gradient_text · rich_text · chart · gauge · sparkline · stat · heatmap · treemap · dot_map · counter · table · badge · switch · slider · rating · kbd · tooltip · notification · pill_nav · list · stepper · comparison · countdown · skeleton · tag_cloud · callout · codeblock · terminal · arrow · connector · timeline · line · cursor · particle · qrcode · marquee · divider",
+          "speed": 110,
+          "direction": "left",
+          "font_size": 24,
+          "color": "#64748b",
+          "style": {
+            "width": 1700,
+            "height": 48
+          }
+        }
+      ]
+    },
+    {
+      "duration": 4.5,
+      "transition": {
+        "type": "fade",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 24
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Key Numbers",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "counter",
+          "from": 0,
+          "to": 248500,
+          "separator": ",",
+          "suffix": "+",
+          "easing": "ease_out",
+          "start_at": 0.3,
+          "end_at": 3.0,
+          "style": {
+            "font-size": 130,
+            "color": "#38bdf8",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
+        },
+        {
+          "type": "text",
+          "content": "frames rendered this month",
+          "style": {
+            "font-size": 30,
+            "color": "#94a3b8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 0.6,
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1640,
+            "flex-direction": "row",
+            "gap": 24,
+            "justify-content": "center"
+          },
+          "children": [
+            {
+              "type": "stat",
+              "value": "98.2%",
+              "label": "Tests Passing",
+              "trend": {
+                "value": "+2.1%",
+                "direction": "up"
+              },
+              "sparkline_data": [
+                80,
+                84,
+                82,
+                88,
+                90,
+                94,
+                98
+              ],
+              "sparkline_color": "#22c55e",
+              "value_font_size": 40,
+              "label_font_size": 18,
+              "style": {
+                "width": 380,
+                "height": 220,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "padding": 24,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.4,
+                    "duration": 0.5
+                  }
+                ]
+              }
+            },
+            {
+              "type": "stat",
+              "value": "1.86s",
+              "label": "Build Time",
+              "trend": {
+                "value": "-0.4s",
+                "direction": "down",
+                "color": "#22c55e"
+              },
+              "sparkline_data": [
+                3.0,
+                2.7,
+                2.4,
+                2.1,
+                2.0,
+                1.9,
+                1.86
+              ],
+              "sparkline_color": "#6366f1",
+              "value_font_size": 40,
+              "label_font_size": 18,
+              "style": {
+                "width": 380,
+                "height": 220,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "padding": 24,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.6,
+                    "duration": 0.5
+                  }
+                ]
+              }
+            },
+            {
+              "type": "flex",
+              "style": {
+                "width": 380,
+                "height": 220,
+                "flex-direction": "column",
+                "gap": 14,
+                "align-items": "center",
+                "justify-content": "center",
+                "background": "#161b2e",
+                "border-radius": 16,
+                "padding": 24,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.5
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Coverage",
+                  "style": {
+                    "font-size": 18,
+                    "color": "#94a3b8",
+                    "text-align": "center"
+                  }
+                },
+                {
+                  "type": "progress",
+                  "progress": 0.86,
+                  "variant": "circular",
+                  "width": 120,
+                  "height": 120,
+                  "fill_color": "#f59e0b",
+                  "background_color": "#1f2937",
+                  "track_width": 10,
+                  "show_value": true
+                }
+              ]
+            },
+            {
+              "type": "gauge",
+              "value": 91,
+              "max": 100,
+              "label": "Health",
+              "fill_color": "#10b981",
+              "track_color": "#1f2937",
+              "track_width": 16,
+              "style": {
+                "width": 380,
+                "height": 220,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 1.0,
+                    "duration": 0.5
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "slide",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 22
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Data Visualization",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1740,
+            "height": 760,
+            "flex-direction": "row",
+            "gap": 24
+          },
+          "children": [
+            {
+              "type": "card",
+              "style": {
+                "width": 860,
+                "height": 760,
+                "flex-direction": "column",
+                "gap": 14,
+                "padding": 28,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "animation": [
+                  {
+                    "name": "fade_in_left",
+                    "delay": 0.3,
+                    "duration": 0.5
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Quarterly Revenue (k€)",
+                  "style": {
+                    "font-size": 24,
+                    "color": "#94a3b8"
+                  }
+                },
+                {
+                  "type": "chart",
+                  "chart_type": "area",
+                  "smooth": true,
+                  "fill_opacity": 0.35,
+                  "data": [
+                    {
+                      "value": 42,
+                      "label": "Jan"
+                    },
+                    {
+                      "value": 58,
+                      "label": "Feb"
+                    },
+                    {
+                      "value": 51,
+                      "label": "Mar"
+                    },
+                    {
+                      "value": 74,
+                      "label": "Apr"
+                    },
+                    {
+                      "value": 69,
+                      "label": "May"
+                    },
+                    {
+                      "value": 92,
+                      "label": "Jun"
+                    }
+                  ],
+                  "colors": [
+                    "#6366f1"
+                  ],
+                  "show_grid": true,
+                  "show_x_labels": true,
+                  "show_y_labels": true,
+                  "label_color": "#94a3b8",
+                  "label_font_size": 16,
+                  "animated": true,
+                  "animation_duration": 1.6,
+                  "style": {
+                    "width": 804,
+                    "height": 690
+                  }
+                }
+              ]
+            },
+            {
+              "type": "flex",
+              "style": {
+                "width": 856,
+                "height": 760,
+                "flex-direction": "column",
+                "gap": 24
+              },
+              "children": [
+                {
+                  "type": "flex",
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 24,
+                    "width": 856
+                  },
+                  "children": [
+                    {
+                      "type": "treemap",
+                      "data": [
+                        {
+                          "label": "Rust",
+                          "value": 48,
+                          "color": "#f97316"
+                        },
+                        {
+                          "label": "TS",
+                          "value": 26,
+                          "color": "#3b82f6"
+                        },
+                        {
+                          "label": "Skia",
+                          "value": 16,
+                          "color": "#22c55e"
+                        },
+                        {
+                          "label": "GLSL",
+                          "value": 10,
+                          "color": "#a78bfa"
+                        }
+                      ],
+                      "show_labels": true,
+                      "show_values": true,
+                      "gap": 4,
+                      "border_radius": 8,
+                      "style": {
+                        "width": 416,
+                        "height": 368,
+                        "background": "#161b2e",
+                        "border-radius": 16,
+                        "padding": 16,
+                        "animation": [
+                          {
+                            "name": "fade_in",
+                            "delay": 0.5,
+                            "duration": 0.5
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "card",
+                      "style": {
+                        "width": 416,
+                        "height": 368,
+                        "flex-direction": "column",
+                        "gap": 12,
+                        "padding": 20,
+                        "background": "#161b2e",
+                        "border-radius": 16,
+                        "align-items": "center",
+                        "justify-content": "center",
+                        "animation": [
+                          {
+                            "name": "fade_in",
+                            "delay": 0.7,
+                            "duration": 0.5
+                          }
+                        ]
+                      },
+                      "children": [
+                        {
+                          "type": "text",
+                          "content": "Traffic Share",
+                          "style": {
+                            "font-size": 20,
+                            "color": "#94a3b8",
+                            "text-align": "center"
+                          }
+                        },
+                        {
+                          "type": "chart",
+                          "chart_type": "donut",
+                          "inner_radius": 0.6,
+                          "data": [
+                            {
+                              "value": 52,
+                              "label": "Desktop",
+                              "color": "#6366f1"
+                            },
+                            {
+                              "value": 33,
+                              "label": "Mobile",
+                              "color": "#10b981"
+                            },
+                            {
+                              "value": 15,
+                              "label": "Tablet",
+                              "color": "#f59e0b"
+                            }
+                          ],
+                          "animated": true,
+                          "animation_duration": 1.4,
+                          "style": {
+                            "width": 280,
+                            "height": 280
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "card",
+                  "style": {
+                    "width": 856,
+                    "height": 364,
+                    "flex-direction": "column",
+                    "gap": 16,
+                    "padding": 24,
+                    "background": "#161b2e",
+                    "border-radius": 16,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.9,
+                        "duration": 0.5
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "content": "Commit Activity",
+                      "style": {
+                        "font-size": 22,
+                        "color": "#94a3b8"
+                      }
+                    },
+                    {
+                      "type": "heatmap",
+                      "data": [
+                        [
+                          0.1,
+                          0.4,
+                          0.8,
+                          0.3,
+                          0.6,
+                          0.2,
+                          0.9,
+                          0.5,
+                          0.7,
+                          0.3,
+                          0.6,
+                          0.4
+                        ],
+                        [
+                          0.5,
+                          0.2,
+                          0.6,
+                          0.9,
+                          0.4,
+                          0.7,
+                          0.3,
+                          0.8,
+                          0.5,
+                          0.6,
+                          0.2,
+                          0.7
+                        ],
+                        [
+                          0.3,
+                          0.7,
+                          0.4,
+                          0.5,
+                          0.8,
+                          0.6,
+                          0.2,
+                          0.4,
+                          0.9,
+                          0.5,
+                          0.7,
+                          0.3
+                        ]
+                      ],
+                      "cell_size": 26,
+                      "cell_gap": 4,
+                      "cell_radius": 5,
+                      "animated": true,
+                      "animation_duration": 1.4,
+                      "style": {
+                        "width": 804,
+                        "height": 110
+                      }
+                    },
+                    {
+                      "type": "sparkline",
+                      "data": [
+                        5,
+                        12,
+                        8,
+                        20,
+                        15,
+                        25,
+                        18,
+                        30,
+                        22,
+                        34,
+                        28,
+                        40
+                      ],
+                      "color": "#22c55e",
+                      "fill": true,
+                      "fill_opacity": 0.25,
+                      "stroke_width": 3,
+                      "animated": true,
+                      "animation_duration": 1.4,
+                      "style": {
+                        "width": 804,
+                        "height": 70
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "zoom_in",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 22
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Global Reach",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1740,
+            "height": 760,
+            "flex-direction": "row",
+            "gap": 24,
+            "align-items": "center"
+          },
+          "children": [
+            {
+              "type": "dot_map",
+              "points": [
+                {
+                  "lat": 40.71,
+                  "lng": -74.01,
+                  "label": "NYC",
+                  "size": 12,
+                  "color": "#3b82f6",
+                  "pulse": true
+                },
+                {
+                  "lat": 51.51,
+                  "lng": -0.13,
+                  "label": "London",
+                  "size": 12,
+                  "color": "#22c55e",
+                  "pulse": true
+                },
+                {
+                  "lat": 48.86,
+                  "lng": 2.35,
+                  "label": "Paris",
+                  "size": 11,
+                  "color": "#a78bfa"
+                },
+                {
+                  "lat": 35.68,
+                  "lng": 139.69,
+                  "label": "Tokyo",
+                  "size": 13,
+                  "color": "#ef4444",
+                  "pulse": true
+                },
+                {
+                  "lat": -33.87,
+                  "lng": 151.21,
+                  "label": "Sydney",
+                  "size": 10,
+                  "color": "#ec4899"
+                },
+                {
+                  "lat": 1.35,
+                  "lng": 103.82,
+                  "label": "Singapore",
+                  "size": 11,
+                  "color": "#f59e0b",
+                  "pulse": true
+                }
+              ],
+              "show_world": true,
+              "world_dot_color": "#26314a",
+              "dot_spacing": 9,
+              "dot_radius": 2,
+              "animated": true,
+              "animation_duration": 1.5,
+              "style": {
+                "width": 1080,
+                "height": 700,
+                "background": "#0e1426",
+                "border-radius": 16,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "delay": 0.3,
+                    "duration": 0.6
+                  }
+                ]
+              }
+            },
+            {
+              "type": "flex",
+              "style": {
+                "width": 636,
+                "height": 700,
+                "flex-direction": "column",
+                "gap": 22,
+                "justify-content": "center"
+              },
+              "children": [
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "Serving "
+                    },
+                    {
+                      "text": "6 regions",
+                      "color": "#38bdf8",
+                      "font-weight": "bold"
+                    },
+                    {
+                      "text": " worldwide"
+                    }
+                  ],
+                  "max_width": 600,
+                  "style": {
+                    "font-size": 40,
+                    "color": "#e2e8f0",
+                    "animation": [
+                      {
+                        "name": "fade_in_left",
+                        "delay": 0.5,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "table",
+                  "headers": [
+                    "Region",
+                    "Users",
+                    "Latency"
+                  ],
+                  "rows": [
+                    [
+                      "Americas",
+                      "98K",
+                      "24ms"
+                    ],
+                    [
+                      "Europe",
+                      "76K",
+                      "18ms"
+                    ],
+                    [
+                      "Asia-Pacific",
+                      "54K",
+                      "31ms"
+                    ],
+                    [
+                      "Oceania",
+                      "20K",
+                      "42ms"
+                    ]
+                  ],
+                  "column_widths": [
+                    260,
+                    180,
+                    160
+                  ],
+                  "column_align": [
+                    "left",
+                    "right",
+                    "right"
+                  ],
+                  "cell_padding": 16,
+                  "show_borders": true,
+                  "header_color": "#1e293b",
+                  "row_colors": [
+                    "#161b2e",
+                    "#0f1626"
+                  ],
+                  "border_color": "#334155",
+                  "style": {
+                    "width": 600,
+                    "height": 320,
+                    "color": "#e2e8f0",
+                    "font-size": 22,
+                    "border-radius": 12,
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "delay": 0.7,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "tag_cloud",
+                  "tags": [
+                    {
+                      "text": "fast",
+                      "weight": 10,
+                      "color": "#60a5fa"
+                    },
+                    {
+                      "text": "secure",
+                      "weight": 7,
+                      "color": "#22c55e"
+                    },
+                    {
+                      "text": "scalable",
+                      "weight": 9,
+                      "color": "#a78bfa"
+                    },
+                    {
+                      "text": "global",
+                      "weight": 6,
+                      "color": "#f59e0b"
+                    },
+                    {
+                      "text": "reliable",
+                      "weight": 8,
+                      "color": "#ec4899"
+                    }
+                  ],
+                  "min_font_size": 18,
+                  "max_font_size": 46,
+                  "animated": true,
+                  "animation_duration": 1.3,
+                  "style": {
+                    "width": 600,
+                    "height": 200,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.9,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.5,
+      "transition": {
+        "type": "wipe_left",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 22
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "UI Controls",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "pill_nav",
+          "items": [
+            "Overview",
+            "Settings",
+            "Billing"
+          ],
+          "active_index": 0,
+          "transitions": [
+            {
+              "to": 1,
+              "at": 1.8
+            },
+            {
+              "to": 2,
+              "at": 3.6
+            }
+          ],
+          "pill_color": "#6366f1",
+          "background_color": "#161b2e",
+          "height": 52,
+          "style": {
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 0.3,
+                "duration": 0.4
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1740,
+            "height": 640,
+            "flex-direction": "row",
+            "gap": 24
+          },
+          "children": [
+            {
+              "type": "card",
+              "style": {
+                "width": 560,
+                "height": 640,
+                "flex-direction": "column",
+                "gap": 24,
+                "padding": 36,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.4,
+                    "duration": 0.5
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Preferences",
+                  "style": {
+                    "font-size": 26,
+                    "font-weight": "bold",
+                    "color": "#94a3b8"
+                  }
+                },
+                {
+                  "type": "switch",
+                  "value": false,
+                  "toggle_at": 2.0,
+                  "label": "Dark mode",
+                  "width": 64,
+                  "height": 34,
+                  "track_color_on": "#6366f1"
+                },
+                {
+                  "type": "slider",
+                  "value": 20,
+                  "animate_to": 78,
+                  "animate_at": 1.2,
+                  "animation_duration": 1.4,
+                  "width": 480,
+                  "fill_color": "#10b981",
+                  "show_value": true
+                },
+                {
+                  "type": "rating",
+                  "value": 4.5,
+                  "max": 5,
+                  "size": 44,
+                  "filled_color": "#f59e0b",
+                  "animated": true,
+                  "animation_duration": 1.2
+                },
+                {
+                  "type": "flex",
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 12,
+                    "align-items": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "kbd",
+                      "key": "⌘"
+                    },
+                    {
+                      "type": "kbd",
+                      "key": "K"
+                    },
+                    {
+                      "type": "text",
+                      "content": "Command palette",
+                      "style": {
+                        "font-size": 24,
+                        "color": "#94a3b8"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "flex",
+              "style": {
+                "width": 560,
+                "height": 640,
+                "flex-direction": "column",
+                "gap": 24,
+                "align-items": "center",
+                "justify-content": "center"
+              },
+              "children": [
+                {
+                  "type": "stepper",
+                  "steps": [
+                    {
+                      "label": "Sign Up"
+                    },
+                    {
+                      "label": "Configure"
+                    },
+                    {
+                      "label": "Deploy"
+                    }
+                  ],
+                  "active_step": 0,
+                  "animate_to": 2,
+                  "animate_at": 1.0,
+                  "active_color": "#6366f1",
+                  "completed_color": "#22c55e",
+                  "style": {
+                    "width": 520,
+                    "height": 110,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.5,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "comparison",
+                  "left_color": "#1e293b",
+                  "right_color": "#6366f1",
+                  "left_label": "Before",
+                  "right_label": "After",
+                  "divider_position": 0.5,
+                  "animate_from": 0.25,
+                  "animate_to": 0.8,
+                  "animate_at": 1.2,
+                  "animation_duration": 2.0,
+                  "border_radius": 16,
+                  "style": {
+                    "width": 520,
+                    "height": 280,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.7,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "countdown",
+                  "seconds": 125,
+                  "show_hours": false,
+                  "digit_size": 56,
+                  "style": {
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.9,
+                        "duration": 0.4
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "flex",
+              "style": {
+                "width": 560,
+                "height": 640,
+                "flex-direction": "column",
+                "gap": 22,
+                "justify-content": "center"
+              },
+              "children": [
+                {
+                  "type": "callout",
+                  "text": "New: realtime collab is live!",
+                  "arrow_direction": "bottom",
+                  "arrow_size": 14,
+                  "style": {
+                    "background": "#6366f1",
+                    "color": "#ffffff",
+                    "border-radius": 12,
+                    "font-size": 24,
+                    "animation": [
+                      {
+                        "name": "scale_in",
+                        "delay": 0.5,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "tooltip",
+                  "text": "Hover to inspect",
+                  "arrow": "top",
+                  "background_color": "#1e293b",
+                  "text_color": "#e2e8f0",
+                  "border_color": "#334155",
+                  "style": {
+                    "font-size": 22,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.7,
+                        "duration": 0.4
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "card",
+                  "style": {
+                    "width": 520,
+                    "height": 200,
+                    "flex-direction": "column",
+                    "gap": 14,
+                    "padding": 22,
+                    "background": "#161b2e",
+                    "border-radius": 16,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.9,
+                        "duration": 0.5
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "content": "Loading content…",
+                      "style": {
+                        "font-size": 20,
+                        "color": "#94a3b8"
+                      }
+                    },
+                    {
+                      "type": "skeleton",
+                      "variant": "text",
+                      "lines": 3,
+                      "style": {
+                        "width": 476,
+                        "height": 90
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "notification",
+          "title": "Settings saved",
+          "message": "Your preferences were updated",
+          "variant": "success",
+          "icon": "lucide:check-circle",
+          "width": 420,
+          "slide_in_at": 2.2,
+          "slide_out_at": 5.2,
+          "position": "absolute",
+          "x": 1450,
+          "y": 60
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "dissolve",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 22
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Process & Lists",
+          "style": {
+            "font-size": "44",
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "timeline",
+          "width": 1500,
+          "direction": "horizontal",
+          "fill_progress": 0.75,
+          "bar_fill_color": "#6366f1",
+          "bar_color": "#1e293b",
+          "font_size": 22,
+          "label_color": "#e2e8f0",
+          "steps": [
+            {
+              "label": "Design",
+              "sublabel": "Week 1",
+              "color": "#6366f1",
+              "icon": "1"
+            },
+            {
+              "label": "Build",
+              "sublabel": "Week 2-3",
+              "color": "#6366f1",
+              "icon": "2"
+            },
+            {
+              "label": "Test",
+              "sublabel": "Week 4",
+              "color": "#6366f1",
+              "icon": "3"
+            },
+            {
+              "label": "Ship",
+              "sublabel": "Week 5",
+              "color": "#22c55e",
+              "icon": "🚀"
+            }
+          ],
+          "style": {
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 0.3,
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1500,
+            "height": 560,
+            "flex-direction": "row",
+            "gap": 28
+          },
+          "children": [
+            {
+              "type": "card",
+              "style": {
+                "width": 736,
+                "height": 560,
+                "flex-direction": "column",
+                "gap": 18,
+                "padding": 36,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "justify-content": "center",
+                "animation": [
+                  {
+                    "name": "fade_in_left",
+                    "delay": 0.5,
+                    "duration": 0.5
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "What's included",
+                  "style": {
+                    "font-size": 28,
+                    "font-weight": "bold",
+                    "color": "#f8fafc"
+                  }
+                },
+                {
+                  "type": "list",
+                  "variant": "checklist",
+                  "width": 664,
+                  "gap": 20,
+                  "icon_color": "#22c55e",
+                  "unchecked_color": "#ef4444",
+                  "items": [
+                    {
+                      "text": "CSS flex + grid layout via taffy",
+                      "checked": true
+                    },
+                    {
+                      "text": "Skia paint: gradients, shadows, filters",
+                      "checked": true
+                    },
+                    {
+                      "text": "Unicode shaping with cosmic-text",
+                      "checked": true
+                    },
+                    {
+                      "text": "39 animation presets + wiggle",
+                      "checked": true
+                    },
+                    {
+                      "text": "Browser dependency",
+                      "checked": false
+                    }
+                  ],
+                  "style": {
+                    "font-size": "25",
+                    "color": "#e2e8f0",
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "delay": 0.7,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "style": {
+                "width": 736,
+                "height": 560,
+                "display": "grid",
+                "grid-template-columns": [
+                  "1fr",
+                  "1fr"
+                ],
+                "grid-template-rows": [
+                  "1fr",
+                  "1fr"
+                ],
+                "gap": 20,
+                "padding": 28,
+                "background": "#161b2e",
+                "border-radius": 16,
+                "animation": [
+                  {
+                    "name": "fade_in_right",
+                    "delay": 0.5,
+                    "duration": 0.5
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "div",
+                  "style": {
+                    "flex-direction": "column",
+                    "align-items": "center",
+                    "justify-content": "center",
+                    "gap": 10
+                  },
+                  "children": [
+                    {
+                      "type": "icon",
+                      "icon": "lucide:zap",
+                      "style": {
+                        "width": 56,
+                        "height": 56,
+                        "color": "#f59e0b"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Fast",
+                      "style": {
+                        "font-size": 24,
+                        "color": "#e2e8f0",
+                        "text-align": "center"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "div",
+                  "style": {
+                    "flex-direction": "column",
+                    "align-items": "center",
+                    "justify-content": "center",
+                    "gap": 10
+                  },
+                  "children": [
+                    {
+                      "type": "icon",
+                      "icon": "lucide:shield-check",
+                      "style": {
+                        "width": 56,
+                        "height": 56,
+                        "color": "#22c55e"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Secure",
+                      "style": {
+                        "font-size": 24,
+                        "color": "#e2e8f0",
+                        "text-align": "center"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "div",
+                  "style": {
+                    "flex-direction": "column",
+                    "align-items": "center",
+                    "justify-content": "center",
+                    "gap": 10
+                  },
+                  "children": [
+                    {
+                      "type": "icon",
+                      "icon": "lucide:feather",
+                      "style": {
+                        "width": 56,
+                        "height": 56,
+                        "color": "#a78bfa"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Light",
+                      "style": {
+                        "font-size": 24,
+                        "color": "#e2e8f0",
+                        "text-align": "center"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "div",
+                  "style": {
+                    "flex-direction": "column",
+                    "align-items": "center",
+                    "justify-content": "center",
+                    "gap": 10
+                  },
+                  "children": [
+                    {
+                      "type": "icon",
+                      "icon": "lucide:infinity",
+                      "style": {
+                        "width": 56,
+                        "height": 56,
+                        "color": "#ec4899"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Scalable",
+                      "style": {
+                        "font-size": 24,
+                        "color": "#e2e8f0",
+                        "text-align": "center"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 6.0,
+      "transition": {
+        "type": "iris",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 22
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Code & Terminal",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "width": 1740,
+            "height": 760,
+            "flex-direction": "row",
+            "gap": 24
+          },
+          "children": [
+            {
+              "type": "codeblock",
+              "code": "use skia_safe::Canvas;\n\npub trait Painter {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    );\n}\n\nimpl Painter for Text {\n    fn paint_content(&self, c: &Canvas, l: &BoxLayout,\n        _p: &AnimatedProperties, ctx: &PaintCtx) {\n        draw_runs(c, &self.runs, l, ctx);\n    }\n}",
+              "language": "rust",
+              "theme": "tokyo-night",
+              "show_line_numbers": true,
+              "chrome": {
+                "enabled": true,
+                "title": "painter.rs"
+              },
+              "reveal": {
+                "mode": "line_by_line",
+                "start": 0.3,
+                "duration": 4.0
+              },
+              "auto_scroll": true,
+              "style": {
+                "width": 858,
+                "height": 760,
+                "font-size": 22,
+                "border-radius": 14,
+                "animation": [
+                  {
+                    "name": "fade_in_left",
+                    "delay": 0.3,
+                    "duration": 0.5
+                  }
+                ]
+              }
+            },
+            {
+              "type": "terminal",
+              "title": "rustmotion",
+              "show_chrome": true,
+              "theme": "dark",
+              "auto_scroll": true,
+              "lines": [
+                {
+                  "text": "$ rustmotion validate -f mega-showcase.json",
+                  "line_type": "prompt"
+                },
+                {
+                  "text": "  schema:   pass",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  geometry: pass  (0 violations)",
+                  "line_type": "output"
+                },
+                {
+                  "text": "",
+                  "line_type": "output"
+                },
+                {
+                  "text": "$ rustmotion render -f mega-showcase.json -o out.mp4",
+                  "line_type": "prompt"
+                },
+                {
+                  "text": "  Rendering 1920x1080 @ 30fps",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  [scene 1/8]  done",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  [scene 4/8]  done",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  [scene 8/8]  done",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  Encoding ffmpeg H.264 10-bit",
+                  "line_type": "output"
+                },
+                {
+                  "text": "  out.mp4  6.1 MB  37.0s",
+                  "line_type": "output"
+                }
+              ],
+              "reveal": {
+                "mode": "typewriter",
+                "start": 0.5,
+                "duration": 4.5
+              },
+              "style": {
+                "width": 858,
+                "height": 760,
+                "font-size": 22,
+                "border-radius": 14,
+                "animation": [
+                  {
+                    "name": "fade_in_right",
+                    "delay": 0.5,
+                    "duration": 0.5
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.5,
+      "transition": {
+        "type": "flip",
+        "duration": 0.6
+      },
+      "background": "#0b0f1a",
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 24
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Architecture Flow",
+          "style": {
+            "font-size": 44,
+            "font-weight": "bold",
+            "color": "#f8fafc",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.5
+              }
+            ]
+          }
+        },
+        {
+          "type": "positioned",
+          "style": {
+            "width": 1740,
+            "height": 560
+          },
+          "children": [
+            {
+              "type": "line",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "x1": 60,
+              "y1": 540,
+              "x2": 1680,
+              "y2": 540,
+              "width": 2,
+              "color": "#334155",
+              "dashed": [
+                10,
+                8
+              ],
+              "style": {
+                "animation": [
+                  {
+                    "name": "draw_in",
+                    "delay": 0.3,
+                    "duration": 0.8
+                  }
+                ]
+              }
+            },
+            {
+              "type": "shape",
+              "shape": "rounded_rect",
+              "position": {
+                "x": 80,
+                "y": 180
+              },
+              "text": {
+                "content": "box_tree",
+                "font_size": 28,
+                "color": "#ffffff",
+                "align": "center",
+                "vertical_align": "middle",
+                "font_weight": "bold"
+              },
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#6366f1",
+                  "#4f46e5"
+                ],
+                "angle": 135
+              },
+              "style": {
+                "width": 360,
+                "height": 160,
+                "border-radius": 20,
+                "animation": [
+                  {
+                    "name": "scale_in",
+                    "delay": 0.5,
+                    "duration": 0.5
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 6,
+                    "frequency": 0.5,
+                    "seed": 11
+                  }
+                ]
+              }
+            },
+            {
+              "type": "shape",
+              "shape": "rounded_rect",
+              "position": {
+                "x": 690,
+                "y": 180
+              },
+              "text": {
+                "content": "layout_pass",
+                "font_size": 28,
+                "color": "#ffffff",
+                "align": "center",
+                "vertical_align": "middle",
+                "font_weight": "bold"
+              },
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#10b981",
+                  "#059669"
+                ],
+                "angle": 135
+              },
+              "style": {
+                "width": 360,
+                "height": 160,
+                "border-radius": 20,
+                "animation": [
+                  {
+                    "name": "scale_in",
+                    "delay": 0.7,
+                    "duration": 0.5
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 6,
+                    "frequency": 0.5,
+                    "seed": 42
+                  }
+                ]
+              }
+            },
+            {
+              "type": "shape",
+              "shape": "rounded_rect",
+              "position": {
+                "x": 1300,
+                "y": 180
+              },
+              "text": {
+                "content": "paint_pass",
+                "font_size": 28,
+                "color": "#ffffff",
+                "align": "center",
+                "vertical_align": "middle",
+                "font_weight": "bold"
+              },
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#f59e0b",
+                  "#d97706"
+                ],
+                "angle": 135
+              },
+              "style": {
+                "width": 360,
+                "height": 160,
+                "border-radius": 20,
+                "animation": [
+                  {
+                    "name": "scale_in",
+                    "delay": 0.9,
+                    "duration": 0.5
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 6,
+                    "frequency": 0.5,
+                    "seed": 91
+                  }
+                ]
+              }
+            },
+            {
+              "type": "arrow",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "x1": 450,
+              "y1": 260,
+              "x2": 680,
+              "y2": 260,
+              "curve": 0.2,
+              "width": 4,
+              "color": "#94a3b8",
+              "arrow_end": true,
+              "style": {
+                "animation": [
+                  {
+                    "name": "stroke_reveal",
+                    "delay": 1.2,
+                    "duration": 0.6
+                  }
+                ]
+              }
+            },
+            {
+              "type": "connector",
+              "position": {
+                "x": 0,
+                "y": 0
+              },
+              "from": {
+                "x": 1060,
+                "y": 260
+              },
+              "to": {
+                "x": 1290,
+                "y": 260
+              },
+              "routing": "curved",
+              "curvature": 0.4,
+              "width": 4,
+              "color": "#94a3b8",
+              "arrow_end": true,
+              "style": {
+                "animation": [
+                  {
+                    "name": "stroke_reveal",
+                    "delay": 1.5,
+                    "duration": 0.6
+                  }
+                ]
+              }
+            },
+            {
+              "type": "cursor",
+              "cursor_style": "default",
+              "color": "#f8fafc",
+              "blink": 0.5,
+              "click_at": [
+                2.4,
+                3.2
+              ],
+              "auto_path": [
+                {
+                  "time": 1.8,
+                  "x": 260,
+                  "y": 460
+                },
+                {
+                  "time": 2.6,
+                  "x": 870,
+                  "y": 460
+                },
+                {
+                  "time": 3.4,
+                  "x": 1480,
+                  "y": 460
+                }
+              ],
+              "path_easing": "ease_in_out",
+              "position": {
+                "x": 260,
+                "y": 460
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "A browser-style render pipeline, entirely in Rust.",
+          "max_width": 1100,
+          "style": {
+            "font-size": 30,
+            "color": "#cbd5e1",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 1.6,
+                "duration": 0.5
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "zoom_out",
+        "duration": 0.6
+      },
+      "background": {
+        "$ref": "rings"
+      },
+      "layout": {
+        "direction": "column",
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 30
+      },
+      "children": [
+        {
+          "type": "particle",
+          "particle_type": "confetti",
+          "count": 90,
+          "speed": 1.1,
+          "seed": 21,
+          "position": "absolute",
+          "x": 0,
+          "y": 0,
+          "style": {
+            "width": 1920,
+            "height": 1080
+          }
+        },
+        {
+          "type": "icon",
+          "icon": "lucide:rocket",
+          "style": {
+            "width": 100,
+            "height": 100,
+            "color": "#f472b6",
+            "animation": [
+              {
+                "name": "bounce_in",
+                "duration": 0.7
+              },
+              {
+                "name": "wiggle",
+                "property": "rotation",
+                "amplitude": 7,
+                "frequency": 1.2,
+                "seed": 5
+              }
+            ]
+          }
+        },
+        {
+          "type": "gradient_text",
+          "content": "Start building today",
+          "colors": [
+            "#60a5fa",
+            "#a78bfa",
+            "#f472b6"
+          ],
+          "angle": 90,
+          "style": {
+            "font-size": 80,
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "char_fade_in",
+                "stagger": 0.12,
+                "duration": 0.5,
+                "delay": 0.4,
+                "granularity": "word"
+              }
+            ]
+          }
+        },
+        {
+          "type": "flex",
+          "style": {
+            "flex-direction": "row",
+            "gap": 36,
+            "align-items": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 1.0,
+                "duration": 0.6
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "qr_code",
+              "content": "https://github.com/rustmotion/rustmotion",
+              "size": 200,
+              "foreground_color": "#f8fafc",
+              "background_color": "#0b0f1a"
+            },
+            {
+              "type": "flex",
+              "style": {
+                "flex-direction": "column",
+                "gap": 16,
+                "justify-content": "center"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Scan to get started",
+                  "style": {
+                    "font-size": 34,
+                    "font-weight": "bold",
+                    "color": "#f8fafc"
+                  }
+                },
+                {
+                  "type": "flex",
+                  "style": {
+                    "flex-direction": "row",
+                    "gap": 12,
+                    "align-items": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "kbd",
+                      "key": "cargo"
+                    },
+                    {
+                      "type": "kbd",
+                      "key": "install"
+                    },
+                    {
+                      "type": "kbd",
+                      "key": "rustmotion"
+                    }
+                  ]
+                },
+                {
+                  "type": "badge",
+                  "text": "v0.6.0",
+                  "icon": "lucide:check-circle",
+                  "dot": true,
+                  "dot_color": "#22c55e",
+                  "pulse": true,
+                  "style": {
+                    "background": "#10b981",
+                    "font-size": 24
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
