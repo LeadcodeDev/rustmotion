@@ -18,3 +18,4 @@ clap = { version = "4", features = ["derive"] }
 notify = "7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 serde_json = "1"
+tokio = { version = "1", features = ["time"] }

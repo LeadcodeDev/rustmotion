@@ -4767,6 +4767,7 @@ dependencies = [
  "notify",
  "rustmotion",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
