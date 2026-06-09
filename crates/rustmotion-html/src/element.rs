@@ -177,4 +177,22 @@ mod tests {
         assert_eq!(v["children"][0]["type"], json!("text"));
         assert_eq!(v["children"][0]["content"], json!("loose text"));
     }
+
+    #[test]
+    fn custom_element_attrs_become_root_fields() {
+        let v = map_first(r#"<rm-counter from="0" to="1250" suffix="€"></rm-counter>"#);
+        assert_eq!(v["type"], json!("counter"));
+        assert_eq!(v["from"], json!(0));
+        assert_eq!(v["to"], json!(1250));
+        assert_eq!(v["suffix"], json!("€"));
+    }
+
+    #[test]
+    fn custom_element_keeps_style_and_children() {
+        let v = map_first(r#"<rm-card style="padding:24"><p>inside</p></rm-card>"#);
+        assert_eq!(v["type"], json!("card"));
+        assert_eq!(v["style"]["padding"], json!(24));
+        assert_eq!(v["children"][0]["type"], json!("text"));
+        assert_eq!(v["children"][0]["content"], json!("inside"));
+    }
 }
