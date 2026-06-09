@@ -16,7 +16,9 @@ pub fn StudioApp() -> Element {
     let mut current = use_signal(|| 0u32);
     let mut playing = use_signal(|| false);
     let rev = use_signal(|| 0u64);
-    let mut selected = use_signal(|| None::<u32>);
+    // Selection stores (node_id, pointer, kind) so the inspector stays open via
+    // the stored pointer even if the element collapses out of the hit-map.
+    let mut selected = use_signal(|| None::<(u32, String, String)>);
     // Debounce state for inspector edits. NOT read in the render body, so
     // typing does not re-render (which would reset the controlled input).
     let edit_gen = use_signal(|| 0u64);
@@ -103,22 +105,19 @@ pub fn StudioApp() -> Element {
         let prefix = super::frames::scene_prefix(&m.raw, &m.tasks, cur);
         super::frames::frame_hits(&m.scenario, &m.tasks, cur, &prefix)
     };
-    let selected_hit = selected().and_then(|id| hits.iter().find(|h| h.node_id == id).cloned());
-    let selected_kind = selected_hit.as_ref().map(|h| h.kind.clone());
+    let selected_node = selected().map(|(id, _, _)| id);
+    let selected_kind = selected().map(|(_, _, kind)| kind);
 
     // Inspector data for the selected element: its current style prop values.
-    let inspector = selected_hit
-        .as_ref()
-        .and_then(|h| h.pointer.clone())
-        .map(|pointer| {
-            let m = shared.lock().unwrap();
-            let color = super::edit::read_style(&m.raw, &pointer, "color").unwrap_or_default();
-            let font_size =
-                super::edit::read_style(&m.raw, &pointer, "font-size").unwrap_or_default();
-            let background =
-                super::edit::read_style(&m.raw, &pointer, "background").unwrap_or_default();
-            (pointer, color, font_size, background)
-        });
+    // Driven by the STORED pointer, so it stays open even if the element
+    // collapses out of the current frame's hit-map (e.g. font-size 0).
+    let inspector = selected().map(|(_, pointer, _)| {
+        let m = shared.lock().unwrap();
+        let color = super::edit::read_style(&m.raw, &pointer, "color").unwrap_or_default();
+        let font_size = super::edit::read_style(&m.raw, &pointer, "font-size").unwrap_or_default();
+        let background = super::edit::read_style(&m.raw, &pointer, "background").unwrap_or_default();
+        (pointer, color, font_size, background)
+    });
 
     if let Some(e) = err {
         return rsx! {
@@ -143,12 +142,18 @@ pub fn StudioApp() -> Element {
                                 style: format!(
                                     "position:absolute; left:{}%; top:{}%; width:{}%; height:{}%; box-sizing:border-box; cursor:pointer; border:{};",
                                     hit.x, hit.y, hit.w, hit.h,
-                                    if selected() == Some(hit.node_id) { "2px solid #4c8dff; background:rgba(76,141,255,0.15)" }
+                                    if selected_node == Some(hit.node_id) { "2px solid #4c8dff; background:rgba(76,141,255,0.15)" }
                                     else { "1px dashed rgba(255,255,255,0.22)" }
                                 ),
                                 onclick: {
                                     let id = hit.node_id;
-                                    move |_| selected.set(Some(id))
+                                    let ptr = hit.pointer.clone();
+                                    let kind = hit.kind.clone();
+                                    move |_| {
+                                        if let Some(ptr) = ptr.clone() {
+                                            selected.set(Some((id, ptr, kind.clone())));
+                                        }
+                                    }
                                 },
                             }
                         }
@@ -192,7 +197,14 @@ pub fn StudioApp() -> Element {
             }
             if let Some((pointer, color, font_size, background)) = inspector {
                 div { style: "position:fixed; top:0; right:0; width:248px; height:100vh; background:#13161d; border-left:1px solid #1c1f27; padding:16px; box-sizing:border-box; display:flex; flex-direction:column; gap:14px; overflow:auto;",
-                    div { style: "color:#4c8dff; font-weight:600;", "Inspector" }
+                    div { style: "display:flex; justify-content:space-between; align-items:center;",
+                        div { style: "color:#4c8dff; font-weight:600;", "Inspector" }
+                        button {
+                            style: "cursor:pointer; background:none; border:none; color:#7a7f8a; font-size:16px; line-height:1;",
+                            onclick: move |_| selected.set(None),
+                            "✕"
+                        }
+                    }
                     if let Some(kind) = selected_kind.as_deref() {
                         div { style: "color:#7a7f8a;", "{kind}" }
                     }
@@ -265,8 +277,12 @@ fn schedule_write(
 }
 
 /// Write a single style property back to the scenario file. The file watcher
-/// then reloads the model and refreshes the preview.
+/// then reloads the model and refreshes the preview. Empty values are ignored
+/// so clearing a field mid-edit doesn't collapse the element.
 fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
+    if value.trim().is_empty() {
+        return;
+    }
     let (path, raw) = {
         let m = shared.lock().unwrap();
         (m.path.clone(), m.raw.clone())
