@@ -103,8 +103,14 @@ pub fn StudioApp(view: Signal<View>) -> Element {
         };
     }
 
+    // Inspector slot is ALWAYS mounted so its width can animate between 0 and
+    // 300px; the canvas (flex:1) reflows each frame of that transition, giving a
+    // smooth resize. Content is only rendered when something is selected.
+    let panel = inspector();
+    let panel_w = if panel.is_some() { "300px" } else { "0px" };
+
     rsx! {
-        div { style: "margin:0; background:var(--rm-bg); min-height:100vh; color:var(--rm-text); font:13px -apple-system,sans-serif; display:flex; flex-direction:column;",
+        div { style: "margin:0; background:var(--rm-bg); height:100vh; overflow:hidden; color:var(--rm-text); font:13px -apple-system,sans-serif; display:flex; flex-direction:column;",
             TopBar {
                 view,
                 title,
@@ -114,10 +120,16 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                 show_hits,
                 comment_count,
             }
-            Canvas { current, rev, show_hits, selected }
-            PlaybackBar { current, playing, total }
-            if let Some((pointer, style, kind)) = inspector() {
-                InspectorPanel { selected, pointer, kind, current, style }
+            div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
+                div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
+                    Canvas { current, rev, show_hits, selected }
+                    PlaybackBar { current, playing, total }
+                }
+                div { style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
+                    if let Some((pointer, style, kind)) = panel {
+                        InspectorPanel { selected, pointer, kind, current, style }
+                    }
+                }
             }
             if show_annotations() {
                 AnnotationsPanel { current, annotations: annotations.clone() }
@@ -138,7 +150,14 @@ fn Canvas(
     mut selected: Signal<Option<(u32, String, String)>>,
 ) -> Element {
     let shared = use_context::<Shared>();
-    let max = shared.lock().unwrap().total_frames.saturating_sub(1);
+    let (max, vw, vh) = {
+        let m = shared.lock().unwrap();
+        (
+            m.total_frames.saturating_sub(1),
+            m.scenario.video.width,
+            m.scenario.video.height,
+        )
+    };
     let cur = current().min(max);
     let r = rev();
 
@@ -152,13 +171,18 @@ fn Canvas(
 
     rsx! {
         div {
-            style: "flex:1; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
+            style: "flex:1; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
             // Clicking the empty canvas (not an element) clears the selection.
             onclick: move |_| selected.set(None),
-            div { style: "position:relative; display:inline-block; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
+            // Wrapper carries the video's aspect ratio and is capped at 100% of the
+            // (definite) canvas in both axes, so it scales to fit without the circular
+            // `max-width:100%` collapse an inline-block shrink-wrap would cause when the
+            // canvas narrows (e.g. the inspector opens). The image fills it 1:1, so the
+            // overlay stays exactly aligned.
+            div { style: "position:relative; aspect-ratio:{vw} / {vh}; max-width:100%; max-height:100%; min-width:0; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
                 img {
                     src: "/frame/{cur}?v={r}",
-                    style: "display:block; max-width:100%; max-height:78vh; height:auto;",
+                    style: "display:block; width:100%; height:100%;",
                 }
                 Overlay { hits, selected }
             }

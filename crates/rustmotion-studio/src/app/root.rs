@@ -33,19 +33,19 @@ const THEME_CSS: &str = r##"
   --rm-overlay-hover:rgba(255,255,255,0.06); --rm-overlay-border:rgba(255,255,255,0.45);
 }
 .rm-light {
-  --rm-bg:#f5f6f8; --rm-surface:#ffffff; --rm-surface-2:#eef0f3; --rm-surface-3:#e3e8f0;
-  --rm-border:#e2e5ea; --rm-border-2:#d0d4dc;
-  --rm-text:#2b2f38; --rm-text-strong:#0c0d10; --rm-text-muted:#6b7280;
-  --rm-accent:#2f6fe0; --rm-on-accent:#ffffff; --rm-error:#d92d20;
-  --rm-overlay-hover:rgba(0,0,0,0.06); --rm-overlay-border:rgba(0,0,0,0.5);
+  --rm-bg:#f4f2ee; --rm-surface:#ffffff; --rm-surface-2:#faf8f5; --rm-surface-3:#efece6;
+  --rm-border:#e7e4df; --rm-border-2:#d8d3cc;
+  --rm-text:#3f3a35; --rm-text-strong:#1c1917; --rm-text-muted:#857d73;
+  --rm-accent:#2563eb; --rm-on-accent:#ffffff; --rm-error:#d92d20;
+  --rm-overlay-hover:rgba(0,0,0,0.05); --rm-overlay-border:rgba(37,99,235,0.55);
 }
 @media (prefers-color-scheme: light) {
   .rm-system {
-    --rm-bg:#f5f6f8; --rm-surface:#ffffff; --rm-surface-2:#eef0f3; --rm-surface-3:#e3e8f0;
-    --rm-border:#e2e5ea; --rm-border-2:#d0d4dc;
-    --rm-text:#2b2f38; --rm-text-strong:#0c0d10; --rm-text-muted:#6b7280;
-    --rm-accent:#2f6fe0; --rm-on-accent:#ffffff; --rm-error:#d92d20;
-    --rm-overlay-hover:rgba(0,0,0,0.06); --rm-overlay-border:rgba(0,0,0,0.5);
+    --rm-bg:#f4f2ee; --rm-surface:#ffffff; --rm-surface-2:#faf8f5; --rm-surface-3:#efece6;
+    --rm-border:#e7e4df; --rm-border-2:#d8d3cc;
+    --rm-text:#3f3a35; --rm-text-strong:#1c1917; --rm-text-muted:#857d73;
+    --rm-accent:#2563eb; --rm-on-accent:#ffffff; --rm-error:#d92d20;
+    --rm-overlay-hover:rgba(0,0,0,0.05); --rm-overlay-border:rgba(37,99,235,0.55);
   }
 }
 .rm-dark, .rm-light, .rm-system {

@@ -345,7 +345,7 @@ pub fn InspectorPanel(
     style: serde_json::Value,
 ) -> Element {
     rsx! {
-        div { style: "position:fixed; top:40px; right:0; width:300px; height:calc(100vh - 40px); background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; gap:12px; overflow:auto;",
+        div { style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; gap:12px; overflow:auto;",
             div {
               style: "padding:16px;",
               div { style: "display:flex; justify-content:space-between; align-items:center;",
