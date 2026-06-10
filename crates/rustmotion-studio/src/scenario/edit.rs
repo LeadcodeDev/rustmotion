@@ -11,6 +11,16 @@ pub fn read_style(raw: &Value, pointer: &str, prop: &str) -> Option<String> {
     })
 }
 
+/// Read the whole `style` object of the element at `pointer` (or `Null`). The
+/// inspector renders every supported property from this single value, which
+/// keeps it stable (frame-independent) for memoization.
+pub fn read_style_object(raw: &Value, pointer: &str) -> Value {
+    raw.pointer(pointer)
+        .and_then(|el| el.get("style"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// Set a style property (as a JSON string) on the element at `pointer`.
 /// Returns the mutated clone; the caller writes it to disk.
 pub fn set_style(mut raw: Value, pointer: &str, prop: &str, value: &str) -> Option<Value> {

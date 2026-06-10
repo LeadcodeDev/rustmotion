@@ -23,3 +23,4 @@ tokio = { version = "1", features = ["time"] }
 dioxus-icons = { version = "0.1.0", default-features = false }
 rfd = "0.17"
 dirs = "6.0.0"
+palette = { version = "0.7.6", default-features = false }

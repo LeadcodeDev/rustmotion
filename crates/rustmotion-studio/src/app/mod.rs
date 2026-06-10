@@ -128,7 +128,7 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                 }
                 WatchMsg::Changed => {
                     if let Some(p) = current.clone() {
-                        if let Ok(scenario) = rustmotion::loader::load_scenario(&p) {
+                        if let Ok(scenario) = rustmotion::loader::load_input(&p) {
                             if let Ok(mut m) = shared.lock() {
                                 let g = m.generation.wrapping_add(1);
                                 *m = StudioModel::new(scenario, None, Some(p.clone()));

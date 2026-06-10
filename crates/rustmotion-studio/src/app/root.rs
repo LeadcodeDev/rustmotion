@@ -1,11 +1,24 @@
 use std::sync::Arc;
 
-use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder};
+use dioxus::desktop::{
+    use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder,
+};
 use dioxus::prelude::*;
 
 use crate::editor::StudioApp;
 use crate::library::{render_thumbnail, Library, SharedLibrary};
 use crate::scenario::{Shared, Theme, View};
+
+/// dx-component CSS, injected globally. `#[css_module]` only injects its compiled
+/// stylesheet through the `dx` asset pipeline, which our plain `cargo`-built
+/// `rustmotion studio` binary doesn't run — so we bundle the (unscoped) CSS at
+/// compile time and inject it as a `<style>` block, the same way the theme is
+/// applied. The matching component wrappers use plain class names.
+const SELECT_CSS: &str = include_str!("../components/select/style.css");
+const COLOR_PICKER_CSS: &str = include_str!("../components/color_picker/style.css");
+const SWITCH_CSS: &str = include_str!("../components/switch/style.css");
+const SLIDER_CSS: &str = include_str!("../components/slider/style.css");
+const INPUT_CSS: &str = include_str!("../components/input/style.css");
 
 /// Semantic palette tokens (`--rm-*`) for each theme, plus the `--dx-*` vars the
 /// `components/` scaffold reads. `System` defaults to the light palette and
@@ -131,6 +144,11 @@ pub fn StudioRoot() -> Element {
 
     rsx! {
         style { "{THEME_CSS}" }
+        style { "{SELECT_CSS}" }
+        style { "{COLOR_PICKER_CSS}" }
+        style { "{SWITCH_CSS}" }
+        style { "{SLIDER_CSS}" }
+        style { "{INPUT_CSS}" }
         div { class: "{theme().class()}", style: "min-height:100vh; background:var(--rm-bg); color:var(--rm-text);",
             {match view() {
                 View::Library => rsx! { Library { view } },

@@ -4,9 +4,10 @@ mod element;
 mod scene;
 mod style;
 
+use html5ever::serialize::{serialize, SerializeOpts, TraversalScope};
 use html5ever::tendril::TendrilSink;
-use html5ever::{local_name, ns, parse_fragment, ParseOpts, QualName};
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use html5ever::{local_name, ns, parse_fragment, Attribute, ParseOpts, QualName};
+use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
 use serde_json::{Map, Value};
 
 /// Errors from transpiling HTML to a scenario value.
@@ -102,9 +103,156 @@ pub(crate) fn find_element(handle: &Handle, tag: &str) -> Option<Handle> {
     None
 }
 
+/// Set or replace an inline `style` property on the element addressed by the
+/// JSON pointer (into the transpiled scenario), returning the rewritten HTML.
+/// Used by the studio inspector to persist a property edit back into the HTML
+/// source. The document is re-serialized (formatting is normalized). Returns
+/// `None` if the pointer doesn't resolve to an element.
+pub fn set_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> Option<String> {
+    let dom = parse_fragment_dom(html);
+    let root = find_element(&dom.document, "rustmotion")?;
+    let target = resolve_pointer(&root, pointer)?;
+    set_style_attr(&target, prop, value)?;
+    Some(serialize_element(&root))
+}
+
+/// Numeric segments of a JSON pointer, e.g. `/scenes/0/children/2` → `[0, 2]`.
+/// The first is the scene index; the rest walk content-node children.
+fn parse_indices(pointer: &str) -> Vec<usize> {
+    pointer.split('/').filter_map(|s| s.parse::<usize>().ok()).collect()
+}
+
+/// Walk from `<rustmotion>` to the element a pointer addresses, mirroring the
+/// transpiler's ordering (content nodes = elements + non-whitespace text).
+fn resolve_pointer(root: &Handle, pointer: &str) -> Option<Handle> {
+    let idx = parse_indices(pointer);
+    let (&scene_i, rest) = idx.split_first()?;
+    let mut node = nth_named_child(root, "scene", scene_i)?;
+    for &i in rest {
+        node = nth_content_node(&node, i)?;
+    }
+    Some(node)
+}
+
+fn nth_named_child(parent: &Handle, tag: &str, n: usize) -> Option<Handle> {
+    parent
+        .children
+        .borrow()
+        .iter()
+        .filter(|c| tag_name(c).as_deref() == Some(tag))
+        .nth(n)
+        .cloned()
+}
+
+fn nth_content_node(parent: &Handle, n: usize) -> Option<Handle> {
+    parent
+        .children
+        .borrow()
+        .iter()
+        .filter(|c| match &c.data {
+            NodeData::Element { .. } => true,
+            NodeData::Text { contents } => !contents.borrow().trim().is_empty(),
+            _ => false,
+        })
+        .nth(n)
+        .cloned()
+}
+
+fn set_style_attr(handle: &Handle, prop: &str, value: &str) -> Option<()> {
+    let NodeData::Element { attrs, .. } = &handle.data else {
+        return None;
+    };
+    let mut attrs = attrs.borrow_mut();
+    let existing = attrs
+        .iter()
+        .find(|a| a.name.local.as_ref() == "style")
+        .map(|a| a.value.to_string())
+        .unwrap_or_default();
+    let new_style = upsert_decl(&existing, prop, value);
+    if let Some(a) = attrs.iter_mut().find(|a| a.name.local.as_ref() == "style") {
+        a.value = new_style.as_str().into();
+    } else {
+        attrs.push(Attribute {
+            name: QualName::new(None, ns!(), local_name!("style")),
+            value: new_style.as_str().into(),
+        });
+    }
+    Some(())
+}
+
+/// Set/replace one `prop: value` in a CSS declaration list, preserving order.
+fn upsert_decl(decls: &str, prop: &str, value: &str) -> String {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut found = false;
+    for decl in decls.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = decl.split_once(':') {
+            let k = k.trim().to_string();
+            if k == prop {
+                pairs.push((k, value.to_string()));
+                found = true;
+            } else {
+                pairs.push((k, v.trim().to_string()));
+            }
+        }
+    }
+    if !found {
+        pairs.push((prop.to_string(), value.to_string()));
+    }
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{k}:{v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn serialize_element(handle: &Handle) -> String {
+    let mut buf = Vec::new();
+    let node: SerializableHandle = handle.clone().into();
+    let opts = SerializeOpts {
+        traversal_scope: TraversalScope::IncludeNode,
+        ..Default::default()
+    };
+    let _ = serialize(&mut buf, &node, opts);
+    String::from_utf8(buf).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod lib_tests {
     use serde_json::json;
+
+    #[test]
+    fn set_inline_style_updates_property() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-size:96; color:#fff">Hi</h1></scene></rustmotion>"##;
+        let out = crate::set_inline_style(html, "/scenes/0/children/0", "font-size", "120").unwrap();
+        assert!(out.contains("font-size:120"), "got: {out}");
+        assert!(out.contains("color:#fff"), "kept other props: {out}");
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        assert_eq!(v["scenes"][0]["children"][0]["style"]["font-size"], json!(120));
+    }
+
+    #[test]
+    fn set_inline_style_nested_through_container() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><div style="gap:8"><h1 style="font-size:96">Hi</h1></div></scene></rustmotion>"##;
+        let out =
+            crate::set_inline_style(html, "/scenes/0/children/0/children/0", "font-size", "120")
+                .unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        assert_eq!(
+            v["scenes"][0]["children"][0]["children"][0]["style"]["font-size"],
+            json!(120)
+        );
+    }
+
+    #[test]
+    fn set_inline_style_inserts_when_absent() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><p>Hi</p></scene></rustmotion>"##;
+        let out = crate::set_inline_style(html, "/scenes/0/children/0", "color", "#ff0000").unwrap();
+        assert!(out.contains("color:#ff0000"), "got: {out}");
+    }
 
     #[test]
     fn root_maps_to_video_and_scenes() {

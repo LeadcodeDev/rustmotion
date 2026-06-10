@@ -1,0 +1,33 @@
+/* Input Styles */
+.dx-input {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--rm-border-2);
+  border-radius: 6px;
+  background: var(--rm-bg);
+  color: var(--rm-text);
+  gap: 0.25rem;
+  font: inherit;
+  transition: border-color 100ms ease-out;
+}
+
+.dx-input::placeholder {
+  color: var(--rm-text-muted);
+}
+
+.dx-input:disabled {
+  color: var(--rm-text-muted);
+  cursor: not-allowed;
+}
+
+.dx-input:hover:not(:disabled),
+.dx-input:focus-visible {
+  border-color: var(--rm-accent);
+  outline: none;
+}

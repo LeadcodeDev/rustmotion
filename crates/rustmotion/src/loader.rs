@@ -76,6 +76,12 @@ pub fn is_html_path(path: &std::path::Path) -> bool {
     )
 }
 
+/// Apply an inline-style edit to an HTML-dialect source by JSON pointer (used by
+/// the studio inspector to persist a property change into the HTML).
+pub fn set_html_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> Option<String> {
+    rustmotion_html::set_inline_style(html, pointer, prop, value)
+}
+
 #[cfg(test)]
 mod html_tests {
     use super::*;

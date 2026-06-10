@@ -76,9 +76,13 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
             "target": { "pointer": pointer, "kind": kind }
         });
         let raw = append_annotation(raw, ann);
+        // Annotations live in the scenario JSON; HTML sources have no place to
+        // store them, so skip the write rather than overwrite the HTML.
         if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
-            let _ = std::fs::write(&path, t);
-            note.set(String::new());
+            if !rustmotion::loader::is_html_path(&path) {
+                let _ = std::fs::write(&path, t);
+                note.set(String::new());
+            }
         }
     };
 
@@ -107,7 +111,9 @@ fn delete_annotation(shared: &Shared, id: &str) {
     };
     let raw = remove_annotation(raw, id);
     if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
-        let _ = std::fs::write(&path, t);
+        if !rustmotion::loader::is_html_path(&path) {
+            let _ = std::fs::write(&path, t);
+        }
     }
 }
 

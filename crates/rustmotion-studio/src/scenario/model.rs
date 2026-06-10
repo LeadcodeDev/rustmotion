@@ -27,10 +27,18 @@ impl StudioModel {
         error: Option<String>,
         path: Option<std::path::PathBuf>,
     ) -> Self {
+        // For HTML sources the raw JSON is the transpiled scenario, so the
+        // inspector can read/resolve element properties by pointer.
         let raw = path
             .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|p| {
+                let s = std::fs::read_to_string(p).ok()?;
+                if rustmotion::loader::is_html_path(p) {
+                    rustmotion::loader::html_to_scenario_json(&s).ok()
+                } else {
+                    serde_json::from_str(&s).ok()
+                }
+            })
             .unwrap_or(serde_json::Value::Null);
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         let total_frames = tasks.len() as u32;

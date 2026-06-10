@@ -127,7 +127,7 @@ impl LibraryState {
 /// Render a scenario's frame 0 to a small JPEG thumbnail. No lock held by design
 /// (the caller renders this off-lock, then re-locks to cache the result).
 pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
-    let scenario = rustmotion::loader::load_scenario(&path.to_path_buf()).ok()?;
+    let scenario = rustmotion::loader::load_input(&path.to_path_buf()).ok()?;
     let tasks = rustmotion::encode::build_frame_tasks(&scenario);
     if tasks.is_empty() {
         return None;
@@ -193,14 +193,18 @@ pub fn scan_workspace(root: &Path) -> Vec<Group> {
 }
 
 fn is_scenario_file(p: &Path) -> bool {
-    if p.extension().and_then(|e| e.to_str()) != Some("json") {
-        return false;
+    match p.extension().and_then(|e| e.to_str()) {
+        Some("json") => std::fs::read_to_string(p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .map(|v| is_scenario_json(&v))
+            .unwrap_or(false),
+        // Cheap HTML-dialect check: a scenario has a <rustmotion> root element.
+        Some("html") | Some("htm") => std::fs::read_to_string(p)
+            .map(|s| s.contains("<rustmotion"))
+            .unwrap_or(false),
+        _ => false,
     }
-    std::fs::read_to_string(p)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .map(|v| is_scenario_json(&v))
-        .unwrap_or(false)
 }
 
 fn entry_for(p: &Path) -> ScenarioEntry {

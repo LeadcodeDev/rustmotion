@@ -5013,6 +5013,7 @@ dependencies = [
  "dirs",
  "image",
  "notify",
+ "palette",
  "rfd",
  "rustmotion",
  "serde_json",

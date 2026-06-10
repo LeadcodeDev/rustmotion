@@ -4,7 +4,9 @@
 mod edit;
 mod model;
 
-pub use edit::{append_annotation, list_annotations, read_style, remove_annotation, set_style};
+pub use edit::{
+    append_annotation, list_annotations, read_style_object, remove_annotation, set_style,
+};
 pub use model::{empty_scenario, Shared, StudioModel};
 
 /// Which top-level view is shown (library home vs. the editor).

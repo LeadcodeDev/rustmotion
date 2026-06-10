@@ -142,7 +142,7 @@ pub fn Library(view: Signal<View>) -> Element {
 
 /// Load a scenario into the shared model and switch to the editor.
 fn open_scenario(shared: &Shared, library: &SharedLibrary, mut view: Signal<View>, path: PathBuf) {
-    let (scenario, error) = match rustmotion::loader::load_scenario(&path) {
+    let (scenario, error) = match rustmotion::loader::load_input(&path) {
         Ok(s) => (s, None),
         Err(e) => (empty_scenario(), Some(e.to_string())),
     };
@@ -178,7 +178,7 @@ fn new_scenario(shared: &Shared, library: &SharedLibrary, view: Signal<View>) {
 fn import_scenario(shared: Shared, library: SharedLibrary, view: Signal<View>) {
     spawn(async move {
         if let Some(handle) = rfd::AsyncFileDialog::new()
-            .add_filter("scenario", &["json"])
+            .add_filter("scenario", &["json", "html", "htm"])
             .pick_file()
             .await
         {

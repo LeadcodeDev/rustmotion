@@ -1,7 +1,7 @@
 use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder};
 use dioxus::prelude::*;
 
-use crate::scenario::{list_annotations, read_style, Shared, View};
+use crate::scenario::{list_annotations, read_style_object, Shared, View};
 
 use super::annotations::AnnotationsPanel;
 use super::frames::{frame_hits, render_frame, scene_prefix, HitPct};
@@ -31,7 +31,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let rev = use_signal(|| 0u64);
     // Selection stores (node_id, pointer, kind) so the inspector stays open via
     // the stored pointer even if the element collapses out of the hit-map.
-    let mut selected = use_signal(|| None::<(u32, String, String)>);
+    let selected = use_signal(|| None::<(u32, String, String)>);
     let show_annotations = use_signal(|| false);
     // Whether the clickable element overlay is shown (the "Inspect" toggle).
     let show_hits = use_signal(|| true);
@@ -78,30 +78,21 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             .to_string();
         (m.total_frames, m.error.clone(), title, list_annotations(&m.raw))
     };
-    let max = total.saturating_sub(1);
-    let cur = current().min(max);
-    let r = rev();
     let comment_count = annotations.len();
 
-    // Real element hotspots for the current frame (render only, no encode).
-    // Skipped entirely when the Inspect overlay is off.
-    let hits = if show_hits() {
-        let m = shared.lock().unwrap();
-        let prefix = scene_prefix(&m.raw, &m.tasks, cur);
-        frame_hits(&m.scenario, &m.tasks, cur, &prefix)
-    } else {
-        Vec::new()
-    };
-
-    // Inspector data for the selected element. Driven by the STORED pointer, so
-    // it stays open even if the element collapses out of the current frame's
-    // hit-map (e.g. font-size 0).
-    let inspector = selected().map(|(_, pointer, kind)| {
-        let m = shared.lock().unwrap();
-        let color = read_style(&m.raw, &pointer, "color").unwrap_or_default();
-        let font_size = read_style(&m.raw, &pointer, "font-size").unwrap_or_default();
-        let background = read_style(&m.raw, &pointer, "background").unwrap_or_default();
-        (pointer, color, font_size, background, kind)
+    // Inspector data for the selected element, computed ONCE per selection (not
+    // on every model reload). Editing a property reloads the model and refreshes
+    // the preview, but this memo doesn't recompute (selection is unchanged), so
+    // the inspector's controls aren't re-rendered and keep their own state — no
+    // focus/popover disruption. Driven by the stored pointer, so it stays open
+    // even if the element collapses out of the current frame's hit-map.
+    let inspector_shared = shared.clone();
+    let inspector = use_memo(move || {
+        selected().map(|(_, pointer, kind)| {
+            let m = inspector_shared.lock().unwrap();
+            let style = read_style_object(&m.raw, &pointer);
+            (pointer, style, kind)
+        })
     });
 
     if let Some(e) = err {
@@ -123,24 +114,53 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                 show_hits,
                 comment_count,
             }
-            div {
-                style: "flex:1; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
-                // Clicking the empty canvas (not an element) clears the selection.
-                onclick: move |_| selected.set(None),
-                div { style: "position:relative; display:inline-block; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
-                    img {
-                        src: "/frame/{cur}?v={r}",
-                        style: "display:block; max-width:100%; max-height:78vh; height:auto;",
-                    }
-                    Overlay { hits, selected }
-                }
-            }
+            Canvas { current, rev, show_hits, selected }
             PlaybackBar { current, playing, total }
-            if let Some((pointer, color, font_size, background, kind)) = inspector {
-                InspectorPanel { selected, pointer, color, font_size, background, kind, current }
+            if let Some((pointer, style, kind)) = inspector() {
+                InspectorPanel { selected, pointer, kind, current, style }
             }
             if show_annotations() {
                 AnnotationsPanel { current, annotations: annotations.clone() }
+            }
+        }
+    }
+}
+
+/// The preview canvas: the rendered frame plus the clickable element overlay.
+/// It owns the reads of `current`/`rev`/`show_hits`, so a playback tick or a
+/// model reload (e.g. after an inspector edit) re-renders ONLY this subtree —
+/// never the editor chrome or the inspector, which keep their own state.
+#[component]
+fn Canvas(
+    current: Signal<u32>,
+    rev: Signal<u64>,
+    show_hits: Signal<bool>,
+    mut selected: Signal<Option<(u32, String, String)>>,
+) -> Element {
+    let shared = use_context::<Shared>();
+    let max = shared.lock().unwrap().total_frames.saturating_sub(1);
+    let cur = current().min(max);
+    let r = rev();
+
+    let hits = if show_hits() {
+        let m = shared.lock().unwrap();
+        let prefix = scene_prefix(&m.raw, &m.tasks, cur);
+        frame_hits(&m.scenario, &m.tasks, cur, &prefix)
+    } else {
+        Vec::new()
+    };
+
+    rsx! {
+        div {
+            style: "flex:1; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
+            // Clicking the empty canvas (not an element) clears the selection.
+            onclick: move |_| selected.set(None),
+            div { style: "position:relative; display:inline-block; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
+                img {
+                    src: "/frame/{cur}?v={r}",
+                    style: "display:block; max-width:100%; max-height:78vh; height:auto;",
+                }
+                Overlay { hits, selected }
             }
         }
     }
