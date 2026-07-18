@@ -1,0 +1,39 @@
+<rustmotion width="1920" height="1080" fps="30" background="#0f172a">
+  <!-- Font declarations: <font family="..." path="..."> or <font family="..." src="..."> -->
+  <font family="Inter" path="fonts/Inter-Regular.ttf">
+  <font family="JetBrainsMono" path="fonts/JetBrainsMono-Regular.ttf">
+
+  <!-- Scene 1: plain color background -->
+  <scene duration="3" background="#0f172a" transition="fade" transition-duration="0.6" transition-easing="ease_in_out">
+    <div style="flex-direction:column; align-items:center; gap:24">
+      <h1 style="font-size:96; color:#ffffff; font-family:Inter; text-align:center">
+        HTML Dialect
+      </h1>
+      <p style="font-size:40; color:#94a3b8; text-align:center">
+        Backgrounds · Transitions · Fonts
+      </p>
+    </div>
+  </scene>
+
+  <!-- Scene 2: animated halo background (inline JSON object) -->
+  <scene duration="4" background='{"preset":"halo","halo":{"zones":[{"color":"#7c3aed","x":0.3,"y":0.4,"radius":0.45},{"color":"#0ea5e9","x":0.7,"y":0.6,"radius":0.35}]},"speed":0}' transition="wipe_left" transition-duration="0.5">
+    <div style="flex-direction:column; align-items:center; gap:32">
+      <h2 style="font-size:72; color:#ffffff; font-family:Inter; text-align:center">
+        Animated Background
+      </h2>
+      <p style="font-size:36; color:#e2e8f0; text-align:center">
+        Inline JSON in the background attribute
+      </p>
+    </div>
+  </scene>
+
+  <!-- Scene 3: grid_dots animated background -->
+  <scene duration="3" background='{"preset":"grid_dots","grid_dots":{"color":"#FFFFFF20","element_size":4,"spacing":60},"speed":30,"direction":"up"}' transition="dissolve" transition-duration="0.4" transition-easing="ease_out">
+    <div style="flex-direction:column; align-items:center; gap:24">
+      <h2 style="font-size:72; color:#38bdf8; font-family:Inter; text-align:center">
+        Grid Dots Preset
+      </h2>
+      <rm-counter from="0" to="1920" suffix="px" style="font-size:80; color:#ffffff; font-family:JetBrainsMono"></rm-counter>
+    </div>
+  </scene>
+</rustmotion>

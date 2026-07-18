@@ -22,6 +22,12 @@ pub enum HtmlError {
     NoScenes,
     #[error("<scene> requires a duration attribute")]
     MissingDuration,
+    #[error("background attribute contains invalid JSON: {0}")]
+    InvalidBackgroundJson(String),
+    #[error("transition-duration and transition-easing require a transition attribute")]
+    TransitionParamsWithoutTransition,
+    #[error("<font> requires both family and path (or src) attributes")]
+    MissingFontAttributes,
 }
 
 /// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
@@ -43,20 +49,72 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
         video.insert("fps".into(), style::coerce_value(&fps));
     }
     if let Some(bg) = get("background") {
-        video.insert("background".into(), Value::from(bg));
+        video.insert("background".into(), parse_background_attr(&bg)?);
     }
 
     let mut scenes = Vec::new();
-    for child in root.children.borrow().iter() {
-        if tag_name(child).as_deref() == Some("scene") {
-            scenes.push(scene::scene_to_value(child)?);
-        }
-    }
+    let mut fonts = Vec::new();
+    collect_scenes_and_fonts(&root, &mut scenes, &mut fonts)?;
     if scenes.is_empty() {
         return Err(HtmlError::NoScenes);
     }
 
-    Ok(serde_json::json!({ "video": Value::Object(video), "scenes": scenes }))
+    let mut scenario = Map::new();
+    scenario.insert("video".into(), Value::Object(video));
+    scenario.insert("scenes".into(), Value::Array(scenes));
+    if !fonts.is_empty() {
+        scenario.insert("fonts".into(), Value::Array(fonts));
+    }
+    Ok(Value::Object(scenario))
+}
+
+/// Parse a `background` attribute value: if it starts with `{` or `[`, treat it as
+/// JSON and parse it; otherwise return it as a plain string value.
+pub(crate) fn parse_background_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidBackgroundJson(e.to_string()))
+    } else {
+        Ok(Value::from(raw))
+    }
+}
+
+/// Map a `<font>` element to a `{"family": ..., "path": ...}` JSON object.
+fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
+    let attrs = element_attrs(handle);
+    let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+
+    let family = get("family").ok_or(HtmlError::MissingFontAttributes)?;
+    // Accept both `path` and `src` attribute names.
+    let path = get("path")
+        .or_else(|| get("src"))
+        .ok_or(HtmlError::MissingFontAttributes)?;
+
+    Ok(serde_json::json!({ "family": family, "path": path }))
+}
+
+/// Walk the immediate children of `parent`, collecting `<scene>` and `<font>`
+/// elements. Because html5ever's HTML5 parser treats `<font>` as a formatting
+/// element and nests subsequent siblings inside it, we recurse into `<font>`
+/// children so that `<scene>` elements placed after `<font>` declarations are
+/// still found at any depth.
+fn collect_scenes_and_fonts(
+    parent: &Handle,
+    scenes: &mut Vec<Value>,
+    fonts: &mut Vec<Value>,
+) -> Result<(), HtmlError> {
+    for child in parent.children.borrow().iter() {
+        match tag_name(child).as_deref() {
+            Some("scene") => scenes.push(scene::scene_to_value(child)?),
+            Some("font") => {
+                fonts.push(font_to_value(child)?);
+                // Recurse: html5ever may nest siblings inside the <font> element.
+                collect_scenes_and_fonts(child, scenes, fonts)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Parse an HTML fragment into an RcDom (browserless; html5ever).
@@ -317,5 +375,83 @@ mod lib_tests {
     #[test]
     fn missing_root_is_an_error() {
         assert!(crate::html_to_scenario_value("<div>no root</div>").is_err());
+    }
+
+    // --- font tests ---
+
+    #[test]
+    fn fonts_are_collected_from_font_elements() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter" path="fonts/Inter.ttf">
+            <font family="JetBrainsMono" src="fonts/JetBrainsMono.ttf">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let v = crate::html_to_scenario_value(html).unwrap();
+        let fonts = &v["fonts"];
+        assert_eq!(fonts[0]["family"], json!("Inter"));
+        assert_eq!(fonts[0]["path"], json!("fonts/Inter.ttf"));
+        assert_eq!(fonts[1]["family"], json!("JetBrainsMono"));
+        assert_eq!(fonts[1]["path"], json!("fonts/JetBrainsMono.ttf"));
+    }
+
+    #[test]
+    fn font_without_family_is_error() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font path="fonts/Inter.ttf">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::MissingFontAttributes),
+            "expected MissingFontAttributes, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn font_without_path_is_error() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::MissingFontAttributes),
+            "expected MissingFontAttributes, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn no_fonts_means_no_fonts_key() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let v = crate::html_to_scenario_value(html).unwrap();
+        assert!(
+            v.get("fonts").is_none(),
+            "fonts key should be absent when no fonts declared"
+        );
+    }
+
+    // --- root-level background JSON ---
+
+    #[test]
+    fn root_background_json_object_is_parsed() {
+        let html = r##"<rustmotion width="1920" height="1080" background='{"gradient":"linear","colors":["#0f172a","#1e3a5f"]}'>
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let v = crate::html_to_scenario_value(html).unwrap();
+        assert_eq!(v["video"]["background"]["gradient"], json!("linear"));
+    }
+
+    #[test]
+    fn root_background_invalid_json_is_error() {
+        let html = r##"<rustmotion width="1920" height="1080" background="{bad json}">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::InvalidBackgroundJson(_)),
+            "expected InvalidBackgroundJson, got: {err:?}"
+        );
     }
 }
