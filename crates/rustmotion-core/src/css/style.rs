@@ -101,6 +101,43 @@ pub struct CssStyle {
     // ---- Animation ----
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
+    /// Smoothing for `timeline` style-state changes. Supported properties:
+    /// `opacity`, and `color` on text/counter; everything else snaps at the
+    /// step's `at`.
+    pub transition: Option<StyleTransition>,
+}
+
+/// `transition` config: bare number = duration in seconds with the default
+/// easing, or a `{ duration, easing }` object.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum StyleTransition {
+    Duration(f64),
+    Config {
+        duration: f64,
+        #[serde(default = "default_transition_easing")]
+        easing: crate::schema::EasingType,
+    },
+}
+
+fn default_transition_easing() -> crate::schema::EasingType {
+    crate::schema::EasingType::EaseInOut
+}
+
+impl StyleTransition {
+    pub fn duration(&self) -> f64 {
+        match self {
+            StyleTransition::Duration(d) => *d,
+            StyleTransition::Config { duration, .. } => *duration,
+        }
+    }
+
+    pub fn easing(&self) -> crate::schema::EasingType {
+        match self {
+            StyleTransition::Duration(_) => default_transition_easing(),
+            StyleTransition::Config { easing, .. } => easing.clone(),
+        }
+    }
 }
 
 // ---- Painter convenience accessors ----

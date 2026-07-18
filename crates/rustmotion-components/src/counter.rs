@@ -59,12 +59,18 @@ impl Counter {
         layout_width: f32,
         time: f64,
         scene_duration: f64,
+        props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
         let font_size = self.style.font_size_px_or(48.0);
-        let color = self.style.color_str_or("#FFFFFF");
+        // Animated color (timeline style-state transitions) overrides the
+        // static style color.
+        let color = props
+            .color
+            .as_deref()
+            .unwrap_or_else(|| self.style.color_str_or("#FFFFFF"));
         let font_family = self.style.font_family_or("Inter");
         let font_weight = match &self.style.font_weight {
             Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
@@ -244,9 +250,16 @@ impl Painter for Counter {
         &self,
         canvas: &Canvas,
         layout: &BoxLayout,
-        _props: &AnimatedProperties,
+        props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration, ctx);
+        let _ = self.paint(
+            canvas,
+            layout.width,
+            ctx.time,
+            ctx.scene_duration,
+            props,
+            ctx,
+        );
     }
 }

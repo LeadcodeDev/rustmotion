@@ -318,7 +318,12 @@ impl Text {
         ctx: &PaintCtx,
     ) -> Result<()> {
         let font_size = self.style.font_size_px_or(48.0);
-        let color = self.style.color_str_or("#FFFFFF");
+        // Animated color (timeline style-state transitions) overrides the
+        // static style color.
+        let color = props
+            .color
+            .as_deref()
+            .unwrap_or_else(|| self.style.color_str_or("#FFFFFF"));
         let font_family = self.style.font_family_or("Inter");
         let font_weight = match &self.style.font_weight {
             Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {

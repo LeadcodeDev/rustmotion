@@ -726,6 +726,116 @@ mod component_smoke {
     }
 
     #[test]
+    fn style_state_snaps_without_transition() {
+        // A timeline step carrying a `style` state hard-cuts at `at` when no
+        // transition is configured: full red before, 20% right after.
+        let scene = red_rect_scene(serde_json::json!({
+            "timeline": [{ "at": 1.0, "style": { "opacity": 0.2 } }]
+        }));
+        let before = red_sum(&render_new_at(&scene, 400, 300, 0.5, 4.0));
+        let after = red_sum(&render_new_at(&scene, 400, 300, 1.5, 4.0));
+        assert!(before > 0, "rect must be visible before the state");
+        let ratio = after as f64 / before as f64;
+        assert!(
+            (ratio - 0.2).abs() < 0.08,
+            "state must snap to opacity 0.2 (ratio={ratio:.3})"
+        );
+    }
+
+    #[test]
+    fn style_state_smooths_with_transition() {
+        // Same state change with `transition: {duration: 1, easing: linear}`:
+        // untouched at t=0.5, halfway (~0.6) at t=1.5, settled (0.2) at t=2.5.
+        let scene = red_rect_scene(serde_json::json!({
+            "timeline": [{ "at": 1.0, "style": { "opacity": 0.2 } }],
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "transition": { "duration": 1.0, "easing": "linear" }
+            }
+        }));
+        let full = red_sum(&render_new_at(&scene, 400, 300, 0.5, 4.0)) as f64;
+        let mid = red_sum(&render_new_at(&scene, 400, 300, 1.5, 4.0)) as f64;
+        let settled = red_sum(&render_new_at(&scene, 400, 300, 2.5, 4.0)) as f64;
+        assert!(full > 0.0);
+        let mid_ratio = mid / full;
+        let settled_ratio = settled / full;
+        assert!(
+            (mid_ratio - 0.6).abs() < 0.1,
+            "mid-transition must sit near opacity 0.6 (ratio={mid_ratio:.3})"
+        );
+        assert!(
+            (settled_ratio - 0.2).abs() < 0.08,
+            "transition must settle at opacity 0.2 (ratio={settled_ratio:.3})"
+        );
+    }
+
+    #[test]
+    fn color_state_transitions_smoothly_on_text() {
+        // Text color red → blue at t=1 with a 1s transition: pure red before,
+        // both channels mid-way, pure blue after.
+        let json = serde_json::json!({
+            "type": "text",
+            "content": "COLOR",
+            "timeline": [{ "at": 1.0, "style": { "color": "#0000ff" } }],
+            "style": {
+                "font-size": "72px",
+                "color": "#ff0000",
+                "transition": { "duration": 1.0, "easing": "linear" }
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 40.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let scene = vec![child];
+        let blue_sum = |buf: &[u8]| -> u64 { buf.chunks_exact(4).map(|p| p[2] as u64).sum() };
+        let before = render_new_at(&scene, 400, 300, 0.5, 4.0);
+        let mid = render_new_at(&scene, 400, 300, 1.5, 4.0);
+        let after = render_new_at(&scene, 400, 300, 2.5, 4.0);
+        assert!(red_sum(&before) > 500 && blue_sum(&before) < red_sum(&before) / 10);
+        assert!(
+            red_sum(&mid) > 500 && blue_sum(&mid) > 500,
+            "mid-transition must blend red and blue (r={}, b={})",
+            red_sum(&mid),
+            blue_sum(&mid)
+        );
+        assert!(blue_sum(&after) > 500 && red_sum(&after) < blue_sum(&after) / 10);
+    }
+
+    #[test]
+    fn keyframes_effect_honors_its_delay() {
+        // KeyframesConfig.delay was silently ignored by the resolver: an
+        // opacity ramp 0→1 over 1s with delay 2 must keep the rect invisible
+        // at t=1 and fully visible at t=3.5.
+        let scene = red_rect_scene(serde_json::json!({
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "animation": [{
+                    "name": "keyframes",
+                    "delay": 2.0,
+                    "keyframes": [{
+                        "property": "opacity",
+                        "keyframes": [
+                            { "time": 0.0, "value": 0.0 },
+                            { "time": 1.0, "value": 1.0 }
+                        ]
+                    }]
+                }]
+            }
+        }));
+        let early = red_sum(&render_new_at(&scene, 400, 300, 1.0, 4.0));
+        let late = red_sum(&render_new_at(&scene, 400, 300, 3.5, 4.0));
+        assert_eq!(early, 0, "keyframes must not start before their delay");
+        assert!(late > 0, "keyframes must complete after delay + ramp");
+    }
+
+    #[test]
     fn timeline_steps_trigger_delayed_animations() {
         // A timeline step resolves as its animations with `delay += at`:
         // fade_in(1s) at t=2 must be ~5% opaque at t=2.05 and ~95% at t=2.95.

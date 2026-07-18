@@ -187,21 +187,30 @@ fn build_child<'a>(
         css.z_index = Some(z);
     }
 
+    // Timeline style states: merge every state whose (at + stagger) <= t
+    // into the box CSS. Opacity is excluded when a `transition` smooths it
+    // (the synthesized keyframes then own its whole history). States affect
+    // box-model properties (layout, background, border, opacity, transform,
+    // filter); painter-internal properties like text color flow through the
+    // keyframes path below instead.
+    if let Some(animatable) = child.component.as_animatable() {
+        let steps = animatable.timeline_steps();
+        if steps.iter().any(|s| s.style.is_some()) {
+            let t = anim.map(|a| a.time).unwrap_or(0.0);
+            let skip_opacity = css.transition.is_some();
+            apply_style_states(&mut css, steps, t - stagger_delay, skip_opacity);
+        }
+    }
+
     // Resolve animations and apply transform/opacity/filter overrides on the
     // box's CSS. Only paint-time properties (transform, opacity, filter,
     // perspective) flow into CSS — internal animations like draw_progress or
     // char_animation remain on the `AnimatedProperties` legacy path.
     if let Some(actx) = anim {
-        if let Some(animatable) = child.component.as_animatable() {
-            if let Some(effects) = effective_effects(
-                animatable.animation_effects(),
-                animatable.timeline_steps(),
-                stagger_delay,
-            ) {
-                let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
-                if props_has_paint_overrides(&props) {
-                    apply_animated_props(&mut css, &props);
-                }
+        if let Some(effects) = effective_effects(&child.component, stagger_delay) {
+            let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
+            if props_has_paint_overrides(&props) {
+                apply_animated_props(&mut css, &props);
             }
         }
     }
@@ -242,15 +251,23 @@ fn build_child<'a>(
 }
 
 /// The full effect list for a component at paint time: `style.animation`,
-/// plus `timeline` steps shifted by their `at`, plus the container-stagger
-/// delay applied to everything. Returns `None` when there is nothing to
-/// resolve, `Some(Cow::Borrowed)` on the no-merge fast path.
-pub fn effective_effects<'a>(
-    effects: &'a [rustmotion_core::schema::AnimationEffect],
-    steps: &[rustmotion_core::schema::TimelineStep],
+/// plus `timeline` steps shifted by their `at`, plus keyframes synthesized
+/// from timeline style-state changes (`style.transition`), plus the
+/// container-stagger delay applied to everything. Returns `None` when there
+/// is nothing to resolve, `Some(Cow::Borrowed)` on the no-merge fast path.
+pub fn effective_effects(
+    component: &Component,
     extra_delay: f64,
-) -> Option<std::borrow::Cow<'a, [rustmotion_core::schema::AnimationEffect]>> {
-    if steps.is_empty() && extra_delay == 0.0 {
+) -> Option<std::borrow::Cow<'_, [rustmotion_core::schema::AnimationEffect]>> {
+    let animatable = component.as_animatable()?;
+    let effects = animatable.animation_effects();
+    let steps = animatable.timeline_steps();
+    // `color` keyframes drive AnimatedProperties.color, consumed by the
+    // text-like painters only.
+    let smooth_color = matches!(component, Component::Text(_) | Component::Counter(_));
+    let synthesized =
+        transition_keyframes(component.as_styled().style_config(), steps, smooth_color);
+    if steps.is_empty() && synthesized.is_empty() && extra_delay == 0.0 {
         return (!effects.is_empty()).then_some(std::borrow::Cow::Borrowed(effects));
     }
     let mut merged = effects.to_vec();
@@ -261,12 +278,176 @@ pub fn effective_effects<'a>(
             merged.push(e);
         }
     }
+    merged.extend(synthesized);
     if extra_delay != 0.0 {
         for e in &mut merged {
             e.shift_delay(extra_delay);
         }
     }
     (!merged.is_empty()).then_some(std::borrow::Cow::Owned(merged))
+}
+
+/// Merge every timeline style state whose `at <= t` into `css`, in `at`
+/// order. Serialize-merge keeps this schema-complete; `null`s and the empty
+/// `animation` array never erase existing values. `skip_opacity` leaves
+/// opacity to the synthesized transition keyframes.
+pub(crate) fn apply_style_states(
+    css: &mut CssStyle,
+    steps: &[rustmotion_core::schema::TimelineStep],
+    t: f64,
+    skip_opacity: bool,
+) {
+    let mut due: Vec<&rustmotion_core::schema::TimelineStep> = steps
+        .iter()
+        .filter(|s| s.style.is_some() && s.at <= t)
+        .collect();
+    if due.is_empty() {
+        return;
+    }
+    due.sort_by(|a, b| a.at.total_cmp(&b.at));
+
+    let Ok(serde_json::Value::Object(mut base)) = serde_json::to_value(&*css) else {
+        return;
+    };
+    for step in due {
+        let Some(style) = step.style.as_deref() else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(state)) = serde_json::to_value(style) else {
+            continue;
+        };
+        for (k, v) in state {
+            if v.is_null() {
+                continue;
+            }
+            if k == "animation" && v.as_array().is_some_and(|a| a.is_empty()) {
+                continue;
+            }
+            if skip_opacity && k == "opacity" {
+                continue;
+            }
+            base.insert(k, v);
+        }
+    }
+    if let Ok(merged) = serde_json::from_value::<CssStyle>(serde_json::Value::Object(base)) {
+        *css = merged;
+    }
+}
+
+/// Synthesize `Keyframes` effects smoothing timeline style-state changes per
+/// the component's `style.transition`. Supported: `opacity` (as ratios of the
+/// base opacity — `apply_animated_props` multiplies) and, on text-like
+/// components, `color` (absolute, via `AnimatedProperties.color`). Color
+/// states without a transition still synthesize a near-instant ramp because
+/// text painters only see color through this path.
+pub(crate) fn transition_keyframes(
+    base: &CssStyle,
+    steps: &[rustmotion_core::schema::TimelineStep],
+    smooth_color: bool,
+) -> Vec<rustmotion_core::schema::AnimationEffect> {
+    use rustmotion_core::schema::{
+        Animation, AnimationEffect, Keyframe, KeyframeValue, KeyframesConfig,
+    };
+
+    let has_states = steps.iter().any(|s| s.style.is_some());
+    if !has_states {
+        return Vec::new();
+    }
+    let (duration, easing) = match base.transition.as_ref() {
+        Some(tr) if tr.duration() > 0.0 => (tr.duration(), tr.easing()),
+        // Color snaps still need the keyframes path (see doc above); a 1ms
+        // ramp is visually a hard cut.
+        _ => (0.001, rustmotion_core::schema::EasingType::Linear),
+    };
+    let smooth_opacity = base.transition.is_some();
+
+    let mut sorted: Vec<&rustmotion_core::schema::TimelineStep> =
+        steps.iter().filter(|s| s.style.is_some()).collect();
+    sorted.sort_by(|a, b| a.at.total_cmp(&b.at));
+
+    let base_opacity = base.opacity.unwrap_or(1.0) as f64;
+    let mut opacity_kfs: Vec<Keyframe> = Vec::new();
+    let mut color_kfs: Vec<Keyframe> = Vec::new();
+    let mut prev_opacity = base_opacity;
+    let mut prev_color = base.color.as_ref().map(|c| c.to_css_string());
+
+    let kf_num = |time: f64, v: f64| Keyframe {
+        time,
+        value: KeyframeValue::Number(v),
+        easing: None,
+    };
+    let kf_color = |time: f64, c: String| Keyframe {
+        time,
+        value: KeyframeValue::Color(c),
+        easing: None,
+    };
+    // Keep keyframe times strictly ascending even when states overlap a
+    // still-running transition (the resolver walks ordered segments).
+    let push_pair = |kfs: &mut Vec<Keyframe>, at: f64, from: Keyframe, to: Keyframe| {
+        let floor = kfs.last().map(|k| k.time + 1e-6).unwrap_or(f64::MIN);
+        let start = at.max(floor);
+        let mut from = from;
+        let mut to = to;
+        from.time = start;
+        to.time = to.time.max(start + 1e-6);
+        kfs.push(from);
+        kfs.push(to);
+    };
+
+    for step in sorted {
+        let style = step.style.as_deref().unwrap();
+        if smooth_opacity && base_opacity > 1e-6 {
+            if let Some(o) = style.opacity {
+                let target = o as f64;
+                if (target - prev_opacity).abs() > 1e-6 {
+                    push_pair(
+                        &mut opacity_kfs,
+                        step.at,
+                        kf_num(step.at, prev_opacity / base_opacity),
+                        kf_num(step.at + duration, target / base_opacity),
+                    );
+                    prev_opacity = target;
+                }
+            }
+        }
+        if smooth_color {
+            if let Some(c) = style.color.as_ref() {
+                let target = c.to_css_string();
+                if prev_color.as_ref() != Some(&target) {
+                    if let Some(from) = prev_color.clone() {
+                        push_pair(
+                            &mut color_kfs,
+                            step.at,
+                            kf_color(step.at, from),
+                            kf_color(step.at + duration, target.clone()),
+                        );
+                    }
+                    prev_color = Some(target);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut push_effect = |property: &str, keyframes: Vec<Keyframe>| {
+        if keyframes.is_empty() {
+            return;
+        }
+        out.push(AnimationEffect::Keyframes(KeyframesConfig {
+            keyframes: vec![Animation {
+                property: property.to_string(),
+                keyframes,
+                easing: easing.clone(),
+                spring: None,
+            }],
+            delay: 0.0,
+            duration: 0.0,
+            repeat: false,
+        }));
+    };
+    push_effect("opacity", opacity_kfs);
+    push_effect("color", color_kfs);
+    out
 }
 
 /// Quick gate: does this resolved `AnimatedProperties` carry any property

@@ -87,17 +87,8 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             .get(*node_id as usize)
             .copied()
             .unwrap_or(0.0);
-        let props = match child.component.as_animatable() {
-            Some(a) => match crate::box_builder::effective_effects(
-                a.animation_effects(),
-                a.timeline_steps(),
-                stagger_delay,
-            ) {
-                Some(effects) => {
-                    resolve_props_for_effects(&effects, frame.time, frame.scene_duration)
-                }
-                None => AnimatedProperties::default(),
-            },
+        let props = match crate::box_builder::effective_effects(&child.component, stagger_delay) {
+            Some(effects) => resolve_props_for_effects(&effects, frame.time, frame.scene_duration),
             None => AnimatedProperties::default(),
         };
         if props.opacity <= 0.0 {

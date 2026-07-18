@@ -105,8 +105,24 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                     result.orbits.push(config);
                 }
                 AnimationEffect::Keyframes(config) => {
-                    for kf in &config.keyframes {
-                        result.keyframes.push(kf);
+                    if config.delay.abs() > 1e-9 {
+                        // Keyframe times are absolute scene seconds; the
+                        // config-level delay shifts them (it used to be
+                        // silently ignored, breaking timeline/stagger shifts
+                        // on keyframes effects).
+                        result
+                            .owned_keyframes
+                            .extend(config.keyframes.iter().map(|anim| {
+                                let mut a = anim.clone();
+                                for kf in &mut a.keyframes {
+                                    kf.time += config.delay;
+                                }
+                                a
+                            }));
+                    } else {
+                        for kf in &config.keyframes {
+                            result.keyframes.push(kf);
+                        }
                     }
                 }
                 AnimationEffect::TiltIn(config) => {
