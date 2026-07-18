@@ -27,17 +27,13 @@ fn default_stack_gap() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum NotificationVariant {
+    #[default]
     Info,
     Success,
     Warning,
     Error,
-}
-
-impl Default for NotificationVariant {
-    fn default() -> Self {
-        Self::Info
-    }
 }
 
 impl NotificationVariant {
@@ -198,11 +194,9 @@ impl Notification {
                         skia_safe::AlphaType::Premul,
                         None,
                     );
-                    if let Some(decoded) = skia_safe::images::raster_from_data(
-                        &info,
-                        img_data,
-                        icon_w as usize * 4,
-                    ) {
+                    if let Some(decoded) =
+                        skia_safe::images::raster_from_data(&info, img_data, icon_w as usize * 4)
+                    {
                         cache.insert(cache_key, decoded.clone());
                         decoded
                     } else {

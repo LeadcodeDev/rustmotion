@@ -27,7 +27,9 @@ pub trait ShadowedExt: ShadowedMut + Sized {
     fn shadow_sm(mut self) -> Self {
         self.set_shadow(Some(Shadow {
             color: "rgba(0,0,0,0.1)".into(),
-            offset_x: 0.0, offset_y: 1.0, blur: 2.0,
+            offset_x: 0.0,
+            offset_y: 1.0,
+            blur: 2.0,
         }));
         self
     }
@@ -35,7 +37,9 @@ pub trait ShadowedExt: ShadowedMut + Sized {
     fn shadow_md(mut self) -> Self {
         self.set_shadow(Some(Shadow {
             color: "rgba(0,0,0,0.15)".into(),
-            offset_x: 0.0, offset_y: 4.0, blur: 6.0,
+            offset_x: 0.0,
+            offset_y: 4.0,
+            blur: 6.0,
         }));
         self
     }
@@ -43,7 +47,9 @@ pub trait ShadowedExt: ShadowedMut + Sized {
     fn shadow_lg(mut self) -> Self {
         self.set_shadow(Some(Shadow {
             color: "rgba(0,0,0,0.2)".into(),
-            offset_x: 0.0, offset_y: 8.0, blur: 16.0,
+            offset_x: 0.0,
+            offset_y: 8.0,
+            blur: 16.0,
         }));
         self
     }
@@ -51,7 +57,9 @@ pub trait ShadowedExt: ShadowedMut + Sized {
     fn shadow_xl(mut self) -> Self {
         self.set_shadow(Some(Shadow {
             color: "rgba(0,0,0,0.25)".into(),
-            offset_x: 0.0, offset_y: 16.0, blur: 32.0,
+            offset_x: 0.0,
+            offset_y: 16.0,
+            blur: 32.0,
         }));
         self
     }
@@ -61,10 +69,18 @@ pub trait ShadowedExt: ShadowedMut + Sized {
         self
     }
 
-    fn shadow_custom(mut self, color: impl Into<String>, offset_x: f32, offset_y: f32, blur: f32) -> Self {
+    fn shadow_custom(
+        mut self,
+        color: impl Into<String>,
+        offset_x: f32,
+        offset_y: f32,
+        blur: f32,
+    ) -> Self {
         self.set_shadow(Some(Shadow {
             color: color.into(),
-            offset_x, offset_y, blur,
+            offset_x,
+            offset_y,
+            blur,
         }));
         self
     }

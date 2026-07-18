@@ -1,27 +1,25 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, paint_from_hex,
+};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback};
 use rustmotion_core::schema::{CodeblockReveal, RevealMode, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TerminalLineType {
     Prompt,
     Command,
+    #[default]
     Output,
-}
-
-impl Default for TerminalLineType {
-    fn default() -> Self {
-        Self::Output
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,15 +33,11 @@ pub struct TerminalLine {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TerminalTheme {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for TerminalTheme {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 impl TerminalTheme {
@@ -149,7 +143,7 @@ impl Terminal {
             .or_else(|| fm.match_family_style("monospace", font_style))
             .or_else(|| fm.match_family_style("Courier", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         let size = self.style.font_size_px_or(FONT_SIZE);
 
@@ -277,10 +271,16 @@ impl Terminal {
             if let Some(title) = &self.title {
                 let font = self.make_font();
                 let font_size = self.style.font_size_px_or(FONT_SIZE);
-                let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+                let emoji_font =
+                    emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
                 let mut title_paint = paint_from_hex(self.theme.title_color());
                 title_paint.set_anti_alias(true);
-                let title_w = rustmotion_core::engine::renderer::measure_text_with_fallback(title, &font, &emoji_font, 0.0);
+                let title_w = rustmotion_core::engine::renderer::measure_text_with_fallback(
+                    title,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                );
                 let x = (w - title_w) / 2.0;
                 let (_, metrics) = font.metrics();
                 let y = CHROME_HEIGHT / 2.0 + (-metrics.ascent) / 2.0;
@@ -328,7 +328,11 @@ impl Terminal {
             }
 
             let is_last_visible = i == visible_lines - 1;
-            let opacity = if is_last_visible { last_line_opacity } else { 1.0 };
+            let opacity = if is_last_visible {
+                last_line_opacity
+            } else {
+                1.0
+            };
 
             let prefix = Self::line_prefix(&line.line_type);
             let (prefix_color, text_color) = match line.line_type {
@@ -368,8 +372,22 @@ impl Terminal {
                 let mut prefix_paint = paint_from_hex(prefix_color);
                 prefix_paint.set_anti_alias(true);
                 prefix_paint.set_alpha_f(opacity);
-                let prefix_w = rustmotion_core::engine::renderer::measure_text_with_fallback(&draw_prefix, &font, &emoji_font, 0.0);
-                draw_text_with_fallback(canvas, &draw_prefix, &font, &emoji_font, 0.0, x, y, &prefix_paint);
+                let prefix_w = rustmotion_core::engine::renderer::measure_text_with_fallback(
+                    &draw_prefix,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                );
+                draw_text_with_fallback(
+                    canvas,
+                    &draw_prefix,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                    x,
+                    y,
+                    &prefix_paint,
+                );
                 x += prefix_w + 2.0;
             }
 
@@ -378,8 +396,22 @@ impl Terminal {
                 let mut text_paint = paint_from_hex(color);
                 text_paint.set_anti_alias(true);
                 text_paint.set_alpha_f(opacity);
-                let text_w = rustmotion_core::engine::renderer::measure_text_with_fallback(&draw_text, &font, &emoji_font, 0.0);
-                draw_text_with_fallback(canvas, &draw_text, &font, &emoji_font, 0.0, x, y, &text_paint);
+                let text_w = rustmotion_core::engine::renderer::measure_text_with_fallback(
+                    &draw_text,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                );
+                draw_text_with_fallback(
+                    canvas,
+                    &draw_text,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                    x,
+                    y,
+                    &text_paint,
+                );
                 x += text_w;
             }
 

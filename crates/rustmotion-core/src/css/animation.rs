@@ -34,13 +34,19 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
         tx.push(TransformFn::Scale { x: sx, y: sy });
     }
     if props.rotation.abs() > 1e-3 {
-        tx.push(TransformFn::Rotate { deg: props.rotation });
+        tx.push(TransformFn::Rotate {
+            deg: props.rotation,
+        });
     }
     if props.rotate_x.abs() > 1e-3 {
-        tx.push(TransformFn::RotateX { deg: props.rotate_x });
+        tx.push(TransformFn::RotateX {
+            deg: props.rotate_x,
+        });
     }
     if props.rotate_y.abs() > 1e-3 {
-        tx.push(TransformFn::RotateY { deg: props.rotate_y });
+        tx.push(TransformFn::RotateY {
+            deg: props.rotate_y,
+        });
     }
     if !tx.is_empty() {
         // Append rather than replace so a CSS-defined transform composes with
@@ -101,9 +107,11 @@ mod tests {
     #[test]
     fn translate_props_become_transform_translate() {
         let mut css = CssStyle::default();
-        let mut props = AnimatedProperties::default();
-        props.translate_x = 10.0;
-        props.translate_y = -5.0;
+        let props = AnimatedProperties {
+            translate_x: 10.0,
+            translate_y: -5.0,
+            ..AnimatedProperties::default()
+        };
         apply_animated_props(&mut css, &props);
 
         let tx = css.transform.expect("transform list created");
@@ -123,8 +131,10 @@ mod tests {
             opacity: Some(0.5),
             ..CssStyle::default()
         };
-        let mut props = AnimatedProperties::default();
-        props.opacity = 0.5;
+        let props = AnimatedProperties {
+            opacity: 0.5,
+            ..AnimatedProperties::default()
+        };
         apply_animated_props(&mut css, &props);
         assert!((css.opacity.unwrap() - 0.25).abs() < 1e-6);
     }
@@ -143,10 +153,12 @@ mod tests {
     #[test]
     fn blur_and_glow_compose_into_filter_list() {
         let mut css = CssStyle::default();
-        let mut props = AnimatedProperties::default();
-        props.blur = 4.0;
-        props.glow_radius = 8.0;
-        props.glow_intensity = 1.0;
+        let props = AnimatedProperties {
+            blur: 4.0,
+            glow_radius: 8.0,
+            glow_intensity: 1.0,
+            ..AnimatedProperties::default()
+        };
         apply_animated_props(&mut css, &props);
 
         let filters = css.filter.expect("filter list created");

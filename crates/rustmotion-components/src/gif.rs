@@ -11,7 +11,9 @@ use rustmotion_core::engine::renderer::gif_cache;
 use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
-fn default_loop_true() -> bool { true }
+fn default_loop_true() -> bool {
+    true
+}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Gif {
@@ -49,11 +51,15 @@ impl Painter for Gif {
         let cached = if let Some(cached) = gcache.get(&self.src) {
             cached.clone()
         } else {
-            let Ok(file) = std::fs::File::open(&self.src) else { return };
+            let Ok(file) = std::fs::File::open(&self.src) else {
+                return;
+            };
 
             let mut decoder = gif::DecodeOptions::new();
             decoder.set_color_output(gif::ColorOutput::RGBA);
-            let Ok(mut decoder) = decoder.read_info(file) else { return };
+            let Ok(mut decoder) = decoder.read_info(file) else {
+                return;
+            };
 
             let gif_width = decoder.width() as u32;
             let gif_height = decoder.height() as u32;

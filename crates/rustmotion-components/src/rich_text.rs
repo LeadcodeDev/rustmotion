@@ -2,11 +2,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle};
 
-use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::style::{
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
+};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -75,7 +79,8 @@ fn make_font(
         .or_else(|| fm.match_family_style("Arial", skia_style))
         .or_else(|| fm.match_family_style("sans-serif", skia_style))
         .unwrap_or_else(|| {
-            fm.legacy_make_typeface(None, skia_style).expect("No fallback font")
+            fm.legacy_make_typeface(None, skia_style)
+                .expect("No fallback font")
         });
     Font::from_typeface(typeface, size)
 }
@@ -95,7 +100,9 @@ impl RichText {
         let default_color = self.style.color_str_or("#FFFFFF");
         let default_family = self.style.font_family_or("Inter");
         let default_weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
+                FontWeight::Bold
+            }
             Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
             Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
             _ => FontWeight::Normal,
@@ -115,24 +122,38 @@ impl RichText {
         let emoji_tf = emoji_typeface();
 
         // Prepare all spans with their fonts and measurements
-        let mut prepared: Vec<PreparedSpan> = self.spans.iter().map(|span| {
-            let size = span.font_size.unwrap_or(default_size);
-            let family = span.font_family.as_deref().unwrap_or(default_family);
-            let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
-            let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
-            let color = span.color.as_deref().unwrap_or(default_color).to_string();
-            let letter_spacing = span.letter_spacing.unwrap_or(0.0);
-            let font = make_font(family, weight, fstyle, size);
-            let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), size));
-            let width = measure_text_with_fallback(&span.text, &font, &emoji_font, letter_spacing);
+        let mut prepared: Vec<PreparedSpan> = self
+            .spans
+            .iter()
+            .map(|span| {
+                let size = span.font_size.unwrap_or(default_size);
+                let family = span.font_family.as_deref().unwrap_or(default_family);
+                let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
+                let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
+                let color = span.color.as_deref().unwrap_or(default_color).to_string();
+                let letter_spacing = span.letter_spacing.unwrap_or(0.0);
+                let font = make_font(family, weight, fstyle, size);
+                let emoji_font = emoji_tf
+                    .as_ref()
+                    .map(|tf| Font::from_typeface(tf.clone(), size));
+                let width =
+                    measure_text_with_fallback(&span.text, &font, &emoji_font, letter_spacing);
 
-            PreparedSpan { text: span.text.clone(), font, color, letter_spacing, width }
-        }).collect();
+                PreparedSpan {
+                    text: span.text.clone(),
+                    font,
+                    color,
+                    letter_spacing,
+                    width,
+                }
+            })
+            .collect();
 
         // Typewriter animation: truncate spans based on visible_chars_progress
         if props.visible_chars_progress >= 0.0 {
             let total_chars: usize = prepared.iter().map(|ps| ps.text.chars().count()).sum();
-            let visible = ((props.visible_chars_progress * total_chars as f32).round() as usize).min(total_chars);
+            let visible = ((props.visible_chars_progress * total_chars as f32).round() as usize)
+                .min(total_chars);
             if visible == 0 {
                 return;
             }
@@ -146,8 +167,15 @@ impl RichText {
                         truncated.push(ps);
                     } else {
                         let truncated_text: String = ps.text.chars().take(remaining).collect();
-                        let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), ps.font.size()));
-                        ps.width = measure_text_with_fallback(&truncated_text, &ps.font, &emoji_font, ps.letter_spacing);
+                        let emoji_font = emoji_tf
+                            .as_ref()
+                            .map(|tf| Font::from_typeface(tf.clone(), ps.font.size()));
+                        ps.width = measure_text_with_fallback(
+                            &truncated_text,
+                            &ps.font,
+                            &emoji_font,
+                            ps.letter_spacing,
+                        );
                         ps.text = truncated_text;
                         truncated.push(ps);
                         break;
@@ -177,14 +205,20 @@ impl RichText {
             width: f32,
         }
 
-        let mut lines: Vec<Line> = vec![Line { spans: vec![], width: 0.0 }];
+        let mut lines: Vec<Line> = vec![Line {
+            spans: vec![],
+            width: 0.0,
+        }];
 
         for (i, ps) in prepared.iter().enumerate() {
             let current = lines.last_mut().unwrap();
             if current.width + ps.width > wrap_width && !current.spans.is_empty() {
                 // Start new line
                 lines.push(Line {
-                    spans: vec![LineSpan { span_idx: i, x: 0.0 }],
+                    spans: vec![LineSpan {
+                        span_idx: i,
+                        x: 0.0,
+                    }],
                     width: ps.width,
                 });
             } else {
@@ -201,10 +235,13 @@ impl RichText {
         };
 
         // Find max ascent for baseline alignment
-        let max_ascent = prepared.iter().map(|ps| {
-            let (_, m) = ps.font.metrics();
-            -m.ascent
-        }).fold(0.0f32, f32::max);
+        let max_ascent = prepared
+            .iter()
+            .map(|ps| {
+                let (_, m) = ps.font.metrics();
+                -m.ascent
+            })
+            .fold(0.0f32, f32::max);
 
         let baseline_offset = (line_height_val + max_ascent) / 2.0;
 
@@ -220,7 +257,9 @@ impl RichText {
             for ls in &line.spans {
                 let ps = &prepared[ls.span_idx];
                 let paint = paint_from_hex(&ps.color);
-                let emoji_font = emoji_tf.as_ref().map(|tf| Font::from_typeface(tf.clone(), ps.font.size()));
+                let emoji_font = emoji_tf
+                    .as_ref()
+                    .map(|tf| Font::from_typeface(tf.clone(), ps.font.size()));
 
                 draw_text_with_fallback(
                     canvas,

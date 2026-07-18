@@ -39,17 +39,35 @@ impl Painter for Svg {
         _props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        let target_w_opt: Option<u32> = if layout.width > 0.0 { Some(layout.width as u32) } else { None };
-        let target_h_opt: Option<u32> = if layout.height > 0.0 { Some(layout.height as u32) } else { None };
+        let target_w_opt: Option<u32> = if layout.width > 0.0 {
+            Some(layout.width as u32)
+        } else {
+            None
+        };
+        let target_h_opt: Option<u32> = if layout.height > 0.0 {
+            Some(layout.height as u32)
+        } else {
+            None
+        };
 
         let cache_key = if let Some(ref src) = self.src {
-            format!("svg:{}:{}x{}", src, target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
+            format!(
+                "svg:{}:{}x{}",
+                src,
+                target_w_opt.unwrap_or(0),
+                target_h_opt.unwrap_or(0)
+            )
         } else if let Some(ref data) = self.data {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
             let mut hasher = DefaultHasher::new();
             data.hash(&mut hasher);
-            format!("svg-inline:{}:{}x{}", hasher.finish(), target_w_opt.unwrap_or(0), target_h_opt.unwrap_or(0))
+            format!(
+                "svg-inline:{}:{}x{}",
+                hasher.finish(),
+                target_w_opt.unwrap_or(0),
+                target_h_opt.unwrap_or(0)
+            )
         } else {
             return;
         };
@@ -68,13 +86,17 @@ impl Painter for Svg {
             };
 
             let opt = usvg::Options::default();
-            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else { return };
+            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else {
+                return;
+            };
 
             let svg_size = tree.size();
             let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
             let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
 
-            let Some(mut pixmap) = tiny_skia::Pixmap::new(target_w, target_h) else { return };
+            let Some(mut pixmap) = tiny_skia::Pixmap::new(target_w, target_h) else {
+                return;
+            };
 
             let scale_x = target_w as f32 / svg_size.width();
             let scale_y = target_h as f32 / svg_size.height();
@@ -91,7 +113,9 @@ impl Painter for Svg {
             );
             let Some(decoded) =
                 skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
-            else { return };
+            else {
+                return;
+            };
             cache.insert(cache_key, decoded.clone());
             decoded
         };

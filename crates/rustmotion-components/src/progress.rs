@@ -2,13 +2,13 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
-    paint_from_hex,
+    color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr,
+    measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -31,15 +31,11 @@ fn default_track_width() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProgressVariant {
+    #[default]
     Linear,
     Circular,
-}
-
-impl Default for ProgressVariant {
-    fn default() -> Self {
-        Self::Linear
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -117,8 +113,7 @@ impl Progress {
 
         // Fill (progress)
         if progress > 0.001 {
-            let mut fill_paint =
-                skia_safe::Paint::new(color4f_from_hex(&self.fill_color), None);
+            let mut fill_paint = skia_safe::Paint::new(color4f_from_hex(&self.fill_color), None);
             fill_paint.set_style(PaintStyle::Fill);
             fill_paint.set_anti_alias(true);
 
@@ -186,7 +181,14 @@ impl Progress {
             let text_x = cx - text_w / 2.0;
             let text_y = cy + (-metrics.ascent) / 2.0;
             draw_text_with_fallback(
-                canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
+                canvas,
+                &text,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &text_paint,
             );
         }
 

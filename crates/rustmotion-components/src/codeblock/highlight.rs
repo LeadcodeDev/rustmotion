@@ -250,7 +250,10 @@ fn theme_set() -> &'static ThemeSet {
                 "dark-plus",
                 include_str!("../../../../themes/vscode/dark-plus.json"),
             ),
-            ("dracula", include_str!("../../../../themes/vscode/dracula.json")),
+            (
+                "dracula",
+                include_str!("../../../../themes/vscode/dracula.json"),
+            ),
             (
                 "dracula-soft",
                 include_str!("../../../../themes/vscode/dracula-soft.json"),
@@ -315,12 +318,18 @@ fn theme_set() -> &'static ThemeSet {
                 "gruvbox-light-soft",
                 include_str!("../../../../themes/vscode/gruvbox-light-soft.json"),
             ),
-            ("horizon", include_str!("../../../../themes/vscode/horizon.json")),
+            (
+                "horizon",
+                include_str!("../../../../themes/vscode/horizon.json"),
+            ),
             (
                 "horizon-bright",
                 include_str!("../../../../themes/vscode/horizon-bright.json"),
             ),
-            ("houston", include_str!("../../../../themes/vscode/houston.json")),
+            (
+                "houston",
+                include_str!("../../../../themes/vscode/houston.json"),
+            ),
             (
                 "kanagawa-dragon",
                 include_str!("../../../../themes/vscode/kanagawa-dragon.json"),
@@ -369,7 +378,10 @@ fn theme_set() -> &'static ThemeSet {
                 "min-light",
                 include_str!("../../../../themes/vscode/min-light.json"),
             ),
-            ("monokai", include_str!("../../../../themes/vscode/monokai.json")),
+            (
+                "monokai",
+                include_str!("../../../../themes/vscode/monokai.json"),
+            ),
             (
                 "night-owl",
                 include_str!("../../../../themes/vscode/night-owl.json"),
@@ -387,7 +399,10 @@ fn theme_set() -> &'static ThemeSet {
                 "one-light",
                 include_str!("../../../../themes/vscode/one-light.json"),
             ),
-            ("plastic", include_str!("../../../../themes/vscode/plastic.json")),
+            (
+                "plastic",
+                include_str!("../../../../themes/vscode/plastic.json"),
+            ),
             (
                 "poimandres",
                 include_str!("../../../../themes/vscode/poimandres.json"),
@@ -433,7 +448,10 @@ fn theme_set() -> &'static ThemeSet {
                 "tokyo-night",
                 include_str!("../../../../themes/vscode/tokyo-night.json"),
             ),
-            ("vesper", include_str!("../../../../themes/vscode/vesper.json")),
+            (
+                "vesper",
+                include_str!("../../../../themes/vscode/vesper.json"),
+            ),
             (
                 "vitesse-black",
                 include_str!("../../../../themes/vscode/vitesse-black.json"),
@@ -536,7 +554,7 @@ pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight
         .unwrap_or_else(|| {
             if font_mgr.count_families() > 0 {
                 font_mgr
-                    .match_family_style(&font_mgr.family_name(0), style)
+                    .match_family_style(font_mgr.family_name(0), style)
                     .unwrap()
             } else {
                 panic!("No fonts available on this system");

@@ -78,7 +78,9 @@ rustmotion_core::impl_traits!(Heatmap {
 });
 
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8
+    (a as f32 + (b as f32 - a as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn interpolate_color(scale: &[String], t: f32) -> (u8, u8, u8) {

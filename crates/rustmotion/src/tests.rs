@@ -131,8 +131,8 @@ mod component_smoke {
         use rustmotion_core::engine::layout_pass::run_layout;
         use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 
-        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 300))
-            .expect("raster surface");
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((400, 300)).expect("raster surface");
         let canvas = surface.canvas();
         let frame = PaintFrame {
             time: 0.5,
@@ -159,15 +159,11 @@ mod component_smoke {
             let scene = vec![child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let built = build_scene(&scene, (400.0, 300.0));
-                let layout = run_layout(
-                    &built.root,
-                    (400.0, 300.0),
-                    &ConversionContext::default(),
-                );
+                let layout = run_layout(&built.root, (400.0, 300.0), &ConversionContext::default());
                 let dispatcher = LegacyPaintDispatcher::new(&built.components);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
-            if let Err(_) = result {
+            if result.is_err() {
                 failures.push(name);
             }
         }
@@ -191,14 +187,14 @@ mod component_smoke {
         use rustmotion_components::box_builder::build_scene;
         use rustmotion_components::card::Card;
         use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+        use rustmotion_core::css::style::{CssStyle, Edges, FlexDirection, Gap};
         use rustmotion_core::css::taffy_bridge::ConversionContext;
+        use rustmotion_core::css::units::LengthPercentage;
         use rustmotion_core::engine::layout_pass::run_layout;
         use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
-        use rustmotion_core::css::style::{CssStyle, Edges, FlexDirection, Gap};
-        use rustmotion_core::css::units::LengthPercentage;
 
-        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 300))
-            .expect("raster surface");
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((400, 300)).expect("raster surface");
         let canvas = surface.canvas();
         let frame = PaintFrame {
             time: 0.0,
@@ -244,15 +240,11 @@ mod component_smoke {
             let scene = vec![card_child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let built = build_scene(&scene, (400.0, 300.0));
-                let layout = run_layout(
-                    &built.root,
-                    (400.0, 300.0),
-                    &ConversionContext::default(),
-                );
+                let layout = run_layout(&built.root, (400.0, 300.0), &ConversionContext::default());
                 let dispatcher = LegacyPaintDispatcher::new(&built.components);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
-            if let Err(_) = result {
+            if result.is_err() {
                 failures.push(name);
             }
         }
@@ -288,17 +280,24 @@ mod component_smoke {
         use rustmotion_core::engine::layout_pass::run_layout;
         use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 
-        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32))
-            .expect("raster surface");
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).expect("raster surface");
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
 
         let built = build_scene_with_anim(
             children,
             (w as f32, h as f32),
-            BuildAnimationCtx { time, scene_duration },
+            BuildAnimationCtx {
+                time,
+                scene_duration,
+            },
         );
-        let layout = run_layout(&built.root, (w as f32, h as f32), &ConversionContext::default());
+        let layout = run_layout(
+            &built.root,
+            (w as f32, h as f32),
+            &ConversionContext::default(),
+        );
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
             time,
@@ -352,7 +351,10 @@ mod component_smoke {
         let scene = vec![child];
         let new_buf = render_new(&scene, 400, 300);
         let lit = nonzero_pixels(&new_buf);
-        assert!(lit > 100, "new pipeline produced too few non-zero pixels: {lit}");
+        assert!(
+            lit > 100,
+            "new pipeline produced too few non-zero pixels: {lit}"
+        );
     }
 
     #[test]
@@ -405,7 +407,11 @@ mod component_smoke {
             sum_wx += w * x;
             sum_w += w;
         }
-        if sum_w == 0.0 { None } else { Some(sum_wx / sum_w) }
+        if sum_w == 0.0 {
+            None
+        } else {
+            Some(sum_wx / sum_w)
+        }
     }
 
     #[test]
@@ -485,5 +491,4 @@ mod component_smoke {
             "SlideInLeft centroid did not move right (early_cx={early_cx:.1}, late_cx={late_cx:.1}, dx={dx:.1})"
         );
     }
-
 }

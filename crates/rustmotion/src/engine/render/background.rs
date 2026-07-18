@@ -1,7 +1,10 @@
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint};
 
+use crate::schema::{
+    AnimatedBackground, BackgroundPreset, ConcentricCirclesConfig, GradientShiftConfig,
+    GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, ScrollDirection,
+};
 use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex};
-use crate::schema::{AnimatedBackground, BackgroundPreset, ConcentricCirclesConfig, GradientShiftConfig, GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, ScrollDirection};
 
 /// Draw an animated background (gradient, concentric circles, grid dots, halo, or heropattern).
 pub(super) fn draw_animated_background(
@@ -18,16 +21,21 @@ pub(super) fn draw_animated_background(
     canvas.translate((bg.x + scroll_x, bg.y + scroll_y));
 
     match &bg.preset {
-        BackgroundPreset::GradientShift(cfg) =>
-            draw_bg_gradient_shift(canvas, cfg, bg.speed, bg.direction.as_ref(), time, width, height),
-        BackgroundPreset::GridDots(cfg) =>
-            draw_bg_grid_dots(canvas, cfg, time, width, height),
-        BackgroundPreset::ConcentricCircles(cfg) =>
-            draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height),
-        BackgroundPreset::Halo(cfg) =>
-            draw_bg_halo(canvas, cfg, bg.speed, time, width, height),
-        BackgroundPreset::Heropattern(cfg) =>
-            draw_bg_heropattern(canvas, cfg, time, width, height),
+        BackgroundPreset::GradientShift(cfg) => draw_bg_gradient_shift(
+            canvas,
+            cfg,
+            bg.speed,
+            bg.direction.as_ref(),
+            time,
+            width,
+            height,
+        ),
+        BackgroundPreset::GridDots(cfg) => draw_bg_grid_dots(canvas, cfg, time, width, height),
+        BackgroundPreset::ConcentricCircles(cfg) => {
+            draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height)
+        }
+        BackgroundPreset::Halo(cfg) => draw_bg_halo(canvas, cfg, bg.speed, time, width, height),
+        BackgroundPreset::Heropattern(cfg) => draw_bg_heropattern(canvas, cfg, time, width, height),
     }
 
     canvas.restore();
@@ -69,7 +77,13 @@ pub(super) fn draw_world_bg_with_parallax(
             let offset_y = -(cam_y % spacing);
             canvas.save();
             canvas.translate((offset_x, offset_y));
-            draw_animated_background(canvas, bg, time, width + spacing * 2.0, height + spacing * 2.0);
+            draw_animated_background(
+                canvas,
+                bg,
+                time,
+                width + spacing * 2.0,
+                height + spacing * 2.0,
+            );
             canvas.restore();
         }
     }
@@ -90,7 +104,8 @@ fn draw_bg_gradient_shift(
         return;
     }
 
-    let base_colors: Vec<skia_safe::Color4f> = cfg.colors.iter().map(|c| color4f_from_hex(c)).collect();
+    let base_colors: Vec<skia_safe::Color4f> =
+        cfg.colors.iter().map(|c| color4f_from_hex(c)).collect();
 
     // Direction determines rotation sense; default is cw
     let sign = match direction {
@@ -184,20 +199,14 @@ pub(super) fn subdivide_gradient_stops(
 }
 
 /// Soft colored glow zones (halo preset).
-fn draw_bg_halo(
-    canvas: &Canvas,
-    cfg: &HaloConfig,
-    speed: f32,
-    time: f32,
-    width: f32,
-    height: f32,
-) {
+fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width: f32, height: f32) {
     for (i, zone) in cfg.zones.iter().enumerate() {
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
         // Each particle gets a unique phase and slightly different frequency
-        let phase = (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
+        let phase =
+            (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
         let freq = speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
@@ -256,13 +265,7 @@ fn draw_bg_concentric_circles(
 }
 
 /// Animated dot grid pattern.
-fn draw_bg_grid_dots(
-    canvas: &Canvas,
-    cfg: &GridDotsConfig,
-    time: f32,
-    width: f32,
-    height: f32,
-) {
+fn draw_bg_grid_dots(canvas: &Canvas, cfg: &GridDotsConfig, time: f32, width: f32, height: f32) {
     let mut paint = paint_from_hex(&cfg.color);
     paint.set_anti_alias(true);
 
@@ -306,7 +309,10 @@ fn draw_bg_heropattern(
     // Build the SVG source with color/opacity substituted
     let svg_content = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">{}</svg>"#,
-        def.width, def.height, def.width, def.height,
+        def.width,
+        def.height,
+        def.width,
+        def.height,
         def.svg_paths
             .replace("{{color}}", &cfg.color)
             .replace("{{opacity}}", &cfg.opacity.to_string()),
@@ -361,17 +367,30 @@ fn draw_bg_heropattern(
 
     let margin = tile_w.max(tile_h);
     canvas.draw_rect(
-        skia_safe::Rect::from_xywh(-margin, -margin, width + margin * 2.0, height + margin * 2.0),
+        skia_safe::Rect::from_xywh(
+            -margin,
+            -margin,
+            width + margin * 2.0,
+            height + margin * 2.0,
+        ),
         &paint,
     );
 }
 
 /// Interpolate two AnimatedBackground structs. `t` goes from 0.0 (fully `a`) to 1.0 (fully `b`).
 #[allow(dead_code)]
-pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackground, t: f32) -> AnimatedBackground {
+pub(super) fn interpolate_animated_bg(
+    a: &AnimatedBackground,
+    b: &AnimatedBackground,
+    t: f32,
+) -> AnimatedBackground {
     let lerp = |x: f32, y: f32| x * (1.0 - t) + y * t;
 
-    fn lerp_colors(a_colors: &[String], b_colors: &[String], lerp: impl Fn(f32, f32) -> f32) -> Vec<String> {
+    fn lerp_colors(
+        a_colors: &[String],
+        b_colors: &[String],
+        lerp: impl Fn(f32, f32) -> f32,
+    ) -> Vec<String> {
         let max = a_colors.len().max(b_colors.len());
         let mut out = Vec::with_capacity(max);
         for i in 0..max {
@@ -379,11 +398,13 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
             let cb = b_colors.get(i).map(|c| color4f_from_hex(c));
             match (ca, cb) {
                 (Some(ca), Some(cb)) => {
-                    out.push(format!("#{:02X}{:02X}{:02X}{:02X}",
+                    out.push(format!(
+                        "#{:02X}{:02X}{:02X}{:02X}",
                         (lerp(ca.r, cb.r) * 255.0) as u8,
                         (lerp(ca.g, cb.g) * 255.0) as u8,
                         (lerp(ca.b, cb.b) * 255.0) as u8,
-                        (lerp(ca.a, cb.a) * 255.0) as u8));
+                        (lerp(ca.a, cb.a) * 255.0) as u8
+                    ));
                 }
                 (None, Some(_)) => out.push(b_colors[i].clone()),
                 (Some(_), None) => out.push(a_colors[i].clone()),
@@ -393,7 +414,11 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
         out
     }
 
-    fn lerp_zones(a_zones: &[HaloZone], b_zones: &[HaloZone], lerp: impl Fn(f32, f32) -> f32) -> Vec<HaloZone> {
+    fn lerp_zones(
+        a_zones: &[HaloZone],
+        b_zones: &[HaloZone],
+        lerp: impl Fn(f32, f32) -> f32,
+    ) -> Vec<HaloZone> {
         let max = a_zones.len().max(b_zones.len());
         let mut out = Vec::with_capacity(max);
         for i in 0..max {
@@ -402,10 +427,12 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
                     let ca = color4f_from_hex(&za.color);
                     let cb = color4f_from_hex(&zb.color);
                     out.push(HaloZone {
-                        color: format!("#{:02X}{:02X}{:02X}",
+                        color: format!(
+                            "#{:02X}{:02X}{:02X}",
                             (lerp(ca.r, cb.r) * 255.0) as u8,
                             (lerp(ca.g, cb.g) * 255.0) as u8,
-                            (lerp(ca.b, cb.b) * 255.0) as u8),
+                            (lerp(ca.b, cb.b) * 255.0) as u8
+                        ),
                         x: lerp(za.x, zb.x),
                         y: lerp(za.y, zb.y),
                         radius: lerp(za.radius, zb.radius),
@@ -423,7 +450,7 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
     let preset = match (&a.preset, &b.preset) {
         (BackgroundPreset::GradientShift(ac), BackgroundPreset::GradientShift(bc)) => {
             BackgroundPreset::GradientShift(GradientShiftConfig {
-                colors: lerp_colors(&ac.colors, &bc.colors, &lerp),
+                colors: lerp_colors(&ac.colors, &bc.colors, lerp),
                 gradient_type: bc.gradient_type.clone(),
             })
         }
@@ -431,11 +458,13 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
             let ca = color4f_from_hex(&ac.color);
             let cb = color4f_from_hex(&bc.color);
             BackgroundPreset::GridDots(GridDotsConfig {
-                color: format!("#{:02X}{:02X}{:02X}{:02X}",
+                color: format!(
+                    "#{:02X}{:02X}{:02X}{:02X}",
                     (lerp(ca.r, cb.r) * 255.0) as u8,
                     (lerp(ca.g, cb.g) * 255.0) as u8,
                     (lerp(ca.b, cb.b) * 255.0) as u8,
-                    (lerp(ca.a, cb.a) * 255.0) as u8),
+                    (lerp(ca.a, cb.a) * 255.0) as u8
+                ),
                 element_size: lerp(ac.element_size, bc.element_size),
                 spacing: lerp(ac.spacing, bc.spacing),
             })
@@ -444,11 +473,13 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
             let ca = color4f_from_hex(&ac.color);
             let cb = color4f_from_hex(&bc.color);
             BackgroundPreset::ConcentricCircles(ConcentricCirclesConfig {
-                color: format!("#{:02X}{:02X}{:02X}{:02X}",
+                color: format!(
+                    "#{:02X}{:02X}{:02X}{:02X}",
                     (lerp(ca.r, cb.r) * 255.0) as u8,
                     (lerp(ca.g, cb.g) * 255.0) as u8,
                     (lerp(ca.b, cb.b) * 255.0) as u8,
-                    (lerp(ca.a, cb.a) * 255.0) as u8),
+                    (lerp(ca.a, cb.a) * 255.0) as u8
+                ),
                 element_size: lerp(ac.element_size, bc.element_size),
                 spacing: lerp(ac.spacing, bc.spacing),
                 count: bc.count,
@@ -456,12 +487,16 @@ pub(super) fn interpolate_animated_bg(a: &AnimatedBackground, b: &AnimatedBackgr
         }
         (BackgroundPreset::Halo(ac), BackgroundPreset::Halo(bc)) => {
             BackgroundPreset::Halo(HaloConfig {
-                zones: lerp_zones(&ac.zones, &bc.zones, &lerp),
+                zones: lerp_zones(&ac.zones, &bc.zones, lerp),
             })
         }
         _ => {
             // Different preset types: snap to b at midpoint
-            if t >= 0.5 { b.preset.clone() } else { a.preset.clone() }
+            if t >= 0.5 {
+                b.preset.clone()
+            } else {
+                a.preset.clone()
+            }
         }
     };
 

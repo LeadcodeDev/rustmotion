@@ -1,13 +1,13 @@
-mod tasks;
-mod h264;
 mod ffmpeg;
 mod formats;
+mod h264;
 mod mux;
+mod tasks;
 
-pub use tasks::*;
-pub use h264::*;
 pub use ffmpeg::*;
 pub use formats::*;
+pub use h264::*;
+pub use tasks::*;
 
 /// Progress events emitted during encoding
 pub enum EncodeProgress {

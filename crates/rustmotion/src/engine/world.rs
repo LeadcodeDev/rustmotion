@@ -72,7 +72,9 @@ impl WorldTimeline {
             windows.push((start, end));
 
             // Use world-position if specified, otherwise fall back to horizontal grid
-            let (wx, wy) = scene.world_position.as_ref()
+            let (wx, wy) = scene
+                .world_position
+                .as_ref()
                 .map(|p| (p.x, p.y))
                 .unwrap_or((vw / 2.0 + i as f32 * vw, vh / 2.0));
 
@@ -135,7 +137,8 @@ impl WorldTimeline {
 
             // During this pan → interpolate between wp_a and wp_b
             if time <= pan_end {
-                let raw_progress = safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0);
+                let raw_progress =
+                    safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0);
                 let t = ease(raw_progress, easing) as f32;
                 let x = wp_a.x + (wp_b.x - wp_a.x) * t;
                 let y = wp_a.y + (wp_b.y - wp_a.y) * t;
@@ -165,11 +168,7 @@ impl WorldTimeline {
             // The pan to this scene starts at `start - pan_half` and finishes at `start + pan_half`
             // Animations begin after the pan finishes arriving, so anim_start = start + pan_half
             // (For the first scene, there's no incoming pan, so anim_start = start)
-            let anim_start = if i == 0 {
-                *start
-            } else {
-                start + pan_half
-            };
+            let anim_start = if i == 0 { *start } else { start + pan_half };
 
             // Is this scene currently in its active window (including pan margins)?
             let visible_start = start - pan_half;
@@ -183,7 +182,8 @@ impl WorldTimeline {
                 let local_frame = if local_time <= 0.0 {
                     0
                 } else {
-                    ((local_time * fps as f64).round() as u32).min(scene_total_frames.saturating_sub(1))
+                    ((local_time * fps as f64).round() as u32)
+                        .min(scene_total_frames.saturating_sub(1))
                 };
 
                 // Calculate opacity for crossfade during camera pans
@@ -202,11 +202,17 @@ impl WorldTimeline {
                     if i > 0 && time >= in_pan_start.max(0.0) && time < in_pan_end {
                         // Fading in: opacity goes 0 → 1 during incoming pan
                         let denom = in_pan_end - in_pan_start.max(0.0);
-                        let progress = safe_div(time - in_pan_start.max(0.0), denom, 1.0).clamp(0.0, 1.0);
+                        let progress =
+                            safe_div(time - in_pan_start.max(0.0), denom, 1.0).clamp(0.0, 1.0);
                         progress as f32
-                    } else if i < self.scene_windows.len() - 1 && time >= out_pan_start && time <= out_pan_end {
+                    } else if i < self.scene_windows.len() - 1
+                        && time >= out_pan_start
+                        && time <= out_pan_end
+                    {
                         // Fading out: opacity goes 1 → 0 during outgoing pan
-                        let progress = safe_div(time - out_pan_start, out_pan_end - out_pan_start, 1.0).clamp(0.0, 1.0);
+                        let progress =
+                            safe_div(time - out_pan_start, out_pan_end - out_pan_start, 1.0)
+                                .clamp(0.0, 1.0);
                         1.0 - progress as f32
                     } else {
                         1.0

@@ -5,11 +5,15 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{extract_video_frame, find_closest_frame, video_frame_cache};
+use rustmotion_core::engine::renderer::{
+    extract_video_frame, find_closest_frame, video_frame_cache,
+};
 use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
-fn default_volume() -> f32 { 1.0 }
+fn default_volume() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Video {

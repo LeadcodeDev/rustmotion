@@ -30,7 +30,7 @@ pub fn encode_png_sequence(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     std::fs::create_dir_all(output_dir)?;
@@ -49,7 +49,10 @@ pub fn encode_png_sequence(
             .collect();
 
         if let Some(ref mut cb) = on_progress {
-            cb(EncodeProgress::Rendering(counter.load(Ordering::Relaxed), total_frames));
+            cb(EncodeProgress::Rendering(
+                counter.load(Ordering::Relaxed),
+                total_frames,
+            ));
         }
 
         for result in results {
@@ -84,18 +87,24 @@ pub fn encode_gif(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     let gif_w = width.min(65535) as u16;
     let gif_h = height.min(65535) as u16;
 
     let file = File::create(output_path)?;
-    let mut encoder = gif::Encoder::new(BufWriter::new(file), gif_w, gif_h, &[])
-        .map_err(|e| RustmotionError::GifEncoder { reason: e.to_string() })?;
+    let mut encoder = gif::Encoder::new(BufWriter::new(file), gif_w, gif_h, &[]).map_err(|e| {
+        RustmotionError::GifEncoder {
+            reason: e.to_string(),
+        }
+    })?;
 
-    encoder.set_repeat(gif::Repeat::Infinite)
-        .map_err(|e| RustmotionError::GifRepeat { reason: e.to_string() })?;
+    encoder
+        .set_repeat(gif::Repeat::Infinite)
+        .map_err(|e| RustmotionError::GifRepeat {
+            reason: e.to_string(),
+        })?;
 
     let delay = (100.0 / fps as f64).round() as u16;
 
@@ -113,15 +122,21 @@ pub fn encode_gif(
             .collect();
 
         if let Some(ref mut cb) = on_progress {
-            cb(EncodeProgress::Rendering(counter.load(Ordering::Relaxed), total_frames));
+            cb(EncodeProgress::Rendering(
+                counter.load(Ordering::Relaxed),
+                total_frames,
+            ));
         }
 
         for result in results {
             let rgba = result?;
             let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba.clone(), 10);
             frame.delay = delay;
-            encoder.write_frame(&frame)
-                .map_err(|e| RustmotionError::GifFrame { reason: e.to_string() })?;
+            encoder
+                .write_frame(&frame)
+                .map_err(|e| RustmotionError::GifFrame {
+                    reason: e.to_string(),
+                })?;
         }
     }
 
@@ -142,7 +157,10 @@ pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
 
             for local_frame in 0..scene_frames {
                 let rgba = crate::engine::render::render_scene_frame(
-                    config, scene, local_frame, scene_frames,
+                    config,
+                    scene,
+                    local_frame,
+                    scene_frames,
                 )?;
                 stdout.write_all(&rgba)?;
 

@@ -1,0 +1,5 @@
+# Painter/render entry points legitimately thread many context parameters
+# (canvas, layout, props, ctx, …); restructuring them into bags would hurt
+# call-site clarity more than it helps.
+too-many-arguments-threshold = 16
+type-complexity-threshold = 400

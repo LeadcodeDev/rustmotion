@@ -1,7 +1,9 @@
 use skia_safe::{Canvas, Font, FontStyle, Rect};
 
-use rustmotion_core::engine::renderer::{draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex};
 use super::Codeblock;
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 
 pub(super) fn draw_chrome(
     canvas: &Canvas,
@@ -43,8 +45,7 @@ pub(super) fn draw_chrome(
             .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
             .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
             .unwrap_or_else(|| {
-                fm
-                    .match_family_style("sans-serif", FontStyle::normal())
+                fm.match_family_style("sans-serif", FontStyle::normal())
                     .unwrap()
             });
         let title_font = Font::from_typeface(typeface, 13.0);
@@ -54,6 +55,15 @@ pub(super) fn draw_chrome(
         let title_y = dot_y + 4.0;
         let mut title_paint = paint_from_hex("#999999");
         title_paint.set_anti_alias(true);
-        draw_text_with_fallback(canvas, title, &title_font, &emoji_font, 0.0, title_x, title_y, &title_paint);
+        draw_text_with_fallback(
+            canvas,
+            title,
+            &title_font,
+            &emoji_font,
+            0.0,
+            title_x,
+            title_y,
+            &title_paint,
+        );
     }
 }

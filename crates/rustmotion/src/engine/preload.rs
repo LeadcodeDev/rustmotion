@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, video_frame_cache};
-use rustmotion_core::traits::{Styled, Timed};
 use crate::components::{ChildComponent, Component};
 use crate::schema::Scene;
+use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, video_frame_cache};
+use rustmotion_core::traits::{Styled, Timed};
 
 /// Pre-fetch and cache all icon components before rendering.
 /// Call this before the render loop to avoid HTTP requests during parallel rendering.
@@ -29,7 +29,12 @@ pub fn prefetch_icons(scenes: &[Scene]) {
                     Some(CSize::Length(LengthPercentage::Px(v))) => (*v as u32).max(1),
                     _ => 24,
                 };
-                seen.insert((icon.icon.clone(), icon.style_config().color_str_or("#FFFFFF").to_string(), w, h));
+                seen.insert((
+                    icon.icon.clone(),
+                    icon.style_config().color_str_or("#FFFFFF").to_string(),
+                    w,
+                    h,
+                ));
             }
             Component::Card(c) => {
                 for child in &c.children {
@@ -61,7 +66,9 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 
     for scene in scenes {
-        let children: Vec<ChildComponent> = scene.children.iter()
+        let children: Vec<ChildComponent> = scene
+            .children
+            .iter()
             .filter_map(|v| serde_json::from_value(v.clone()).ok())
             .collect();
         for child in &children {
@@ -118,10 +125,7 @@ pub fn prefetch_icons(scenes: &[Scene]) {
 
 /// Pre-extract all needed frames from video sources in a single ffmpeg pass.
 /// Called before the render loop to populate the video frame cache.
-pub fn preextract_video_frames(
-    scenes: &[Scene],
-    fps: u32,
-) {
+pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
     fn collect_videos(child: &ChildComponent, scene_frames: u32, fps: u32) {
         if let Component::Video(video) = &child.component {
             use rustmotion_core::css::style::Size as CSize;
@@ -146,8 +150,12 @@ pub fn preextract_video_frames(
             }
 
             let (start_at, end_at) = video.timing();
-            let start_frame = start_at.map(|s| (s * fps as f64).round() as u32).unwrap_or(0);
-            let end_frame = end_at.map(|e| (e * fps as f64).round() as u32).unwrap_or(scene_frames);
+            let start_frame = start_at
+                .map(|s| (s * fps as f64).round() as u32)
+                .unwrap_or(0);
+            let end_frame = end_at
+                .map(|e| (e * fps as f64).round() as u32)
+                .unwrap_or(scene_frames);
 
             let mut times = Vec::new();
             for f in start_frame..end_frame {
@@ -166,13 +174,20 @@ pub fn preextract_video_frames(
 
             let output = std::process::Command::new("ffmpeg")
                 .args([
-                    "-ss", &format!("{:.3}", min_time),
-                    "-t", &format!("{:.3}", duration),
-                    "-i", &video.src,
-                    "-vf", &format!("fps={},scale={}:{}", fps, width, height),
-                    "-f", "rawvideo",
-                    "-pix_fmt", "rgba",
-                    "-y", "pipe:1",
+                    "-ss",
+                    &format!("{:.3}", min_time),
+                    "-t",
+                    &format!("{:.3}", duration),
+                    "-i",
+                    &video.src,
+                    "-vf",
+                    &format!("fps={},scale={}:{}", fps, width, height),
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgba",
+                    "-y",
+                    "pipe:1",
                 ])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
@@ -215,7 +230,9 @@ pub fn preextract_video_frames(
 
     for scene in scenes {
         let scene_frames = (scene.duration * fps as f64).round() as u32;
-        let children: Vec<ChildComponent> = scene.children.iter()
+        let children: Vec<ChildComponent> = scene
+            .children
+            .iter()
             .filter_map(|v| serde_json::from_value(v.clone()).ok())
             .collect();
         for child in &children {

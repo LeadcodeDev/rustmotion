@@ -61,15 +61,11 @@ pub struct Scenario {
 /// Lifecycle of a studio annotation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AnnotationStatus {
+    #[default]
     Open,
     Resolved,
-}
-
-impl Default for AnnotationStatus {
-    fn default() -> Self {
-        AnnotationStatus::Open
-    }
 }
 
 /// What an annotation points at: a JSON Pointer into the source scenario,
@@ -136,8 +132,11 @@ pub struct View {
     #[schemars(skip)]
     pub background: Option<BackgroundValue>,
     /// (world) Legacy shared animated backgrounds.
-    #[serde(default, rename = "animated-background",
-            deserialize_with = "deserialize_animated_backgrounds")]
+    #[serde(
+        default,
+        rename = "animated-background",
+        deserialize_with = "deserialize_animated_backgrounds"
+    )]
     pub animated_background: Vec<AnimatedBackground>,
     /// (world) Easing for camera pan between scenes.
     #[serde(default = "default_transition_easing")]
@@ -184,6 +183,7 @@ pub struct ResolvedView {
 /// An entry in the `scenes` array: either a concrete scene or an include directive.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // untagged serde enum; boxing Scene would break all match arms
 pub enum SceneEntry {
     /// A regular scene defined inline.
     Scene(Scene),
@@ -280,7 +280,11 @@ pub struct Scene {
     #[serde(default)]
     pub layout: Option<SceneLayout>,
     /// Legacy animated background (kept for backward compat)
-    #[serde(default, rename = "animated-background", deserialize_with = "deserialize_animated_backgrounds")]
+    #[serde(
+        default,
+        rename = "animated-background",
+        deserialize_with = "deserialize_animated_backgrounds"
+    )]
     pub animated_background: Vec<AnimatedBackground>,
     /// Virtual camera with animatable x, y, zoom, rotation.
     #[serde(default)]
@@ -396,17 +400,13 @@ pub(crate) fn default_transition_easing() -> EasingType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum VideoCodec {
+    #[default]
     H264,
     H265,
     Vp9,
     Prores,
-}
-
-impl Default for VideoCodec {
-    fn default() -> Self {
-        Self::H264
-    }
 }
 
 // --- Default functions ---

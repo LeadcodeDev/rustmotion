@@ -10,29 +10,21 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DividerDirection {
+    #[default]
     Horizontal,
     Vertical,
 }
 
-impl Default for DividerDirection {
-    fn default() -> Self {
-        Self::Horizontal
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DividerLineStyle {
+    #[default]
     Solid,
     Dashed,
     Dotted,
-}
-
-impl Default for DividerLineStyle {
-    fn default() -> Self {
-        Self::Solid
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

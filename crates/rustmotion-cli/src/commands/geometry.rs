@@ -17,6 +17,8 @@
 //! This walker runs the new CSS-engine pipeline (taffy + cosmic-text) so the
 //! geometry it checks matches what the renderer will actually paint.
 
+use rustmotion::components::box_builder::build_scene_from_refs;
+use rustmotion::components::intrinsic::TextIntrinsic;
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::taffy_bridge::ConversionContext;
 use rustmotion::core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
@@ -24,8 +26,6 @@ use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult}
 use rustmotion::engine::animator::{
     apply_orbits, apply_wiggles, extract_effects, resolve_animations, AnimatedProperties,
 };
-use rustmotion::components::box_builder::build_scene_from_refs;
-use rustmotion::components::intrinsic::TextIntrinsic;
 use rustmotion::engine::render;
 use rustmotion::schema::ResolvedScenario;
 use serde::Serialize;
@@ -59,6 +59,7 @@ pub enum Axis {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // "Overflow" postfix is load-bearing: serde output matches CLI docs
 pub enum ViolationKind {
     /// Component bbox crosses the viewport edge.
     ViewportOverflow,
@@ -271,7 +272,10 @@ fn check_unwrappable_text(
     if let Component::Text(t) = component {
         let nowrap = matches!(
             t.style.white_space,
-            Some(rustmotion::core::css::style::WhiteSpace::Nowrap | rustmotion::core::css::style::WhiteSpace::Pre)
+            Some(
+                rustmotion::core::css::style::WhiteSpace::Nowrap
+                    | rustmotion::core::css::style::WhiteSpace::Pre
+            )
         );
         if !nowrap {
             return;
@@ -316,7 +320,11 @@ fn check_auto_scroll(
             let font_size = cb.style.font_size_px_or(14.0);
             let actual_line_height = cb.style.line_height_for(font_size);
             let line_count = cb.code.lines().count().max(1) as f32;
-            let chrome_h = if cb.chrome.as_ref().is_some_and(|c| c.enabled) { 36.0 } else { 0.0 };
+            let chrome_h = if cb.chrome.as_ref().is_some_and(|c| c.enabled) {
+                36.0
+            } else {
+                0.0
+            };
             let pad = 32.0; // ~16 top + 16 bottom default
             let natural_h = chrome_h + pad + line_count * actual_line_height;
             if natural_h > bbox.h + 0.5 {
@@ -587,7 +595,11 @@ fn resolve_props_for_validation(
                 return AnimatedProperties::default();
             }
         }
-        let base = if let Some(start) = start_at { time - start } else { time };
+        let base = if let Some(start) = start_at {
+            time - start
+        } else {
+            time
+        };
         base.max(0.0)
     } else {
         time
@@ -595,7 +607,13 @@ fn resolve_props_for_validation(
 
     let mut props = AnimatedProperties::default();
     for (preset, preset_config) in &extracted.presets {
-        let p = resolve_animations(&[], Some(preset), Some(preset_config), anim_time, scene_duration);
+        let p = resolve_animations(
+            &[],
+            Some(preset),
+            Some(preset_config),
+            anim_time,
+            scene_duration,
+        );
         props.merge(&p);
     }
     if !extracted.keyframes.is_empty() {
@@ -671,6 +689,37 @@ fn hint_for_animated(
     }
 }
 
+/// Render a violation for human consumption (multi-line, color-free).
+pub fn format_violation(v: &GeometryViolation) -> String {
+    let axis_str = match v.axis {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Both => "x+y",
+    };
+    let kind_str = match v.kind {
+        ViolationKind::ViewportOverflow => "viewport overflow",
+        ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
+        ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
+        ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
+    };
+    format!(
+        "ERROR: {} ({})\n  view: {}, scene: {}\n  path: {}\n  bbox: [{:.0}, {:.0}] -> [{:.0}, {:.0}]   (viewport: {}x{})\n  axis: {}\n  hint: {}",
+        v.component,
+        kind_str,
+        v.view_index,
+        v.scene_index,
+        v.path,
+        v.bbox.x,
+        v.bbox.y,
+        v.bbox.x + v.bbox.w,
+        v.bbox.y + v.bbox.h,
+        v.viewport.0,
+        v.viewport.1,
+        axis_str,
+        v.hint,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,7 +747,11 @@ mod tests {
         }"##;
         let scenario = parse(json);
         let violations = validate_geometry(&scenario);
-        assert!(violations.is_empty(), "expected clean, got: {:?}", violations);
+        assert!(
+            violations.is_empty(),
+            "expected clean, got: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -721,12 +774,27 @@ mod tests {
         }"##;
         let scenario = parse(json);
         let violations = validate_geometry(&scenario);
-        let viewport = violations.iter().find(|v| v.kind == ViolationKind::ViewportOverflow);
-        assert!(viewport.is_some(), "missing viewport violation in {:?}", violations);
+        let viewport = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ViewportOverflow);
+        assert!(
+            viewport.is_some(),
+            "missing viewport violation in {:?}",
+            violations
+        );
         let v = viewport.unwrap();
-        assert_eq!(v.axis, Axis::X, "expected X-axis overflow, got {:?}", v.axis);
+        assert_eq!(
+            v.axis,
+            Axis::X,
+            "expected X-axis overflow, got {:?}",
+            v.axis
+        );
         assert_eq!(v.component, "shape");
-        assert!(v.path.contains("children[0]"), "path missing index: {}", v.path);
+        assert!(
+            v.path.contains("children[0]"),
+            "path missing index: {}",
+            v.path
+        );
     }
 
     #[test]
@@ -751,8 +819,14 @@ mod tests {
         }"##;
         let scenario = parse(json);
         let violations = validate_geometry(&scenario);
-        let v = violations.iter().find(|v| v.kind == ViolationKind::UnwrappableTextOverflow);
-        assert!(v.is_some(), "missing UnwrappableTextOverflow in {:?}", violations);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::UnwrappableTextOverflow);
+        assert!(
+            v.is_some(),
+            "missing UnwrappableTextOverflow in {:?}",
+            violations
+        );
         let v = v.unwrap();
         assert_eq!(v.component, "text");
         assert_eq!(v.axis, Axis::X);
@@ -801,39 +875,14 @@ mod tests {
         }"##;
         let scenario = parse(json);
         let violations = validate_geometry(&scenario);
-        let v = violations.iter().find(|v| v.kind == ViolationKind::AutoScrollDisabledOverflow);
-        assert!(v.is_some(), "missing AutoScrollDisabledOverflow in {:?}", violations);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::AutoScrollDisabledOverflow);
+        assert!(
+            v.is_some(),
+            "missing AutoScrollDisabledOverflow in {:?}",
+            violations
+        );
         assert_eq!(v.unwrap().component, "codeblock");
     }
-}
-
-/// Render a violation for human consumption (multi-line, color-free).
-pub fn format_violation(v: &GeometryViolation) -> String {
-    let axis_str = match v.axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Both => "x+y",
-    };
-    let kind_str = match v.kind {
-        ViolationKind::ViewportOverflow => "viewport overflow",
-        ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
-        ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
-        ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
-    };
-    format!(
-        "ERROR: {} ({})\n  view: {}, scene: {}\n  path: {}\n  bbox: [{:.0}, {:.0}] -> [{:.0}, {:.0}]   (viewport: {}x{})\n  axis: {}\n  hint: {}",
-        v.component,
-        kind_str,
-        v.view_index,
-        v.scene_index,
-        v.path,
-        v.bbox.x,
-        v.bbox.y,
-        v.bbox.x + v.bbox.w,
-        v.bbox.y + v.bbox.h,
-        v.viewport.0,
-        v.viewport.1,
-        axis_str,
-        v.hint,
-    )
 }

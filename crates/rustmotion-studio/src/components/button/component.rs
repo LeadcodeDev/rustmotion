@@ -1,3 +1,5 @@
+// UI kit scaffold — variants are consumed incrementally as the studio grows.
+#![allow(dead_code)]
 use dioxus::prelude::*;
 use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;

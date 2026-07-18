@@ -156,7 +156,14 @@ impl Slider {
             let text_y = thumb_cy - thumb_r - 4.0 - (-metrics.descent);
 
             draw_text_with_fallback(
-                canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
+                canvas,
+                &text,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &text_paint,
             );
         }
     }

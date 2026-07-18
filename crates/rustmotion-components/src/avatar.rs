@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Paint, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, Paint, PaintStyle, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -13,18 +13,14 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AvatarStatus {
     Online,
     Offline,
     Away,
     #[serde(rename = "none")]
+    #[default]
     NoStatus,
-}
-
-impl Default for AvatarStatus {
-    fn default() -> Self {
-        Self::NoStatus
-    }
 }
 
 impl AvatarStatus {
@@ -81,11 +77,16 @@ impl Avatar {
         let img = if let Some(cached) = cache.get(&self.src) {
             cached.clone()
         } else {
-            let data = std::fs::read(&self.src)
-                .map_err(|e| RustmotionError::ImageLoad { path: self.src.clone(), reason: e.to_string() })?;
+            let data = std::fs::read(&self.src).map_err(|e| RustmotionError::ImageLoad {
+                path: self.src.clone(),
+                reason: e.to_string(),
+            })?;
             let skia_data = skia_safe::Data::new_copy(&data);
-            let decoded = skia_safe::Image::from_encoded(skia_data)
-                .ok_or_else(|| RustmotionError::ImageDecode { path: self.src.clone() })?;
+            let decoded = skia_safe::Image::from_encoded(skia_data).ok_or_else(|| {
+                RustmotionError::ImageDecode {
+                    path: self.src.clone(),
+                }
+            })?;
             cache.insert(self.src.clone(), decoded.clone());
             decoded
         };

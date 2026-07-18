@@ -45,6 +45,13 @@ pub fn run() -> Result<()> {
                 true,
             ),
         },
-        None => app::run_preview_root(scenario::empty_scenario(), None, None, workspace, false, true),
+        None => app::run_preview_root(
+            scenario::empty_scenario(),
+            None,
+            None,
+            workspace,
+            false,
+            true,
+        ),
     }
 }

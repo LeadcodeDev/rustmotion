@@ -10,23 +10,21 @@ use super::video::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CardDirection {
+    #[default]
     Column,
     Row,
     ColumnReverse,
     RowReverse,
 }
 
-impl Default for CardDirection {
-    fn default() -> Self {
-        Self::Column
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CardAlign {
     #[serde(alias = "flex-start", alias = "flex_start")]
+    #[default]
     Start,
     Center,
     #[serde(alias = "flex-end", alias = "flex_end")]
@@ -34,16 +32,12 @@ pub enum CardAlign {
     Stretch,
 }
 
-impl Default for CardAlign {
-    fn default() -> Self {
-        Self::Start
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CardJustify {
     #[serde(alias = "flex-start", alias = "flex_start")]
+    #[default]
     Start,
     Center,
     #[serde(alias = "flex-end", alias = "flex_end")]
@@ -54,12 +48,6 @@ pub enum CardJustify {
     SpaceAround,
     #[serde(alias = "space-evenly")]
     SpaceEvenly,
-}
-
-impl Default for CardJustify {
-    fn default() -> Self {
-        Self::Start
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -90,15 +78,11 @@ impl Spacing {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CardDisplay {
+    #[default]
     Flex,
     Grid,
-}
-
-impl Default for CardDisplay {
-    fn default() -> Self {
-        Self::Flex
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -129,17 +113,12 @@ pub struct TimelineStep {
 }
 
 /// Font weight — named ("normal"/"bold") or numeric (100-900)
-#[derive(Debug, Clone, JsonSchema)]
+#[derive(Debug, Clone, JsonSchema, Default)]
 pub enum FontWeight {
+    #[default]
     Normal,
     Bold,
     Weight(u16),
-}
-
-impl Default for FontWeight {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 #[allow(dead_code)]
@@ -194,44 +173,32 @@ impl<'de> Deserialize<'de> for FontWeight {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FontStyleType {
+    #[default]
     Normal,
     Italic,
     Oblique,
 }
 
-impl Default for FontStyleType {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TextAlign {
+    #[default]
     Left,
     Center,
     Right,
 }
 
-impl Default for TextAlign {
-    fn default() -> Self {
-        Self::Left
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum VerticalAlign {
     Top,
+    #[default]
     Middle,
     Bottom,
-}
-
-impl Default for VerticalAlign {
-    fn default() -> Self {
-        Self::Middle
-    }
 }
 
 /// CSS-like overflow: controls whether children that exceed this container's
@@ -240,15 +207,11 @@ impl Default for VerticalAlign {
 /// `visible` parent is legitimate (e.g. a badge sticking out of a card).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Overflow {
+    #[default]
     Visible,
     Hidden,
-}
-
-impl Default for Overflow {
-    fn default() -> Self {
-        Self::Visible
-    }
 }
 
 /// Size dimension: fixed px, "auto", or "50%" (percent of parent)
@@ -307,7 +270,9 @@ impl<'de> Deserialize<'de> for SizeDimension {
 }
 
 /// Deserialize `animation` as either a single AnimationEffect or a Vec.
-pub fn deserialize_animation_effects<'de, D>(deserializer: D) -> Result<Vec<AnimationEffect>, D::Error>
+pub fn deserialize_animation_effects<'de, D>(
+    deserializer: D,
+) -> Result<Vec<AnimationEffect>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -333,8 +298,7 @@ where
         where
             M: de::MapAccess<'de>,
         {
-            let effect =
-                AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            let effect = AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
             Ok(vec![effect])
         }
     }

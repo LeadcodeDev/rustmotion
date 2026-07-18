@@ -132,7 +132,9 @@ pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     if tasks.is_empty() {
         return None;
     }
-    Some(crate::editor::frames::render_frame(&scenario, &tasks, 0, 0.25))
+    Some(crate::editor::frames::render_frame(
+        &scenario, &tasks, 0, 0.25,
+    ))
 }
 
 /// Cheap check: is this JSON a Rustmotion scenario? Avoids the heavier
@@ -279,12 +281,8 @@ mod tests {
 
     #[test]
     fn is_scenario_json_accepts_and_rejects() {
-        assert!(is_scenario_json(
-            &json!({ "video": {}, "scenes": [] })
-        ));
-        assert!(is_scenario_json(
-            &json!({ "video": {}, "composition": [] })
-        ));
+        assert!(is_scenario_json(&json!({ "video": {}, "scenes": [] })));
+        assert!(is_scenario_json(&json!({ "video": {}, "composition": [] })));
         assert!(!is_scenario_json(&json!({ "foo": 1 })));
         assert!(!is_scenario_json(&json!({ "video": {} })));
     }

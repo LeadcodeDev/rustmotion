@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -133,7 +133,14 @@ impl Countdown {
         let text_y = y + (box_h + (-metrics.ascent)) / 2.0;
 
         draw_text_with_fallback(
-            canvas, &digit_str, font, emoji_font, 0.0, text_x, text_y, &text_paint,
+            canvas,
+            &digit_str,
+            font,
+            emoji_font,
+            0.0,
+            text_x,
+            text_y,
+            &text_paint,
         );
     }
 
@@ -156,9 +163,7 @@ impl Countdown {
         let sep_x = x + (self.gap - sep_w) / 2.0;
         let sep_y = y + (box_h + (-metrics.ascent)) / 2.0;
 
-        draw_text_with_fallback(
-            canvas, sep, font, emoji_font, 0.0, sep_x, sep_y, &sep_paint,
-        );
+        draw_text_with_fallback(canvas, sep, font, emoji_font, 0.0, sep_x, sep_y, &sep_paint);
 
         self.gap
     }

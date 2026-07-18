@@ -200,9 +200,8 @@ impl DotMap {
                 } else {
                     0.0
                 };
-                let dot_progress =
-                    ((time - stagger_delay) / (self.animation_duration * 0.4)).clamp(0.0, 1.0)
-                        as f32;
+                let dot_progress = ((time - stagger_delay) / (self.animation_duration * 0.4))
+                    .clamp(0.0, 1.0) as f32;
                 dot_progress * progress
             } else {
                 1.0
@@ -256,8 +255,7 @@ impl DotMap {
                 label_paint.set_anti_alias(true);
                 label_paint.set_alpha_f(dot_alpha * 0.9);
 
-                let text_w =
-                    measure_text_with_fallback(label, &label_font, &emoji_font, 0.0);
+                let text_w = measure_text_with_fallback(label, &label_font, &emoji_font, 0.0);
                 let label_x = px - text_w / 2.0;
                 let label_y = py + dot_size / 2.0 + label_font_size + 4.0;
 

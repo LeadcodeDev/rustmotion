@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -126,7 +126,7 @@ impl Comparison {
         let right_rect = Rect::from_xywh(divider_x, 0.0, w - divider_x, h);
         canvas.draw_rect(right_rect, &right_paint);
 
-        let font_size = (h * 0.08).max(16.0).min(36.0);
+        let font_size = (h * 0.08).clamp(16.0, 36.0);
         let fm = font_mgr();
         let font_style = skia_safe::FontStyle::bold();
         let typeface = fm
@@ -145,7 +145,14 @@ impl Comparison {
             let text_x = divider_x / 2.0 - text_w / 2.0;
             let text_y = h / 2.0 + (-metrics.ascent) / 2.0;
             draw_text_with_fallback(
-                canvas, label, &font, &emoji_font, 0.0, text_x, text_y, &label_paint,
+                canvas,
+                label,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &label_paint,
             );
         }
 
@@ -155,7 +162,14 @@ impl Comparison {
             let text_x = divider_x + (w - divider_x) / 2.0 - text_w / 2.0;
             let text_y = h / 2.0 + (-metrics.ascent) / 2.0;
             draw_text_with_fallback(
-                canvas, label, &font, &emoji_font, 0.0, text_x, text_y, &label_paint,
+                canvas,
+                label,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &label_paint,
             );
         }
 

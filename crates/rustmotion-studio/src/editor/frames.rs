@@ -23,7 +23,10 @@ pub fn render_frame(
     let rgb = image::DynamicImage::ImageRgba8(rgba_img).to_rgb8();
     let mut jpeg = Vec::new();
     image::DynamicImage::ImageRgb8(rgb)
-        .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg),
+            image::ImageFormat::Jpeg,
+        )
         .expect("encode jpeg");
     jpeg
 }
@@ -83,7 +86,12 @@ pub fn scene_prefix(
         return String::new();
     }
     let idx = (frame as usize).min(tasks.len() - 1);
-    if let FrameTask::Normal { view_idx, scene_idx, .. } = &tasks[idx] {
+    if let FrameTask::Normal {
+        view_idx,
+        scene_idx,
+        ..
+    } = &tasks[idx]
+    {
         if raw.get("composition").is_some() {
             format!("/composition/{view_idx}/scenes/{scene_idx}")
         } else {
@@ -98,8 +106,7 @@ pub fn scene_prefix(
 mod tests {
     use super::*;
 
-    const SCENARIO: &str =
-        r##"{ "video": { "width": 1280, "height": 720, "background": "#101418" }, "scenes": [ { "duration": 1.0 } ] }"##;
+    const SCENARIO: &str = r##"{ "video": { "width": 1280, "height": 720, "background": "#101418" }, "scenes": [ { "duration": 1.0 } ] }"##;
 
     #[test]
     fn renders_frame_to_nonempty_jpeg() {
@@ -119,9 +126,14 @@ mod tests {
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         let hits = frame_hits(&scenario, &tasks, 0, "/scenes/0");
         let text = hits.iter().find(|h| h.kind == "text").expect("text hit");
-        assert!(hits.iter().all(|h| h.x >= 0.0 && h.x <= 100.0 && h.w <= 100.0));
+        assert!(hits
+            .iter()
+            .all(|h| h.x >= 0.0 && h.x <= 100.0 && h.w <= 100.0));
         assert!(
-            text.pointer.as_deref().unwrap().starts_with("/scenes/0/children/"),
+            text.pointer
+                .as_deref()
+                .unwrap()
+                .starts_with("/scenes/0/children/"),
             "pointer = {:?}",
             text.pointer
         );
@@ -129,7 +141,8 @@ mod tests {
 
     #[test]
     fn scene_prefix_handles_top_level_scenes() {
-        let json = r##"{ "video": { "width": 1, "height": 1 }, "scenes": [ { "duration": 1.0 } ] }"##;
+        let json =
+            r##"{ "video": { "width": 1, "height": 1 }, "scenes": [ { "duration": 1.0 } ] }"##;
         let scenario = rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap();
         let raw: serde_json::Value = serde_json::from_str(json).unwrap();
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);

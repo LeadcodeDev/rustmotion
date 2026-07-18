@@ -62,11 +62,7 @@ pub trait Painter {
     /// Optional intrinsic measurement for leaves like `text`, `image`,
     /// `codeblock`. Return `None` to let taffy compute the size from the
     /// CSS style alone. `available` mirrors taffy's `AvailableSpace`.
-    fn intrinsic_size(
-        &self,
-        _available: AvailableSize,
-        _ctx: &MeasureCtx,
-    ) -> Option<(f32, f32)> {
+    fn intrinsic_size(&self, _available: AvailableSize, _ctx: &MeasureCtx) -> Option<(f32, f32)> {
         None
     }
 }

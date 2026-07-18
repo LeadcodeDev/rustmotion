@@ -131,8 +131,7 @@ impl AnimationEffect {
 }
 
 /// Timing configuration for preset animations.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -187,8 +186,7 @@ impl Default for AnimationTiming {
 }
 
 /// Timing configuration for char animation effect variants (used inside style.animation).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CharAnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -219,8 +217,7 @@ fn default_char_duration_f64() -> f64 {
 }
 
 /// Per-character or per-word text animation configuration (legacy root-level prop).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CharAnimation {
     /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up".
     #[serde(default = "default_char_preset")]
@@ -298,8 +295,7 @@ impl AnimationTiming {
 }
 
 /// Custom keyframe animations configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct KeyframesConfig {
     pub keyframes: Vec<Animation>,
     #[serde(default)]
@@ -311,8 +307,7 @@ pub struct KeyframesConfig {
 }
 
 /// Motion blur configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct MotionBlurConfig {
     #[serde(default)]
     pub intensity: f32,
@@ -322,8 +317,7 @@ pub struct MotionBlurConfig {
 
 /// Configuration for a 3D orbit/floating animation effect.
 /// Creates circular or elliptical motion with pseudo-depth (scale + opacity modulation).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct OrbitConfig {
     /// Horizontal radius of the orbit in pixels.
     #[serde(default = "default_orbit_radius")]
@@ -351,14 +345,19 @@ pub struct OrbitConfig {
     pub phase: f64,
 }
 
-fn default_orbit_radius() -> f64 { 30.0 }
-fn default_orbit_speed() -> f64 { 0.5 }
-fn default_orbit_depth() -> f64 { 0.15 }
+fn default_orbit_radius() -> f64 {
+    30.0
+}
+fn default_orbit_speed() -> f64 {
+    0.5
+}
+fn default_orbit_depth() -> f64 {
+    0.15
+}
 
 // --- Wiggle Config ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct WiggleConfig {
     pub property: String,
     pub amplitude: f64,
@@ -456,16 +455,12 @@ pub struct Stroke {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ImageFit {
     Cover,
+    #[default]
     Contain,
     Fill,
-}
-
-impl Default for ImageFit {
-    fn default() -> Self {
-        Self::Contain
-    }
 }
 
 // --- Shape Text ---
@@ -502,16 +497,12 @@ pub struct CaptionWord {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CaptionStyle {
+    #[default]
     Highlight,
     Karaoke,
     WordByWord,
-}
-
-impl Default for CaptionStyle {
-    fn default() -> Self {
-        Self::Highlight
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -623,8 +614,7 @@ fn default_drop_shadow_color() -> String {
 }
 
 /// Glow effect (colored luminous halo around the element)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct GlowConfig {
     /// Glow color (hex string, e.g. "#5C39EE")
     #[serde(default = "default_glow_color")]
@@ -677,7 +667,6 @@ pub struct TextGradient {
     #[serde(default)]
     pub angle: Option<f32>,
 }
-
 
 // --- Default functions ---
 

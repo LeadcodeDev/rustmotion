@@ -4,15 +4,15 @@ use skia_safe::{surfaces, Canvas, ClipOp, ColorType, ImageInfo, Paint, Rect};
 use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
 use crate::components::ChildComponent;
-use rustmotion_core::engine::animator::safe_div;
-use rustmotion_core::engine::renderer::color4f_from_hex;
 use crate::error::RustmotionError;
 use crate::schema::{Camera, Scene, SceneLayout, VideoConfig};
 use rustmotion_core::css::style::{
-    AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection,
-    Gap, JustifyContent as CssJustifyContent,
+    AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection, Gap,
+    JustifyContent as CssJustifyContent,
 };
 use rustmotion_core::css::units::LengthPercentage;
+use rustmotion_core::engine::animator::safe_div;
+use rustmotion_core::engine::renderer::color4f_from_hex;
 
 /// Internal render-time context — bundles per-scene timing/dimension info that
 /// the scene renderer threads down into its helpers. This is intentionally
@@ -40,7 +40,15 @@ pub fn render_frame_v2(
     _total_frames: u32,
     root_children: &[ChildComponent],
 ) -> Result<Vec<u8>> {
-    render_frame_v2_scaled(config, scene, frame_index, _total_frames, root_children, 1.0, None)
+    render_frame_v2_scaled(
+        config,
+        scene,
+        frame_index,
+        _total_frames,
+        root_children,
+        1.0,
+        None,
+    )
 }
 
 /// Render a frame with an optional scale factor for higher-resolution output.
@@ -76,8 +84,8 @@ pub fn render_frame_v2_scaled(
         None,
     );
 
-    let mut surface = surfaces::raster(&info, None, None)
-        .ok_or(RustmotionError::SurfaceCreation)?;
+    let mut surface =
+        surfaces::raster(&info, None, None).ok_or(RustmotionError::SurfaceCreation)?;
 
     let canvas = surface.canvas();
 
@@ -87,7 +95,11 @@ pub fn render_frame_v2_scaled(
     }
 
     // Fill background
-    let bg = scene.resolved_background.color.as_deref().unwrap_or(&config.background);
+    let bg = scene
+        .resolved_background
+        .color
+        .as_deref()
+        .unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
 
     // Animated background gradient(s) — with optional transition crossfade
@@ -109,11 +121,16 @@ pub fn render_frame_v2_scaled(
             if progress < 1.0 {
                 // Draw previous background with fading alpha
                 let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                    (scaled_w, scaled_h),
+                    ColorType::RGBA8888,
+                    skia_safe::AlphaType::Premul,
+                    None,
                 );
                 if let Some(mut prev_surface) = surfaces::raster(&bg_info, None, None) {
                     let prev_canvas = prev_surface.canvas();
-                    if scale_factor != 1.0 { prev_canvas.scale((scale_factor, scale_factor)); }
+                    if scale_factor != 1.0 {
+                        prev_canvas.scale((scale_factor, scale_factor));
+                    }
                     prev_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
                     for anim_bg in &prev.animated {
                         draw_animated_background(prev_canvas, anim_bg, continuous_time, w, h);
@@ -126,7 +143,9 @@ pub fn render_frame_v2_scaled(
                     // factor returns to its prior value after restore — adding
                     // another canvas.scale() afterwards would compound it.
                     canvas.save();
-                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    if scale_factor != 1.0 {
+                        canvas.reset_matrix();
+                    }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
                 }
@@ -134,11 +153,16 @@ pub fn render_frame_v2_scaled(
             if progress > 0.0 {
                 // Draw current background with growing alpha
                 let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                    (scaled_w, scaled_h),
+                    ColorType::RGBA8888,
+                    skia_safe::AlphaType::Premul,
+                    None,
                 );
                 if let Some(mut cur_surface) = surfaces::raster(&bg_info, None, None) {
                     let cur_canvas = cur_surface.canvas();
-                    if scale_factor != 1.0 { cur_canvas.scale((scale_factor, scale_factor)); }
+                    if scale_factor != 1.0 {
+                        cur_canvas.scale((scale_factor, scale_factor));
+                    }
                     cur_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
                     for anim_bg in &cur_bg.animated {
                         draw_animated_background(cur_canvas, anim_bg, continuous_time, w, h);
@@ -147,7 +171,9 @@ pub fn render_frame_v2_scaled(
                     let mut paint = Paint::default();
                     paint.set_alpha_f(progress);
                     canvas.save();
-                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    if scale_factor != 1.0 {
+                        canvas.reset_matrix();
+                    }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
                 }
@@ -155,12 +181,24 @@ pub fn render_frame_v2_scaled(
         } else {
             // Transition ended — keep using continuous time for the rest of the scene
             for anim_bg in &cur_bg.animated {
-                draw_animated_background(canvas, anim_bg, continuous_time, config.width as f32, config.height as f32);
+                draw_animated_background(
+                    canvas,
+                    anim_bg,
+                    continuous_time,
+                    config.width as f32,
+                    config.height as f32,
+                );
             }
         }
     } else {
         for anim_bg in &cur_bg.animated {
-            draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+            draw_animated_background(
+                canvas,
+                anim_bg,
+                time as f32,
+                config.width as f32,
+                config.height as f32,
+            );
         }
     }
 
@@ -178,7 +216,13 @@ pub fn render_frame_v2_scaled(
     // Apply virtual camera transform
     let camera_guard = if let Some(ref camera) = scene.camera {
         let g = super::CanvasGuard::new(canvas);
-        apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
+        apply_camera_transform(
+            canvas,
+            camera,
+            time as f32,
+            config.width as f32,
+            config.height as f32,
+        );
         Some(g)
     } else {
         None
@@ -319,7 +363,11 @@ fn render_with_new_pipeline_iter<'a, I>(
         scene_duration: ctx.scene_duration,
     });
     let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css, anim);
-    let layout = run_layout(&built.root, (viewport_w, viewport_h), &ConversionContext::default());
+    let layout = run_layout(
+        &built.root,
+        (viewport_w, viewport_h),
+        &ConversionContext::default(),
+    );
     let dispatcher = LegacyPaintDispatcher::new(&built.components);
     let frame = PaintFrame {
         time: ctx.time,
@@ -348,8 +396,16 @@ fn paint_decorative_fullscreen(
 
     if let Some(timed) = child.component.as_timed() {
         let (start_at, end_at) = timed.timing();
-        if let Some(s) = start_at { if ctx.time < s { return; } }
-        if let Some(e) = end_at { if ctx.time > e { return; } }
+        if let Some(s) = start_at {
+            if ctx.time < s {
+                return;
+            }
+        }
+        if let Some(e) = end_at {
+            if ctx.time > e {
+                return;
+            }
+        }
     }
 
     let props = match child.component.as_animatable() {
@@ -363,9 +419,13 @@ fn paint_decorative_fullscreen(
         }
         None => AnimatedProperties::default(),
     };
-    if props.opacity <= 0.0 { return; }
+    if props.opacity <= 0.0 {
+        return;
+    }
 
-    let Some(painter) = child.component.as_painter() else { return; };
+    let Some(painter) = child.component.as_painter() else {
+        return;
+    };
 
     let local = BoxLayout {
         x: 0.0,
@@ -409,10 +469,7 @@ pub fn deserialize_children(scene: &Scene) -> Vec<ChildComponent> {
 }
 
 /// Deserialize a scene's children — ready for render_frame_v2.
-pub fn prepare_scene(
-    scene: &Scene,
-    _config: &VideoConfig,
-) -> Vec<ChildComponent> {
+pub fn prepare_scene(scene: &Scene, _config: &VideoConfig) -> Vec<ChildComponent> {
     deserialize_children(scene)
 }
 
@@ -436,7 +493,15 @@ pub fn render_scene_frame_scaled(
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     let children = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, None)
+    render_frame_v2_scaled(
+        config,
+        scene,
+        frame_in_scene,
+        scene_total_frames,
+        &children,
+        scale_factor,
+        None,
+    )
 }
 
 /// Like `render_scene_frame_scaled` but with the previous scene's resolved background for transition interpolation.
@@ -450,7 +515,15 @@ pub fn render_scene_frame_scaled_with_prev_bg(
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
 ) -> Result<Vec<u8>> {
     let children = prepare_scene(scene, config);
-    render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, prev_bg)
+    render_frame_v2_scaled(
+        config,
+        scene,
+        frame_in_scene,
+        scene_total_frames,
+        &children,
+        scale_factor,
+        prev_bg,
+    )
 }
 
 /// Compute the per-frame enriched hit-map for a scene at video resolution.
@@ -463,7 +536,9 @@ pub fn render_scene_hits(
     scene: &Scene,
     frame_in_scene: u32,
 ) -> Vec<rustmotion_core::engine::paint_pass::EnrichedHit> {
-    use rustmotion_components::box_builder::{build_scene_from_refs, component_kind, BuildAnimationCtx};
+    use rustmotion_components::box_builder::{
+        build_scene_from_refs, component_kind, BuildAnimationCtx,
+    };
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
     use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::layout_pass::run_layout;
@@ -501,7 +576,10 @@ pub fn render_scene_hits(
     };
 
     let root_css = root_style(scene.layout.as_ref());
-    let anim = Some(BuildAnimationCtx { time, scene_duration: scene.duration });
+    let anim = Some(BuildAnimationCtx {
+        time,
+        scene_duration: scene.duration,
+    });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
     let layout = run_layout(&built.root, (vw, vh), &ConversionContext::default());
     let dispatcher = LegacyPaintDispatcher::new(&built.components);
@@ -517,8 +595,15 @@ pub fn render_scene_hits(
 
     hits.into_iter()
         .filter_map(|h| {
-            let child = built.components.get(h.node_id as usize).copied().flatten()?;
-            let pointer = built.root.find(h.node_id).and_then(|n| n.source_path.clone());
+            let child = built
+                .components
+                .get(h.node_id as usize)
+                .copied()
+                .flatten()?;
+            let pointer = built
+                .root
+                .find(h.node_id)
+                .and_then(|n| n.source_path.clone());
             Some(EnrichedHit {
                 node_id: h.node_id,
                 kind: component_kind(&child.component).to_string(),
@@ -543,10 +628,13 @@ pub fn render_world_frame_scaled(
     let time = frame_in_view as f64 / fps as f64;
 
     let info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    let mut surface = surfaces::raster(&info, None, None)
-        .ok_or(RustmotionError::SurfaceCreation)?;
+    let mut surface =
+        surfaces::raster(&info, None, None).ok_or(RustmotionError::SurfaceCreation)?;
     let canvas = surface.canvas();
 
     if scale_factor != 1.0 {
@@ -557,7 +645,11 @@ pub fn render_world_frame_scaled(
     let vh = config.height as f32;
 
     // 1. Draw base background (view-level or video-level)
-    let bg_color = view.background.color.as_deref().unwrap_or(&config.background);
+    let bg_color = view
+        .background
+        .color
+        .as_deref()
+        .unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg_color));
 
     // Pre-compute camera position for background parallax
@@ -571,7 +663,8 @@ pub fn render_world_frame_scaled(
 
     // Find the "active" scene (the one currently being displayed, latest in sequence)
     // and optionally a "previous" scene during camera pan for crossfade
-    let active_scene_idx = visible.iter()
+    let active_scene_idx = visible
+        .iter()
         .filter(|v| !v.is_persisted)
         .map(|v| v.scene_idx)
         .max();
@@ -585,9 +678,7 @@ pub fn render_world_frame_scaled(
         };
 
         // Check if we're during a camera pan (two non-persisted scenes visible)
-        let non_persisted: Vec<_> = visible.iter()
-            .filter(|v| !v.is_persisted)
-            .collect();
+        let non_persisted: Vec<_> = visible.iter().filter(|v| !v.is_persisted).collect();
 
         if non_persisted.len() >= 2 {
             // Crossfade between outgoing and incoming scene backgrounds
@@ -612,7 +703,8 @@ pub fn render_world_frame_scaled(
             let (_, _scene_b_start) = timeline.scene_windows[scene_b_idx];
             let pan_start = timeline.scene_windows[scene_b_idx].0 - pan_half;
             let pan_end = timeline.scene_windows[scene_b_idx].0 + pan_half;
-            let crossfade = safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0) as f32;
+            let crossfade =
+                safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0) as f32;
 
             // Draw scene A backgrounds with fading alpha
             if crossfade < 1.0 {
@@ -621,17 +713,30 @@ pub fn render_world_frame_scaled(
                 }
             }
             // Draw scene B backgrounds with growing alpha
-            if crossfade > 0.0 && bgs_a as *const _ != bgs_b as *const _ {
+            if crossfade > 0.0 && !std::ptr::eq(bgs_a, bgs_b) {
                 // If backgrounds are different, create a temporary surface for B and blend
                 let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+                    (scaled_w, scaled_h),
+                    ColorType::RGBA8888,
+                    skia_safe::AlphaType::Premul,
+                    None,
                 );
                 if let Some(mut bg_surface) = surfaces::raster(&bg_info, None, None) {
                     let bg_canvas = bg_surface.canvas();
-                    if scale_factor != 1.0 { bg_canvas.scale((scale_factor, scale_factor)); }
+                    if scale_factor != 1.0 {
+                        bg_canvas.scale((scale_factor, scale_factor));
+                    }
                     bg_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
                     for bg in bgs_b {
-                        draw_world_bg_with_parallax(bg_canvas, bg, time as f32, vw, vh, cam_x, cam_y);
+                        draw_world_bg_with_parallax(
+                            bg_canvas,
+                            bg,
+                            time as f32,
+                            vw,
+                            vh,
+                            cam_x,
+                            cam_y,
+                        );
                     }
                     let snapshot = bg_surface.image_snapshot();
                     let mut paint = skia_safe::Paint::default();
@@ -639,7 +744,9 @@ pub fn render_world_frame_scaled(
                     // save()/restore() already bracket the matrix change; an
                     // extra canvas.scale() after restore would compound it.
                     canvas.save();
-                    if scale_factor != 1.0 { canvas.reset_matrix(); }
+                    if scale_factor != 1.0 {
+                        canvas.reset_matrix();
+                    }
                     canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
                     canvas.restore();
                 }
@@ -665,7 +772,9 @@ pub fn render_world_frame_scaled(
     for vis in &visible {
         let scene = &view.scenes[vis.scene_idx];
         // Use world-position if specified, otherwise fall back to horizontal grid
-        let (wx, wy) = scene.world_position.as_ref()
+        let (wx, wy) = scene
+            .world_position
+            .as_ref()
             .map(|p| (p.x, p.y))
             .unwrap_or((vw / 2.0 + vis.scene_idx as f32 * vw, vh / 2.0));
 
@@ -746,10 +855,15 @@ pub fn render_world_frame_scaled(
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
     let dst_info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
-        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+    surface
+        .read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(())
+        .ok_or(RustmotionError::PixelRead)?;
 
     Ok(pixels)
 }
@@ -765,29 +879,51 @@ pub fn render_scene_bg_scaled(
     let scaled_h = (config.height as f32 * scale_factor) as i32;
     let mut time = frame_in_scene as f64 / config.fps as f64;
     if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at { time = freeze_at; }
+        if time > freeze_at {
+            time = freeze_at;
+        }
     }
     let info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    let mut surface = surfaces::raster(&info, None, None)
-        .ok_or(RustmotionError::SurfaceCreation)?;
+    let mut surface =
+        surfaces::raster(&info, None, None).ok_or(RustmotionError::SurfaceCreation)?;
     let canvas = surface.canvas();
-    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+    if scale_factor != 1.0 {
+        canvas.scale((scale_factor, scale_factor));
+    }
 
-    let bg = scene.resolved_background.color.as_deref().unwrap_or(&config.background);
+    let bg = scene
+        .resolved_background
+        .color
+        .as_deref()
+        .unwrap_or(&config.background);
     canvas.clear(color4f_from_hex(bg));
     for anim_bg in &scene.resolved_background.animated {
-        draw_animated_background(canvas, anim_bg, time as f32, config.width as f32, config.height as f32);
+        draw_animated_background(
+            canvas,
+            anim_bg,
+            time as f32,
+            config.width as f32,
+            config.height as f32,
+        );
     }
 
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
     let dst_info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
-        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+    surface
+        .read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(())
+        .ok_or(RustmotionError::PixelRead)?;
     Ok(pixels)
 }
 
@@ -804,15 +940,22 @@ pub fn render_scene_fg_scaled(
     let scaled_h = (config.height as f32 * scale_factor) as i32;
     let mut time = frame_in_scene as f64 / config.fps as f64;
     if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at { time = freeze_at; }
+        if time > freeze_at {
+            time = freeze_at;
+        }
     }
     let info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    let mut surface = surfaces::raster(&info, None, None)
-        .ok_or(RustmotionError::SurfaceCreation)?;
+    let mut surface =
+        surfaces::raster(&info, None, None).ok_or(RustmotionError::SurfaceCreation)?;
     let canvas = surface.canvas();
-    if scale_factor != 1.0 { canvas.scale((scale_factor, scale_factor)); }
+    if scale_factor != 1.0 {
+        canvas.scale((scale_factor, scale_factor));
+    }
 
     // Transparent background
     canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
@@ -829,7 +972,13 @@ pub fn render_scene_fg_scaled(
 
     let has_camera = scene.camera.is_some();
     if let Some(ref camera) = scene.camera {
-        apply_camera_transform(canvas, camera, time as f32, config.width as f32, config.height as f32);
+        apply_camera_transform(
+            canvas,
+            camera,
+            time as f32,
+            config.width as f32,
+            config.height as f32,
+        );
     }
 
     // Clip scene content to viewport dimensions so scaled elements don't overflow
@@ -849,15 +998,22 @@ pub fn render_scene_fg_scaled(
     );
     canvas.restore();
 
-    if has_camera { canvas.restore(); }
+    if has_camera {
+        canvas.restore();
+    }
 
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
     let dst_info = ImageInfo::new(
-        (scaled_w, scaled_h), ColorType::RGBA8888, skia_safe::AlphaType::Premul, None,
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
     );
-    surface.read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
-        .then_some(()).ok_or(RustmotionError::PixelRead)?;
+    surface
+        .read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(())
+        .ok_or(RustmotionError::PixelRead)?;
     Ok(pixels)
 }
 
@@ -913,7 +1069,13 @@ pub(super) fn interpolate_camera_property(camera: &Camera, property: &str, time:
 }
 
 /// Apply camera transform to the canvas: translate, zoom, rotate around scene center.
-pub(super) fn apply_camera_transform(canvas: &Canvas, camera: &Camera, time: f32, width: f32, height: f32) {
+pub(super) fn apply_camera_transform(
+    canvas: &Canvas,
+    camera: &Camera,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
     let x = interpolate_camera_property(camera, "x", time);
     let y = interpolate_camera_property(camera, "y", time);
     let zoom = interpolate_camera_property(camera, "zoom", time);

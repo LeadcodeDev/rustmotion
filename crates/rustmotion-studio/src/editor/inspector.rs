@@ -78,80 +78,306 @@ const WEIGHTS: &[(&str, &str)] = &[
 // ── Field lists ────────────────────────────────────────────────────────────
 
 const F_TYPO: &[Field] = &[
-    Field { name: "font-size", label: "Size", ctrl: Ctrl::UnitSlider { min: 8.0, max: 200.0, step: 1.0, unit: "PX" } },
-    Field { name: "font-weight", label: "Weight", ctrl: Ctrl::Weight },
-    Field { name: "style", label: "Style", ctrl: Ctrl::StyleToggles },
-    Field { name: "line-height", label: "Line height", ctrl: Ctrl::UnitSlider { min: 0.8, max: 3.0, step: 0.1, unit: "" } },
-    Field { name: "letter-spacing", label: "Tracking", ctrl: Ctrl::UnitSlider { min: -5.0, max: 20.0, step: 0.5, unit: "PX" } },
-    Field { name: "text-align", label: "Align", ctrl: Ctrl::Align },
+    Field {
+        name: "font-size",
+        label: "Size",
+        ctrl: Ctrl::UnitSlider {
+            min: 8.0,
+            max: 200.0,
+            step: 1.0,
+            unit: "PX",
+        },
+    },
+    Field {
+        name: "font-weight",
+        label: "Weight",
+        ctrl: Ctrl::Weight,
+    },
+    Field {
+        name: "style",
+        label: "Style",
+        ctrl: Ctrl::StyleToggles,
+    },
+    Field {
+        name: "line-height",
+        label: "Line height",
+        ctrl: Ctrl::UnitSlider {
+            min: 0.8,
+            max: 3.0,
+            step: 0.1,
+            unit: "",
+        },
+    },
+    Field {
+        name: "letter-spacing",
+        label: "Tracking",
+        ctrl: Ctrl::UnitSlider {
+            min: -5.0,
+            max: 20.0,
+            step: 0.5,
+            unit: "PX",
+        },
+    },
+    Field {
+        name: "text-align",
+        label: "Align",
+        ctrl: Ctrl::Align,
+    },
 ];
 
 const F_COLOR: &[Field] = &[
-    Field { name: "color", label: "Text", ctrl: Ctrl::Color { clearable: false } },
-    Field { name: "background", label: "Background", ctrl: Ctrl::Color { clearable: true } },
+    Field {
+        name: "color",
+        label: "Text",
+        ctrl: Ctrl::Color { clearable: false },
+    },
+    Field {
+        name: "background",
+        label: "Background",
+        ctrl: Ctrl::Color { clearable: true },
+    },
 ];
 
 const F_LAYOUT: &[Field] = &[
-    Field { name: "display", label: "Display", ctrl: Ctrl::Select(&["block", "flex", "grid", "inline-block", "none", "contents"]) },
-    Field { name: "position", label: "Position", ctrl: Ctrl::Select(&["static", "relative", "absolute"]) },
-    Field { name: "top", label: "Top", ctrl: Ctrl::Text },
-    Field { name: "right", label: "Right", ctrl: Ctrl::Text },
-    Field { name: "bottom", label: "Bottom", ctrl: Ctrl::Text },
-    Field { name: "left", label: "Left", ctrl: Ctrl::Text },
-    Field { name: "z-index", label: "Z-index", ctrl: Ctrl::Number },
-    Field { name: "overflow", label: "Overflow", ctrl: Ctrl::Select(&["visible", "hidden", "auto", "scroll", "clip"]) },
-    Field { name: "visibility", label: "Visible", ctrl: Ctrl::Switch("hidden", "visible") },
+    Field {
+        name: "display",
+        label: "Display",
+        ctrl: Ctrl::Select(&["block", "flex", "grid", "inline-block", "none", "contents"]),
+    },
+    Field {
+        name: "position",
+        label: "Position",
+        ctrl: Ctrl::Select(&["static", "relative", "absolute"]),
+    },
+    Field {
+        name: "top",
+        label: "Top",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "right",
+        label: "Right",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "bottom",
+        label: "Bottom",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "left",
+        label: "Left",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "z-index",
+        label: "Z-index",
+        ctrl: Ctrl::Number,
+    },
+    Field {
+        name: "overflow",
+        label: "Overflow",
+        ctrl: Ctrl::Select(&["visible", "hidden", "auto", "scroll", "clip"]),
+    },
+    Field {
+        name: "visibility",
+        label: "Visible",
+        ctrl: Ctrl::Switch("hidden", "visible"),
+    },
 ];
 
 const F_POSITION: &[Field] = &[
-    Field { name: "position", label: "Position", ctrl: Ctrl::Select(&["static", "relative", "absolute"]) },
-    Field { name: "top", label: "Top", ctrl: Ctrl::Text },
-    Field { name: "left", label: "Left", ctrl: Ctrl::Text },
-    Field { name: "z-index", label: "Z-index", ctrl: Ctrl::Number },
+    Field {
+        name: "position",
+        label: "Position",
+        ctrl: Ctrl::Select(&["static", "relative", "absolute"]),
+    },
+    Field {
+        name: "top",
+        label: "Top",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "left",
+        label: "Left",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "z-index",
+        label: "Z-index",
+        ctrl: Ctrl::Number,
+    },
 ];
 
 const F_FLEX: &[Field] = &[
-    Field { name: "flex-direction", label: "Direction", ctrl: Ctrl::Select(&["row", "row-reverse", "column", "column-reverse"]) },
-    Field { name: "flex-wrap", label: "Wrap", ctrl: Ctrl::Select(&["nowrap", "wrap", "wrap-reverse"]) },
-    Field { name: "justify-content", label: "Justify", ctrl: Ctrl::Select(&["flex-start", "flex-end", "center", "space-between", "space-around", "space-evenly", "start", "end"]) },
-    Field { name: "align-items", label: "Align", ctrl: Ctrl::Select(&["stretch", "flex-start", "flex-end", "center", "baseline", "start", "end"]) },
-    Field { name: "align-content", label: "Align content", ctrl: Ctrl::Select(&["stretch", "flex-start", "flex-end", "center", "space-between", "space-around", "space-evenly", "start", "end"]) },
-    Field { name: "gap", label: "Gap", ctrl: Ctrl::Text },
+    Field {
+        name: "flex-direction",
+        label: "Direction",
+        ctrl: Ctrl::Select(&["row", "row-reverse", "column", "column-reverse"]),
+    },
+    Field {
+        name: "flex-wrap",
+        label: "Wrap",
+        ctrl: Ctrl::Select(&["nowrap", "wrap", "wrap-reverse"]),
+    },
+    Field {
+        name: "justify-content",
+        label: "Justify",
+        ctrl: Ctrl::Select(&[
+            "flex-start",
+            "flex-end",
+            "center",
+            "space-between",
+            "space-around",
+            "space-evenly",
+            "start",
+            "end",
+        ]),
+    },
+    Field {
+        name: "align-items",
+        label: "Align",
+        ctrl: Ctrl::Select(&[
+            "stretch",
+            "flex-start",
+            "flex-end",
+            "center",
+            "baseline",
+            "start",
+            "end",
+        ]),
+    },
+    Field {
+        name: "align-content",
+        label: "Align content",
+        ctrl: Ctrl::Select(&[
+            "stretch",
+            "flex-start",
+            "flex-end",
+            "center",
+            "space-between",
+            "space-around",
+            "space-evenly",
+            "start",
+            "end",
+        ]),
+    },
+    Field {
+        name: "gap",
+        label: "Gap",
+        ctrl: Ctrl::Text,
+    },
 ];
 
 const F_SPACING: &[Field] = &[
-    Field { name: "padding", label: "Padding", ctrl: Ctrl::Text },
-    Field { name: "margin", label: "Margin", ctrl: Ctrl::Text },
+    Field {
+        name: "padding",
+        label: "Padding",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "margin",
+        label: "Margin",
+        ctrl: Ctrl::Text,
+    },
 ];
 
-const F_MARGIN: &[Field] = &[Field { name: "margin", label: "Margin", ctrl: Ctrl::Text }];
+const F_MARGIN: &[Field] = &[Field {
+    name: "margin",
+    label: "Margin",
+    ctrl: Ctrl::Text,
+}];
 
 const F_SIZING: &[Field] = &[
-    Field { name: "width", label: "Width", ctrl: Ctrl::Text },
-    Field { name: "height", label: "Height", ctrl: Ctrl::Text },
-    Field { name: "min-width", label: "Min W", ctrl: Ctrl::Text },
-    Field { name: "min-height", label: "Min H", ctrl: Ctrl::Text },
-    Field { name: "max-width", label: "Max W", ctrl: Ctrl::Text },
-    Field { name: "max-height", label: "Max H", ctrl: Ctrl::Text },
+    Field {
+        name: "width",
+        label: "Width",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "height",
+        label: "Height",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "min-width",
+        label: "Min W",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "min-height",
+        label: "Min H",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "max-width",
+        label: "Max W",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "max-height",
+        label: "Max H",
+        ctrl: Ctrl::Text,
+    },
 ];
 
 const F_SIZING_WH: &[Field] = &[
-    Field { name: "width", label: "Width", ctrl: Ctrl::Text },
-    Field { name: "height", label: "Height", ctrl: Ctrl::Text },
+    Field {
+        name: "width",
+        label: "Width",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "height",
+        label: "Height",
+        ctrl: Ctrl::Text,
+    },
 ];
 
 const F_TEXT_SIZING: &[Field] = &[
-    Field { name: "width", label: "Width", ctrl: Ctrl::Text },
-    Field { name: "max-width", label: "Max W", ctrl: Ctrl::Text },
+    Field {
+        name: "width",
+        label: "Width",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "max-width",
+        label: "Max W",
+        ctrl: Ctrl::Text,
+    },
 ];
 
 const F_APPEARANCE: &[Field] = &[
-    Field { name: "background", label: "Background", ctrl: Ctrl::Color { clearable: true } },
-    Field { name: "border-radius", label: "Radius", ctrl: Ctrl::Text },
-    Field { name: "opacity", label: "Opacity", ctrl: Ctrl::Slider { min: 0.0, max: 1.0, step: 0.01 } },
+    Field {
+        name: "background",
+        label: "Background",
+        ctrl: Ctrl::Color { clearable: true },
+    },
+    Field {
+        name: "border-radius",
+        label: "Radius",
+        ctrl: Ctrl::Text,
+    },
+    Field {
+        name: "opacity",
+        label: "Opacity",
+        ctrl: Ctrl::Slider {
+            min: 0.0,
+            max: 1.0,
+            step: 0.01,
+        },
+    },
 ];
 
-const F_OPACITY: &[Field] = &[Field { name: "opacity", label: "Opacity", ctrl: Ctrl::Slider { min: 0.0, max: 1.0, step: 0.01 } }];
+const F_OPACITY: &[Field] = &[Field {
+    name: "opacity",
+    label: "Opacity",
+    ctrl: Ctrl::Slider {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+    },
+}];
 
 // ── Per-family sections (strict: only valid props per element type) ──────────
 
@@ -176,33 +402,87 @@ fn family(kind: &str) -> Family {
 }
 
 const TEXT_SECTIONS: &[Section] = &[
-    Section { title: "Typography", fields: F_TYPO },
-    Section { title: "Color", fields: F_COLOR },
-    Section { title: "Sizing", fields: F_TEXT_SIZING },
-    Section { title: "Spacing", fields: F_SPACING },
-    Section { title: "Appearance", fields: F_OPACITY },
+    Section {
+        title: "Typography",
+        fields: F_TYPO,
+    },
+    Section {
+        title: "Color",
+        fields: F_COLOR,
+    },
+    Section {
+        title: "Sizing",
+        fields: F_TEXT_SIZING,
+    },
+    Section {
+        title: "Spacing",
+        fields: F_SPACING,
+    },
+    Section {
+        title: "Appearance",
+        fields: F_OPACITY,
+    },
 ];
 
 const CONTAINER_SECTIONS: &[Section] = &[
-    Section { title: "Layout", fields: F_LAYOUT },
-    Section { title: "Flex", fields: F_FLEX },
-    Section { title: "Spacing", fields: F_SPACING },
-    Section { title: "Sizing", fields: F_SIZING },
-    Section { title: "Appearance", fields: F_APPEARANCE },
+    Section {
+        title: "Layout",
+        fields: F_LAYOUT,
+    },
+    Section {
+        title: "Flex",
+        fields: F_FLEX,
+    },
+    Section {
+        title: "Spacing",
+        fields: F_SPACING,
+    },
+    Section {
+        title: "Sizing",
+        fields: F_SIZING,
+    },
+    Section {
+        title: "Appearance",
+        fields: F_APPEARANCE,
+    },
 ];
 
 const SHAPE_SECTIONS: &[Section] = &[
-    Section { title: "Layout", fields: F_POSITION },
-    Section { title: "Sizing", fields: F_SIZING },
-    Section { title: "Spacing", fields: F_MARGIN },
-    Section { title: "Appearance", fields: F_APPEARANCE },
+    Section {
+        title: "Layout",
+        fields: F_POSITION,
+    },
+    Section {
+        title: "Sizing",
+        fields: F_SIZING,
+    },
+    Section {
+        title: "Spacing",
+        fields: F_MARGIN,
+    },
+    Section {
+        title: "Appearance",
+        fields: F_APPEARANCE,
+    },
 ];
 
 const FALLBACK_SECTIONS: &[Section] = &[
-    Section { title: "Layout", fields: F_POSITION },
-    Section { title: "Sizing", fields: F_SIZING_WH },
-    Section { title: "Spacing", fields: F_SPACING },
-    Section { title: "Appearance", fields: F_APPEARANCE },
+    Section {
+        title: "Layout",
+        fields: F_POSITION,
+    },
+    Section {
+        title: "Sizing",
+        fields: F_SIZING_WH,
+    },
+    Section {
+        title: "Spacing",
+        fields: F_SPACING,
+    },
+    Section {
+        title: "Appearance",
+        fields: F_APPEARANCE,
+    },
 ];
 
 fn sections(f: Family) -> &'static [Section] {
@@ -226,7 +506,11 @@ const TEXTAREA_STYLE: &str = "width:100%; box-sizing:border-box; min-height:58px
 /// The button chrome (bg/hover/active) is themed via `INSPECTOR_CSS` classes —
 /// inline styles can't override the WKWebView native button `appearance`.
 fn seg_icon(active: bool) -> &'static str {
-    if active { "var(--rm-on-accent)" } else { "var(--rm-text-muted)" }
+    if active {
+        "var(--rm-on-accent)"
+    } else {
+        "var(--rm-text-muted)"
+    }
 }
 
 // ── Value helpers ────────────────────────────────────────────────────────────
@@ -368,7 +652,11 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
 
     let control = match field.ctrl {
         Ctrl::Text | Ctrl::Number => {
-            let kind = if matches!(field.ctrl, Ctrl::Number) { "number" } else { "text" };
+            let kind = if matches!(field.ctrl, Ctrl::Number) {
+                "number"
+            } else {
+                "text"
+            };
             rsx! {
                 input {
                     r#type: "{kind}",
@@ -382,7 +670,12 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
                 }
             }
         }
-        Ctrl::UnitSlider { min, max, step, unit } => {
+        Ctrl::UnitSlider {
+            min,
+            max,
+            step,
+            unit,
+        } => {
             // Shared live state so the slider and the number field track each other
             // (the panel itself doesn't re-render on the file reload). `txt` holds the
             // field's raw text so typing decimals isn't reformatted mid-keystroke.
@@ -500,7 +793,13 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
             }
         }
         Ctrl::Align => {
-            let vr = |v: &str| if value == v { ButtonVariant::Primary } else { ButtonVariant::Ghost };
+            let vr = |v: &str| {
+                if value == v {
+                    ButtonVariant::Primary
+                } else {
+                    ButtonVariant::Ghost
+                }
+            };
             rsx! {
                 div { class: "rm-seg",
                     Button {
@@ -528,7 +827,8 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
         }
         Ctrl::StyleToggles => {
             let weight = prop_str(&style, "font-weight");
-            let is_bold = weight == "bold" || weight.parse::<i32>().map(|w| w >= 600).unwrap_or(false);
+            let is_bold =
+                weight == "bold" || weight.parse::<i32>().map(|w| w >= 600).unwrap_or(false);
             let fstyle = prop_str(&style, "font-style");
             let is_italic = fstyle == "italic" || fstyle == "oblique";
             rsx! {
@@ -663,7 +963,9 @@ fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
     };
     if rustmotion::loader::is_html_path(&path) {
         if let Ok(html) = std::fs::read_to_string(&path) {
-            if let Some(updated) = rustmotion::loader::set_html_inline_style(&html, pointer, prop, value) {
+            if let Some(updated) =
+                rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
+            {
                 let _ = std::fs::write(&path, updated);
             }
         }

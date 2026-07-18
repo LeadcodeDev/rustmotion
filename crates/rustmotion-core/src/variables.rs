@@ -27,8 +27,7 @@ fn merge_variables(
                 return Err(RustmotionError::UndefinedVariable {
                     name: name.clone(),
                     path: path.to_string(),
-                }
-                .into());
+                });
             }
             merged.insert(name.clone(), value.clone());
         }
@@ -114,11 +113,7 @@ fn parse_single_var_ref(s: &str) -> Option<&str> {
 
 /// Perform string interpolation: replace $name occurrences within a larger string.
 /// Handles $$ escape sequences.
-fn interpolate_string(
-    s: &str,
-    vars: &HashMap<String, Value>,
-    path: &str,
-) -> Result<String> {
+fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Result<String> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
@@ -151,8 +146,7 @@ fn interpolate_string(
                             return Err(RustmotionError::VariableInterpolationTypeError {
                                 name,
                                 path: path.to_string(),
-                            }
-                            .into());
+                            });
                         }
                     }
                 } else {
@@ -243,8 +237,7 @@ pub fn apply_variables(
                     return Err(RustmotionError::VariableMissingDefault {
                         name: name.clone(),
                         path: path.to_string(),
-                    }
-                    .into());
+                    });
                 }
             }
 
@@ -261,15 +254,12 @@ pub fn apply_variables(
                 return Err(RustmotionError::UnresolvedVariable {
                     name,
                     path: path.to_string(),
-                }
-                .into());
+                });
             }
 
             Ok(())
         }
-        None => {
-            Ok(())
-        }
+        None => Ok(()),
     }
 }
 
@@ -427,19 +417,13 @@ mod tests {
         vars.insert("name".to_string(), json!("resolved"));
         substitute(&mut val, &vars, "test").unwrap();
         // "config" block should be untouched
-        assert_eq!(
-            val["config"]["name"]["default"],
-            json!("$not_a_ref")
-        );
+        assert_eq!(val["config"]["name"]["default"], json!("$not_a_ref"));
         assert_eq!(val["text"], json!("resolved"));
     }
 
     #[test]
     fn test_recursive_array_substitution() {
-        let mut val = json!([
-            "$a",
-            ["$b", "$c"]
-        ]);
+        let mut val = json!(["$a", ["$b", "$c"]]);
         let mut vars = HashMap::new();
         vars.insert("a".to_string(), json!(1));
         vars.insert("b".to_string(), json!(2));

@@ -4,6 +4,14 @@ use dashmap::DashMap;
 
 use crate::error::{Result, RustmotionError};
 
+type GifFrame = (Vec<u8>, u32, u32);
+type GifData = Arc<(Vec<GifFrame>, Vec<f64>, f64)>;
+type GifCacheMap = Arc<DashMap<String, GifData>>;
+
+type VideoFrame = (f64, Vec<u8>, u32, u32);
+type VideoFrameList = Arc<Vec<VideoFrame>>;
+type VideoFrameCacheMap = Arc<DashMap<String, VideoFrameList>>;
+
 /// Global asset cache for decoded images (keyed by file path)
 static ASSET_CACHE: OnceLock<Arc<DashMap<String, skia_safe::Image>>> = OnceLock::new();
 
@@ -20,11 +28,9 @@ pub fn clear_asset_cache() {
 
 /// GIF frame data cache: stores decoded frames with pre-computed cumulative timestamps
 /// (frames_rgba, cumulative_times, total_duration) keyed by file path
-static GIF_CACHE: OnceLock<Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>>> =
-    OnceLock::new();
+static GIF_CACHE: OnceLock<GifCacheMap> = OnceLock::new();
 
-pub fn gif_cache() -> &'static Arc<DashMap<String, Arc<(Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64)>>>
-{
+pub fn gif_cache() -> &'static GifCacheMap {
     GIF_CACHE.get_or_init(|| Arc::new(DashMap::new()))
 }
 
@@ -62,10 +68,9 @@ pub fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Resul
 // ─── Video frame extraction ─────────────────────────────────────────────────
 
 /// Cache for pre-extracted video frames: key = "src:width:height", value = sorted list of (time, RGBA data, width, height)
-static VIDEO_FRAME_CACHE: OnceLock<Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>>> =
-    OnceLock::new();
+static VIDEO_FRAME_CACHE: OnceLock<VideoFrameCacheMap> = OnceLock::new();
 
-pub fn video_frame_cache() -> &'static Arc<DashMap<String, Arc<Vec<(f64, Vec<u8>, u32, u32)>>>> {
+pub fn video_frame_cache() -> &'static VideoFrameCacheMap {
     VIDEO_FRAME_CACHE.get_or_init(|| Arc::new(DashMap::new()))
 }
 
@@ -120,8 +125,7 @@ pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Res
     if !output.status.success() {
         return Err(RustmotionError::FfmpegFrameExtract {
             src: src.to_string(),
-        }
-        .into());
+        });
     }
 
     Ok(output.stdout)

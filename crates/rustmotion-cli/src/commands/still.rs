@@ -29,7 +29,10 @@ pub fn cmd_still(
             let scene_frames = (scene.duration * fps as f64).round() as u32;
 
             let rgba = engine::render::render_scene_frame(
-                config, scene, frame_index.min(scene_frames.saturating_sub(1)), scene_frames,
+                config,
+                scene,
+                frame_index.min(scene_frames.saturating_sub(1)),
+                scene_frames,
             )?;
 
             // Create parent directories
@@ -42,11 +45,9 @@ pub fn cmd_still(
             let img = image::RgbaImage::from_raw(config.width, config.height, rgba)
                 .ok_or(RustmotionError::PixelImage)?;
 
-            let fmt = format.as_deref().unwrap_or_else(|| {
-                output.extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("png")
-            });
+            let fmt = format
+                .as_deref()
+                .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("png"));
 
             match fmt {
                 "jpeg" | "jpg" => {
@@ -82,5 +83,5 @@ pub fn cmd_still(
         scene_start = scene_end;
     }
 
-    Err(RustmotionError::TimeOutOfRange { time }.into())
+    Err(RustmotionError::TimeOutOfRange { time })
 }

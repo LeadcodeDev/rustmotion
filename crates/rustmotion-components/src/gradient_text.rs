@@ -2,13 +2,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Point, TextBlob};
 
-use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw};
+use rustmotion_core::css::style::{
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, font_mgr, paint_from_hex,
-    parse_hex_color,
+    emoji_typeface, font_mgr, paint_from_hex, parse_hex_color,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -64,7 +65,9 @@ impl GradientText {
             _ => skia_safe::font_style::Slant::Upright,
         };
         let weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => skia_safe::font_style::Weight::BOLD,
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
+                skia_safe::font_style::Weight::BOLD
+            }
             Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
             _ => skia_safe::font_style::Weight::NORMAL,
         };

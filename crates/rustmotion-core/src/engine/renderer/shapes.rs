@@ -3,7 +3,14 @@ use skia_safe::{Canvas, Paint, Rect};
 use crate::schema::ShapeType;
 
 /// Build a `Path` for the given shape type without drawing it.
-pub fn build_shape_path(shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, corner_radius: Option<f32>) -> Option<skia_safe::Path> {
+pub fn build_shape_path(
+    shape_type: &ShapeType,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    corner_radius: Option<f32>,
+) -> Option<skia_safe::Path> {
     match shape_type {
         ShapeType::Rect => {
             let mut path = skia_safe::Path::new();
@@ -44,11 +51,16 @@ pub fn build_shape_path(shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, 
             let n = *points as usize;
             let mut path = skia_safe::Path::new();
             for i in 0..(n * 2) {
-                let angle = (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let angle =
+                    (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
                 let r = if i % 2 == 0 { outer_r } else { inner_r };
                 let px = cx + r * angle.cos();
                 let py = cy + r * angle.sin();
-                if i == 0 { path.move_to((px, py)); } else { path.line_to((px, py)); }
+                if i == 0 {
+                    path.move_to((px, py));
+                } else {
+                    path.line_to((px, py));
+                }
             }
             path.close();
             Some(path)
@@ -60,24 +72,38 @@ pub fn build_shape_path(shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, 
             let n = *sides as usize;
             let mut path = skia_safe::Path::new();
             for i in 0..n {
-                let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32
+                    - std::f32::consts::FRAC_PI_2;
                 let px = cx + r * angle.cos();
                 let py = cy + r * angle.sin();
-                if i == 0 { path.move_to((px, py)); } else { path.line_to((px, py)); }
+                if i == 0 {
+                    path.move_to((px, py));
+                } else {
+                    path.line_to((px, py));
+                }
             }
             path.close();
             Some(path)
         }
-        ShapeType::Path { data } => {
-            skia_safe::Path::from_svg(data)
-        }
+        ShapeType::Path { data } => skia_safe::Path::from_svg(data),
     }
 }
 
-pub fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, w: f32, h: f32, corner_radius: Option<f32>, paint: &Paint) {
+pub fn draw_shape_path(
+    canvas: &Canvas,
+    shape_type: &ShapeType,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    corner_radius: Option<f32>,
+    paint: &Paint,
+) {
     let rect = Rect::from_xywh(x, y, w, h);
     match shape_type {
-        ShapeType::Rect => { canvas.draw_rect(rect, paint); }
+        ShapeType::Rect => {
+            canvas.draw_rect(rect, paint);
+        }
         ShapeType::RoundedRect => {
             let r = corner_radius.unwrap_or(8.0);
             let rrect = skia_safe::RRect::new_rect_xy(rect, r, r);
@@ -87,7 +113,9 @@ pub fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, 
             let radius = w.min(h) / 2.0;
             canvas.draw_circle((x + w / 2.0, y + h / 2.0), radius, paint);
         }
-        ShapeType::Ellipse => { canvas.draw_oval(rect, paint); }
+        ShapeType::Ellipse => {
+            canvas.draw_oval(rect, paint);
+        }
         ShapeType::Triangle => {
             let mut path = skia_safe::Path::new();
             path.move_to((x + w / 2.0, y));
@@ -104,7 +132,8 @@ pub fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, 
             let n = *points as usize;
             let mut path = skia_safe::Path::new();
             for i in 0..(n * 2) {
-                let angle = (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let angle =
+                    (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
                 let r = if i % 2 == 0 { outer_r } else { inner_r };
                 let px = cx + r * angle.cos();
                 let py = cy + r * angle.sin();
@@ -124,7 +153,8 @@ pub fn draw_shape_path(canvas: &Canvas, shape_type: &ShapeType, x: f32, y: f32, 
             let n = *sides as usize;
             let mut path = skia_safe::Path::new();
             for i in 0..n {
-                let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
+                let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32
+                    - std::f32::consts::FRAC_PI_2;
                 let px = cx + r * angle.cos();
                 let py = cy + r * angle.sin();
                 if i == 0 {

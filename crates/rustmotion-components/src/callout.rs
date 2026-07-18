@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, Path, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -13,17 +13,13 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ArrowDirection {
     Top,
+    #[default]
     Bottom,
     Left,
     Right,
-}
-
-impl Default for ArrowDirection {
-    fn default() -> Self {
-        Self::Bottom
-    }
 }
 
 /// Speech bubble with a directional arrow.

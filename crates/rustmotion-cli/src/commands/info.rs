@@ -16,7 +16,10 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
     let total_layers: usize = all_scenes.iter().map(|s| s.children.len()).sum();
 
     println!("File: {}", input.display());
-    println!("Resolution: {}x{}", scenario.video.width, scenario.video.height);
+    println!(
+        "Resolution: {}x{}",
+        scenario.video.width, scenario.video.height
+    );
     println!("FPS: {}", fps);
     println!("Duration: {:.1}s ({} frames)", total_duration, total_frames);
     println!("Views: {}", scenario.views.len());
@@ -29,7 +32,12 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
             schema::ViewType::Slide => "Slide",
             schema::ViewType::World => "World",
         };
-        println!("  View {}: {} ({} scenes)", vi + 1, vtype, view.scenes.len());
+        println!(
+            "  View {}: {} ({} scenes)",
+            vi + 1,
+            vtype,
+            view.scenes.len()
+        );
         for (si, scene) in view.scenes.iter().enumerate() {
             let scene_frames = (scene.duration * fps as f64).round() as u32;
             println!(

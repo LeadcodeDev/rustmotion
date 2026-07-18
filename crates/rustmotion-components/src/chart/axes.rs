@@ -79,8 +79,7 @@ impl Chart {
                 let label = format_number(val);
                 let mut label_paint = paint_from_hex(&self.label_color);
                 label_paint.set_anti_alias(true);
-                let label_w =
-                    measure_text_with_fallback(&label, &font, &emoji_font, 0.0);
+                let label_w = measure_text_with_fallback(&label, &font, &emoji_font, 0.0);
                 let lx = chart_x - label_w - 6.0;
                 let ly = y + ascent / 2.0;
                 draw_text_with_fallback(
@@ -110,8 +109,7 @@ impl Chart {
                 } else {
                     chart_x + (i as f32 / (n - 1).max(1) as f32) * chart_w
                 };
-                let label_w =
-                    measure_text_with_fallback(label, &font, &emoji_font, 0.0);
+                let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
                 let lx = x - label_w / 2.0;
                 let ly = chart_y + chart_h + ascent + 6.0;
                 draw_text_with_fallback(

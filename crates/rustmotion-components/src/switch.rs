@@ -149,7 +149,14 @@ impl Switch {
             let text_y = h / 2.0 + (-metrics.ascent) / 2.0;
 
             draw_text_with_fallback(
-                canvas, label, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
+                canvas,
+                label,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &text_paint,
             );
         }
     }

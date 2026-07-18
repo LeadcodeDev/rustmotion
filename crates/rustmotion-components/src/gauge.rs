@@ -156,7 +156,14 @@ impl Gauge {
             let text_y = cy + (-metrics.ascent) / 2.0;
 
             draw_text_with_fallback(
-                canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
+                canvas,
+                &text,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &text_paint,
             );
         }
 
@@ -182,7 +189,14 @@ impl Gauge {
             let label_y = cy + radius * 0.35;
 
             draw_text_with_fallback(
-                canvas, label, &font, &emoji_font, 0.0, label_x, label_y, &label_paint,
+                canvas,
+                label,
+                &font,
+                &emoji_font,
+                0.0,
+                label_x,
+                label_y,
+                &label_paint,
             );
         }
     }

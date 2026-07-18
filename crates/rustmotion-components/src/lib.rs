@@ -19,7 +19,6 @@ pub mod counter;
 pub mod cursor;
 pub mod divider;
 pub mod dot_map;
-pub mod world_bitmap;
 pub mod flex;
 pub mod gauge;
 pub mod gif;
@@ -27,12 +26,12 @@ pub mod gradient_text;
 pub mod grid;
 pub mod heatmap;
 pub mod icon;
+pub mod image;
 pub mod kbd;
 pub mod line;
 pub mod list;
 pub mod lottie;
 pub mod marquee;
-pub mod image;
 pub mod mockup;
 pub mod notification;
 pub mod particle;
@@ -58,6 +57,7 @@ pub mod timeline;
 pub mod tooltip;
 pub mod treemap;
 pub mod video;
+pub mod world_bitmap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -240,78 +240,180 @@ pub enum Component {
 impl Component {
     pub fn as_animatable(&self) -> Option<&dyn Animatable> {
         match self {
-            Component::Text(c) => Some(c), Component::Shape(c) => Some(c), Component::Image(c) => Some(c),
-            Component::Icon(c) => Some(c), Component::Svg(c) => Some(c), Component::Video(c) => Some(c),
-            Component::Gif(c) => Some(c), Component::Counter(c) => Some(c), Component::Cursor(c) => Some(c),
-            Component::Caption(c) => Some(c), Component::Codeblock(c) => Some(c), Component::Avatar(c) => Some(c),
-            Component::AvatarGroup(c) => Some(c), Component::Arrow(c) => Some(c), Component::Connector(c) => Some(c),
-            Component::Badge(c) => Some(c), Component::Callout(c) => Some(c), Component::Chart(c) => Some(c),
-            Component::Comparison(c) => Some(c), Component::Countdown(c) => Some(c),
-            Component::Divider(c) => Some(c), Component::DotMap(c) => Some(c), Component::Gauge(c) => Some(c),
-            Component::GradientText(c) => Some(c), Component::Heatmap(c) => Some(c),
-            Component::Kbd(c) => Some(c), Component::Line(c) => Some(c), Component::List(c) => Some(c),
-            Component::Lottie(c) => Some(c), Component::Marquee(c) => Some(c), Component::Mockup(c) => Some(c),
-            Component::Notification(c) => Some(c), Component::Particle(c) => Some(c),
-            Component::PillNav(c) => Some(c), Component::Progress(c) => Some(c), Component::QrCode(c) => Some(c),
-            Component::Rating(c) => Some(c), Component::Skeleton(c) => Some(c), Component::Slider(c) => Some(c),
-            Component::Sparkline(c) => Some(c), Component::Stat(c) => Some(c), Component::Stepper(c) => Some(c),
-            Component::Switch(c) => Some(c), Component::RichText(c) => Some(c), Component::Table(c) => Some(c),
-            Component::TagCloud(c) => Some(c), Component::Terminal(c) => Some(c), Component::Timeline(c) => Some(c),
-            Component::Tooltip(c) => Some(c), Component::Treemap(c) => Some(c),
-            Component::Flex(c) => Some(c), Component::Grid(c) => Some(c),
-            Component::Card(c) => Some(c), Component::Container(c) => Some(c),
+            Component::Text(c) => Some(c),
+            Component::Shape(c) => Some(c),
+            Component::Image(c) => Some(c),
+            Component::Icon(c) => Some(c),
+            Component::Svg(c) => Some(c),
+            Component::Video(c) => Some(c),
+            Component::Gif(c) => Some(c),
+            Component::Counter(c) => Some(c),
+            Component::Cursor(c) => Some(c),
+            Component::Caption(c) => Some(c),
+            Component::Codeblock(c) => Some(c),
+            Component::Avatar(c) => Some(c),
+            Component::AvatarGroup(c) => Some(c),
+            Component::Arrow(c) => Some(c),
+            Component::Connector(c) => Some(c),
+            Component::Badge(c) => Some(c),
+            Component::Callout(c) => Some(c),
+            Component::Chart(c) => Some(c),
+            Component::Comparison(c) => Some(c),
+            Component::Countdown(c) => Some(c),
+            Component::Divider(c) => Some(c),
+            Component::DotMap(c) => Some(c),
+            Component::Gauge(c) => Some(c),
+            Component::GradientText(c) => Some(c),
+            Component::Heatmap(c) => Some(c),
+            Component::Kbd(c) => Some(c),
+            Component::Line(c) => Some(c),
+            Component::List(c) => Some(c),
+            Component::Lottie(c) => Some(c),
+            Component::Marquee(c) => Some(c),
+            Component::Mockup(c) => Some(c),
+            Component::Notification(c) => Some(c),
+            Component::Particle(c) => Some(c),
+            Component::PillNav(c) => Some(c),
+            Component::Progress(c) => Some(c),
+            Component::QrCode(c) => Some(c),
+            Component::Rating(c) => Some(c),
+            Component::Skeleton(c) => Some(c),
+            Component::Slider(c) => Some(c),
+            Component::Sparkline(c) => Some(c),
+            Component::Stat(c) => Some(c),
+            Component::Stepper(c) => Some(c),
+            Component::Switch(c) => Some(c),
+            Component::RichText(c) => Some(c),
+            Component::Table(c) => Some(c),
+            Component::TagCloud(c) => Some(c),
+            Component::Terminal(c) => Some(c),
+            Component::Timeline(c) => Some(c),
+            Component::Tooltip(c) => Some(c),
+            Component::Treemap(c) => Some(c),
+            Component::Flex(c) => Some(c),
+            Component::Grid(c) => Some(c),
+            Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
             Component::Positioned(_) => None,
         }
     }
 
     pub fn as_timed(&self) -> Option<&dyn Timed> {
         match self {
-            Component::Text(c) => Some(c), Component::Shape(c) => Some(c), Component::Image(c) => Some(c),
-            Component::Icon(c) => Some(c), Component::Svg(c) => Some(c), Component::Video(c) => Some(c),
-            Component::Gif(c) => Some(c), Component::Counter(c) => Some(c), Component::Cursor(c) => Some(c),
-            Component::Codeblock(c) => Some(c), Component::Avatar(c) => Some(c),
-            Component::AvatarGroup(c) => Some(c), Component::Arrow(c) => Some(c), Component::Connector(c) => Some(c),
-            Component::Badge(c) => Some(c), Component::Callout(c) => Some(c), Component::Chart(c) => Some(c),
-            Component::Comparison(c) => Some(c), Component::Countdown(c) => Some(c),
-            Component::Divider(c) => Some(c), Component::DotMap(c) => Some(c), Component::Gauge(c) => Some(c),
-            Component::GradientText(c) => Some(c), Component::Heatmap(c) => Some(c),
-            Component::Kbd(c) => Some(c), Component::Line(c) => Some(c), Component::List(c) => Some(c),
-            Component::Lottie(c) => Some(c), Component::Marquee(c) => Some(c), Component::Mockup(c) => Some(c),
-            Component::Notification(c) => Some(c), Component::Particle(c) => Some(c),
-            Component::PillNav(c) => Some(c), Component::Progress(c) => Some(c), Component::QrCode(c) => Some(c),
-            Component::Rating(c) => Some(c), Component::Skeleton(c) => Some(c), Component::Slider(c) => Some(c),
-            Component::Sparkline(c) => Some(c), Component::Stat(c) => Some(c), Component::Stepper(c) => Some(c),
-            Component::Switch(c) => Some(c), Component::RichText(c) => Some(c), Component::Table(c) => Some(c),
-            Component::TagCloud(c) => Some(c), Component::Terminal(c) => Some(c), Component::Timeline(c) => Some(c),
-            Component::Tooltip(c) => Some(c), Component::Treemap(c) => Some(c),
-            Component::Flex(c) => Some(c), Component::Grid(c) => Some(c),
-            Component::Card(c) => Some(c), Component::Container(c) => Some(c),
+            Component::Text(c) => Some(c),
+            Component::Shape(c) => Some(c),
+            Component::Image(c) => Some(c),
+            Component::Icon(c) => Some(c),
+            Component::Svg(c) => Some(c),
+            Component::Video(c) => Some(c),
+            Component::Gif(c) => Some(c),
+            Component::Counter(c) => Some(c),
+            Component::Cursor(c) => Some(c),
+            Component::Codeblock(c) => Some(c),
+            Component::Avatar(c) => Some(c),
+            Component::AvatarGroup(c) => Some(c),
+            Component::Arrow(c) => Some(c),
+            Component::Connector(c) => Some(c),
+            Component::Badge(c) => Some(c),
+            Component::Callout(c) => Some(c),
+            Component::Chart(c) => Some(c),
+            Component::Comparison(c) => Some(c),
+            Component::Countdown(c) => Some(c),
+            Component::Divider(c) => Some(c),
+            Component::DotMap(c) => Some(c),
+            Component::Gauge(c) => Some(c),
+            Component::GradientText(c) => Some(c),
+            Component::Heatmap(c) => Some(c),
+            Component::Kbd(c) => Some(c),
+            Component::Line(c) => Some(c),
+            Component::List(c) => Some(c),
+            Component::Lottie(c) => Some(c),
+            Component::Marquee(c) => Some(c),
+            Component::Mockup(c) => Some(c),
+            Component::Notification(c) => Some(c),
+            Component::Particle(c) => Some(c),
+            Component::PillNav(c) => Some(c),
+            Component::Progress(c) => Some(c),
+            Component::QrCode(c) => Some(c),
+            Component::Rating(c) => Some(c),
+            Component::Skeleton(c) => Some(c),
+            Component::Slider(c) => Some(c),
+            Component::Sparkline(c) => Some(c),
+            Component::Stat(c) => Some(c),
+            Component::Stepper(c) => Some(c),
+            Component::Switch(c) => Some(c),
+            Component::RichText(c) => Some(c),
+            Component::Table(c) => Some(c),
+            Component::TagCloud(c) => Some(c),
+            Component::Terminal(c) => Some(c),
+            Component::Timeline(c) => Some(c),
+            Component::Tooltip(c) => Some(c),
+            Component::Treemap(c) => Some(c),
+            Component::Flex(c) => Some(c),
+            Component::Grid(c) => Some(c),
+            Component::Card(c) => Some(c),
+            Component::Container(c) => Some(c),
             Component::Caption(_) | Component::Positioned(_) => None,
         }
     }
 
     pub fn as_styled(&self) -> &dyn Styled {
         match self {
-            Component::Text(c) => c, Component::Shape(c) => c, Component::Image(c) => c,
-            Component::Icon(c) => c, Component::Svg(c) => c, Component::Video(c) => c,
-            Component::Gif(c) => c, Component::Counter(c) => c, Component::Cursor(c) => c,
-            Component::Caption(c) => c, Component::Codeblock(c) => c, Component::Avatar(c) => c,
-            Component::AvatarGroup(c) => c, Component::Arrow(c) => c, Component::Connector(c) => c,
-            Component::Badge(c) => c, Component::Callout(c) => c, Component::Chart(c) => c,
-            Component::Comparison(c) => c, Component::Countdown(c) => c,
-            Component::Divider(c) => c, Component::DotMap(c) => c, Component::Gauge(c) => c,
-            Component::GradientText(c) => c, Component::Heatmap(c) => c,
-            Component::Kbd(c) => c, Component::Line(c) => c, Component::List(c) => c,
-            Component::Lottie(c) => c, Component::Marquee(c) => c, Component::Mockup(c) => c,
-            Component::Notification(c) => c, Component::Particle(c) => c,
-            Component::PillNav(c) => c, Component::Progress(c) => c, Component::QrCode(c) => c,
-            Component::Rating(c) => c, Component::Skeleton(c) => c, Component::Slider(c) => c,
-            Component::Sparkline(c) => c, Component::Stat(c) => c, Component::Stepper(c) => c,
-            Component::Switch(c) => c, Component::RichText(c) => c, Component::Table(c) => c,
-            Component::TagCloud(c) => c, Component::Terminal(c) => c, Component::Timeline(c) => c,
-            Component::Tooltip(c) => c, Component::Treemap(c) => c,
-            Component::Positioned(c) => c, Component::Flex(c) => c, Component::Grid(c) => c,
-            Component::Card(c) => c, Component::Container(c) => c,
+            Component::Text(c) => c,
+            Component::Shape(c) => c,
+            Component::Image(c) => c,
+            Component::Icon(c) => c,
+            Component::Svg(c) => c,
+            Component::Video(c) => c,
+            Component::Gif(c) => c,
+            Component::Counter(c) => c,
+            Component::Cursor(c) => c,
+            Component::Caption(c) => c,
+            Component::Codeblock(c) => c,
+            Component::Avatar(c) => c,
+            Component::AvatarGroup(c) => c,
+            Component::Arrow(c) => c,
+            Component::Connector(c) => c,
+            Component::Badge(c) => c,
+            Component::Callout(c) => c,
+            Component::Chart(c) => c,
+            Component::Comparison(c) => c,
+            Component::Countdown(c) => c,
+            Component::Divider(c) => c,
+            Component::DotMap(c) => c,
+            Component::Gauge(c) => c,
+            Component::GradientText(c) => c,
+            Component::Heatmap(c) => c,
+            Component::Kbd(c) => c,
+            Component::Line(c) => c,
+            Component::List(c) => c,
+            Component::Lottie(c) => c,
+            Component::Marquee(c) => c,
+            Component::Mockup(c) => c,
+            Component::Notification(c) => c,
+            Component::Particle(c) => c,
+            Component::PillNav(c) => c,
+            Component::Progress(c) => c,
+            Component::QrCode(c) => c,
+            Component::Rating(c) => c,
+            Component::Skeleton(c) => c,
+            Component::Slider(c) => c,
+            Component::Sparkline(c) => c,
+            Component::Stat(c) => c,
+            Component::Stepper(c) => c,
+            Component::Switch(c) => c,
+            Component::RichText(c) => c,
+            Component::Table(c) => c,
+            Component::TagCloud(c) => c,
+            Component::Terminal(c) => c,
+            Component::Timeline(c) => c,
+            Component::Tooltip(c) => c,
+            Component::Treemap(c) => c,
+            Component::Positioned(c) => c,
+            Component::Flex(c) => c,
+            Component::Grid(c) => c,
+            Component::Card(c) => c,
+            Component::Container(c) => c,
         }
     }
 
@@ -384,7 +486,7 @@ pub fn draw_gradient_border(
     rrect: &skia_safe::RRect,
     gb: &rustmotion_core::schema::GradientBorder,
 ) {
-    use skia_safe::{Paint, PaintStyle, Point, gradient_shader::GradientShaderColors};
+    use skia_safe::{gradient_shader::GradientShaderColors, Paint, PaintStyle, Point};
 
     if gb.colors.len() < 2 {
         return;
@@ -405,10 +507,14 @@ pub fn draw_gradient_border(
         cy + angle_rad.sin() * half_diag,
     );
 
-    let colors: Vec<skia_safe::Color> = gb.colors.iter().map(|c| {
-        let (r, g, b, a) = rustmotion_core::engine::renderer::parse_hex_color(c);
-        skia_safe::Color::from_argb(a, r, g, b)
-    }).collect();
+    let colors: Vec<skia_safe::Color> = gb
+        .colors
+        .iter()
+        .map(|c| {
+            let (r, g, b, a) = rustmotion_core::engine::renderer::parse_hex_color(c);
+            skia_safe::Color::from_argb(a, r, g, b)
+        })
+        .collect();
 
     let shader = skia_safe::shader::Shader::linear_gradient(
         (start, end),

@@ -53,13 +53,19 @@ impl Painter for Icon {
         let img = if let Some(cached) = cache.get(&cache_key) {
             cached.clone()
         } else {
-            let Ok(svg_data) = fetch_icon_svg(&self.icon, color, render_w, render_h) else { return };
+            let Ok(svg_data) = fetch_icon_svg(&self.icon, color, render_w, render_h) else {
+                return;
+            };
 
             let opt = usvg::Options::default();
-            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else { return };
+            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else {
+                return;
+            };
 
             let svg_size = tree.size();
-            let Some(mut pixmap) = tiny_skia::Pixmap::new(render_w, render_h) else { return };
+            let Some(mut pixmap) = tiny_skia::Pixmap::new(render_w, render_h) else {
+                return;
+            };
 
             let scale_x = render_w as f32 / svg_size.width();
             let scale_y = render_h as f32 / svg_size.height();
@@ -76,7 +82,9 @@ impl Painter for Icon {
             );
             let Some(decoded) =
                 skia_safe::images::raster_from_data(&img_info, img_data, render_w as usize * 4)
-            else { return };
+            else {
+                return;
+            };
             cache.insert(cache_key, decoded.clone());
             decoded
         };

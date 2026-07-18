@@ -30,18 +30,14 @@ fn default_arrow_size() -> f32 {
 /// Arrow direction — where the arrow points (toward the target element).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TooltipArrow {
     Top,
+    #[default]
     Bottom,
     Left,
     Right,
     None,
-}
-
-impl Default for TooltipArrow {
-    fn default() -> Self {
-        Self::Bottom
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -88,14 +84,16 @@ impl Tooltip {
             .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
         skia_safe::Font::from_typeface(typeface, fs)
     }
-
 }
 
 impl Tooltip {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
-        let bg_color = self.style.background_color_str().unwrap_or(&self.background_color);
+        let bg_color = self
+            .style
+            .background_color_str()
+            .unwrap_or(&self.background_color);
         let radius = self.style.border_radius_px_or(8.0);
         let arrow_sz = self.arrow_size;
 

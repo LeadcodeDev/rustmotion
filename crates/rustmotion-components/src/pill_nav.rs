@@ -191,10 +191,7 @@ impl PillNav {
             let to_x = tab_positions[to];
             let from_w = tab_widths[from];
             let to_w = tab_widths[to];
-            (
-                from_x + (to_x - from_x) * t,
-                from_w + (to_w - from_w) * t,
-            )
+            (from_x + (to_x - from_x) * t, from_w + (to_w - from_w) * t)
         } else {
             (tab_positions[active_idx], tab_widths[active_idx])
         };

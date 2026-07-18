@@ -6,12 +6,20 @@ use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 use rustmotion_core::engine::animator::ease;
 use rustmotion_core::error::RustmotionError;
 
-use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::style::{
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
+};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
-use rustmotion_core::schema::{CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign, TextAnimGranularity, TextBackground, TextShadow, TimelineStep};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    wrap_text_with_fallback,
+};
+use rustmotion_core::schema::{
+    CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
+    TextAnimGranularity, TextBackground, TextShadow, TimelineStep,
+};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -90,10 +98,20 @@ fn apply_text_anim_preset(
             draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, &p);
         }
         CharAnimPreset::Wave => {
-            let wave_offset = (time as f32 * 4.0 + unit_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
+            let wave_offset =
+                (time as f32 * 4.0 + unit_idx as f32 * 0.5).sin() * 8.0 * (1.0 - t * 0.5);
             let mut p = paint.clone();
             p.set_alpha_f(t.min(1.0) * paint.alpha_f());
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y + wave_offset, &p);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                0.0,
+                cursor_x,
+                line_y + wave_offset,
+                &p,
+            );
         }
         CharAnimPreset::Bounce => {
             let peak = 1.0 + overshoot.max(0.3); // bounce always overshoots, min 0.3
@@ -121,7 +139,16 @@ fn apply_text_anim_preset(
             let offset_y = (1.0 - t) * font_size * 0.8;
             let mut p = paint.clone();
             p.set_alpha_f(t * paint.alpha_f());
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y + offset_y, &p);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                0.0,
+                cursor_x,
+                line_y + offset_y,
+                &p,
+            );
         }
     }
 }
@@ -176,9 +203,12 @@ fn render_char_animation(
                     }
                 }
                 if !spaces.is_empty() {
-                    let space_w = measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
+                    let space_w =
+                        measure_text_with_fallback(&spaces, font, emoji_font, letter_spacing);
                     // Draw spaces without animation
-                    draw_text_with_fallback(canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint);
+                    draw_text_with_fallback(
+                        canvas, &spaces, font, emoji_font, 0.0, cursor_x, line_y, paint,
+                    );
                     cursor_x += space_w;
                 }
 
@@ -195,10 +225,12 @@ fn render_char_animation(
                     continue;
                 }
 
-                let word_width = measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
+                let word_width =
+                    measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
 
                 // Calculate animation progress for this word
-                let unit_start = char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
+                let unit_start =
+                    char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
                 let unit_end = unit_start + char_anim.duration as f64;
                 let raw_t = if time <= unit_start {
                     0.0
@@ -211,9 +243,19 @@ fn render_char_animation(
 
                 canvas.save();
                 apply_text_anim_preset(
-                    canvas, &word, font, emoji_font, paint,
-                    cursor_x, line_y, word_width,
-                    &char_anim.preset, t, time, global_unit_idx, font.size(),
+                    canvas,
+                    &word,
+                    font,
+                    emoji_font,
+                    paint,
+                    cursor_x,
+                    line_y,
+                    word_width,
+                    &char_anim.preset,
+                    t,
+                    time,
+                    global_unit_idx,
+                    font.size(),
                     overshoot,
                 );
                 canvas.restore();
@@ -229,7 +271,8 @@ fn render_char_animation(
                 let (ch_width, _) = font.measure_str(&ch_str, None);
                 let ch_width = ch_width + letter_spacing;
 
-                let unit_start = char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
+                let unit_start =
+                    char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
                 let unit_end = unit_start + char_anim.duration as f64;
                 let raw_t = if time <= unit_start {
                     0.0
@@ -242,9 +285,19 @@ fn render_char_animation(
 
                 canvas.save();
                 apply_text_anim_preset(
-                    canvas, &ch_str, font, emoji_font, paint,
-                    cursor_x, line_y, ch_width,
-                    &char_anim.preset, t, time, global_unit_idx, font.size(),
+                    canvas,
+                    &ch_str,
+                    font,
+                    emoji_font,
+                    paint,
+                    cursor_x,
+                    line_y,
+                    ch_width,
+                    &char_anim.preset,
+                    t,
+                    time,
+                    global_unit_idx,
+                    font.size(),
                     overshoot,
                 );
                 canvas.restore();
@@ -268,7 +321,9 @@ impl Text {
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
         let font_weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
+                FontWeight::Bold
+            }
             Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
             Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
             _ => FontWeight::Normal,
@@ -306,7 +361,7 @@ impl Text {
             .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
             .or_else(|| {
                 if fm.count_families() > 0 {
-                    fm.match_family_style(&fm.family_name(0), skia_font_style)
+                    fm.match_family_style(fm.family_name(0), skia_font_style)
                 } else {
                     None
                 }
@@ -393,9 +448,20 @@ impl Text {
                 delay: resolved.delay,
             };
             render_char_animation(
-                canvas, &content, &font, &emoji_font, &paint,
-                letter_spacing, align, align_width, line_height_val, baseline_offset,
-                &lines, &char_anim, time, resolved.overshoot,
+                canvas,
+                &content,
+                &font,
+                &emoji_font,
+                &paint,
+                letter_spacing,
+                align,
+                align_width,
+                line_height_val,
+                baseline_offset,
+                &lines,
+                &char_anim,
+                time,
+                resolved.overshoot,
             );
             return Ok(());
         }
@@ -405,7 +471,8 @@ impl Text {
                 continue;
             }
 
-            let advance_width = measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
+            let advance_width =
+                measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
 
             let x = match align {
                 TextAlign::Left => 0.0,
@@ -425,7 +492,8 @@ impl Text {
                     -font_rect.top + font_rect.bottom + bg.padding,
                 );
                 if bg.corner_radius > 0.0 {
-                    let rrect = skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
+                    let rrect =
+                        skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
                     canvas.draw_rrect(rrect, &bg_paint);
                 } else {
                     canvas.draw_rect(bg_rect, &bg_paint);
@@ -434,7 +502,16 @@ impl Text {
 
             // Draw shadow
             if let Some((ref sp, ox, oy)) = shadow_paint {
-                draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x + ox, y + oy, sp);
+                draw_text_with_fallback(
+                    canvas,
+                    line,
+                    &font,
+                    &emoji_font,
+                    letter_spacing,
+                    x + ox,
+                    y + oy,
+                    sp,
+                );
             }
 
             // Draw stroke (outline)
@@ -443,7 +520,16 @@ impl Text {
             }
 
             // Draw fill
-            draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, &paint);
+            draw_text_with_fallback(
+                canvas,
+                line,
+                &font,
+                &emoji_font,
+                letter_spacing,
+                x,
+                y,
+                &paint,
+            );
         }
 
         Ok(())

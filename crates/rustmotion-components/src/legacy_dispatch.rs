@@ -126,11 +126,11 @@ mod tests {
     use crate::box_builder::build_scene;
     use crate::shape::Shape;
     use crate::PositionMode;
+    use rustmotion_core::css::style::{CssStyle, Size as CSize};
     use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::css::units::LengthPercentage as CLP;
     use rustmotion_core::engine::box_tree::BoxKind;
     use rustmotion_core::engine::layout_pass::run_layout;
-    use rustmotion_core::css::style::{CssStyle, Size as CSize};
-    use rustmotion_core::css::units::LengthPercentage as CLP;
     use rustmotion_core::schema::ShapeType;
     use std::sync::Arc;
 
@@ -169,8 +169,8 @@ mod tests {
 
         // Build a Skia raster surface and run a paint pass against the
         // dispatcher — this just exercises the dispatcher hook end-to-end.
-        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 200))
-            .expect("raster surface");
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
         let canvas = surface.canvas();
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
@@ -365,7 +365,10 @@ mod tests {
             let built = crate::box_builder::build_scene_with_anim(
                 &scene,
                 (200.0, 200.0),
-                crate::box_builder::BuildAnimationCtx { time, scene_duration: 1.0 },
+                crate::box_builder::BuildAnimationCtx {
+                    time,
+                    scene_duration: 1.0,
+                },
             );
             let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
             let mut surface =
@@ -382,7 +385,11 @@ mod tests {
                 scene_duration: 1.0,
             };
             rustmotion_core::engine::paint_pass::paint_tree(
-                canvas, &built.root, &layout, &frame, &dispatcher,
+                canvas,
+                &built.root,
+                &layout,
+                &frame,
+                &dispatcher,
             );
             let snap = surface.image_snapshot();
             let info = skia_safe::ImageInfo::new(

@@ -25,7 +25,10 @@ pub trait BorderedMut: Bordered {
 /// Builder API for border.
 pub trait BorderedExt: BorderedMut + Sized {
     fn border_color(mut self, color: impl Into<String>, width: f32) -> Self {
-        self.set_border(Some(Border { color: color.into(), width }));
+        self.set_border(Some(Border {
+            color: color.into(),
+            width,
+        }));
         self
     }
 

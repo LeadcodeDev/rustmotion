@@ -5,8 +5,8 @@ use crate::error::Result;
 use crate::error::RustmotionError;
 use crate::schema::{
     AnimatedBackground, BackgroundEntry, BackgroundPreset, BackgroundValue, EasingType,
-    IncludeDirective, ResolvedBackground, ResolvedScenario, ResolvedView, Scene, SceneEntry,
-    Scenario, ViewType,
+    IncludeDirective, ResolvedBackground, ResolvedScenario, ResolvedView, Scenario, Scene,
+    SceneEntry, ViewType,
 };
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
@@ -27,7 +27,7 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
     let has_composition = scenario.composition.is_some();
 
     if has_scenes && has_composition {
-        return Err(RustmotionError::CompositionAndScenesConflict.into());
+        return Err(RustmotionError::CompositionAndScenesConflict);
     }
 
     let templates = &scenario.backgrounds;
@@ -36,11 +36,16 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         // New format: composition with views
         let mut views = Vec::with_capacity(composition.len());
         for view in composition {
-            let mut scenes = resolve_entries(view.scenes, source, 0, &mut audio, &mut included_paths)?;
+            let mut scenes =
+                resolve_entries(view.scenes, source, 0, &mut audio, &mut included_paths)?;
             for scene in &mut scenes {
                 resolve_scene_background(scene, templates)?;
             }
-            let view_bg = resolve_background_value(view.background.as_ref(), &view.animated_background, templates)?;
+            let view_bg = resolve_background_value(
+                view.background.as_ref(),
+                &view.animated_background,
+                templates,
+            )?;
             views.push(ResolvedView {
                 view_type: view.view_type,
                 scenes,
@@ -53,7 +58,8 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
         views
     } else {
         // Backward compat: wrap top-level scenes in a single slide view
-        let mut scenes = resolve_entries(scenario.scenes, source, 0, &mut audio, &mut included_paths)?;
+        let mut scenes =
+            resolve_entries(scenario.scenes, source, 0, &mut audio, &mut included_paths)?;
         for scene in &mut scenes {
             resolve_scene_background(scene, templates)?;
         }
@@ -95,9 +101,10 @@ fn resolve_entries(
                     return Err(RustmotionError::IncludeDepthExceeded {
                         limit: MAX_INCLUDE_DEPTH,
                         path: directive.include.clone(),
-                    }.into());
+                    });
                 }
-                let scenes = fetch_and_resolve(&directive, source, depth + 1, audio, included_paths)?;
+                let scenes =
+                    fetch_and_resolve(&directive, source, depth + 1, audio, included_paths)?;
                 result.extend(scenes);
             }
         }
@@ -113,8 +120,8 @@ fn fetch_and_resolve(
     audio: &mut Vec<crate::schema::AudioTrack>,
     included_paths: &mut Vec<PathBuf>,
 ) -> Result<Vec<Scene>> {
-    let is_remote = directive.include.starts_with("http://")
-        || directive.include.starts_with("https://");
+    let is_remote =
+        directive.include.starts_with("http://") || directive.include.starts_with("https://");
 
     let (json_str, child_source) = if is_remote {
         let body = fetch_remote(&directive.include)?;
@@ -122,9 +129,10 @@ fn fetch_and_resolve(
         (body, child_source)
     } else {
         let path = resolve_local_path(&directive.include, parent_source)?;
-        let body = std::fs::read_to_string(&path).map_err(|_| {
-            RustmotionError::IncludeFileNotFound { path: path.display().to_string() }
-        })?;
+        let body =
+            std::fs::read_to_string(&path).map_err(|_| RustmotionError::IncludeFileNotFound {
+                path: path.display().to_string(),
+            })?;
         // Track this included file for watch mode
         included_paths.push(path.clone());
         let child_source = IncludeSource::File(path);
@@ -148,7 +156,13 @@ fn fetch_and_resolve(
     audio.extend(child_scenario.audio);
 
     // Recursively resolve any nested includes
-    let mut scenes = resolve_entries(child_scenario.scenes, &child_source, depth, audio, included_paths)?;
+    let mut scenes = resolve_entries(
+        child_scenario.scenes,
+        &child_source,
+        depth,
+        audio,
+        included_paths,
+    )?;
 
     // Apply scene index filter if specified
     if let Some(ref indices) = directive.scenes {
@@ -159,7 +173,7 @@ fn fetch_and_resolve(
                     index: idx,
                     path: directive.include.clone(),
                     total,
-                }.into());
+                });
             }
         }
         let mut slots: Vec<Option<Scene>> = scenes.into_iter().map(Some).collect();
@@ -178,27 +192,30 @@ fn fetch_and_resolve(
 fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf> {
     match source {
         IncludeSource::File(parent_path) => {
-            let parent_dir = parent_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."));
+            let parent_dir = parent_path.parent().unwrap_or_else(|| Path::new("."));
             Ok(parent_dir.join(relative))
         }
-        IncludeSource::Inline => {
-            return Err(RustmotionError::IncludeInlinePath {
-                path: relative.to_string(),
-            }.into());
-        }
+        IncludeSource::Inline => Err(RustmotionError::IncludeInlinePath {
+            path: relative.to_string(),
+        }),
     }
 }
 
 fn fetch_remote(url: &str) -> Result<String> {
     let response = ureq::get(url)
         .call()
-        .map_err(|e| RustmotionError::IncludeRemoteFetch { url: url.to_string(), reason: e.to_string() })?;
-    let body = response
-        .into_body()
-        .read_to_string()
-        .map_err(|e| RustmotionError::IncludeRemoteFetch { url: url.to_string(), reason: e.to_string() })?;
+        .map_err(|e| RustmotionError::IncludeRemoteFetch {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+    let body =
+        response
+            .into_body()
+            .read_to_string()
+            .map_err(|e| RustmotionError::IncludeRemoteFetch {
+                url: url.to_string(),
+                reason: e.to_string(),
+            })?;
     Ok(body)
 }
 
@@ -212,11 +229,14 @@ fn resolve_entry(
     templates: &HashMap<String, serde_json::Value>,
 ) -> Result<AnimatedBackground> {
     let base = if let Some(ref name) = entry.template_ref {
-        let tmpl = templates.get(name).ok_or_else(|| {
-            RustmotionError::UnknownBackgroundTemplate { name: name.clone() }
-        })?;
+        let tmpl = templates
+            .get(name)
+            .ok_or_else(|| RustmotionError::UnknownBackgroundTemplate { name: name.clone() })?;
         let mut base = tmpl.clone();
-        deep_merge(&mut base, &serde_json::Value::Object(entry.overrides.clone()));
+        deep_merge(
+            &mut base,
+            &serde_json::Value::Object(entry.overrides.clone()),
+        );
         base
     } else {
         serde_json::Value::Object(entry.overrides.clone())
@@ -232,8 +252,7 @@ fn validate_animated_bg(bg: &AnimatedBackground) -> Result<()> {
         if crate::engine::heropatterns::find_pattern(&cfg.pattern).is_none() {
             return Err(RustmotionError::UnknownHeropattern {
                 name: cfg.pattern.clone(),
-            }
-            .into());
+            });
         }
     }
     Ok(())

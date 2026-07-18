@@ -2,6 +2,7 @@ use serde_json::Value;
 
 /// Read a style property at the element addressed by `pointer`, e.g.
 /// (`"/scenes/0/children/0"`, `"color"`). Returns the value as a string.
+#[allow(dead_code)] // symmetric API counterpart to set_style; consumed as the inspector grows
 pub fn read_style(raw: &Value, pointer: &str, prop: &str) -> Option<String> {
     let el = raw.pointer(pointer)?;
     let v = el.get("style")?.get(prop)?;
@@ -83,8 +84,16 @@ pub fn list_annotations(raw: &Value) -> Vec<(String, String, u64, String)> {
         .map(|a| {
             a.iter()
                 .map(|x| {
-                    let id = x.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let note = x.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = x
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let note = x
+                        .get("note")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let frame = x.get("frame").and_then(|v| v.as_u64()).unwrap_or(0);
                     let kind = x
                         .get("target")

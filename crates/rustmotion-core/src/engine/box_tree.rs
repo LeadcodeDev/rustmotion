@@ -28,11 +28,25 @@ pub struct BoxNode {
 
 impl BoxNode {
     pub fn container(css: CssStyle, children: Vec<BoxNode>) -> Self {
-        Self { id: 0, kind: BoxKind::Container, css, children, intrinsic: None, source_path: None }
+        Self {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children,
+            intrinsic: None,
+            source_path: None,
+        }
     }
 
     pub fn leaf(css: CssStyle, intrinsic: Arc<dyn IntrinsicMeasure>) -> Self {
-        Self { id: 0, kind: BoxKind::Container, css, children: Vec::new(), intrinsic: Some(intrinsic), source_path: None }
+        Self {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: Vec::new(),
+            intrinsic: Some(intrinsic),
+            source_path: None,
+        }
     }
 
     /// Walk the tree and assign sequential `id` values to each node.

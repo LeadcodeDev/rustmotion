@@ -5,7 +5,9 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -13,16 +15,12 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 /// Text alignment for table columns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ColumnAlign {
+    #[default]
     Left,
     Center,
     Right,
-}
-
-impl Default for ColumnAlign {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 fn default_cell_padding() -> f32 {
@@ -90,18 +88,14 @@ impl Table {
             skia_safe::FontStyle::normal()
         };
 
-        let family = self
-            .style
-            .font_family
-            .as_deref()
-            .unwrap_or("Inter");
+        let family = self.style.font_family.as_deref().unwrap_or("Inter");
 
         let typeface = fm
             .match_family_style(family, font_style)
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         skia_safe::Font::from_typeface(typeface, self.font_size())
     }
@@ -110,7 +104,7 @@ impl Table {
     fn resolve_column_widths(&self, total_w: f32) -> Vec<f32> {
         let col_count = self.headers.len().max(1);
         if let Some(widths) = &self.column_widths {
-            let mut result: Vec<f32> = widths.iter().copied().collect();
+            let mut result: Vec<f32> = widths.to_vec();
             // Pad with equal-share for missing columns
             while result.len() < col_count {
                 let remaining = total_w - result.iter().sum::<f32>();
@@ -188,7 +182,16 @@ impl Table {
             let x = self.align_text_x(i, col_x, cw, text_w);
             let y = (row_h - self.font_size()) / 2.0 + header_ascent;
 
-            draw_text_with_fallback(canvas, header, &header_font, &emoji_font, 0.0, x, y, &header_text_paint);
+            draw_text_with_fallback(
+                canvas,
+                header,
+                &header_font,
+                &emoji_font,
+                0.0,
+                x,
+                y,
+                &header_text_paint,
+            );
             col_x += cw;
         }
 
@@ -221,7 +224,16 @@ impl Table {
                 let x = self.align_text_x(col_idx, cx, cw, text_w);
                 let y = y_base + (row_h - self.font_size()) / 2.0 + body_ascent;
 
-                draw_text_with_fallback(canvas, cell, &body_font, &emoji_font, 0.0, x, y, &text_paint);
+                draw_text_with_fallback(
+                    canvas,
+                    cell,
+                    &body_font,
+                    &emoji_font,
+                    0.0,
+                    x,
+                    y,
+                    &text_paint,
+                );
                 cx += cw;
             }
         }

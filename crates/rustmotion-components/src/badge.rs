@@ -5,36 +5,31 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
+    measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BadgeVariant {
+    #[default]
     Solid,
     Outline,
 }
 
-impl Default for BadgeVariant {
-    fn default() -> Self {
-        Self::Solid
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BadgeSize {
     Sm,
+    #[default]
     Md,
     Lg,
-}
-
-impl Default for BadgeSize {
-    fn default() -> Self {
-        Self::Md
-    }
 }
 
 impl BadgeSize {
@@ -87,8 +82,7 @@ rustmotion_core::impl_traits!(Badge {
 
 impl Badge {
     fn resolved_font_size(&self) -> f32 {
-        self.style
-            .font_size_px_or(self.badge_size.params().0)
+        self.style.font_size_px_or(self.badge_size.params().0)
     }
 
     /// Returns (h_padding, v_padding, icon_size) scaled proportionally
@@ -112,11 +106,10 @@ impl Badge {
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.match_family_style("sans-serif", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
     }
-
 }
 
 impl Badge {
@@ -232,7 +225,16 @@ impl Badge {
         };
         let text_y = (h - cap_h) / 2.0 + cap_h;
 
-        draw_text_with_fallback(canvas, &self.text, &font, &emoji_font, 0.0, x_offset, text_y, &text_paint);
+        draw_text_with_fallback(
+            canvas,
+            &self.text,
+            &font,
+            &emoji_font,
+            0.0,
+            x_offset,
+            text_y,
+            &text_paint,
+        );
 
         // Dot indicator (top-right)
         if self.dot {
@@ -273,9 +275,13 @@ impl Badge {
                 .match_family_style("Inter", skia_safe::FontStyle::bold())
                 .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::bold()))
                 .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::bold()))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_safe::FontStyle::bold()).unwrap());
+                .unwrap_or_else(|| {
+                    fm.legacy_make_typeface(None, skia_safe::FontStyle::bold())
+                        .unwrap()
+                });
             let count_font = skia_safe::Font::from_typeface(count_typeface, count_fs);
-            let count_emoji = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));
+            let count_emoji =
+                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));
 
             let count_w = measure_text_with_fallback(&count_text, &count_font, &count_emoji, 0.0);
             let badge_pad = count_fs * 0.4;
@@ -298,7 +304,16 @@ impl Badge {
             let (_, count_metrics) = count_font.metrics();
             let cx = badge_x + (badge_w - count_w) / 2.0;
             let cy = badge_y + (badge_h + (-count_metrics.ascent)) / 2.0;
-            draw_text_with_fallback(canvas, &count_text, &count_font, &count_emoji, 0.0, cx, cy, &count_paint);
+            draw_text_with_fallback(
+                canvas,
+                &count_text,
+                &count_font,
+                &count_emoji,
+                0.0,
+                cx,
+                cy,
+                &count_paint,
+            );
         }
     }
 }

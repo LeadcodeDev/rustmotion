@@ -144,7 +144,10 @@ fn set_text(handle: &Handle, text: &str) -> Option<()> {
 /// Numeric segments of a JSON pointer, e.g. `/scenes/0/children/2` → `[0, 2]`.
 /// The first is the scene index; the rest walk content-node children.
 fn parse_indices(pointer: &str) -> Vec<usize> {
-    pointer.split('/').filter_map(|s| s.parse::<usize>().ok()).collect()
+    pointer
+        .split('/')
+        .filter_map(|s| s.parse::<usize>().ok())
+        .collect()
 }
 
 /// Walk from `<rustmotion>` to the element a pointer addresses, mirroring the
@@ -252,11 +255,15 @@ mod lib_tests {
     #[test]
     fn set_inline_style_updates_property() {
         let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-size:96; color:#fff">Hi</h1></scene></rustmotion>"##;
-        let out = crate::set_inline_style(html, "/scenes/0/children/0", "font-size", "120").unwrap();
+        let out =
+            crate::set_inline_style(html, "/scenes/0/children/0", "font-size", "120").unwrap();
         assert!(out.contains("font-size:120"), "got: {out}");
         assert!(out.contains("color:#fff"), "kept other props: {out}");
         let v = crate::html_to_scenario_value(&out).unwrap();
-        assert_eq!(v["scenes"][0]["children"][0]["style"]["font-size"], json!(120));
+        assert_eq!(
+            v["scenes"][0]["children"][0]["style"]["font-size"],
+            json!(120)
+        );
     }
 
     #[test]
@@ -279,13 +286,17 @@ mod lib_tests {
         let v = crate::html_to_scenario_value(&out).unwrap();
         assert_eq!(v["scenes"][0]["children"][0]["content"], json!("Bonjour"));
         // The style attribute is preserved.
-        assert_eq!(v["scenes"][0]["children"][0]["style"]["font-size"], json!(96));
+        assert_eq!(
+            v["scenes"][0]["children"][0]["style"]["font-size"],
+            json!(96)
+        );
     }
 
     #[test]
     fn set_inline_style_inserts_when_absent() {
         let html = r##"<rustmotion width="100" height="100"><scene duration="2"><p>Hi</p></scene></rustmotion>"##;
-        let out = crate::set_inline_style(html, "/scenes/0/children/0", "color", "#ff0000").unwrap();
+        let out =
+            crate::set_inline_style(html, "/scenes/0/children/0", "color", "#ff0000").unwrap();
         assert!(out.contains("color:#ff0000"), "got: {out}");
     }
 

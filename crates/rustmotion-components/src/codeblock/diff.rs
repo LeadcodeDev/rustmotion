@@ -2,13 +2,13 @@ use similar::{ChangeTag, TextDiff};
 use skia_safe::{Canvas, Font, PaintStyle, Rect};
 use syntect::highlighting::Theme;
 
-use rustmotion_core::engine::animator::ease;
-use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::EasingType;
-use super::Codeblock;
 use super::dimensions::lerp;
 use super::highlight::highlight_code;
 use super::reveal::{draw_line_number_at, draw_single_highlighted_line};
+use super::Codeblock;
+use rustmotion_core::engine::animator::ease;
+use rustmotion_core::engine::renderer::paint_from_hex;
+use rustmotion_core::schema::EasingType;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,10 @@ pub(super) struct FragmentEdit {
 
 // ─── State management ────────────────────────────────────────────────────────
 
-pub(super) fn determine_active_state(layer: &Codeblock, time: f64) -> (String, Option<TransitionInfo>) {
+pub(super) fn determine_active_state(
+    layer: &Codeblock,
+    time: f64,
+) -> (String, Option<TransitionInfo>) {
     if layer.states.is_empty() {
         return (layer.code.clone(), None);
     }
@@ -174,13 +177,13 @@ pub(super) fn render_diff_transition(
     let highlighted_a = highlight_code(&trans.code_a, &layer.language, theme);
     let highlighted_b = highlight_code(&trans.code_b, &layer.language, theme);
 
-    let cursor_enabled = trans.cursor_config.as_ref().map_or(true, |c| c.enabled);
+    let cursor_enabled = trans.cursor_config.as_ref().is_none_or(|c| c.enabled);
     let cursor_color = trans
         .cursor_config
         .as_ref()
         .map_or("#FFFFFF", |c| c.color.as_str());
     let cursor_width = trans.cursor_config.as_ref().map_or(2.0, |c| c.width);
-    let cursor_blink = trans.cursor_config.as_ref().map_or(true, |c| c.blink);
+    let cursor_blink = trans.cursor_config.as_ref().is_none_or(|c| c.blink);
 
     // Build animated line placements with proper interpolated positions.
     // Track "virtual cursors" for old and new index space so that

@@ -65,10 +65,18 @@ pub struct ControlPoint {
     pub y: f32,
 }
 
-fn default_arrow_width() -> f32 { 3.0 }
-fn default_arrow_color() -> String { "#FFFFFF".to_string() }
-fn default_arrow_size() -> f32 { 12.0 }
-fn default_true() -> bool { true }
+fn default_arrow_width() -> f32 {
+    3.0
+}
+fn default_arrow_color() -> String {
+    "#FFFFFF".to_string()
+}
+fn default_arrow_size() -> f32 {
+    12.0
+}
+fn default_true() -> bool {
+    true
+}
 
 rustmotion_core::impl_traits!(Arrow {
     Animatable => animation,
@@ -108,10 +116,18 @@ impl Arrow {
     }
 
     /// Draw an arrowhead at the given position along the path.
-    fn draw_arrowhead(canvas: &Canvas, path: &Path, at_end: bool, size: f32, paint: &skia_safe::Paint) {
+    fn draw_arrowhead(
+        canvas: &Canvas,
+        path: &Path,
+        at_end: bool,
+        size: f32,
+        paint: &skia_safe::Paint,
+    ) {
         let mut measure = PathMeasure::new(path, false, None);
         let total_len = measure.length();
-        if total_len < 1.0 { return; }
+        if total_len < 1.0 {
+            return;
+        }
 
         let (pos, tangent) = if at_end {
             let dist = total_len - 0.1;

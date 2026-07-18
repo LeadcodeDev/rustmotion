@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Paint, PaintStyle, Rect, RRect};
+use skia_safe::{Canvas, Paint, PaintStyle, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -120,7 +120,8 @@ impl AvatarGroup {
             let cx = x + s / 2.0;
             let cy = s / 2.0;
 
-            let clip_rect = Rect::from_xywh(cx - inner_r, cy - inner_r, inner_r * 2.0, inner_r * 2.0);
+            let clip_rect =
+                Rect::from_xywh(cx - inner_r, cy - inner_r, inner_r * 2.0, inner_r * 2.0);
             let clip_rrect = RRect::new_oval(clip_rect);
 
             canvas.save();
@@ -183,7 +184,14 @@ impl AvatarGroup {
             let text_y = cy + (-metrics.ascent) / 2.0;
 
             draw_text_with_fallback(
-                canvas, &text, &font, &emoji_font, 0.0, text_x, text_y, &text_paint,
+                canvas,
+                &text,
+                &font,
+                &emoji_font,
+                0.0,
+                text_x,
+                text_y,
+                &text_paint,
             );
         }
 

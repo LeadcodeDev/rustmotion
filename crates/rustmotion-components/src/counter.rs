@@ -3,13 +3,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, PaintStyle};
 
-use rustmotion_core::css::style::{FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign};
+use rustmotion_core::css::style::{
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
+};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, format_counter_value, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, format_counter_value,
+    measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep};
+use rustmotion_core::schema::{
+    EasingType, FontStyleType, FontWeight, Stroke, TextAlign, TextShadow, TimelineStep,
+};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -47,14 +54,22 @@ rustmotion_core::impl_traits!(Counter {
 });
 
 impl Counter {
-    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64, scene_duration: f64) -> Result<()> {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_width: f32,
+        time: f64,
+        scene_duration: f64,
+    ) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
         let font_size = self.style.font_size_px_or(48.0);
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
         let font_weight = match &self.style.font_weight {
-            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
+                FontWeight::Bold
+            }
             Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
             Some(CssFontWeight::Number(n)) => FontWeight::Weight(*n),
             _ => FontWeight::Normal,
@@ -81,7 +96,13 @@ impl Counter {
 
         let progress = ease(t, &self.easing);
         let value = self.from + (self.to - self.from) * progress;
-        let content = format_counter_value(value, self.decimals, &self.separator, &self.prefix, &self.suffix);
+        let content = format_counter_value(
+            value,
+            self.decimals,
+            &self.separator,
+            &self.prefix,
+            &self.suffix,
+        );
 
         let fm = font_mgr();
         let slant = match font_style_type {
@@ -110,7 +131,8 @@ impl Counter {
 
         let letter_spacing = self.style.letter_spacing_px();
 
-        let advance_width = measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
+        let advance_width =
+            measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
 
         // For center/right alignment, anchor positioning on the same `absmax`
         // width that `measure()` reserved. This keeps the right edge (or
@@ -118,8 +140,18 @@ impl Counter {
         // of letting it shift sub-pixel as the digit count changes.
         let stable_width = if matches!(align, TextAlign::Center | TextAlign::Right) {
             let absmax = self.from.abs().max(self.to.abs());
-            let signed = if self.from < 0.0 || self.to < 0.0 { -absmax } else { absmax };
-            let display = format_counter_value(signed, self.decimals, &self.separator, &self.prefix, &self.suffix);
+            let signed = if self.from < 0.0 || self.to < 0.0 {
+                -absmax
+            } else {
+                absmax
+            };
+            let display = format_counter_value(
+                signed,
+                self.decimals,
+                &self.separator,
+                &self.prefix,
+                &self.suffix,
+            );
             measure_text_with_fallback(&display, &font, &emoji_font, letter_spacing)
         } else {
             advance_width
@@ -127,8 +159,9 @@ impl Counter {
 
         let raw_x = match align {
             TextAlign::Left => 0.0,
-            TextAlign::Center => (layout_width - stable_width) / 2.0
-                + (stable_width - advance_width) / 2.0,
+            TextAlign::Center => {
+                (layout_width - stable_width) / 2.0 + (stable_width - advance_width) / 2.0
+            }
             TextAlign::Right => layout_width - advance_width,
         };
         // Snap to whole pixels to eliminate the sub-pixel jitter that the
@@ -153,7 +186,16 @@ impl Counter {
                     sp.set_image_filter(filter);
                 }
             }
-            draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x + shadow.offset_x, y + shadow.offset_y, &sp);
+            draw_text_with_fallback(
+                canvas,
+                &content,
+                &font,
+                &emoji_font,
+                letter_spacing,
+                x + shadow.offset_x,
+                y + shadow.offset_y,
+                &sp,
+            );
         }
 
         // Draw stroke
@@ -161,10 +203,28 @@ impl Counter {
             let mut sp = paint_from_hex(&stroke.color);
             sp.set_style(PaintStyle::Stroke);
             sp.set_stroke_width(stroke.width);
-            draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &sp);
+            draw_text_with_fallback(
+                canvas,
+                &content,
+                &font,
+                &emoji_font,
+                letter_spacing,
+                x,
+                y,
+                &sp,
+            );
         }
 
-        draw_text_with_fallback(canvas, &content, &font, &emoji_font, letter_spacing, x, y, &paint);
+        draw_text_with_fallback(
+            canvas,
+            &content,
+            &font,
+            &emoji_font,
+            letter_spacing,
+            x,
+            y,
+            &paint,
+        );
 
         Ok(())
     }
@@ -178,6 +238,6 @@ impl Painter for Counter {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration as f64);
+        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration);
     }
 }

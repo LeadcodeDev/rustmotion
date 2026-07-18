@@ -17,11 +17,7 @@ impl Chart {
             .map(|d| d.value)
             .fold(0.0_f64, f64::max)
             .max(0.001);
-        let min_val = self
-            .data
-            .iter()
-            .map(|d| d.value)
-            .fold(f64::MAX, f64::min);
+        let min_val = self.data.iter().map(|d| d.value).fold(f64::MAX, f64::min);
         let range = (max_val - min_val).max(0.001);
 
         let n = self.data.len();
@@ -29,12 +25,10 @@ impl Chart {
             return Ok(());
         }
 
-        let x_labels: Vec<String> = self
-            .data
-            .iter()
-            .filter_map(|d| d.label.clone())
-            .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false);
+        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        self.draw_axes(
+            canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
+        );
 
         let mut path = Path::new();
         let mut fill_path = Path::new();
@@ -107,11 +101,7 @@ impl Chart {
             .map(|d| d.value)
             .fold(0.0_f64, f64::max)
             .max(0.001);
-        let min_val = self
-            .data
-            .iter()
-            .map(|d| d.value)
-            .fold(f64::MAX, f64::min);
+        let min_val = self.data.iter().map(|d| d.value).fold(f64::MAX, f64::min);
         let range = (max_val - min_val).max(0.001);
 
         let n = self.data.len();
@@ -119,12 +109,10 @@ impl Chart {
             return Ok(());
         }
 
-        let x_labels: Vec<String> = self
-            .data
-            .iter()
-            .filter_map(|d| d.label.clone())
-            .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false);
+        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        self.draw_axes(
+            canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
+        );
 
         // Compute points
         let pts: Vec<(f32, f32)> = self

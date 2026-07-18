@@ -20,12 +20,12 @@ pub fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
         .enumerate()
         .for_each(|(row, y_row)| {
             let row_offset = row * w * 4;
-            for col in 0..w {
+            for (col, out) in y_row.iter_mut().enumerate().take(w) {
                 let idx = row_offset + col * 4;
                 let r = rgba[idx] as i32;
                 let g = rgba[idx + 1] as i32;
                 let b = rgba[idx + 2] as i32;
-                y_row[col] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).clamp(0, 255) as u8;
+                *out = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16).clamp(0, 255) as u8;
             }
         });
 

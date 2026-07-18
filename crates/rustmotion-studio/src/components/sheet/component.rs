@@ -1,9 +1,11 @@
+// UI kit scaffold — variants are consumed incrementally as the studio grows.
+#![allow(dead_code)]
 use dioxus::prelude::*;
 use dioxus_icons::lucide::X;
-use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::dialog::{
     self, DialogCtx, DialogDescriptionProps, DialogRootProps, DialogTitleProps,
 };
+use dioxus_primitives::dioxus_attributes::attributes;
 use dioxus_primitives::merge_attributes;
 
 #[css_module("/src/components/sheet/style.css")]
@@ -57,7 +59,9 @@ pub fn Sheet(props: DialogRootProps) -> Element {
 }
 
 #[component]
-pub fn SheetContentClose(#[props(extends = GlobalAttributes)] attributes: Vec<Attribute>) -> Element {
+pub fn SheetContentClose(
+    #[props(extends = GlobalAttributes)] attributes: Vec<Attribute>,
+) -> Element {
     let base = attributes!(button {
         class: Styles::dx_sheet_close,
     });
