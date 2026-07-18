@@ -12,7 +12,7 @@ use rustmotion_core::css::style::{
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, font_mgr, format_counter_value, measure_text_with_fallback,
+    emoji_typeface, format_counter_value, measure_text_with_fallback, typeface_with_fallback,
     wrap_text_with_fallback,
 };
 
@@ -95,7 +95,9 @@ impl IntrinsicMeasure for TextIntrinsic {
             }
         };
 
-        let font = self.skia_font();
+        let Some(font) = self.skia_font() else {
+            return (0.0, 0.0);
+        };
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
 
         let wrap_at = if self.wrap { max_width } else { None };
@@ -112,8 +114,7 @@ impl IntrinsicMeasure for TextIntrinsic {
 }
 
 impl TextIntrinsic {
-    fn skia_font(&self) -> Font {
-        let fm = font_mgr();
+    fn skia_font(&self) -> Option<Font> {
         let slant = if self.italic {
             skia_safe::font_style::Slant::Italic
         } else {
@@ -122,16 +123,8 @@ impl TextIntrinsic {
         let weight = skia_safe::font_style::Weight::from(self.weight as i32);
         let sk_style = SkFontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
         let family = self.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, sk_style)
-            .or_else(|| fm.match_family_style("Helvetica", sk_style))
-            .or_else(|| fm.match_family_style("Arial", sk_style))
-            .or_else(|| fm.match_family_style("sans-serif", sk_style))
-            .unwrap_or_else(|| {
-                fm.legacy_make_typeface(None, sk_style)
-                    .expect("no fallback font")
-            });
-        Font::from_typeface(typeface, self.font_size)
+        let typeface = typeface_with_fallback(family, sk_style).ok()?;
+        Some(Font::from_typeface(typeface, self.font_size))
     }
 }
 

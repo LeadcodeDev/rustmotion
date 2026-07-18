@@ -42,7 +42,9 @@ impl Chart {
         let total_gap = gap * (n.saturating_sub(1)) as f32;
         let seg_h = (h - total_gap) / n as f32;
 
-        let font = self.make_label_font();
+        let Some(font) = self.make_label_font() else {
+            return Ok(());
+        };
         let emoji_font =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
         let (_, metrics) = font.metrics();
@@ -120,7 +122,9 @@ impl Chart {
         let total_gap = gap * (n.saturating_sub(1)) as f32;
         let seg_w = (w - total_gap) / n as f32;
 
-        let font = self.make_label_font();
+        let Some(font) = self.make_label_font() else {
+            return Ok(());
+        };
         let emoji_font =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
         let (_, metrics) = font.metrics();

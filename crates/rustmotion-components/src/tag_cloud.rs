@@ -6,8 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    parse_hex_color, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -119,7 +119,6 @@ impl TagCloud {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let fm = font_mgr();
         let tag_count = self.tags.len();
         let h_gap = 12.0_f32;
         let v_gap = 8.0_f32;
@@ -138,10 +137,9 @@ impl TagCloud {
             let tag = &self.tags[idx];
             let font_size = self.font_size_for_weight(tag.weight, min_weight, max_weight);
             let font_style = skia_safe::FontStyle::bold();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                continue;
+            };
             let font = skia_safe::Font::from_typeface(typeface, font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
@@ -246,10 +244,9 @@ impl TagCloud {
             text_paint.set_alpha((tag_alpha * 255.0) as u8);
 
             let font_style = skia_safe::FontStyle::bold();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                continue;
+            };
             let font = skia_safe::Font::from_typeface(typeface, pt.font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, pt.font_size));

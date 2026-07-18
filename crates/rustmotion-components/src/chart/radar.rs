@@ -66,7 +66,9 @@ impl Chart {
         }
 
         // Draw axis labels
-        let font = self.make_label_font();
+        let Some(font) = self.make_label_font() else {
+            return Ok(());
+        };
         let emoji_font =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
         let (_, metrics) = font.metrics();

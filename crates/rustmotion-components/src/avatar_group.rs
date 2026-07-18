@@ -7,8 +7,8 @@ use skia_safe::{Canvas, Paint, PaintStyle, RRect, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    asset_cache, draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback,
-    paint_from_hex,
+    asset_cache, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, typeface_with_fallback,
 };
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
@@ -164,13 +164,10 @@ impl AvatarGroup {
             // Text
             let text = format!("+{}", overflow);
             let font_size = s * 0.35;
-            let fm = font_mgr();
             let font_style = skia_safe::FontStyle::bold();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .or_else(|| fm.match_family_style("Arial", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                return Ok(());
+            };
             let font = skia_safe::Font::from_typeface(typeface, font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));

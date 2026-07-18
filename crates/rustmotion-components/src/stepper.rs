@@ -6,8 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    parse_hex_color, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -121,18 +121,15 @@ impl Stepper {
         let current = self.current_step_at(time);
         let r = self.node_size / 2.0;
 
-        let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
-        let typeface = fm
-            .match_family_style("Inter", font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+        let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+            return;
+        };
 
         let bold_style = skia_safe::FontStyle::bold();
-        let bold_typeface = fm
-            .match_family_style("Inter", bold_style)
-            .or_else(|| fm.match_family_style("Helvetica", bold_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, bold_style).unwrap());
+        let Ok(bold_typeface) = typeface_with_fallback("Inter", bold_style) else {
+            return;
+        };
 
         let number_font_size = r * 0.9;
         let number_font = skia_safe::Font::from_typeface(&bold_typeface, number_font_size);

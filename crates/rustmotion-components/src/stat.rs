@@ -6,8 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
-    measure_text_with_fallback, paint_from_hex, parse_hex_color,
+    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
+    measure_text_with_fallback, paint_from_hex, parse_hex_color, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -86,7 +86,6 @@ impl Stat {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
-        let fm = font_mgr();
 
         // Background if set
         if let Some(bg) = self.style.background_color_str() {
@@ -105,10 +104,9 @@ impl Stat {
         // Label (top)
         if let Some(label) = &self.label {
             let font_style = skia_safe::FontStyle::normal();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                return;
+            };
             let font = skia_safe::Font::from_typeface(typeface, self.label_font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
@@ -134,10 +132,9 @@ impl Stat {
         // Value (large)
         {
             let font_style = skia_safe::FontStyle::bold();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                return;
+            };
             let font = skia_safe::Font::from_typeface(typeface, self.value_font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.value_font_size));
@@ -163,14 +160,9 @@ impl Stat {
                 let val_w = measure_text_with_fallback(&self.value, &font, &emoji_font, 0.0);
                 let trend_fs = self.value_font_size * 0.4;
                 let bold_style = skia_safe::FontStyle::bold();
-                let trend_typeface = fm
-                    .match_family_style("Inter", bold_style)
-                    .or_else(|| fm.match_family_style("Helvetica", bold_style))
-                    .or_else(|| fm.match_family_style("Arial", bold_style))
-                    .unwrap_or_else(|| {
-                        fm.legacy_make_typeface(None, bold_style)
-                            .expect("no font available")
-                    });
+                let Ok(trend_typeface) = typeface_with_fallback("Inter", bold_style) else {
+                    return;
+                };
                 let trend_font = skia_safe::Font::from_typeface(trend_typeface, trend_fs);
                 let trend_emoji =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, trend_fs));

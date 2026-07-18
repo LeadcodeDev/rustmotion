@@ -6,9 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, paint_from_hex, typeface_with_fallback,
 };
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::{CodeblockReveal, RevealMode, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -132,22 +131,11 @@ const LINE_HEIGHT: f32 = 22.0;
 const PADDING: f32 = 16.0;
 
 impl Terminal {
-    fn make_font(&self) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self) -> Option<skia_safe::Font> {
         let font_style = skia_safe::FontStyle::normal();
-
-        let typeface = fm
-            .match_family_style("SF Mono", font_style)
-            .or_else(|| fm.match_family_style("Menlo", font_style))
-            .or_else(|| fm.match_family_style("Courier New", font_style))
-            .or_else(|| fm.match_family_style("monospace", font_style))
-            .or_else(|| fm.match_family_style("Courier", font_style))
-            .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
-
+        let typeface = typeface_with_fallback("SF Mono", font_style).ok()?;
         let size = self.style.font_size_px_or(FONT_SIZE);
-
-        skia_safe::Font::from_typeface(typeface, size)
+        Some(skia_safe::Font::from_typeface(typeface, size))
     }
 
     fn line_height(&self) -> f32 {
@@ -238,6 +226,12 @@ impl Terminal {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(bg_rrect, &bg_paint);
 
+        // Resolve the terminal font up front — bail before any canvas.save()
+        // so save/restore stays balanced if no font is available.
+        let Some(font) = self.make_font() else {
+            return;
+        };
+
         // Always clip content to the rounded box so scrolled lines fade
         // cleanly at the edges and never escape the device viewport.
         canvas.save();
@@ -269,7 +263,6 @@ impl Terminal {
 
             // Title
             if let Some(title) = &self.title {
-                let font = self.make_font();
                 let font_size = self.style.font_size_px_or(FONT_SIZE);
                 let emoji_font =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
@@ -294,7 +287,6 @@ impl Terminal {
         let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(time);
 
         // Lines
-        let font = self.make_font();
         let font_size = self.style.font_size_px_or(FONT_SIZE);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();

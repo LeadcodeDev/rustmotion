@@ -7,7 +7,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
+    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -108,19 +109,15 @@ impl Notification {
         self.style.font_size_px_or(16.0) * 0.85
     }
 
-    fn make_font(&self, bold: bool, size: f32) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self, bold: bool, size: f32) -> Option<skia_safe::Font> {
         let font_style = if bold {
             skia_safe::FontStyle::bold()
         } else {
             skia_safe::FontStyle::normal()
         };
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, size)
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(typeface, size))
     }
 
     fn compute_opacity(&self, time: f64) -> f32 {
@@ -228,6 +225,12 @@ impl Notification {
             return Ok(());
         }
 
+        // Resolve the title font before any canvas.save() so an early return
+        // on font failure keeps save/restore balanced.
+        let Some(title_font) = self.make_font(true, self.title_font_size()) else {
+            return Ok(());
+        };
+
         // Stack offset: count how many push_at timestamps have passed,
         // each one shifts this notification down by one slot with animation.
         let slot_size = h + self.stack_gap;
@@ -294,7 +297,6 @@ impl Notification {
         }
 
         // Title
-        let title_font = self.make_font(true, self.title_font_size());
         let title_fs = self.title_font_size();
         let emoji_font_title =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, title_fs));
@@ -319,25 +321,26 @@ impl Notification {
         // Message
         if let Some(message) = &self.message {
             let msg_fs = self.message_font_size();
-            let msg_font = self.make_font(false, msg_fs);
-            let emoji_font_msg =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, msg_fs));
-            let mut msg_paint = paint_from_hex("#9CA3AF");
-            msg_paint.set_anti_alias(true);
+            if let Some(msg_font) = self.make_font(false, msg_fs) {
+                let emoji_font_msg =
+                    emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, msg_fs));
+                let mut msg_paint = paint_from_hex("#9CA3AF");
+                msg_paint.set_anti_alias(true);
 
-            let (_, msg_metrics) = msg_font.metrics();
-            let msg_y = title_y + 4.0 + title_fs * 0.3 + (-msg_metrics.ascent);
+                let (_, msg_metrics) = msg_font.metrics();
+                let msg_y = title_y + 4.0 + title_fs * 0.3 + (-msg_metrics.ascent);
 
-            draw_text_with_fallback(
-                canvas,
-                message,
-                &msg_font,
-                &emoji_font_msg,
-                0.0,
-                content_x,
-                msg_y,
-                &msg_paint,
-            );
+                draw_text_with_fallback(
+                    canvas,
+                    message,
+                    &msg_font,
+                    &emoji_font_msg,
+                    0.0,
+                    content_x,
+                    msg_y,
+                    &msg_paint,
+                );
+            }
         }
 
         if opacity < 1.0 {

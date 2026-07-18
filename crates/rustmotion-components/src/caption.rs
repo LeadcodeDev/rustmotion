@@ -6,7 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -42,16 +43,9 @@ impl Caption {
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
 
-        let fm = font_mgr();
-        let typeface = fm
-            .match_family_style(font_family, FontStyle::bold())
-            .or_else(|| fm.match_family_style("Helvetica", FontStyle::bold()))
-            .or_else(|| fm.match_family_style("Arial", FontStyle::bold()))
-            .or_else(|| fm.match_family_style("sans-serif", FontStyle::bold()))
-            .unwrap_or_else(|| {
-                fm.legacy_make_typeface(None, FontStyle::bold())
-                    .expect("No fallback font")
-            });
+        let Ok(typeface) = typeface_with_fallback(font_family, FontStyle::bold()) else {
+            return;
+        };
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));

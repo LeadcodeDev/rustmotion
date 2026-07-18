@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 
 use rustmotion_core::engine::animator::ease;
-use rustmotion_core::error::RustmotionError;
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
@@ -13,8 +12,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
-    wrap_text_with_fallback,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback, wrap_text_with_fallback,
 };
 use rustmotion_core::schema::{
     CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
@@ -341,7 +340,6 @@ impl Text {
         let line_height_val = self.style.line_height_for(font_size);
         let letter_spacing = self.style.letter_spacing_px();
 
-        let fm = font_mgr();
         let slant = match font_style_type {
             FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
             FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
@@ -354,19 +352,7 @@ impl Text {
         };
         let skia_font_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
-        let typeface = fm
-            .match_family_style(font_family, skia_font_style)
-            .or_else(|| fm.match_family_style("Helvetica", skia_font_style))
-            .or_else(|| fm.match_family_style("Arial", skia_font_style))
-            .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
-            .or_else(|| {
-                if fm.count_families() > 0 {
-                    fm.match_family_style(fm.family_name(0), skia_font_style)
-                } else {
-                    None
-                }
-            })
-            .ok_or(RustmotionError::FontNotFound)?;
+        let typeface = typeface_with_fallback(font_family, skia_font_style)?;
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));

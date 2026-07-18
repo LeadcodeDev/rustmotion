@@ -6,10 +6,9 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr,
-    measure_text_with_fallback, paint_from_hex,
+    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
+    measure_text_with_fallback, paint_from_hex, typeface_with_fallback,
 };
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -95,20 +94,14 @@ impl Badge {
         (h_pad * ratio, v_pad * ratio, icon_size * ratio)
     }
 
-    fn make_font(&self) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self) -> Option<skia_safe::Font> {
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .or_else(|| fm.match_family_style("sans-serif", font_style))
-            .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
-
-        skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(
+            typeface,
+            self.resolved_font_size(),
+        ))
     }
 }
 
@@ -209,7 +202,9 @@ impl Badge {
         } else {
             color
         };
-        let font = self.make_font();
+        let Some(font) = self.make_font() else {
+            return;
+        };
         let font_size = self.resolved_font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let mut text_paint = paint_from_hex(text_color);
@@ -270,15 +265,10 @@ impl Badge {
             };
 
             let count_fs = font_size * 0.65;
-            let fm = font_mgr();
-            let count_typeface = fm
-                .match_family_style("Inter", skia_safe::FontStyle::bold())
-                .or_else(|| fm.match_family_style("Helvetica", skia_safe::FontStyle::bold()))
-                .or_else(|| fm.match_family_style("Arial", skia_safe::FontStyle::bold()))
-                .unwrap_or_else(|| {
-                    fm.legacy_make_typeface(None, skia_safe::FontStyle::bold())
-                        .unwrap()
-                });
+            let Ok(count_typeface) = typeface_with_fallback("Inter", skia_safe::FontStyle::bold())
+            else {
+                return;
+            };
             let count_font = skia_safe::Font::from_typeface(count_typeface, count_fs);
             let count_emoji =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, count_fs));

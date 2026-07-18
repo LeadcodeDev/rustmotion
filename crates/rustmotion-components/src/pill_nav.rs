@@ -6,7 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -86,23 +87,22 @@ impl PillNav {
         self.style.font_size_px_or(14.0)
     }
 
-    fn make_font(&self, bold: bool) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self, bold: bool) -> Option<skia_safe::Font> {
         let font_style = if bold {
             skia_safe::FontStyle::bold()
         } else {
             skia_safe::FontStyle::normal()
         };
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(
+            typeface,
+            self.resolved_font_size(),
+        ))
     }
 
-    fn compute_tab_layout(&self) -> (f32, Vec<f32>, Vec<f32>) {
-        let font = self.make_font(false);
+    fn compute_tab_layout(&self) -> Option<(f32, Vec<f32>, Vec<f32>)> {
+        let font = self.make_font(false)?;
         let font_size = self.resolved_font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let h_pad = font_size * 1.2;
@@ -125,7 +125,7 @@ impl PillNav {
         }
 
         let total_w = x + inner_pad;
-        (total_w, tab_positions, tab_widths)
+        Some((total_w, tab_positions, tab_widths))
     }
 
     fn active_at_time(&self, time: f64) -> (u32, Option<(u32, f64)>) {
@@ -174,7 +174,9 @@ impl PillNav {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(outer_rrect, &bg_paint);
 
-        let (_total_w, tab_positions, tab_widths) = self.compute_tab_layout();
+        let Some((_total_w, tab_positions, tab_widths)) = self.compute_tab_layout() else {
+            return;
+        };
         let (active, transition_info) = self.active_at_time(time);
 
         // Pill indicator
@@ -204,7 +206,9 @@ impl PillNav {
         canvas.draw_rrect(pill_rrect, &pill_paint);
 
         // Tab labels
-        let font = self.make_font(false);
+        let Some(font) = self.make_font(false) else {
+            return;
+        };
         let font_size = self.resolved_font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();

@@ -9,7 +9,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, font_mgr, paint_from_hex, parse_hex_color,
+    emoji_typeface, paint_from_hex, parse_hex_color, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -54,11 +54,10 @@ rustmotion_core::impl_traits!(GradientText {
 });
 
 impl GradientText {
-    fn resolve_font(&self) -> (Font, Option<Font>) {
+    fn resolve_font(&self) -> Option<(Font, Option<Font>)> {
         let font_size = self.style.font_size_px_or(48.0);
         let font_family = self.style.font_family_or("Inter");
 
-        let fm = font_mgr();
         let slant = match self.style.font_style {
             Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
             Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
@@ -73,14 +72,11 @@ impl GradientText {
         };
         let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
-        let typeface = fm
-            .match_family_style(font_family, skia_style)
-            .or_else(|| fm.match_family_style("Helvetica", skia_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, skia_style).unwrap());
+        let typeface = typeface_with_fallback(font_family, skia_style).ok()?;
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        (font, emoji_font)
+        Some((font, emoji_font))
     }
 }
 
@@ -90,7 +86,9 @@ impl GradientText {
             return;
         }
 
-        let (font, _emoji_font) = self.resolve_font();
+        let Some((font, _emoji_font)) = self.resolve_font() else {
+            return;
+        };
         let _font_size = self.style.font_size_px_or(48.0);
 
         // Measure text

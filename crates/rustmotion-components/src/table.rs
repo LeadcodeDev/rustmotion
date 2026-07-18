@@ -6,9 +6,9 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -80,8 +80,7 @@ impl Table {
         self.font_size() * 2.5
     }
 
-    fn make_font(&self, bold: bool) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self, bold: bool) -> Option<skia_safe::Font> {
         let font_style = if bold {
             skia_safe::FontStyle::bold()
         } else {
@@ -89,15 +88,8 @@ impl Table {
         };
 
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
-
-        skia_safe::Font::from_typeface(typeface, self.font_size())
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(typeface, self.font_size()))
     }
 
     /// Resolve column widths: use explicit widths if provided, else equal distribution.
@@ -151,6 +143,15 @@ impl Table {
         let default_row_colors = vec!["#1F2937".to_string(), "#111827".to_string()];
         let row_colors = self.row_colors.as_ref().unwrap_or(&default_row_colors);
 
+        // Resolve fonts before the optional clip below so an early return on
+        // font failure keeps canvas save/restore balanced.
+        let Some(header_font) = self.make_font(true) else {
+            return;
+        };
+        let Some(body_font) = self.make_font(false) else {
+            return;
+        };
+
         // Clip to rounded rect if border-radius is set
         let radius_px = self.style.border_radius_px_or(0.0);
         let has_radius = radius_px > 0.0;
@@ -162,7 +163,6 @@ impl Table {
         }
 
         // Header row
-        let header_font = self.make_font(true);
         let font_size = self.font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, header_metrics) = header_font.metrics();
@@ -196,7 +196,6 @@ impl Table {
         }
 
         // Data rows
-        let body_font = self.make_font(false);
         let (_, body_metrics) = body_font.metrics();
         let body_ascent = -body_metrics.ascent;
 
