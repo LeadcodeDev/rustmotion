@@ -554,7 +554,7 @@ pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight
         .unwrap_or_else(|| {
             if font_mgr.count_families() > 0 {
                 font_mgr
-                    .match_family_style(&font_mgr.family_name(0), style)
+                    .match_family_style(font_mgr.family_name(0), style)
                     .unwrap()
             } else {
                 panic!("No fonts available on this system");

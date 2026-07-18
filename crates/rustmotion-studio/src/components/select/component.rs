@@ -5,8 +5,6 @@ use dioxus_primitives::select::{
 };
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes};
 
-pub use dioxus_primitives::select::SelectGroup;
-
 #[component]
 pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element {
     let base = attributes!(div { class: "dx-select" });

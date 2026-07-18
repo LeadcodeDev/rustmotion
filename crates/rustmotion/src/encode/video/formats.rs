@@ -30,7 +30,7 @@ pub fn encode_png_sequence(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     std::fs::create_dir_all(output_dir)?;
@@ -87,7 +87,7 @@ pub fn encode_gif(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     let gif_w = width.min(65535) as u16;

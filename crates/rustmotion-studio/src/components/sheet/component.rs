@@ -1,3 +1,5 @@
+// UI kit scaffold — variants are consumed incrementally as the studio grows.
+#![allow(dead_code)]
 use dioxus::prelude::*;
 use dioxus_icons::lucide::X;
 use dioxus_primitives::dialog::{

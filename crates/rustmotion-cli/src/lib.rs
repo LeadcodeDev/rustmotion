@@ -430,8 +430,7 @@ fn install_completions() -> Result<()> {
             return Err(RustmotionError::Generic(format!(
                 "Unsupported shell for install: {:?}. Use 'completions generate' instead.",
                 shell
-            ))
-            .into());
+            )));
         }
     }
 
@@ -485,7 +484,10 @@ fn uninstall_completions() -> Result<()> {
             }
         }
         _ => {
-            return Err(RustmotionError::Generic(format!("Unsupported shell: {:?}", shell)).into());
+            return Err(RustmotionError::Generic(format!(
+                "Unsupported shell: {:?}",
+                shell
+            )));
         }
     }
 

@@ -32,7 +32,7 @@ pub fn encode_with_ffmpeg(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     // Process audio
@@ -260,8 +260,7 @@ pub fn encode_with_ffmpeg(
         }
         return Err(RustmotionError::FfmpegFailed {
             stderr: stderr_summary,
-        }
-        .into());
+        });
     }
 
     Ok(())

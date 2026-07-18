@@ -175,7 +175,7 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
 
         // Detect new vs legacy format: new format has a sub-object keyed by preset name
         let is_new_format =
-            !preset_str.is_empty() && map.get(preset_str).map_or(false, |v| v.is_object());
+            !preset_str.is_empty() && map.get(preset_str).is_some_and(|v| v.is_object());
 
         let (preset, speed) = if is_new_format {
             // New format: config in sub-object
@@ -283,7 +283,7 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
         };
 
         // Infer legacy direction if not specified
-        let direction = direction.or_else(|| {
+        let direction = direction.or({
             if speed > 0.0 && !is_new_format {
                 match &preset {
                     BackgroundPreset::GradientShift(_) => Some(ScrollDirection::Cw),

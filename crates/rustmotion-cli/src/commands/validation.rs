@@ -194,29 +194,6 @@ pub fn warn_on_silent_defaults(loaded: &LoadedScenario) {
     }
 }
 
-#[cfg(test)]
-mod misplaced_animation_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn flags_only_top_level_animation() {
-        let raw = json!({
-            "scenes": [{ "children": [
-                { "type": "text", "style": { "color": "#fff" }, "animation": [{ "name": "fade_in" }] },
-                { "type": "text", "style": { "color": "#fff", "animation": [{ "name": "fade_in" }] } }
-            ]}]
-        });
-        let w = warn_misplaced_animation(&raw);
-        assert_eq!(
-            w.len(),
-            1,
-            "only the top-level animation should warn: {w:?}"
-        );
-        assert!(w[0].contains("style.animation"));
-    }
-}
-
 /// Validate `--codec` against the list ffmpeg can drive. Defaults to OK if None.
 pub fn check_codec(codec: Option<&str>) -> Result<()> {
     if let Some(c) = codec {
@@ -263,5 +240,28 @@ pub fn print_report(report: &ValidationReport, source_label: &str) {
             eprintln!("{}", format_violation(v));
             eprintln!();
         }
+    }
+}
+
+#[cfg(test)]
+mod misplaced_animation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn flags_only_top_level_animation() {
+        let raw = json!({
+            "scenes": [{ "children": [
+                { "type": "text", "style": { "color": "#fff" }, "animation": [{ "name": "fade_in" }] },
+                { "type": "text", "style": { "color": "#fff", "animation": [{ "name": "fade_in" }] } }
+            ]}]
+        });
+        let w = warn_misplaced_animation(&raw);
+        assert_eq!(
+            w.len(),
+            1,
+            "only the top-level animation should warn: {w:?}"
+        );
+        assert!(w[0].contains("style.animation"));
     }
 }

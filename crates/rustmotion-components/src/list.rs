@@ -30,16 +30,12 @@ fn default_width() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ListVariant {
+    #[default]
     Bullet,
     Numbered,
     Checklist,
-}
-
-impl Default for ListVariant {
-    fn default() -> Self {
-        Self::Bullet
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

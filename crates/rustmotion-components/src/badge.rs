@@ -15,29 +15,21 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BadgeVariant {
+    #[default]
     Solid,
     Outline,
 }
 
-impl Default for BadgeVariant {
-    fn default() -> Self {
-        Self::Solid
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BadgeSize {
     Sm,
+    #[default]
     Md,
     Lg,
-}
-
-impl Default for BadgeSize {
-    fn default() -> Self {
-        Self::Md
-    }
 }
 
 impl BadgeSize {
@@ -114,7 +106,7 @@ impl Badge {
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.match_family_style("sans-serif", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
     }

@@ -17,7 +17,7 @@ impl Chart {
         let cy = h / 2.0;
         let max_radius = cx.min(cy) - 16.0;
         let n = self.data.len();
-        let track_width = (max_radius / (n as f32 * 1.5)).min(20.0).max(6.0);
+        let track_width = (max_radius / (n as f32 * 1.5)).clamp(6.0, 20.0);
         let ring_gap = track_width * 0.5;
 
         let max_val = self

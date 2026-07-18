@@ -30,18 +30,14 @@ fn default_arrow_size() -> f32 {
 /// Arrow direction — where the arrow points (toward the target element).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TooltipArrow {
     Top,
+    #[default]
     Bottom,
     Left,
     Right,
     None,
-}
-
-impl Default for TooltipArrow {
-    fn default() -> Self {
-        Self::Bottom
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

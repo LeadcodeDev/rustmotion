@@ -71,29 +71,6 @@ pub fn render_frame_task_hits(
     }
 }
 
-#[cfg(test)]
-mod hit_tests {
-    use super::*;
-
-    const SCENARIO: &str = r##"{
-        "video": { "width": 800, "height": 600, "background": "#101418" },
-        "scenes": [ { "duration": 1.0, "children": [
-            { "type": "text", "content": "Hello", "style": { "font-size": 48 } }
-        ] } ]
-    }"##;
-
-    #[test]
-    fn normal_frame_returns_text_hit() {
-        let scenario = crate::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
-        let tasks = crate::encode::build_frame_tasks(&scenario);
-        let hits = render_frame_task_hits(&scenario, &tasks[0]);
-        assert!(
-            hits.iter().any(|h| h.kind == "text"),
-            "expected a text hit, got {hits:?}"
-        );
-    }
-}
-
 pub fn render_frame_task_scaled(
     config: &VideoConfig,
     scenario: &Scenario,
@@ -558,4 +535,27 @@ pub fn hash_video_config(config: &VideoConfig) -> u64 {
     let mut hasher = DefaultHasher::new();
     json.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod hit_tests {
+    use super::*;
+
+    const SCENARIO: &str = r##"{
+        "video": { "width": 800, "height": 600, "background": "#101418" },
+        "scenes": [ { "duration": 1.0, "children": [
+            { "type": "text", "content": "Hello", "style": { "font-size": 48 } }
+        ] } ]
+    }"##;
+
+    #[test]
+    fn normal_frame_returns_text_hit() {
+        let scenario = crate::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = crate::encode::build_frame_tasks(&scenario);
+        let hits = render_frame_task_hits(&scenario, &tasks[0]);
+        assert!(
+            hits.iter().any(|h| h.kind == "text"),
+            "expected a text hit, got {hits:?}"
+        );
+    }
 }

@@ -126,7 +126,7 @@ impl Comparison {
         let right_rect = Rect::from_xywh(divider_x, 0.0, w - divider_x, h);
         canvas.draw_rect(right_rect, &right_paint);
 
-        let font_size = (h * 0.08).max(16.0).min(36.0);
+        let font_size = (h * 0.08).clamp(16.0, 36.0);
         let fm = font_mgr();
         let font_style = skia_safe::FontStyle::bold();
         let typeface = fm

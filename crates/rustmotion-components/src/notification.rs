@@ -27,17 +27,13 @@ fn default_stack_gap() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum NotificationVariant {
+    #[default]
     Info,
     Success,
     Warning,
     Error,
-}
-
-impl Default for NotificationVariant {
-    fn default() -> Self {
-        Self::Info
-    }
 }
 
 impl NotificationVariant {

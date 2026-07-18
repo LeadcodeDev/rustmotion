@@ -475,20 +475,11 @@ pub enum GridTrackKeyword {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+#[derive(Default)]
 pub struct GridLine {
     pub start: Option<GridLineEnd>,
     pub end: Option<GridLineEnd>,
     pub span: Option<u16>,
-}
-
-impl Default for GridLine {
-    fn default() -> Self {
-        Self {
-            start: None,
-            end: None,
-            span: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

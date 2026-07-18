@@ -58,7 +58,7 @@ impl Chart {
             let x = ml + gap + i as f32 * (bar_w + gap);
 
             // Green for positive, red for negative
-            let color = dp.color.as_deref().unwrap_or_else(|| {
+            let color = dp.color.as_deref().unwrap_or({
                 if dp.value >= 0.0 {
                     "#22C55E"
                 } else {

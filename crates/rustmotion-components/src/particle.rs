@@ -11,18 +11,14 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ParticleType {
+    #[default]
     Confetti,
     Snow,
     Stars,
     Bubbles,
     Halo,
-}
-
-impl Default for ParticleType {
-    fn default() -> Self {
-        Self::Confetti
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

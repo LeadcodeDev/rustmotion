@@ -83,5 +83,5 @@ pub fn cmd_still(
         scene_start = scene_end;
     }
 
-    Err(RustmotionError::TimeOutOfRange { time }.into())
+    Err(RustmotionError::TimeOutOfRange { time })
 }

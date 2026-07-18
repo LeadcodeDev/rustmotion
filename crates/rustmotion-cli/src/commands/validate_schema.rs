@@ -12,7 +12,7 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
     if scenario.video.width == 0 || scenario.video.height == 0 {
         errors.push("video.width and video.height must be > 0".to_string());
     }
-    if scenario.video.width % 2 != 0 || scenario.video.height % 2 != 0 {
+    if !scenario.video.width.is_multiple_of(2) || !scenario.video.height.is_multiple_of(2) {
         errors.push("video.width and video.height must be even (required for H.264)".to_string());
     }
     if scenario.video.fps == 0 {

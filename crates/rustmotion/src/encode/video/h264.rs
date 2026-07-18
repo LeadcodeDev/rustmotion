@@ -17,12 +17,12 @@ use super::EncodeProgress;
 /// Create an OpenH264 encoder with standard settings for the given video dimensions.
 fn create_encoder(width: u32, height: u32, fps: u32) -> Result<Encoder> {
     let api = OpenH264API::from_source();
-    let pixels = (width * height) as u32;
+    let pixels = width * height;
     let target_bitrate = (pixels as f64 * fps as f64 * 0.1) as u32;
     let config = EncoderConfig::new()
         .set_bitrate_bps(target_bitrate.max(3_000_000))
         .max_frame_rate(fps as f32);
-    Ok(Encoder::with_api_config(api, config).map_err(|e| RustmotionError::from(e.to_string()))?)
+    Encoder::with_api_config(api, config).map_err(|e| RustmotionError::from(e.to_string()))
 }
 
 pub fn encode_video(
@@ -45,7 +45,7 @@ pub fn encode_video(
     let total_frames = tasks.len() as u32;
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     let batch_size = (rayon::current_num_threads() * 2).max(4);
@@ -171,7 +171,7 @@ pub fn encode_video_incremental(
     let total_frames: u32 = scene_tasks.iter().map(|t| t.len() as u32).sum();
 
     if total_frames == 0 {
-        return Err(RustmotionError::NoFrames.into());
+        return Err(RustmotionError::NoFrames);
     }
 
     // Flatten tasks that need rendering

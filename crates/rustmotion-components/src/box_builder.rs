@@ -486,21 +486,19 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::Px(c.size)));
             }
         }
-        Countdown(c) => {
-            if css.width.is_none() || css.height.is_none() {
-                let visible = [c.show_hours, c.show_minutes, c.show_seconds]
-                    .iter()
-                    .filter(|v| **v)
-                    .count() as f32;
-                let box_w = c.digit_size * 0.75;
-                let box_h = c.digit_size * 1.2;
-                let w = (visible * 2.0 * box_w) + ((visible - 1.0).max(0.0) * c.gap);
-                if css.width.is_none() {
-                    css.width = Some(CSize::Length(CLP::Px(w)));
-                }
-                if css.height.is_none() {
-                    css.height = Some(CSize::Length(CLP::Px(box_h)));
-                }
+        Countdown(c) if (css.width.is_none() || css.height.is_none()) => {
+            let visible = [c.show_hours, c.show_minutes, c.show_seconds]
+                .iter()
+                .filter(|v| **v)
+                .count() as f32;
+            let box_w = c.digit_size * 0.75;
+            let box_h = c.digit_size * 1.2;
+            let w = (visible * 2.0 * box_w) + ((visible - 1.0).max(0.0) * c.gap);
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(box_h)));
             }
         }
         _ => {}

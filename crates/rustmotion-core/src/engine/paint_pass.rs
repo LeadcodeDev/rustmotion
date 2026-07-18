@@ -234,7 +234,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
             .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
             .unwrap_or([0.0; 4]);
         let rrect = padding_rrect(box_layout, radius);
-        canvas.clip_rrect(&rrect, ClipOp::Intersect, true);
+        canvas.clip_rrect(rrect, ClipOp::Intersect, true);
     }
 
     // 5. outset box-shadow
@@ -501,7 +501,7 @@ fn paint_background(
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             paint.set_color(parse_color(c));
-            canvas.draw_rrect(&rrect, &paint);
+            canvas.draw_rrect(rrect, &paint);
         }
         Background::Single(layer) => paint_bg_layer(canvas, &rrect, layer),
         Background::Layers(layers) => {
@@ -656,7 +656,7 @@ fn paint_border(
     paint.set_color(color);
 
     // Use DRRect = outer minus inner for an accurate stroked border with radius.
-    canvas.draw_drrect(&outer, &inner, &paint);
+    canvas.draw_drrect(outer, inner, &paint);
 }
 
 fn border_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
@@ -763,14 +763,14 @@ fn paint_box_shadow(
             layout.height + spread * 2.0,
         );
         let rrect = rrect_from_corners(rect, radius);
-        canvas.draw_rrect(&rrect, &paint);
+        canvas.draw_rrect(rrect, &paint);
     } else {
         // Inset: invert — paint the area outside the inner rect within the box.
         // Approximation: draw a stroked rrect inside the padding box.
         let (px, py, pw, ph) = layout.padding_box();
         let outer = rrect_from_corners(Rect::from_xywh(px, py, pw, ph), radius);
         canvas.save();
-        canvas.clip_rrect(&outer, ClipOp::Intersect, true);
+        canvas.clip_rrect(outer, ClipOp::Intersect, true);
         let inner_rect = Rect::from_xywh(
             px + dx + spread,
             py + dy + spread,
@@ -790,8 +790,8 @@ fn paint_box_shadow(
         }
         // Cheap approximation — TODO: proper inset shadow with subtraction path.
         let mut path = Path::new();
-        path.add_rrect(&outer, None);
-        path.add_rrect(&inner, None);
+        path.add_rrect(outer, None);
+        path.add_rrect(inner, None);
         path.set_fill_type(skia_safe::PathFillType::EvenOdd);
         canvas.draw_path(&path, &clear);
         canvas.restore();

@@ -1,3 +1,5 @@
+// UI kit scaffold — variants are consumed incrementally as the studio grows.
+#![allow(dead_code)]
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::separator::Separator;
 use crate::components::sheet::{

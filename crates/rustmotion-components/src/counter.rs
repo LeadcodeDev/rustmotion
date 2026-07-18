@@ -238,6 +238,6 @@ impl Painter for Counter {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration as f64);
+        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration);
     }
 }

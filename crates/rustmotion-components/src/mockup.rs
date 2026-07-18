@@ -13,30 +13,22 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MockupDevice {
+    #[default]
     Iphone,
     Android,
     Laptop,
     Browser,
 }
 
-impl Default for MockupDevice {
-    fn default() -> Self {
-        Self::Iphone
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MockupTheme {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for MockupTheme {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 impl MockupTheme {

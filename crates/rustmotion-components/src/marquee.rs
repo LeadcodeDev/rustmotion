@@ -27,15 +27,11 @@ fn default_color() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MarqueeDirection {
+    #[default]
     Left,
     Right,
-}
-
-impl Default for MarqueeDirection {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

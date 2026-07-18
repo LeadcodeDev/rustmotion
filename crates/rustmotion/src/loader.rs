@@ -23,7 +23,7 @@ pub fn load_scenario_from_source(
     json: Option<&str>,
 ) -> Result<ResolvedScenario> {
     match (input, json) {
-        (Some(_), Some(_)) => Err(RustmotionError::ConflictingInput.into()),
+        (Some(_), Some(_)) => Err(RustmotionError::ConflictingInput),
         (Some(path), None) => load_scenario(path),
         (None, Some(json_str)) => {
             let mut json_value: serde_json::Value =
@@ -33,7 +33,7 @@ pub fn load_scenario_from_source(
                 serde_json::from_value(json_value).map_err(RustmotionError::from)?;
             include::resolve_includes(scenario, &include::IncludeSource::Inline)
         }
-        (None, None) => Err(RustmotionError::MissingInput.into()),
+        (None, None) => Err(RustmotionError::MissingInput),
     }
 }
 

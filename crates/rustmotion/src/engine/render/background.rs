@@ -450,7 +450,7 @@ pub(super) fn interpolate_animated_bg(
     let preset = match (&a.preset, &b.preset) {
         (BackgroundPreset::GradientShift(ac), BackgroundPreset::GradientShift(bc)) => {
             BackgroundPreset::GradientShift(GradientShiftConfig {
-                colors: lerp_colors(&ac.colors, &bc.colors, &lerp),
+                colors: lerp_colors(&ac.colors, &bc.colors, lerp),
                 gradient_type: bc.gradient_type.clone(),
             })
         }
@@ -487,7 +487,7 @@ pub(super) fn interpolate_animated_bg(
         }
         (BackgroundPreset::Halo(ac), BackgroundPreset::Halo(bc)) => {
             BackgroundPreset::Halo(HaloConfig {
-                zones: lerp_zones(&ac.zones, &bc.zones, &lerp),
+                zones: lerp_zones(&ac.zones, &bc.zones, lerp),
             })
         }
         _ => {

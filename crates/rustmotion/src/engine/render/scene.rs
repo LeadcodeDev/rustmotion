@@ -713,7 +713,7 @@ pub fn render_world_frame_scaled(
                 }
             }
             // Draw scene B backgrounds with growing alpha
-            if crossfade > 0.0 && bgs_a as *const _ != bgs_b as *const _ {
+            if crossfade > 0.0 && !std::ptr::eq(bgs_a, bgs_b) {
                 // If backgrounds are different, create a temporary surface for B and blend
                 let bg_info = ImageInfo::new(
                     (scaled_w, scaled_h),

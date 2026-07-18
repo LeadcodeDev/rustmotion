@@ -31,7 +31,7 @@ fn load_for_watch(
 
 pub fn cmd_render(
     scenario: ResolvedScenario,
-    output: &PathBuf,
+    output: &Path,
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
     quiet: bool,
@@ -59,7 +59,7 @@ pub fn cmd_render(
         let png_path = if output.extension().map(|e| e == "mp4").unwrap_or(false) {
             output.with_extension("png")
         } else {
-            output.clone()
+            output.to_path_buf()
         };
         render_single_frame(&scenario, frame_num, &png_path)?;
         if !quiet {
@@ -206,7 +206,7 @@ pub fn cmd_render(
 
 pub fn cmd_watch(
     input: &PathBuf,
-    output: &PathBuf,
+    output: &Path,
     frame: Option<u32>,
     output_format: Option<&OutputFormat>,
     quiet: bool,
@@ -225,7 +225,7 @@ pub fn cmd_watch(
     let fmt = format
         .as_deref()
         .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
-    let use_ffmpeg = codec.as_deref().map_or(false, |c| c != "h264")
+    let use_ffmpeg = codec.as_deref().is_some_and(|c| c != "h264")
         || matches!(fmt, "webm" | "mov")
         || transparent;
     let can_incremental =
@@ -396,13 +396,13 @@ pub fn cmd_watch(
                     };
 
                     // Count changed scenes for the TUI
-                    let view0_scenes = scenario.views.get(0).map(|v| &v.scenes[..]).unwrap_or(&[]);
+                    let view0_scenes = scenario.views.first().map(|v| &v.scenes[..]).unwrap_or(&[]);
                     let num_scenes = view0_scenes.len();
                     let scene_hashes: Vec<u64> = view0_scenes
                         .iter()
-                        .map(|s| encode::hash_video_config_scene(s))
+                        .map(encode::hash_video_config_scene)
                         .collect();
-                    let changed = if let Some(ref prev) = use_prev {
+                    let changed = if let Some(prev) = use_prev {
                         if prev.len() == num_scenes {
                             (0..num_scenes)
                                 .filter(|&i| {

@@ -2,6 +2,7 @@ use serde_json::Value;
 
 /// Read a style property at the element addressed by `pointer`, e.g.
 /// (`"/scenes/0/children/0"`, `"color"`). Returns the value as a string.
+#[allow(dead_code)] // symmetric API counterpart to set_style; consumed as the inspector grows
 pub fn read_style(raw: &Value, pointer: &str, prop: &str) -> Option<String> {
     let el = raw.pointer(pointer)?;
     let v = el.get("style")?.get(prop)?;

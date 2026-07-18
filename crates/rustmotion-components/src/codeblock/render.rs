@@ -44,7 +44,7 @@ pub(super) fn render_codeblock(
 
     let (current_code, transition) = determine_active_state(layer, time);
 
-    let chrome_enabled = layer.chrome.as_ref().map_or(false, |c| c.enabled);
+    let chrome_enabled = layer.chrome.as_ref().is_some_and(|c| c.enabled);
     let chrome_height = if chrome_enabled { 36.0 } else { 0.0 };
 
     // Pre-compute the max gutter width across all states so line numbers

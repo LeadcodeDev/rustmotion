@@ -140,7 +140,7 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
         let available = end_sample.min(mix_buffer.len()) - start_sample.min(mix_buffer.len());
         let copy_len = src_len.min(available);
 
-        for i in 0..copy_len {
+        for (i, &src_sample) in resampled.iter().enumerate().take(copy_len) {
             let dst_idx = start_sample + i;
             if dst_idx >= mix_buffer.len() {
                 break;
@@ -153,7 +153,7 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
             } else {
                 track.volume
             };
-            let mut sample = resampled[i] * vol;
+            let mut sample = src_sample * vol;
 
             // Apply fade in
             if fade_in_samples > 0.0 && (frame as f64) < fade_in_samples {
@@ -264,7 +264,9 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     };
 
     // Deinterleave samples into per-channel vectors
-    let mut channel_data: Vec<Vec<f64>> = vec![Vec::with_capacity(src_frames); channels];
+    let mut channel_data: Vec<Vec<f64>> = (0..channels)
+        .map(|_| Vec::with_capacity(src_frames))
+        .collect();
     for (i, &s) in samples.iter().enumerate() {
         channel_data[i % channels].push(s as f64);
     }
@@ -302,15 +304,12 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
             })
             .collect();
 
-        match resampler.process(&chunk, None) {
-            Ok(out) => {
-                let expected_out = (remaining as f64 * ratio).ceil() as usize;
-                for (ch, data) in out.iter().enumerate() {
-                    let take = expected_out.min(data.len());
-                    output_channels[ch].extend_from_slice(&data[..take]);
-                }
+        if let Ok(out) = resampler.process(&chunk, None) {
+            let expected_out = (remaining as f64 * ratio).ceil() as usize;
+            for (ch, data) in out.iter().enumerate() {
+                let take = expected_out.min(data.len());
+                output_channels[ch].extend_from_slice(&data[..take]);
             }
-            Err(_) => {}
         }
     }
 

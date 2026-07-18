@@ -15,16 +15,12 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 /// Text alignment for table columns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ColumnAlign {
+    #[default]
     Left,
     Center,
     Right,
-}
-
-impl Default for ColumnAlign {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 fn default_cell_padding() -> f32 {
@@ -99,7 +95,7 @@ impl Table {
             .or_else(|| fm.match_family_style("Helvetica", font_style))
             .or_else(|| fm.match_family_style("Arial", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         skia_safe::Font::from_typeface(typeface, self.font_size())
     }
@@ -108,7 +104,7 @@ impl Table {
     fn resolve_column_widths(&self, total_w: f32) -> Vec<f32> {
         let col_count = self.headers.len().max(1);
         if let Some(widths) = &self.column_widths {
-            let mut result: Vec<f32> = widths.iter().copied().collect();
+            let mut result: Vec<f32> = widths.to_vec();
             // Pad with equal-share for missing columns
             while result.len() < col_count {
                 let remaining = total_w - result.iter().sum::<f32>();

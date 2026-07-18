@@ -14,16 +14,12 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TerminalLineType {
     Prompt,
     Command,
+    #[default]
     Output,
-}
-
-impl Default for TerminalLineType {
-    fn default() -> Self {
-        Self::Output
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -37,15 +33,11 @@ pub struct TerminalLine {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TerminalTheme {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for TerminalTheme {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 impl TerminalTheme {
@@ -151,7 +143,7 @@ impl Terminal {
             .or_else(|| fm.match_family_style("monospace", font_style))
             .or_else(|| fm.match_family_style("Courier", font_style))
             .or_else(|| fm.legacy_make_typeface(None, font_style))
-            .expect(&RustmotionError::FontNotFound.to_string());
+            .unwrap_or_else(|| panic!("{}", RustmotionError::FontNotFound.to_string()));
 
         let size = self.style.font_size_px_or(FONT_SIZE);
 

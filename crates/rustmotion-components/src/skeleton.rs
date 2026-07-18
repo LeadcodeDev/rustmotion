@@ -27,16 +27,12 @@ fn default_speed() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SkeletonVariant {
+    #[default]
     Rectangle,
     Circle,
     Text,
-}
-
-impl Default for SkeletonVariant {
-    fn default() -> Self {
-        Self::Rectangle
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

@@ -30,16 +30,12 @@ fn default_label_color() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TrendDirection {
     Up,
     Down,
+    #[default]
     Neutral,
-}
-
-impl Default for TrendDirection {
-    fn default() -> Self {
-        Self::Neutral
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -179,14 +175,11 @@ impl Stat {
                 let trend_emoji =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, trend_fs));
 
-                let trend_color = trend
-                    .color
-                    .as_deref()
-                    .unwrap_or_else(|| match trend.direction {
-                        TrendDirection::Up => "#22C55E",
-                        TrendDirection::Down => "#EF4444",
-                        TrendDirection::Neutral => "#94A3B8",
-                    });
+                let trend_color = trend.color.as_deref().unwrap_or(match trend.direction {
+                    TrendDirection::Up => "#22C55E",
+                    TrendDirection::Down => "#EF4444",
+                    TrendDirection::Neutral => "#94A3B8",
+                });
 
                 let mut trend_paint = paint_from_hex(trend_color);
                 trend_paint.set_anti_alias(true);

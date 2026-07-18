@@ -195,7 +195,7 @@ fn blit_glyph(
         let tb = tint.b() as u32;
         let ta = tint.a() as u32;
         for &a in data.iter() {
-            let alpha = (ta * a as u32 / 255) as u32;
+            let alpha = ta * a as u32 / 255;
             rgba.push((tr * alpha / 255) as u8);
             rgba.push((tg * alpha / 255) as u8);
             rgba.push((tb * alpha / 255) as u8);

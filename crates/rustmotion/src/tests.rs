@@ -163,7 +163,7 @@ mod component_smoke {
                 let dispatcher = LegacyPaintDispatcher::new(&built.components);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
-            if let Err(_) = result {
+            if result.is_err() {
                 failures.push(name);
             }
         }
@@ -244,7 +244,7 @@ mod component_smoke {
                 let dispatcher = LegacyPaintDispatcher::new(&built.components);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
-            if let Err(_) = result {
+            if result.is_err() {
                 failures.push(name);
             }
         }

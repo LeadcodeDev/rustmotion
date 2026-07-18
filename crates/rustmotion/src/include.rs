@@ -27,7 +27,7 @@ pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<Re
     let has_composition = scenario.composition.is_some();
 
     if has_scenes && has_composition {
-        return Err(RustmotionError::CompositionAndScenesConflict.into());
+        return Err(RustmotionError::CompositionAndScenesConflict);
     }
 
     let templates = &scenario.backgrounds;
@@ -101,8 +101,7 @@ fn resolve_entries(
                     return Err(RustmotionError::IncludeDepthExceeded {
                         limit: MAX_INCLUDE_DEPTH,
                         path: directive.include.clone(),
-                    }
-                    .into());
+                    });
                 }
                 let scenes =
                     fetch_and_resolve(&directive, source, depth + 1, audio, included_paths)?;
@@ -174,8 +173,7 @@ fn fetch_and_resolve(
                     index: idx,
                     path: directive.include.clone(),
                     total,
-                }
-                .into());
+                });
             }
         }
         let mut slots: Vec<Option<Scene>> = scenes.into_iter().map(Some).collect();
@@ -197,12 +195,9 @@ fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf>
             let parent_dir = parent_path.parent().unwrap_or_else(|| Path::new("."));
             Ok(parent_dir.join(relative))
         }
-        IncludeSource::Inline => {
-            return Err(RustmotionError::IncludeInlinePath {
-                path: relative.to_string(),
-            }
-            .into());
-        }
+        IncludeSource::Inline => Err(RustmotionError::IncludeInlinePath {
+            path: relative.to_string(),
+        }),
     }
 }
 
@@ -257,8 +252,7 @@ fn validate_animated_bg(bg: &AnimatedBackground) -> Result<()> {
         if crate::engine::heropatterns::find_pattern(&cfg.pattern).is_none() {
             return Err(RustmotionError::UnknownHeropattern {
                 name: cfg.pattern.clone(),
-            }
-            .into());
+            });
         }
     }
     Ok(())

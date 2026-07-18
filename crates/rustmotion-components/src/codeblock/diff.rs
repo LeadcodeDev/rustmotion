@@ -177,13 +177,13 @@ pub(super) fn render_diff_transition(
     let highlighted_a = highlight_code(&trans.code_a, &layer.language, theme);
     let highlighted_b = highlight_code(&trans.code_b, &layer.language, theme);
 
-    let cursor_enabled = trans.cursor_config.as_ref().map_or(true, |c| c.enabled);
+    let cursor_enabled = trans.cursor_config.as_ref().is_none_or(|c| c.enabled);
     let cursor_color = trans
         .cursor_config
         .as_ref()
         .map_or("#FFFFFF", |c| c.color.as_str());
     let cursor_width = trans.cursor_config.as_ref().map_or(2.0, |c| c.width);
-    let cursor_blink = trans.cursor_config.as_ref().map_or(true, |c| c.blink);
+    let cursor_blink = trans.cursor_config.as_ref().is_none_or(|c| c.blink);
 
     // Build animated line placements with proper interpolated positions.
     // Track "virtual cursors" for old and new index space so that

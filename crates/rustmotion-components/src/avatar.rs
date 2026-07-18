@@ -13,18 +13,14 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AvatarStatus {
     Online,
     Offline,
     Away,
     #[serde(rename = "none")]
+    #[default]
     NoStatus,
-}
-
-impl Default for AvatarStatus {
-    fn default() -> Self {
-        Self::NoStatus
-    }
 }
 
 impl AvatarStatus {

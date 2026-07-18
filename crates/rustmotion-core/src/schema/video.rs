@@ -455,16 +455,12 @@ pub struct Stroke {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ImageFit {
     Cover,
+    #[default]
     Contain,
     Fill,
-}
-
-impl Default for ImageFit {
-    fn default() -> Self {
-        Self::Contain
-    }
 }
 
 // --- Shape Text ---
@@ -501,16 +497,12 @@ pub struct CaptionWord {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CaptionStyle {
+    #[default]
     Highlight,
     Karaoke,
     WordByWord,
-}
-
-impl Default for CaptionStyle {
-    fn default() -> Self {
-        Self::Highlight
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

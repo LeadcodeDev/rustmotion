@@ -361,7 +361,7 @@ impl Text {
             .or_else(|| fm.match_family_style("sans-serif", skia_font_style))
             .or_else(|| {
                 if fm.count_families() > 0 {
-                    fm.match_family_style(&fm.family_name(0), skia_font_style)
+                    fm.match_family_style(fm.family_name(0), skia_font_style)
                 } else {
                     None
                 }

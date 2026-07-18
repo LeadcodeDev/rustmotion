@@ -31,15 +31,11 @@ fn default_track_width() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProgressVariant {
+    #[default]
     Linear,
     Circular,
-}
-
-impl Default for ProgressVariant {
-    fn default() -> Self {
-        Self::Linear
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

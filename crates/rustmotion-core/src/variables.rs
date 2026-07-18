@@ -27,8 +27,7 @@ fn merge_variables(
                 return Err(RustmotionError::UndefinedVariable {
                     name: name.clone(),
                     path: path.to_string(),
-                }
-                .into());
+                });
             }
             merged.insert(name.clone(), value.clone());
         }
@@ -147,8 +146,7 @@ fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Res
                             return Err(RustmotionError::VariableInterpolationTypeError {
                                 name,
                                 path: path.to_string(),
-                            }
-                            .into());
+                            });
                         }
                     }
                 } else {
@@ -239,8 +237,7 @@ pub fn apply_variables(
                     return Err(RustmotionError::VariableMissingDefault {
                         name: name.clone(),
                         path: path.to_string(),
-                    }
-                    .into());
+                    });
                 }
             }
 
@@ -257,8 +254,7 @@ pub fn apply_variables(
                 return Err(RustmotionError::UnresolvedVariable {
                     name,
                     path: path.to_string(),
-                }
-                .into());
+                });
             }
 
             Ok(())

@@ -1,3 +1,5 @@
+// UI kit scaffold — variants are consumed incrementally as the studio grows.
+#![allow(dead_code)]
 use dioxus::prelude::*;
 
 #[css_module("/src/components/textarea/style.css")]

@@ -721,10 +721,10 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
 fn simplex_noise_1d(x: f64, seed: u64) -> f64 {
     use std::f64::consts::TAU;
     let s = seed as f64;
-    let v = (x * TAU + s * 0.1234).sin() * 0.6
+
+    (x * TAU + s * 0.1234).sin() * 0.6
         + (x * TAU * 1.7 + s * 0.5678).sin() * 0.3
-        + (x * TAU * 2.9 + s * 0.9012).sin() * 0.1;
-    v // roughly -1..1
+        + (x * TAU * 2.9 + s * 0.9012).sin() * 0.1 // roughly -1..1
 }
 
 /// Parameterized noise function with configurable octaves

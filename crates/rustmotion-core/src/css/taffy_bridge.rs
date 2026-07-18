@@ -14,17 +14,9 @@ use super::style::{
 };
 use super::units::{LengthContext, LengthPercentage, ParsedLength};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ConversionContext {
     pub length: LengthContext,
-}
-
-impl Default for ConversionContext {
-    fn default() -> Self {
-        Self {
-            length: LengthContext::default(),
-        }
-    }
 }
 
 /// Convert a [`CssStyle`] into a [`taffy::Style`]. Properties not relevant to

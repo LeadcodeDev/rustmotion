@@ -59,6 +59,7 @@ pub enum Axis {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // "Overflow" postfix is load-bearing: serde output matches CLI docs
 pub enum ViolationKind {
     /// Component bbox crosses the viewport edge.
     ViewportOverflow,
@@ -688,6 +689,37 @@ fn hint_for_animated(
     }
 }
 
+/// Render a violation for human consumption (multi-line, color-free).
+pub fn format_violation(v: &GeometryViolation) -> String {
+    let axis_str = match v.axis {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Both => "x+y",
+    };
+    let kind_str = match v.kind {
+        ViolationKind::ViewportOverflow => "viewport overflow",
+        ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
+        ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
+        ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
+    };
+    format!(
+        "ERROR: {} ({})\n  view: {}, scene: {}\n  path: {}\n  bbox: [{:.0}, {:.0}] -> [{:.0}, {:.0}]   (viewport: {}x{})\n  axis: {}\n  hint: {}",
+        v.component,
+        kind_str,
+        v.view_index,
+        v.scene_index,
+        v.path,
+        v.bbox.x,
+        v.bbox.y,
+        v.bbox.x + v.bbox.w,
+        v.bbox.y + v.bbox.h,
+        v.viewport.0,
+        v.viewport.1,
+        axis_str,
+        v.hint,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,35 +885,4 @@ mod tests {
         );
         assert_eq!(v.unwrap().component, "codeblock");
     }
-}
-
-/// Render a violation for human consumption (multi-line, color-free).
-pub fn format_violation(v: &GeometryViolation) -> String {
-    let axis_str = match v.axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Both => "x+y",
-    };
-    let kind_str = match v.kind {
-        ViolationKind::ViewportOverflow => "viewport overflow",
-        ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
-        ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
-        ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
-    };
-    format!(
-        "ERROR: {} ({})\n  view: {}, scene: {}\n  path: {}\n  bbox: [{:.0}, {:.0}] -> [{:.0}, {:.0}]   (viewport: {}x{})\n  axis: {}\n  hint: {}",
-        v.component,
-        kind_str,
-        v.view_index,
-        v.scene_index,
-        v.path,
-        v.bbox.x,
-        v.bbox.y,
-        v.bbox.x + v.bbox.w,
-        v.bbox.y + v.bbox.h,
-        v.viewport.0,
-        v.viewport.1,
-        axis_str,
-        v.hint,
-    )
 }
