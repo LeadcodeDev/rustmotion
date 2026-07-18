@@ -110,6 +110,11 @@ pub struct TimelineStep {
     /// Animation effects to apply during this step.
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
+    /// Style state applied from this step's `at` onwards. Properties snap at
+    /// `at`, except the ones the component's `style.transition` smooths
+    /// (opacity; color on text/counter).
+    #[serde(default)]
+    pub style: Option<Box<crate::css::CssStyle>>,
 }
 
 /// Font weight — named ("normal"/"bold") or numeric (100-900)

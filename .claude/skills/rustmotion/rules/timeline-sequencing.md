@@ -9,6 +9,16 @@ All three are processed by the rendering pipeline. Pick by intent:
 | `start_at` / `end_at` | Hard visibility window `[start_at, end_at)` — the component (and its subtree) paints nothing outside the window but **keeps its layout space** (CSS `visibility` semantics: siblings don't jump) | Hard cuts: appear/disappear without animation |
 | `style.animation` | Animated effects; `delay` is absolute scene time | Entrances, exits, continuous effects |
 | `timeline` | `[{ "at": t, "animation": [...] }]` — each step's animations run with `delay += at` | Grouping several timed animation phases on one component |
+| `timeline` + `style` states | `[{ "at": t, "style": {...} }]` — the style state applies from `at` onwards (box-model properties snap); with `style.transition` on the component, `opacity` (all components) and `color` (text/counter) interpolate smoothly | State changes: "turns red at 2s", "dims to 20% at 3s" |
+
+```json
+// Text turns blue at t=1 over 0.5s; background snaps at the same instant
+{
+  "type": "text", "content": "Status",
+  "timeline": [{ "at": 1.0, "style": { "color": "#3b82f6", "background": "#0f172a" } }],
+  "style": { "color": "#ef4444", "transition": { "duration": 0.5, "easing": "ease_in_out" } }
+}
+```
 
 `start_at`/`end_at` control **visibility**, not animation timing. To delay an animation, use the animation's `delay` (or a `timeline` step's `at`).
 
