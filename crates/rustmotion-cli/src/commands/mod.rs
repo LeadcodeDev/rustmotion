@@ -1,4 +1,5 @@
 mod batch;
+mod captions;
 mod geometry;
 mod info;
 mod render;
@@ -10,6 +11,7 @@ mod validate_schema;
 pub mod validation;
 
 pub use batch::cmd_batch;
+pub use captions::cmd_captions;
 pub use info::cmd_info;
 pub use render::{cmd_render, cmd_watch};
 pub use schema::cmd_schema;

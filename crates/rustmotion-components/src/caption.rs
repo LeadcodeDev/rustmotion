@@ -21,6 +21,10 @@ pub struct Caption {
     pub mode: CaptionStyle,
     #[serde(default)]
     pub max_width: Option<f32>,
+    /// Pill background color behind the active word (`word_pop` /
+    /// `karaoke_pop` modes). Defaults to black at 70% opacity.
+    #[serde(default)]
+    pub pill_color: Option<String>,
     #[serde(default)]
     pub style: CssStyle,
     #[serde(flatten)]
@@ -88,7 +92,54 @@ impl Caption {
                     }
                 }
             }
-            CaptionStyle::Highlight | CaptionStyle::Karaoke => {
+            CaptionStyle::WordPop => {
+                for word in &self.words {
+                    if time >= word.start && time < word.end {
+                        let text_width =
+                            measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
+                        let cx = layout_width / 2.0;
+
+                        // Spring-like pop: ease-out-back over the first 180ms
+                        // of the word window (overshoots ~1.1 then settles).
+                        let t = (((time - word.start) / POP_DURATION).clamp(0.0, 1.0)) as f32;
+                        let scale = ease_out_back(t).max(0.01);
+
+                        // Scale around the visual center of the word (the
+                        // baseline sits at y=0, glyphs extend upward).
+                        let cy = -font_size * 0.35;
+                        canvas.save();
+                        canvas.translate((cx, cy));
+                        canvas.scale((scale, scale));
+                        canvas.translate((-cx, -cy));
+
+                        let padding = font_size * 0.35;
+                        self.draw_pill(
+                            canvas,
+                            Rect::from_xywh(
+                                cx - text_width / 2.0 - padding,
+                                -font_size - padding / 2.0,
+                                text_width + padding * 2.0,
+                                font_size * 1.4 + padding,
+                            ),
+                        );
+
+                        let paint = paint_from_hex(&self.active_color);
+                        draw_text_with_fallback(
+                            canvas,
+                            &word.text,
+                            &font,
+                            &emoji_font,
+                            0.0,
+                            cx - text_width / 2.0,
+                            0.0,
+                            &paint,
+                        );
+                        canvas.restore();
+                        break;
+                    }
+                }
+            }
+            CaptionStyle::Highlight | CaptionStyle::Karaoke | CaptionStyle::KaraokePop => {
                 let max_width = self.max_width.unwrap_or(f32::MAX);
                 let space_width = measure_text_with_fallback(" ", &font, &emoji_font, 0.0);
 
@@ -139,8 +190,31 @@ impl Caption {
                     for (word_idx, word_width) in line {
                         let word = &self.words[*word_idx];
                         let is_active = time >= word.start && time < word.end;
+                        let pop = is_active && matches!(self.mode, CaptionStyle::KaraokePop);
                         let word_color = if is_active { &self.active_color } else { color };
                         let paint = paint_from_hex(word_color);
+
+                        if pop {
+                            // Active word scales up ~1.15x around its visual
+                            // center, on top of a pill background.
+                            let wcx = x + word_width / 2.0;
+                            let wcy = y - font_size * 0.35;
+                            canvas.save();
+                            canvas.translate((wcx, wcy));
+                            canvas.scale((KARAOKE_POP_SCALE, KARAOKE_POP_SCALE));
+                            canvas.translate((-wcx, -wcy));
+
+                            let padding = font_size * 0.18;
+                            self.draw_pill(
+                                canvas,
+                                Rect::from_xywh(
+                                    x - padding,
+                                    y - font_size - padding / 2.0,
+                                    word_width + padding * 2.0,
+                                    font_size * 1.4 + padding,
+                                ),
+                            );
+                        }
 
                         draw_text_with_fallback(
                             canvas,
@@ -152,11 +226,23 @@ impl Caption {
                             y,
                             &paint,
                         );
+                        if pop {
+                            canvas.restore();
+                        }
                         x += word_width + space_width;
                     }
                 }
             }
         }
+    }
+}
+
+impl Caption {
+    /// Draws the rounded pill background used by the pop presets.
+    fn draw_pill(&self, canvas: &Canvas, rect: Rect) {
+        let radius = rect.height() / 2.0;
+        let paint = paint_from_hex(self.pill_color.as_deref().unwrap_or(DEFAULT_PILL_COLOR));
+        canvas.draw_rrect(skia_safe::RRect::new_rect_xy(rect, radius, radius), &paint);
     }
 }
 
@@ -174,4 +260,21 @@ impl Painter for Caption {
 
 fn default_active_color() -> String {
     "#FFFF00".to_string()
+}
+
+/// Black at 70% opacity — default pill background for the pop presets.
+const DEFAULT_PILL_COLOR: &str = "#000000B3";
+
+/// Duration (seconds) of the word_pop scale-in.
+const POP_DURATION: f64 = 0.18;
+
+/// Scale factor applied to the active word in karaoke_pop.
+const KARAOKE_POP_SCALE: f32 = 1.15;
+
+/// Ease-out-back easing: starts at 0, overshoots ~1.1, settles at 1.
+fn ease_out_back(t: f32) -> f32 {
+    const C1: f32 = 1.70158;
+    const C3: f32 = C1 + 1.0;
+    let p = t - 1.0;
+    1.0 + C3 * p * p * p + C1 * p * p
 }

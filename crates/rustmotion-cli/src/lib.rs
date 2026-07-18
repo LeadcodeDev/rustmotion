@@ -137,6 +137,42 @@ enum Commands {
         var: Vec<String>,
     },
 
+    /// Generate word-level caption timings from audio (whisper.cpp) or subtitles
+    #[command(after_help = CAPTIONS_EXAMPLES)]
+    Captions {
+        /// Audio file to transcribe (wav/mp3/flac — requires a whisper.cpp
+        /// binary in PATH: `brew install whisper-cpp`)
+        #[arg(
+            required_unless_present_any = ["from_srt", "from_vtt"],
+            conflicts_with_all = ["from_srt", "from_vtt"]
+        )]
+        audio: Option<PathBuf>,
+
+        /// Output JSON file (prints to stdout if omitted)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Whisper model: a name (tiny, base, small, medium, large-v3)
+        /// resolved from ~/.cache/whisper/ggml-<name>.bin and next to the
+        /// binary, or a direct path to a .bin file
+        #[arg(long, default_value = "base", conflicts_with_all = ["from_srt", "from_vtt"])]
+        model: String,
+
+        /// Spoken language code (e.g. "en", "fr"); auto-detected if omitted
+        #[arg(long, conflicts_with_all = ["from_srt", "from_vtt"])]
+        lang: Option<String>,
+
+        /// Import cues from an SRT subtitle file instead of transcribing.
+        /// Word timing is spread uniformly over each cue's duration.
+        #[arg(long, value_name = "FILE", conflicts_with = "from_vtt")]
+        from_srt: Option<PathBuf>,
+
+        /// Import cues from a WebVTT subtitle file instead of transcribing.
+        /// Word timing is spread uniformly over each cue's duration.
+        #[arg(long, value_name = "FILE")]
+        from_vtt: Option<PathBuf>,
+    },
+
     /// Validate a JSON scenario without rendering
     Validate {
         /// Path to the JSON scenario file
@@ -242,6 +278,20 @@ enum Commands {
         action: CompletionsAction,
     },
 }
+
+const CAPTIONS_EXAMPLES: &str = "\
+Examples:
+  # Transcribe audio into word-level timings (requires whisper.cpp)
+  rustmotion captions voice.mp3 -o words.json
+
+  # Import subtitles instead (word timing spread uniformly inside each cue)
+  rustmotion captions --from-srt subs.srt -o words.json
+
+  # Inject the output into a scenario through the variables system.
+  # In scenario.json:
+  #   \"config\": { \"words\": { \"type\": \"array\", \"default\": [] } }
+  #   ... { \"type\": \"caption\", \"mode\": \"word_pop\", \"words\": \"$words\" } ...
+  rustmotion render -f scenario.json --props words.json";
 
 #[derive(Subcommand)]
 enum SkillsAction {
@@ -482,6 +532,22 @@ pub fn run() -> Result<()> {
             let scenario = rustmotion::loader::load_input_with_vars(&file, overrides.as_ref())?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
+        Commands::Captions {
+            audio,
+            output,
+            model,
+            lang,
+            from_srt,
+            from_vtt,
+        } => commands::cmd_captions(
+            audio.as_deref(),
+            output.as_deref(),
+            &model,
+            lang.as_deref(),
+            from_srt.as_deref(),
+            from_vtt.as_deref(),
+            cli.quiet,
+        ),
         Commands::Validate {
             file,
             report,
