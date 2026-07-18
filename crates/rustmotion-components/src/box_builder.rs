@@ -43,6 +43,11 @@ pub struct BuiltScene<'a> {
     /// Lookup table — `components[id as usize]` is the component for `id`.
     /// `None` for synthetic boxes (the root scene wrapper).
     pub components: Vec<Option<&'a ChildComponent>>,
+    /// Per-node animation delay accumulated from ancestor containers'
+    /// `stagger` (indexed like `components`). Consumed by the paint
+    /// dispatcher so internal animations shift by the same amount as the
+    /// CSS overrides resolved at build time.
+    pub stagger_delays: Vec<f64>,
 }
 
 /// Build a box tree for a flat list of scene-level children at a given
@@ -105,6 +110,7 @@ where
     I: IntoIterator<Item = &'a ChildComponent>,
 {
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
+    let mut stagger_delays: Vec<f64> = vec![0.0];
     let mut next_id: NodeId = 1;
 
     let mut child_boxes = Vec::new();
@@ -112,9 +118,11 @@ where
         child_boxes.push(build_child(
             c,
             &mut components,
+            &mut stagger_delays,
             &mut next_id,
             anim,
             format!("/children/{i}"),
+            0.0,
         ));
     }
 
@@ -132,7 +140,11 @@ where
         window: None,
     };
 
-    BuiltScene { root, components }
+    BuiltScene {
+        root,
+        components,
+        stagger_delays,
+    }
 }
 
 fn default_root_css(viewport: (f32, f32)) -> CssStyle {
@@ -146,16 +158,22 @@ fn default_root_css(viewport: (f32, f32)) -> CssStyle {
 }
 
 /// Convert a single `ChildComponent` to a `BoxNode`. Recurses into containers.
+/// `stagger_delay` is the animation delay accumulated from ancestor
+/// containers' `stagger` fields.
+#[allow(clippy::too_many_arguments)]
 fn build_child<'a>(
     child: &'a ChildComponent,
     components: &mut Vec<Option<&'a ChildComponent>>,
+    stagger_delays: &mut Vec<f64>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     path: String,
+    stagger_delay: f64,
 ) -> BoxNode {
     let id = *next_id;
     *next_id += 1;
     components.push(Some(child));
+    stagger_delays.push(stagger_delay);
 
     let mut css = component_css(&child.component);
 
@@ -175,29 +193,12 @@ fn build_child<'a>(
     // char_animation remain on the `AnimatedProperties` legacy path.
     if let Some(actx) = anim {
         if let Some(animatable) = child.component.as_animatable() {
-            let effects = animatable.animation_effects();
-            let steps = animatable.timeline_steps();
-            let props = if steps.is_empty() {
-                if effects.is_empty() {
-                    None
-                } else {
-                    Some(resolve_props_for_effects(
-                        effects,
-                        actx.time,
-                        actx.scene_duration,
-                    ))
-                }
-            } else {
-                // Timeline steps resolve as their animations shifted by the
-                // step's `at` (merged with the plain `style.animation` list).
-                let merged = merge_timeline_effects(effects, steps);
-                Some(resolve_props_for_effects(
-                    &merged,
-                    actx.time,
-                    actx.scene_duration,
-                ))
-            };
-            if let Some(props) = props {
+            if let Some(effects) = effective_effects(
+                animatable.animation_effects(),
+                animatable.timeline_steps(),
+                stagger_delay,
+            ) {
+                let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
                 if props_has_paint_overrides(&props) {
                     apply_animated_props(&mut css, &props);
                 }
@@ -206,13 +207,27 @@ fn build_child<'a>(
     }
 
     // Visibility window (start_at/end_at) — enforced by the paint pass.
+    // The stagger delay shifts the window too, so a hard-cut child appears
+    // in step with its staggered siblings.
     let window = child.component.as_timed().and_then(|t| {
         let (start, end) = t.timing();
-        (start.is_some() || end.is_some())
-            .then_some(rustmotion_core::engine::box_tree::PaintWindow { start, end })
+        (start.is_some() || end.is_some()).then_some(
+            rustmotion_core::engine::box_tree::PaintWindow {
+                start: start.map(|s| s + stagger_delay),
+                end: end.map(|e| e + stagger_delay),
+            },
+        )
     });
 
-    let children_boxes = container_children(&child.component, components, next_id, anim, &path);
+    let children_boxes = container_children(
+        &child.component,
+        components,
+        stagger_delays,
+        next_id,
+        anim,
+        &path,
+        stagger_delay,
+    );
     let intrinsic = component_intrinsic(&child.component);
 
     BoxNode {
@@ -226,13 +241,18 @@ fn build_child<'a>(
     }
 }
 
-/// Flatten `timeline` steps into plain animation effects: each step's
-/// animations run with `delay += step.at`, appended after the component's
-/// own `style.animation` list.
-fn merge_timeline_effects(
-    effects: &[rustmotion_core::schema::AnimationEffect],
+/// The full effect list for a component at paint time: `style.animation`,
+/// plus `timeline` steps shifted by their `at`, plus the container-stagger
+/// delay applied to everything. Returns `None` when there is nothing to
+/// resolve, `Some(Cow::Borrowed)` on the no-merge fast path.
+pub fn effective_effects<'a>(
+    effects: &'a [rustmotion_core::schema::AnimationEffect],
     steps: &[rustmotion_core::schema::TimelineStep],
-) -> Vec<rustmotion_core::schema::AnimationEffect> {
+    extra_delay: f64,
+) -> Option<std::borrow::Cow<'a, [rustmotion_core::schema::AnimationEffect]>> {
+    if steps.is_empty() && extra_delay == 0.0 {
+        return (!effects.is_empty()).then_some(std::borrow::Cow::Borrowed(effects));
+    }
     let mut merged = effects.to_vec();
     for step in steps {
         for effect in &step.animation {
@@ -241,7 +261,12 @@ fn merge_timeline_effects(
             merged.push(e);
         }
     }
-    merged
+    if extra_delay != 0.0 {
+        for e in &mut merged {
+            e.shift_delay(extra_delay);
+        }
+    }
+    (!merged.is_empty()).then_some(std::borrow::Cow::Owned(merged))
 }
 
 /// Quick gate: does this resolved `AnimatedProperties` carry any property
@@ -286,22 +311,27 @@ fn component_intrinsic(
 }
 
 /// If the component is a container, recurse into its children. Otherwise
-/// return an empty Vec.
+/// return an empty Vec. A container's `stagger` adds `index * stagger`
+/// to each child's inherited animation delay (cumulative across nesting).
+#[allow(clippy::too_many_arguments)]
 fn container_children<'a>(
     component: &'a Component,
     components: &mut Vec<Option<&'a ChildComponent>>,
+    stagger_delays: &mut Vec<f64>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     parent_path: &str,
+    inherited_delay: f64,
 ) -> Vec<BoxNode> {
-    let children: &[ChildComponent] = match component {
-        Component::Card(c) => &c.children,
-        Component::Flex(c) => &c.children,
-        Component::Grid(c) => &c.children,
-        Component::Container(c) => &c.children,
-        Component::Positioned(c) => &c.children,
+    let (children, stagger): (&[ChildComponent], Option<f32>) = match component {
+        Component::Card(c) => (&c.children, c.stagger),
+        Component::Flex(c) => (&c.children, c.stagger),
+        Component::Grid(c) => (&c.children, c.stagger),
+        Component::Container(c) => (&c.children, c.stagger),
+        Component::Positioned(c) => (&c.children, None),
         _ => return Vec::new(),
     };
+    let step = stagger.unwrap_or(0.0) as f64;
     children
         .iter()
         .enumerate()
@@ -309,9 +339,11 @@ fn container_children<'a>(
             build_child(
                 c,
                 components,
+                stagger_delays,
                 next_id,
                 anim,
                 format!("{parent_path}/children/{j}"),
+                inherited_delay + j as f64 * step,
             )
         })
         .collect()

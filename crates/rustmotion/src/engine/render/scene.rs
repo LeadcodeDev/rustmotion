@@ -368,7 +368,7 @@ fn render_with_new_pipeline_iter<'a, I>(
         (viewport_w, viewport_h),
         &ConversionContext::default(),
     );
-    let dispatcher = LegacyPaintDispatcher::new(&built.components);
+    let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time: ctx.time,
         frame_index: ctx.frame_index,
@@ -582,7 +582,7 @@ pub fn render_scene_hits(
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
     let layout = run_layout(&built.root, (vw, vh), &ConversionContext::default());
-    let dispatcher = LegacyPaintDispatcher::new(&built.components);
+    let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,
         frame_index: frame_in_scene,

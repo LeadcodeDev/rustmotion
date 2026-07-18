@@ -24,11 +24,26 @@ pub struct LegacyPaintDispatcher<'a> {
     /// `components[id as usize]` is the component for `id`. Slot 0 is the
     /// synthetic root and is always `None`.
     components: &'a [Option<&'a ChildComponent>],
+    /// Per-node container-stagger delay (indexed like `components`); empty
+    /// when the caller doesn't carry stagger information.
+    stagger_delays: &'a [f64],
 }
 
 impl<'a> LegacyPaintDispatcher<'a> {
     pub fn new(components: &'a [Option<&'a ChildComponent>]) -> Self {
-        Self { components }
+        Self {
+            components,
+            stagger_delays: &[],
+        }
+    }
+
+    /// Build from a [`BuiltScene`], carrying its stagger delays so internal
+    /// animations shift by the same amount as the CSS overrides.
+    pub fn for_scene(built: &'a crate::box_builder::BuiltScene<'a>) -> Self {
+        Self {
+            components: &built.components,
+            stagger_delays: &built.stagger_delays,
+        }
     }
 
     fn lookup(&self, id: NodeId) -> Option<&'a ChildComponent> {
@@ -64,16 +79,25 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         // the CSS overrides injected at box-tree build time, so we don't
         // wrap the canvas here. `props` is still needed for internal-only
         // fields like `draw_progress`, `stroke_width`, `visible_chars*`,
-        // and `char_animation`.
+        // and `char_animation`. Timeline steps and container-stagger delays
+        // are folded in so those internal animations shift exactly like the
+        // CSS overrides do.
+        let stagger_delay = self
+            .stagger_delays
+            .get(*node_id as usize)
+            .copied()
+            .unwrap_or(0.0);
         let props = match child.component.as_animatable() {
-            Some(a) => {
-                let effects = a.animation_effects();
-                if effects.is_empty() {
-                    AnimatedProperties::default()
-                } else {
-                    resolve_props_for_effects(effects, frame.time, frame.scene_duration)
+            Some(a) => match crate::box_builder::effective_effects(
+                a.animation_effects(),
+                a.timeline_steps(),
+                stagger_delay,
+            ) {
+                Some(effects) => {
+                    resolve_props_for_effects(&effects, frame.time, frame.scene_duration)
                 }
-            }
+                None => AnimatedProperties::default(),
+            },
             None => AnimatedProperties::default(),
         };
         if props.opacity <= 0.0 {
@@ -94,7 +118,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             fps: frame.fps,
             video_width: frame.video_width,
             video_height: frame.video_height,
-            stagger_offset: 0.0,
+            stagger_offset: stagger_delay,
         };
         let local = BoxLayout {
             x: 0.0,
