@@ -9,9 +9,7 @@ use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
 
 use super::mux::mux_h264_to_mp4;
-use super::tasks::{
-    build_frame_tasks, build_scene_frame_tasks, hash_scene, render_frame_task, SceneSegment,
-};
+use super::tasks::{build_frame_tasks, render_frame_task, SceneSegment};
 use super::EncodeProgress;
 
 /// Create an OpenH264 encoder with standard settings for the given video dimensions.
@@ -117,56 +115,42 @@ pub fn encode_video_incremental(
             reason: "scenario has no views".to_string(),
         });
     }
-    if scenario.views.len() > 1 {
+    // All-slide compositions (any view count) segment cleanly: one slot per
+    // scene plus one per inter-view transition. World views don't — camera
+    // pans composite several scenes per frame.
+    let Some(slots) = super::tasks::segment_slots(scenario) else {
         return Err(RustmotionError::IncrementalUnsupported {
-            reason:
-                "incremental encoding requires a single slide view (composition has multiple views)"
-                    .to_string(),
+            reason: "incremental encoding requires slide views (got a world view)".to_string(),
         });
-    }
-    if !matches!(scenario.views[0].view_type, crate::schema::ViewType::Slide) {
-        return Err(RustmotionError::IncrementalUnsupported {
-            reason: "incremental encoding requires slide view (got world view)".to_string(),
-        });
-    }
+    };
 
     for view in &scenario.views {
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
 
-    let num_scenes = scenario.views[0].scenes.len();
-
-    let scene_hashes: Vec<u64> = scenario.views[0].scenes.iter().map(hash_scene).collect();
-
-    // Determine which scenes need re-rendering
-    let mut needs_render = vec![true; num_scenes];
-    if let Some(prev) = prev_segments {
-        if prev.len() == num_scenes {
-            let scenes = &scenario.views[0].scenes;
-            for i in 0..num_scenes {
-                let hash_changed = scene_hashes[i] != prev[i].scene_hash;
-                let next_changed_with_transition = if i + 1 < num_scenes {
-                    scene_hashes[i + 1] != prev[i + 1].scene_hash
-                        && scenes[i + 1].transition.is_some()
-                } else {
-                    false
-                };
-                needs_render[i] = hash_changed || next_changed_with_transition;
-            }
-        }
-    }
+    let num_slots = slots.len();
+    let scene_hashes: Vec<u64> = slots
+        .iter()
+        .map(|s| super::tasks::slot_hash(scenario, s))
+        .collect();
+    let needs_render = super::tasks::plan_dirty(scenario, &slots, &scene_hashes, prev_segments);
 
     let scenes_to_render: usize = needs_render.iter().filter(|&&r| r).count();
 
     if !quiet && on_progress.is_none() {
-        eprintln!("Re-rendering {}/{} scenes...", scenes_to_render, num_scenes);
+        eprintln!(
+            "Re-rendering {}/{} segments...",
+            scenes_to_render, num_slots
+        );
     }
 
-    // Build per-scene tasks
-    let scene_tasks: Vec<Vec<super::tasks::FrameTask>> = (0..num_scenes)
-        .map(|i| build_scene_frame_tasks(scenario, i))
+    // Build per-slot tasks
+    let scene_tasks: Vec<Vec<super::tasks::FrameTask>> = slots
+        .iter()
+        .map(|s| super::tasks::build_slot_frame_tasks(scenario, s))
         .collect();
+    let num_scenes = num_slots;
 
     let total_frames: u32 = scene_tasks.iter().map(|t| t.len() as u32).sum();
 
@@ -289,4 +273,83 @@ pub fn encode_video_incremental(
     }
 
     Ok(new_segments)
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    use crate::loader::load_scenario_from_source;
+
+    fn two_view_json(second_text: &str) -> String {
+        format!(
+            r##"{{
+            "video": {{"width": 32, "height": 32, "fps": 10}},
+            "composition": [
+                {{"type": "slide", "scenes": [
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "one"}}]}},
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "{second_text}"}}]}}
+                ]}},
+                {{"type": "slide", "transition": {{"type": "fade", "duration": 0.2}}, "scenes": [
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "three"}}]}}
+                ]}}
+            ]
+        }}"##
+        )
+    }
+
+    #[test]
+    fn multi_view_slide_composition_encodes_incrementally() {
+        // Used to fail with IncrementalUnsupported ("single slide view").
+        // Second run with one scene changed must re-render only that scene
+        // and the segments it feeds — strictly fewer frames than run one.
+        let out = std::env::temp_dir().join("rustmotion_incr_multiview_test.mp4");
+        let out_str = out.to_str().unwrap();
+
+        let base = load_scenario_from_source(None, Some(&two_view_json("two"))).unwrap();
+        let mut first_total = 0u32;
+        let mut cb = |p: EncodeProgress| {
+            if let EncodeProgress::Rendering(_, total) = p {
+                first_total = total;
+            }
+        };
+        let segments =
+            encode_video_incremental(&base, out_str, true, None, Some(&mut cb)).expect("first run");
+        assert_eq!(segments.len(), 4, "2 + VT + 1 slots");
+        assert!(out.exists() && std::fs::metadata(&out).unwrap().len() > 0);
+
+        let changed = load_scenario_from_source(None, Some(&two_view_json("TWO CHANGED"))).unwrap();
+        let mut second_total = 0u32;
+        let mut cb2 = |p: EncodeProgress| {
+            if let EncodeProgress::Rendering(_, total) = p {
+                second_total = total;
+            }
+        };
+        let segments2 =
+            encode_video_incremental(&changed, out_str, true, Some(&segments), Some(&mut cb2))
+                .expect("second run");
+        assert_eq!(segments2.len(), 4);
+        assert!(
+            second_total > 0 && second_total < first_total,
+            "second run must re-render a strict subset (first={first_total}, second={second_total})"
+        );
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn world_views_still_refuse_incremental_with_a_clear_reason() {
+        let json = r##"{
+            "video": {"width": 32, "height": 32, "fps": 10},
+            "composition": [
+                {"type": "world", "scenes": [
+                    {"duration": 0.2, "children": [{"type": "text", "content": "w"}]}
+                ]}
+            ]
+        }"##;
+        let s = load_scenario_from_source(None, Some(json)).unwrap();
+        let err = encode_video_incremental(&s, "/tmp/never.mp4", true, None, None).unwrap_err();
+        assert!(
+            err.to_string().contains("world"),
+            "reason must name world views: {err}"
+        );
+    }
 }

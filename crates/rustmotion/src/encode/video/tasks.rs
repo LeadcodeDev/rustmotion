@@ -6,7 +6,7 @@ use crate::schema::{
 };
 
 /// Description of what to render for a specific frame
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum FrameTask {
     Normal {
@@ -451,11 +451,157 @@ fn build_world_view_tasks(
     }
 }
 
+/// One independently re-renderable unit of an all-slide composition, in
+/// exact output order: a view's optional incoming transition, then its
+/// scenes. Single-view scenarios degrade to one `Scene` slot per scene,
+/// keeping previous incremental caches compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentSlot {
+    Scene {
+        view_idx: usize,
+        scene_idx: usize,
+    },
+    /// Transition from `view_idx - 1` into `view_idx`.
+    ViewTransition {
+        view_idx: usize,
+    },
+}
+
+/// Enumerate segment slots for an all-slide composition, mirroring
+/// `build_frame_tasks` output order exactly. `None` if any view is a world
+/// view (their frames aren't scene-partitioned — camera pans composite
+/// several scenes per frame).
+pub fn segment_slots(scenario: &Scenario) -> Option<Vec<SegmentSlot>> {
+    use crate::schema::ViewType;
+    let mut slots = Vec::new();
+    for (view_idx, view) in scenario.views.iter().enumerate() {
+        if !matches!(view.view_type, ViewType::Slide) {
+            return None;
+        }
+        if view_idx > 0 && view.transition.is_some() {
+            slots.push(SegmentSlot::ViewTransition { view_idx });
+        }
+        for scene_idx in 0..view.scenes.len() {
+            slots.push(SegmentSlot::Scene {
+                view_idx,
+                scene_idx,
+            });
+        }
+    }
+    Some(slots)
+}
+
+/// Content hash of a slot. A view transition hashes both boundary scenes and
+/// the transition config, so it re-renders when either side changes.
+pub fn slot_hash(scenario: &Scenario, slot: &SegmentSlot) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    match slot {
+        SegmentSlot::Scene {
+            view_idx,
+            scene_idx,
+        } => hash_scene(&scenario.views[*view_idx].scenes[*scene_idx]),
+        SegmentSlot::ViewTransition { view_idx } => {
+            let mut h = DefaultHasher::new();
+            let prev_view = &scenario.views[view_idx - 1];
+            if let Some(last) = prev_view.scenes.last() {
+                hash_scene(last).hash(&mut h);
+            }
+            if let Some(first) = scenario.views[*view_idx].scenes.first() {
+                hash_scene(first).hash(&mut h);
+            }
+            serde_json::to_string(&scenario.views[*view_idx].transition)
+                .unwrap_or_default()
+                .hash(&mut h);
+            h.finish()
+        }
+    }
+}
+
+/// Decide which slots must re-render given the previous run's segments.
+/// `prev` of a different length (slot layout changed) re-renders everything.
+/// A scene also re-renders when the *next* scene in the same view changed and
+/// has an incoming transition (the outgoing blend frames live in this slot).
+pub fn plan_dirty(
+    scenario: &Scenario,
+    slots: &[SegmentSlot],
+    hashes: &[u64],
+    prev: Option<&[SceneSegment]>,
+) -> Vec<bool> {
+    let Some(prev) = prev.filter(|p| p.len() == slots.len()) else {
+        return vec![true; slots.len()];
+    };
+    let changed: Vec<bool> = hashes
+        .iter()
+        .zip(prev)
+        .map(|(h, p)| *h != p.scene_hash)
+        .collect();
+    slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            if changed[i] {
+                return true;
+            }
+            if let SegmentSlot::Scene {
+                view_idx,
+                scene_idx,
+            } = slot
+            {
+                // Same-view successor with an incoming transition?
+                if let Some(next_i) = slots.iter().position(|s| {
+                    matches!(s, SegmentSlot::Scene { view_idx: v, scene_idx: s2 }
+                        if v == view_idx && *s2 == scene_idx + 1)
+                }) {
+                    let next_has_transition = scenario.views[*view_idx].scenes[scene_idx + 1]
+                        .transition
+                        .is_some();
+                    if changed[next_i] && next_has_transition {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// Frame tasks for one slot, mirroring the full builder's output.
+pub(super) fn build_slot_frame_tasks(scenario: &Scenario, slot: &SegmentSlot) -> Vec<FrameTask> {
+    match slot {
+        SegmentSlot::Scene {
+            view_idx,
+            scene_idx,
+        } => build_scene_frame_tasks_in_view(scenario, *view_idx, *scene_idx),
+        SegmentSlot::ViewTransition { view_idx } => {
+            let fps = scenario.video.fps;
+            let view = &scenario.views[*view_idx];
+            let mut tasks = Vec::new();
+            if let Some(ref transition) = view.transition {
+                let transition_frames = (transition.duration * fps as f64).round() as u32;
+                for f in 0..transition_frames {
+                    tasks.push(FrameTask::ViewTransition {
+                        view_a_idx: view_idx - 1,
+                        view_b_idx: *view_idx,
+                        frame_in_transition: f,
+                        transition_type: transition.transition_type.clone(),
+                        transition_duration: transition.duration,
+                        easing: transition.easing.clone(),
+                    });
+                }
+            }
+            tasks
+        }
+    }
+}
+
 /// Build frame tasks for a single scene (by index) within a slide view.
-/// Used by incremental encoding (operates on view 0 only for backward compat).
-pub(super) fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> Vec<FrameTask> {
+pub(super) fn build_scene_frame_tasks_in_view(
+    scenario: &Scenario,
+    view_idx: usize,
+    scene_idx: usize,
+) -> Vec<FrameTask> {
     let fps = scenario.video.fps;
-    let view_idx = 0;
     let scenes = &scenario.views[view_idx].scenes;
     let scene = &scenes[scene_idx];
     let mut tasks = Vec::new();
@@ -514,6 +660,7 @@ pub(super) fn build_scene_frame_tasks(scenario: &Scenario, scene_idx: usize) -> 
 }
 
 /// Cached H.264 data for a single scene segment
+#[derive(Debug)]
 pub struct SceneSegment {
     pub h264_data: Vec<u8>,
     pub scene_hash: u64,
@@ -557,5 +704,120 @@ mod hit_tests {
             hits.iter().any(|h| h.kind == "text"),
             "expected a text hit, got {hits:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+    use crate::loader::load_scenario_from_source;
+    use crate::schema::ResolvedScenario;
+
+    fn scenario(json: &str) -> ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("load")
+    }
+
+    fn two_view_json(second_text: &str, with_view_transition: bool) -> String {
+        let vt = if with_view_transition {
+            r#""transition": {"type": "fade", "duration": 0.2},"#
+        } else {
+            ""
+        };
+        format!(
+            r##"{{
+            "video": {{"width": 32, "height": 32, "fps": 10}},
+            "composition": [
+                {{"type": "slide", "scenes": [
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "one"}}]}},
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "{second_text}"}}]}}
+                ]}},
+                {{"type": "slide", {vt} "scenes": [
+                    {{"duration": 0.2, "children": [{{"type": "text", "content": "three"}}]}}
+                ]}}
+            ]
+        }}"##
+        )
+    }
+
+    #[test]
+    fn slots_enumerate_scenes_and_view_transitions_in_output_order() {
+        let s = scenario(&two_view_json("two", true));
+        let slots = segment_slots(&s).expect("all-slide");
+        assert_eq!(
+            slots,
+            vec![
+                SegmentSlot::Scene {
+                    view_idx: 0,
+                    scene_idx: 0
+                },
+                SegmentSlot::Scene {
+                    view_idx: 0,
+                    scene_idx: 1
+                },
+                SegmentSlot::ViewTransition { view_idx: 1 },
+                SegmentSlot::Scene {
+                    view_idx: 1,
+                    scene_idx: 0
+                },
+            ]
+        );
+        let no_vt = scenario(&two_view_json("two", false));
+        assert_eq!(segment_slots(&no_vt).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn slot_tasks_reproduce_the_full_builder_exactly() {
+        // Concatenated per-slot tasks must equal build_frame_tasks: the
+        // incremental output stream may not differ from a full encode.
+        for with_vt in [false, true] {
+            let s = scenario(&two_view_json("two", with_vt));
+            let slots = segment_slots(&s).unwrap();
+            let concatenated: Vec<String> = slots
+                .iter()
+                .flat_map(|slot| build_slot_frame_tasks(&s, slot))
+                .map(|t| format!("{t:?}"))
+                .collect();
+            let full: Vec<String> = build_frame_tasks(&s)
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect();
+            assert_eq!(concatenated, full, "with_vt={with_vt}");
+        }
+    }
+
+    #[test]
+    fn plan_dirty_marks_changed_scene_and_dependent_view_transition() {
+        let base = scenario(&two_view_json("two", true));
+        let slots = segment_slots(&base).unwrap();
+        let base_hashes: Vec<u64> = slots.iter().map(|s| slot_hash(&base, s)).collect();
+        let prev: Vec<SceneSegment> = base_hashes
+            .iter()
+            .map(|h| SceneSegment {
+                h264_data: Vec::new(),
+                scene_hash: *h,
+            })
+            .collect();
+
+        // Unchanged: nothing re-renders.
+        let clean = plan_dirty(&base, &slots, &base_hashes, Some(&prev));
+        assert!(clean.iter().all(|d| !d), "clean plan: {clean:?}");
+
+        // Change scene (0,1): it is the last scene of view 0, so the view
+        // transition into view 1 depends on it and must re-render too.
+        let changed = scenario(&two_view_json("TWO CHANGED", true));
+        let new_hashes: Vec<u64> = slots.iter().map(|s| slot_hash(&changed, s)).collect();
+        let dirty = plan_dirty(&changed, &slots, &new_hashes, Some(&prev));
+        assert_eq!(
+            dirty,
+            vec![false, true, true, false],
+            "scene(0,1) and VT(1) must re-render: {dirty:?}"
+        );
+
+        // Layout change (slot count mismatch) → everything re-renders.
+        let no_vt = scenario(&two_view_json("two", false));
+        let nv_slots = segment_slots(&no_vt).unwrap();
+        let nv_hashes: Vec<u64> = nv_slots.iter().map(|s| slot_hash(&no_vt, s)).collect();
+        let all = plan_dirty(&no_vt, &nv_slots, &nv_hashes, Some(&prev));
+        assert!(all.iter().all(|d| *d));
     }
 }
