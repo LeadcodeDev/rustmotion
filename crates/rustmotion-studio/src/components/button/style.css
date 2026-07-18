@@ -7,13 +7,15 @@
   padding: 0;
   border: none;
   border-radius: 0.5rem;
-  cursor: default;
+  cursor: pointer;
   font-family: inherit;
   font-size: 0.875rem;
   font-weight: 500;
   gap: 0.5rem;
   line-height: 1.25rem;
   outline: none;
+  appearance: none;
+  -webkit-appearance: none;
   transition-duration: 150ms;
   transition-property: all;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
@@ -125,76 +127,60 @@
 }
 
 .dx-button[data-style="primary"] {
-  background-color: var(--secondary-color-2);
-  color: var(--primary-color);
+  background-color: var(--rm-accent);
+  color: var(--rm-on-accent);
 }
 
 .dx-button[data-style="primary"]:not(:disabled):hover {
-  background-color: color-mix(
-    in oklab,
-    var(--secondary-color-2) 90%,
-    transparent
-  );
+  background-color: color-mix(in oklab, var(--rm-accent) 88%, black);
 }
 
 .dx-button[data-style="secondary"] {
-  background-color: var(--primary-color-5);
-  color: var(--secondary-color-1);
+  background-color: var(--rm-surface-3);
+  color: var(--rm-text-strong);
 }
 
 .dx-button[data-style="secondary"]:not(:disabled):hover {
-  background-color: color-mix(in oklab, var(--primary-color-5) 80%, transparent);
+  background-color: color-mix(in oklab, var(--rm-surface-3) 75%, var(--rm-text-muted));
 }
 
 .dx-button[data-style="ghost"] {
   background-color: transparent;
-  color: var(--secondary-color-4);
+  color: var(--rm-text);
 }
 
 .dx-button[data-style="ghost"]:not(:disabled):hover {
-  background-color: var(--light, var(--primary-color-5))
-    var(--dark, color-mix(in oklab, var(--primary-color-5) 50%, transparent));
-  color: var(--secondary-color-1);
+  background-color: var(--rm-surface-3);
+  color: var(--rm-text-strong);
 }
 
 .dx-button[data-style="outline"] {
-  border: 1px solid var(--light, var(--primary-color-6))
-    var(--dark, var(--primary-color-7));
-  background-color: var(--light, var(--primary-color))
-    var(--dark, color-mix(in oklab, var(--primary-color-7) 30%, transparent));
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
-  color: var(--secondary-color-4);
+  border: 1px solid var(--rm-border-2);
+  background-color: var(--rm-surface);
+  color: var(--rm-text);
 }
 
 .dx-button[data-style="outline"]:not(:disabled):hover {
-  background-color: var(--light, var(--primary-color-5))
-    var(--dark, color-mix(in oklab, var(--primary-color-7) 50%, transparent));
-  color: var(--secondary-color-1);
+  background-color: var(--rm-surface-3);
+  color: var(--rm-text-strong);
 }
 
 .dx-button[data-style="destructive"] {
-  background-color: var(--light, var(--primary-error-color))
-    var(--dark, color-mix(in oklab, var(--primary-error-color) 60%, transparent));
-  color: var(--contrast-error-color);
+  background-color: var(--rm-error);
+  color: var(--rm-on-accent);
 }
 
 .dx-button[data-style="destructive"]:not(:disabled):hover {
-  background-color: color-mix(
-    in oklab,
-    var(--primary-error-color) 90%,
-    transparent
-  );
+  background-color: color-mix(in oklab, var(--rm-error) 88%, black);
 }
 
 .dx-button[data-style="destructive"]:focus-visible {
-  box-shadow: 0 0 0 3px
-    var(--light, color-mix(in oklab, var(--primary-error-color) 20%, transparent))
-    var(--dark, color-mix(in oklab, var(--primary-error-color) 40%, transparent));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--rm-error) 35%, transparent);
 }
 
 .dx-button[data-style="link"] {
   background-color: transparent;
-  color: var(--secondary-color-2);
+  color: var(--rm-accent);
   text-decoration: none;
   text-underline-offset: 0.25rem;
 }
@@ -204,17 +190,13 @@
 }
 
 .dx-button:focus-visible {
-  border-color: var(--focused-border-color);
-  box-shadow: 0 0 0 3px
-    color-mix(in oklab, var(--focused-border-color) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--rm-accent) 50%, transparent);
 }
 
 .dx-button[aria-invalid="true"] {
-  border-color: var(--primary-error-color);
+  border-color: var(--rm-error);
 }
 
 .dx-button[aria-invalid="true"]:focus-visible {
-  box-shadow: 0 0 0 3px
-    var(--light, color-mix(in oklab, var(--primary-error-color) 20%, transparent))
-    var(--dark, color-mix(in oklab, var(--primary-error-color) 40%, transparent));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--rm-error) 35%, transparent);
 }

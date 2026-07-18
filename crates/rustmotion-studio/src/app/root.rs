@@ -19,6 +19,7 @@ const COLOR_PICKER_CSS: &str = include_str!("../components/color_picker/style.cs
 const SWITCH_CSS: &str = include_str!("../components/switch/style.css");
 const SLIDER_CSS: &str = include_str!("../components/slider/style.css");
 const INPUT_CSS: &str = include_str!("../components/input/style.css");
+const BUTTON_CSS: &str = include_str!("../components/button/style.css");
 
 /// Semantic palette tokens (`--rm-*`) for each theme, plus the `--dx-*` vars the
 /// `components/` scaffold reads. `System` defaults to the light palette and
@@ -75,6 +76,13 @@ const THEME_CSS: &str = r##"
 }
 html, body { margin: 0; font: 13px -apple-system, sans-serif; }
 * { box-sizing: border-box; }
+"##;
+
+/// The inspector's segmented-control container (the Align / B-I groups). The
+/// buttons inside are now `Button` components; this just gives the group its
+/// inset background and rounded border.
+const INSPECTOR_CSS: &str = r##"
+.rm-seg { display:flex; gap:2px; width:100%; box-sizing:border-box; background:var(--rm-surface-2); border:1px solid var(--rm-border); border-radius:7px; padding:2px; }
 "##;
 
 /// Root: switches between the library home and the editor, and serves
@@ -149,6 +157,8 @@ pub fn StudioRoot() -> Element {
         style { "{SWITCH_CSS}" }
         style { "{SLIDER_CSS}" }
         style { "{INPUT_CSS}" }
+        style { "{BUTTON_CSS}" }
+        style { "{INSPECTOR_CSS}" }
         div { class: "{theme().class()}", style: "min-height:100vh; background:var(--rm-bg); color:var(--rm-text);",
             {match view() {
                 View::Library => rsx! { Library { view } },

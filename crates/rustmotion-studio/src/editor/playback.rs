@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::scenario::Shared;
 
 /// Advance the playhead at the scenario fps while `playing` is true. A custom
@@ -51,18 +52,21 @@ pub fn PlaybackBar(current: Signal<u32>, playing: Signal<bool>, total: u32) -> E
 
     rsx! {
         div { style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--rm-border); background:var(--rm-surface-2);",
-            button {
-                style: "min-width:64px; padding:6px 10px; cursor:pointer;",
+            Button {
+                variant: ButtonVariant::Secondary,
+                size: ButtonSize::Sm,
                 onclick: move |_| playing.set(!playing()),
                 if is_playing { "Pause" } else { "Play" }
             }
-            button {
-                style: "padding:6px 10px; cursor:pointer;",
+            Button {
+                variant: ButtonVariant::Ghost,
+                size: ButtonSize::IconSm,
                 onclick: move |_| current.set(cur.saturating_sub(1)),
                 "‹"
             }
-            button {
-                style: "padding:6px 10px; cursor:pointer;",
+            Button {
+                variant: ButtonVariant::Ghost,
+                size: ButtonSize::IconSm,
                 onclick: move |_| current.set((cur + 1).min(max)),
                 "›"
             }

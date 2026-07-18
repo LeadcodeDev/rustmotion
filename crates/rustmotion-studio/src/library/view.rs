@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Folder, Import, Plus, Search};
 
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::library::{ScenarioEntry, SharedLibrary};
 use crate::scenario::{empty_scenario, Shared, StudioModel, View};
 
@@ -56,8 +57,9 @@ pub fn Library(view: Signal<View>) -> Element {
             div { style: "width:280px; flex:none; background:var(--rm-surface); border-right:1px solid var(--rm-border); display:flex; flex-direction:column; padding:14px;",
                 div { style: "display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;",
                     div { style: "font-weight:700; color:var(--rm-text-strong);", "Rustmotion" }
-                    button {
-                        style: "display:flex; align-items:center; gap:4px; padding:4px 8px; cursor:pointer; background:var(--rm-surface-3); color:var(--rm-text); border:1px solid var(--rm-border-2); border-radius:6px;",
+                    Button {
+                        variant: ButtonVariant::Secondary,
+                        size: ButtonSize::Sm,
                         onclick: {
                             let shared = shared.clone();
                             let library = library.clone();
@@ -67,8 +69,10 @@ pub fn Library(view: Signal<View>) -> Element {
                         "New"
                     }
                 }
-                button {
-                    style: "display:flex; align-items:center; gap:6px; padding:6px 8px; margin-bottom:12px; cursor:pointer; background:none; color:var(--rm-text); border:1px solid var(--rm-border-2); border-radius:6px;",
+                Button {
+                    variant: ButtonVariant::Outline,
+                    size: ButtonSize::Sm,
+                    style: "width:100%; justify-content:flex-start; margin-bottom:12px;",
                     onclick: {
                         let shared = shared.clone();
                         let library = library.clone();
@@ -80,13 +84,11 @@ pub fn Library(view: Signal<View>) -> Element {
                 div { style: "color:var(--rm-text-muted); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin:8px 0;", "Folders" }
                 div { style: "overflow:auto; display:flex; flex-direction:column; gap:2px;",
                     for (i, (name, group_entries)) in sections.iter().enumerate() {
-                        button {
+                        Button {
                             key: "{name}-{i}",
-                            style: format!(
-                                "display:flex; align-items:center; gap:8px; padding:7px 8px; cursor:pointer; border:none; border-radius:6px; text-align:left; color:{}; background:{};",
-                                if i == sel { "var(--rm-text-strong)" } else { "var(--rm-text)" },
-                                if i == sel { "var(--rm-surface-3)" } else { "transparent" }
-                            ),
+                            variant: if i == sel { ButtonVariant::Secondary } else { ButtonVariant::Ghost },
+                            size: ButtonSize::Sm,
+                            style: "width:100%; justify-content:flex-start; text-align:left;",
                             onclick: move |_| selected.set(i),
                             Folder { size: 16 }
                             div { style: "flex:1;", "{name}" }

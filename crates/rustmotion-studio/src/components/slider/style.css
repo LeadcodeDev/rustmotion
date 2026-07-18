@@ -1,7 +1,8 @@
 .dx-slider {
     position: relative;
     display: flex;
-    min-width: 200px;
+    min-width: 0;
+    width: 100%;
     align-items: center;
     padding: 0.5rem 0;
     touch-action: none;

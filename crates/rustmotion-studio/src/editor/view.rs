@@ -1,7 +1,7 @@
 use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder};
 use dioxus::prelude::*;
 
-use crate::scenario::{list_annotations, read_style_object, Shared, View};
+use crate::scenario::{list_annotations, read_field, read_style_object, Shared, View};
 
 use super::annotations::AnnotationsPanel;
 use super::frames::{frame_hits, render_frame, scene_prefix, HitPct};
@@ -91,7 +91,8 @@ pub fn StudioApp(view: Signal<View>) -> Element {
         selected().map(|(_, pointer, kind)| {
             let m = inspector_shared.lock().unwrap();
             let style = read_style_object(&m.raw, &pointer);
-            (pointer, style, kind)
+            let content = read_field(&m.raw, &pointer, "content");
+            (pointer, style, kind, content)
         })
     });
 
@@ -126,8 +127,8 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                     PlaybackBar { current, playing, total }
                 }
                 div { style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
-                    if let Some((pointer, style, kind)) = panel {
-                        InspectorPanel { selected, pointer, kind, current, style }
+                    if let Some((pointer, style, kind, content)) = panel {
+                        InspectorPanel { selected, pointer, kind, current, content, style }
                     }
                 }
             }

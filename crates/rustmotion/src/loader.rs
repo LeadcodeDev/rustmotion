@@ -82,6 +82,12 @@ pub fn set_html_inline_style(html: &str, pointer: &str, prop: &str, value: &str)
     rustmotion_html::set_inline_style(html, pointer, prop, value)
 }
 
+/// Replace an element's text content in an HTML-dialect source by JSON pointer
+/// (used by the studio inspector's content editor).
+pub fn set_html_text_content(html: &str, pointer: &str, text: &str) -> Option<String> {
+    rustmotion_html::set_text_content(html, pointer, text)
+}
+
 #[cfg(test)]
 mod html_tests {
     use super::*;

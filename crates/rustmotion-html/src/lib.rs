@@ -7,8 +7,9 @@ mod style;
 use html5ever::serialize::{serialize, SerializeOpts, TraversalScope};
 use html5ever::tendril::TendrilSink;
 use html5ever::{local_name, ns, parse_fragment, Attribute, ParseOpts, QualName};
-use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
+use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use serde_json::{Map, Value};
+use std::cell::RefCell;
 
 /// Errors from transpiling HTML to a scenario value.
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +115,30 @@ pub fn set_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> O
     let target = resolve_pointer(&root, pointer)?;
     set_style_attr(&target, prop, value)?;
     Some(serialize_element(&root))
+}
+
+/// Replace the text content of the element addressed by the JSON pointer with
+/// `text`, returning the rewritten HTML. Used by the studio inspector's content
+/// editor (mirrors [`set_inline_style`]). Returns `None` if the pointer doesn't
+/// resolve to an element.
+pub fn set_text_content(html: &str, pointer: &str, text: &str) -> Option<String> {
+    let dom = parse_fragment_dom(html);
+    let root = find_element(&dom.document, "rustmotion")?;
+    let target = resolve_pointer(&root, pointer)?;
+    set_text(&target, text)?;
+    Some(serialize_element(&root))
+}
+
+/// Replace an element's children with a single text node.
+fn set_text(handle: &Handle, text: &str) -> Option<()> {
+    if !matches!(handle.data, NodeData::Element { .. }) {
+        return None;
+    }
+    let node = Node::new(NodeData::Text {
+        contents: RefCell::new(text.into()),
+    });
+    *handle.children.borrow_mut() = vec![node];
+    Some(())
 }
 
 /// Numeric segments of a JSON pointer, e.g. `/scenes/0/children/2` → `[0, 2]`.
@@ -245,6 +270,16 @@ mod lib_tests {
             v["scenes"][0]["children"][0]["children"][0]["style"]["font-size"],
             json!(120)
         );
+    }
+
+    #[test]
+    fn set_text_content_replaces_inner_text() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-size:96">Hi</h1></scene></rustmotion>"##;
+        let out = crate::set_text_content(html, "/scenes/0/children/0", "Bonjour").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        assert_eq!(v["scenes"][0]["children"][0]["content"], json!("Bonjour"));
+        // The style attribute is preserved.
+        assert_eq!(v["scenes"][0]["children"][0]["style"]["font-size"], json!(96));
     }
 
     #[test]

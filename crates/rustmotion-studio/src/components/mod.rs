@@ -11,3 +11,4 @@ pub mod popover;
 pub mod color_picker;
 pub mod slider;
 pub mod input;
+pub mod textarea;

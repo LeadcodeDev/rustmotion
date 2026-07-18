@@ -34,6 +34,26 @@ pub fn set_style(mut raw: Value, pointer: &str, prop: &str, value: &str) -> Opti
     Some(raw)
 }
 
+/// Read a top-level field (e.g. `"content"`) of the element at `pointer` as a
+/// string. Unlike [`read_style`], this reads a field on the element itself, not
+/// inside its `style` object.
+pub fn read_field(raw: &Value, pointer: &str, field: &str) -> Option<String> {
+    let v = raw.pointer(pointer)?.get(field)?;
+    Some(match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    })
+}
+
+/// Set a top-level field (e.g. `"content"`, as a JSON string) on the element at
+/// `pointer`. Returns the mutated clone; the caller writes it to disk.
+pub fn set_field(mut raw: Value, pointer: &str, field: &str, value: &str) -> Option<Value> {
+    let el = raw.pointer_mut(pointer)?;
+    let obj = el.as_object_mut()?;
+    obj.insert(field.to_string(), Value::String(value.to_string()));
+    Some(raw)
+}
+
 /// Append an annotation object to `raw["annotations"]` (creating the array if
 /// absent). Returns the mutated clone.
 pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
@@ -119,6 +139,19 @@ mod tests {
         assert_eq!(
             read_style(&updated, "/scenes/0/children/0", "font-size").as_deref(),
             Some("48")
+        );
+    }
+
+    #[test]
+    fn reads_and_sets_a_top_level_field() {
+        assert_eq!(
+            read_field(&raw(), "/scenes/0/children/0", "content").as_deref(),
+            Some("Hi")
+        );
+        let updated = set_field(raw(), "/scenes/0/children/0", "content", "Hello").unwrap();
+        assert_eq!(
+            read_field(&updated, "/scenes/0/children/0", "content").as_deref(),
+            Some("Hello")
         );
     }
 

@@ -1,6 +1,12 @@
 use dioxus::prelude::*;
 
-use crate::scenario::{append_annotation, remove_annotation, Shared};
+use crate::{
+    components::{
+        button::{Button, ButtonSize, ButtonVariant},
+        textarea::{Textarea, TextareaVariant},
+    },
+    scenario::{append_annotation, remove_annotation, Shared},
+};
 
 /// The left-hand "Comments" panel: lists the scenario's annotations, with
 /// per-comment "go to frame" and "delete" actions.
@@ -23,13 +29,15 @@ pub fn AnnotationsPanel(
                     div { style: "color:var(--rm-text-muted); font-size:11px;", "{kind} · frame {frame}" }
                     div { "{note}" }
                     div { style: "display:flex; gap:8px;",
-                        button {
-                            style: "cursor:pointer; padding:2px 8px;",
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Xs,
                             onclick: move |_| current.set(frame as u32),
                             "Go to frame"
                         }
-                        button {
-                            style: "cursor:pointer; padding:2px 8px; color:var(--rm-error);",
+                        Button {
+                            variant: ButtonVariant::Destructive,
+                            size: ButtonSize::Xs,
                             onclick: {
                                 let shared = shared.clone();
                                 let id = id.clone();
@@ -87,17 +95,21 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
     };
 
     rsx! {
-        div { style: "border-top:1px solid var(--rm-border); padding-top:12px; display:flex; flex-direction:column; gap:8px;",
-            div { style: "color:var(--rm-text-muted);", "Leave a comment for the agent" }
-            textarea {
-                style: "min-height:64px; padding:6px; background:var(--rm-bg); color:var(--rm-text); border:1px solid var(--rm-border-2); resize:vertical; font:inherit;",
-                value: "{note}",
-                oninput: move |e| note.set(e.value()),
+        div { style: "border-top:1px solid var(--rm-border); padding-top:12px; padding:16px; display:flex; flex-direction:column; gap:8px;",
+            div { style: "color:var(--rm-text-muted);", "Leave a comment for the agent" },
+            Textarea {
+                variant: TextareaVariant::Outline,
+                placeholder: "Enter your description",
+                value: note,
+                rows: 5,
+                oninput: move |e: FormEvent| {
+                  note.set(e.value())
+                },
             }
-            button {
-                style: "padding:6px 10px; cursor:pointer; align-self:flex-end;",
-                onclick: submit,
-                "Add comment"
+            Button {
+              variant: ButtonVariant::Primary,
+              onclick: submit,
+              "Add comment"
             }
         }
     }
