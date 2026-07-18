@@ -4946,6 +4946,7 @@ dependencies = [
  "rayon",
  "rustmotion",
  "rustmotion-studio",
+ "schemars",
  "serde",
  "serde_json",
 ]
