@@ -38,17 +38,61 @@ pub fn load_scenario_from_source(
 }
 
 /// Load a scenario authored in the HTML/CSS dialect: transpile to the scenario
-/// JSON value, deserialize into `Scenario`, then resolve includes — reusing the
-/// exact same pipeline as the JSON loader.
+/// JSON value, merge the annotations sidecar (if any), deserialize into
+/// `Scenario`, then resolve includes — reusing the exact same pipeline as the
+/// JSON loader.
 pub fn load_scenario_from_html(input: &PathBuf) -> Result<ResolvedScenario> {
     let html = std::fs::read_to_string(input).map_err(|e| RustmotionError::FileRead {
         path: input.display().to_string(),
         source: e,
     })?;
-    let value = rustmotion_html::html_to_scenario_value(&html)
+    let mut value = rustmotion_html::html_to_scenario_value(&html)
         .map_err(|e| RustmotionError::HtmlParse(e.to_string()))?;
+    let annotations = load_html_annotations_sidecar(input)?;
+    if !annotations.is_empty() {
+        if let Some(obj) = value.as_object_mut() {
+            let arr = obj
+                .entry("annotations")
+                .or_insert_with(|| serde_json::Value::Array(vec![]));
+            if let serde_json::Value::Array(a) = arr {
+                a.extend(annotations);
+            }
+        }
+    }
     let scenario: Scenario = serde_json::from_value(value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
+}
+
+/// Read the annotations sidecar next to an HTML-dialect source: for
+/// `foo.html`, `foo.annotations.json` holding `{"annotations": [...]}` (same
+/// annotation object format as JSON scenarios' `annotations` field; the studio
+/// writes it because HTML sources can't carry the array inline). A missing
+/// sidecar is fine (empty); a present-but-invalid one is an error — never
+/// silently ignored.
+pub fn load_html_annotations_sidecar(input: &std::path::Path) -> Result<Vec<serde_json::Value>> {
+    let sidecar = input.with_extension("annotations.json");
+    let text = match std::fs::read_to_string(&sidecar) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => {
+            return Err(RustmotionError::FileRead {
+                path: sidecar.display().to_string(),
+                source: e,
+            })
+        }
+    };
+    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        RustmotionError::from(format!("annotations sidecar {}: {e}", sidecar.display()))
+    })?;
+    doc.get("annotations")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .ok_or_else(|| {
+            RustmotionError::from(format!(
+                "annotations sidecar {}: missing \"annotations\" array",
+                sidecar.display()
+            ))
+        })
 }
 
 /// Dispatch by file extension: `.html`/`.htm` use the HTML transpiler, everything
@@ -92,21 +136,70 @@ mod html_tests {
     use super::*;
     use std::io::Write;
 
-    #[test]
-    fn loads_html_scenario_into_resolved() {
-        let html = r##"<rustmotion width="1920" height="1080" fps="30" background="#0f172a">
+    const HTML: &str = r##"<rustmotion width="1920" height="1080" fps="30" background="#0f172a">
             <scene duration="4"><h1 style="font-size:96; color:#ffffff">Hi</h1></scene>
         </rustmotion>"##;
-        let dir = std::env::temp_dir();
-        let path = dir.join("rm_html_loader_test.html");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(html.as_bytes()).unwrap();
 
+    fn write_html(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("{name}_{}.html", std::process::id()));
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(HTML.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn loads_html_scenario_into_resolved() {
+        let path = write_html("rm_html_loader_test");
         let resolved = load_input(&path).expect("html loads");
         assert_eq!(resolved.video.width, 1920);
         assert_eq!(resolved.views.len(), 1);
         assert_eq!(resolved.views[0].scenes.len(), 1);
         assert_eq!(resolved.views[0].scenes[0].duration, 4.0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn html_load_merges_annotations_sidecar() {
+        let path = write_html("rm_html_sidecar_merge");
+        let sidecar = path.with_extension("annotations.json");
+        std::fs::write(
+            &sidecar,
+            r##"{ "annotations": [ { "id": "an_1", "note": "smaller", "status": "open",
+                 "frame": 3, "target": { "pointer": "/scenes/0/children/0", "kind": "text" } } ] }"##,
+        )
+        .unwrap();
+
+        let annotations = load_html_annotations_sidecar(&path).expect("sidecar loads");
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0]["id"], "an_1");
+        // The full pipeline (transpile + merge + deserialize) accepts it too.
+        load_input(&path).expect("html with sidecar loads");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&sidecar);
+    }
+
+    #[test]
+    fn corrupt_annotations_sidecar_fails_the_load() {
+        let path = write_html("rm_html_sidecar_corrupt");
+        let sidecar = path.with_extension("annotations.json");
+        std::fs::write(&sidecar, "{ not json").unwrap();
+
+        assert!(load_html_annotations_sidecar(&path).is_err());
+        let err = load_input(&path).expect_err("corrupt sidecar must fail the load");
+        assert!(
+            err.to_string().contains("annotations sidecar"),
+            "error should name the sidecar, got: {err}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&sidecar);
+    }
+
+    #[test]
+    fn missing_annotations_sidecar_is_empty() {
+        let path = write_html("rm_html_sidecar_missing");
+        assert!(load_html_annotations_sidecar(&path).unwrap().is_empty());
         let _ = std::fs::remove_file(&path);
     }
 }

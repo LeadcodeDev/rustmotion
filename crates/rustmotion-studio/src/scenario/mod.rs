@@ -3,12 +3,14 @@
 
 mod edit;
 mod model;
+mod sidecar;
 
 pub use edit::{
     append_annotation, list_annotations, read_field, read_style_object, remove_annotation,
     set_field, set_style,
 };
 pub use model::{empty_scenario, Shared, StudioModel};
+pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
 
 /// Which top-level view is shown (library home vs. the editor).
 #[derive(Clone, Copy, PartialEq)]

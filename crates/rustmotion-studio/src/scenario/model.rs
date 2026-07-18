@@ -31,14 +31,20 @@ impl StudioModel {
         error: Option<String>,
         path: Option<std::path::PathBuf>,
     ) -> Self {
-        // For HTML sources the raw JSON is the transpiled scenario, so the
-        // inspector can read/resolve element properties by pointer.
+        // For HTML sources the raw JSON is the transpiled scenario, plus the
+        // annotations sidecar merged in so `list_annotations` and the comments
+        // panel work unchanged; the inspector reads element props by pointer.
         let raw = path
             .as_ref()
             .and_then(|p| {
                 let s = std::fs::read_to_string(p).ok()?;
                 if rustmotion::loader::is_html_path(p) {
-                    rustmotion::loader::html_to_scenario_json(&s).ok()
+                    let raw = rustmotion::loader::html_to_scenario_json(&s).ok()?;
+                    // A corrupt sidecar already failed the scenario load in the
+                    // loader (error banner); a read failure here can only be a
+                    // race, so fall back to the bare transpile.
+                    let annotations = super::sidecar::read_sidecar(p).unwrap_or_default();
+                    Some(super::sidecar::merge_annotations(raw, annotations))
                 } else {
                     serde_json::from_str(&s).ok()
                 }

@@ -5,7 +5,10 @@ use crate::{
         button::{Button, ButtonSize, ButtonVariant},
         textarea::{Textarea, TextareaVariant},
     },
-    scenario::{append_annotation, remove_annotation, Shared},
+    scenario::{
+        append_annotation, append_sidecar_annotation, remove_annotation, remove_sidecar_annotation,
+        Shared,
+    },
 };
 
 /// Write `content` to `path`, returning a user-facing error string on failure.
@@ -90,31 +93,49 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
                 "view": view, "scene": scene,
                 "target": { "pointer": pointer, "kind": kind }
             });
-            let updated = append_annotation(raw, ann);
-            // Annotations live in the scenario JSON; HTML sources have no place to
-            // store them, so skip the write rather than overwrite the HTML.
-            if let Some(path) = path {
-                if !rustmotion::loader::is_html_path(&path) {
-                    match serde_json::to_string_pretty(&updated) {
-                        Ok(t) => {
-                            let write_result = write_file(&path, &t);
-                            let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
-                            match write_result {
-                                Ok(()) => {
-                                    m.write_error = None;
-                                    note.set(String::new());
-                                }
-                                Err(e) => {
-                                    m.write_error = Some(e);
-                                    m.generation = m.generation.wrapping_add(1);
-                                }
+            let Some(path) = path else {
+                return;
+            };
+            if rustmotion::loader::is_html_path(&path) {
+                // HTML sources: annotations live in the `<stem>.annotations.json`
+                // sidecar; the HTML file itself is never modified.
+                let result = append_sidecar_annotation(&path, ann.clone());
+                let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                match result {
+                    Ok(()) => {
+                        m.write_error = None;
+                        // The watcher doesn't observe the sidecar, so reflect
+                        // the change in the in-memory raw directly.
+                        m.raw = append_annotation(std::mem::take(&mut m.raw), ann);
+                        m.generation = m.generation.wrapping_add(1);
+                        note.set(String::new());
+                    }
+                    Err(e) => {
+                        m.write_error = Some(e);
+                        m.generation = m.generation.wrapping_add(1);
+                    }
+                }
+            } else {
+                let updated = append_annotation(raw, ann);
+                match serde_json::to_string_pretty(&updated) {
+                    Ok(t) => {
+                        let write_result = write_file(&path, &t);
+                        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        match write_result {
+                            Ok(()) => {
+                                m.write_error = None;
+                                note.set(String::new());
+                            }
+                            Err(e) => {
+                                m.write_error = Some(e);
+                                m.generation = m.generation.wrapping_add(1);
                             }
                         }
-                        Err(e) => {
-                            let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
-                            m.write_error = Some(format!("json: {e}"));
-                            m.generation = m.generation.wrapping_add(1);
-                        }
+                    }
+                    Err(e) => {
+                        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        m.write_error = Some(format!("json: {e}"));
+                        m.generation = m.generation.wrapping_add(1);
                     }
                 }
             }
@@ -142,23 +163,40 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
     }
 }
 
-/// Remove an annotation by id from the scenario file (the watcher reloads).
+/// Remove an annotation by id. JSON sources rewrite the scenario file (the
+/// watcher reloads); HTML sources rewrite the annotations sidecar (deleted
+/// when it becomes empty) and update the in-memory raw directly.
 fn delete_annotation(shared: &Shared, id: &str) {
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
     };
-    let updated = remove_annotation(raw, id);
-    if let Some(path) = path {
-        if !rustmotion::loader::is_html_path(&path) {
-            let write_result = serde_json::to_string_pretty(&updated)
-                .map_err(|e| format!("json: {e}"))
-                .and_then(|t| write_file(&path, &t));
-            if let Err(e) = write_result {
-                let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
+    let Some(path) = path else {
+        return;
+    };
+    if rustmotion::loader::is_html_path(&path) {
+        let result = remove_sidecar_annotation(&path, id);
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        match result {
+            Ok(()) => {
+                m.write_error = None;
+                m.raw = remove_annotation(std::mem::take(&mut m.raw), id);
+                m.generation = m.generation.wrapping_add(1);
+            }
+            Err(e) => {
                 m.write_error = Some(e);
                 m.generation = m.generation.wrapping_add(1);
             }
+        }
+    } else {
+        let updated = remove_annotation(raw, id);
+        let write_result = serde_json::to_string_pretty(&updated)
+            .map_err(|e| format!("json: {e}"))
+            .and_then(|t| write_file(&path, &t));
+        if let Err(e) = write_result {
+            let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
+            m.write_error = Some(e);
+            m.generation = m.generation.wrapping_add(1);
         }
     }
 }
