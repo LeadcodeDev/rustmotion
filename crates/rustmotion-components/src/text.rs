@@ -315,6 +315,7 @@ impl Text {
         layout_width: f32,
         time: f64,
         props: &AnimatedProperties,
+        ctx: &PaintCtx,
     ) -> Result<()> {
         let font_size = self.style.font_size_px_or(48.0);
         let color = self.style.color_str_or("#FFFFFF");
@@ -388,21 +389,40 @@ impl Text {
         let descent = metrics.descent;
         let baseline_offset = (line_height_val + ascent - descent) / 2.0;
 
-        // Prepare optional shadow and stroke paints
-        let shadow_paint = self.text_shadow.as_ref().map(|shadow| {
-            let mut p = paint_from_hex(&shadow.color);
-            if shadow.blur > 0.01 {
-                if let Some(filter) = skia_safe::image_filters::blur(
-                    (shadow.blur, shadow.blur),
-                    skia_safe::TileMode::Clamp,
-                    None,
-                    None,
-                ) {
-                    p.set_image_filter(filter);
+        // Prepare optional shadow and stroke paints. The component-level
+        // `text-shadow` field wins; otherwise the CSS `style.text-shadow`
+        // list is bridged (it used to be parsed and silently dropped).
+        let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
+            vec![s.clone()]
+        } else if let Some(list) = &self.style.text_shadow {
+            let lctx = rustmotion_core::css::units::LengthContext {
+                viewport_width: ctx.video_width as f32,
+                viewport_height: ctx.video_height as f32,
+                parent_size: layout_width.max(0.0),
+                font_size,
+                root_font_size: 16.0,
+            };
+            list.iter().map(|s| s.to_schema(&lctx)).collect()
+        } else {
+            Vec::new()
+        };
+        let shadow_paints: Vec<(skia_safe::Paint, f32, f32)> = shadows
+            .iter()
+            .map(|shadow| {
+                let mut p = paint_from_hex(&shadow.color);
+                if shadow.blur > 0.01 {
+                    if let Some(filter) = skia_safe::image_filters::blur(
+                        (shadow.blur, shadow.blur),
+                        skia_safe::TileMode::Clamp,
+                        None,
+                        None,
+                    ) {
+                        p.set_image_filter(filter);
+                    }
                 }
-            }
-            (p, shadow.offset_x, shadow.offset_y)
-        });
+                (p, shadow.offset_x, shadow.offset_y)
+            })
+            .collect();
 
         let stroke_paint = self.stroke.as_ref().map(|stroke| {
             let mut p = paint_from_hex(&stroke.color);
@@ -486,8 +506,8 @@ impl Text {
                 }
             }
 
-            // Draw shadow
-            if let Some((ref sp, ox, oy)) = shadow_paint {
+            // Draw shadows — reverse order so the first CSS shadow ends on top.
+            for (sp, ox, oy) in shadow_paints.iter().rev() {
                 draw_text_with_fallback(
                     canvas,
                     line,
@@ -530,6 +550,6 @@ impl Painter for Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, props);
+        let _ = self.paint(canvas, layout.width, ctx.time, props, ctx);
     }
 }

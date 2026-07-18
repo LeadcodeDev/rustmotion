@@ -594,6 +594,88 @@ mod component_smoke {
     }
 
     #[test]
+    fn css_text_shadow_paints_through_the_bridge() {
+        // `text-shadow` set inside `style` (the CSS dialect form) must paint
+        // like the component-level field: blue text with a red css shadow
+        // must produce red pixels. Before the bridge, css text_shadow was
+        // parsed and silently dropped.
+        let json = serde_json::json!({
+            "type": "text",
+            "content": "SHADOW",
+            "style": {
+                "font-size": "60px",
+                "color": "#0000ff",
+                "text-shadow": [{ "offset-x": 8, "offset-y": 8, "color": "#ff0000" }]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let buf = render_new_at(&[child], 400, 300, 0.5, 1.0);
+        assert!(
+            red_sum(&buf) > 500,
+            "css text-shadow painted no red pixels (red_sum={})",
+            red_sum(&buf)
+        );
+    }
+
+    #[test]
+    fn css_filter_blur_softens_edges() {
+        // A hard-edged red rect has almost no intermediate red values
+        // (antialiasing only); `filter: blur(12px)` must smear the edges into
+        // thousands of intermediate pixels. Before the fix, css `filter` was
+        // written by the animator (blur_in/blur_out) and static styles but
+        // consumed nowhere.
+        let sharp = red_rect_scene(serde_json::json!({}));
+        let blurred = red_rect_scene(serde_json::json!({
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "filter": [{ "fn": "blur", "radius": 12 }]
+            }
+        }));
+        let count_mid = |buf: &[u8]| {
+            buf.chunks_exact(4)
+                .filter(|p| p[0] > 20 && p[0] < 220)
+                .count()
+        };
+        let sharp_mid = count_mid(&render_new_at(&sharp, 400, 300, 0.5, 1.0));
+        let blur_mid = count_mid(&render_new_at(&blurred, 400, 300, 0.5, 1.0));
+        assert!(
+            blur_mid > sharp_mid * 5 && blur_mid > 1000,
+            "filter: blur did not soften edges (sharp={sharp_mid}, blurred={blur_mid})"
+        );
+    }
+
+    #[test]
+    fn css_filter_invert_flips_colors() {
+        // Pure red #ff3366 inverted → #00cc99: red collapses, green rises.
+        // Locks the color-matrix translation convention (0..255 space) —
+        // a wrong convention would leave red pixels untouched or black.
+        let inverted = red_rect_scene(serde_json::json!({
+            "style": {
+                "width": "100px",
+                "height": "80px",
+                "filter": [{ "fn": "invert", "value": 1.0 }]
+            }
+        }));
+        let buf = render_new_at(&inverted, 400, 300, 0.5, 1.0);
+        let flipped = buf
+            .chunks_exact(4)
+            .filter(|p| p[0] < 50 && p[1] > 150)
+            .count();
+        assert!(
+            flipped > 3000,
+            "invert(1) did not flip the rect's colors (flipped px = {flipped})"
+        );
+    }
+
+    #[test]
     fn timeline_steps_trigger_delayed_animations() {
         // A timeline step resolves as its animations with `delay += at`:
         // fade_in(1s) at t=2 must be ~5% opaque at t=2.05 and ~95% at t=2.95.

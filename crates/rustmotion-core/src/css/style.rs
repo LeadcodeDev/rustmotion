@@ -643,6 +643,23 @@ fn one_f32() -> f32 {
     1.0
 }
 
+impl Color {
+    /// CSS-string form: pass strings through, format rgba as `#rrggbb[aa]`.
+    pub fn to_css_string(&self) -> String {
+        match self {
+            Color::String(s) => s.clone(),
+            Color::Rgba { r, g, b, a } => {
+                if *a >= 1.0 {
+                    format!("#{r:02x}{g:02x}{b:02x}")
+                } else {
+                    let alpha = (a.clamp(0.0, 1.0) * 255.0) as u8;
+                    format!("#{r:02x}{g:02x}{b:02x}{alpha:02x}")
+                }
+            }
+        }
+    }
+}
+
 // ---- Background ----
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -755,6 +772,22 @@ pub struct TextShadow {
     pub offset_y: Length,
     pub blur: Option<Length>,
     pub color: Option<Color>,
+}
+
+impl TextShadow {
+    /// Resolve into the legacy schema shadow consumed by the text painters.
+    pub fn to_schema(&self, ctx: &crate::css::units::LengthContext) -> crate::schema::TextShadow {
+        crate::schema::TextShadow {
+            color: self
+                .color
+                .as_ref()
+                .map(Color::to_css_string)
+                .unwrap_or_else(|| "#000000".to_string()),
+            offset_x: self.offset_x.resolve(ctx),
+            offset_y: self.offset_y.resolve(ctx),
+            blur: self.blur.as_ref().map(|b| b.resolve(ctx)).unwrap_or(0.0),
+        }
+    }
 }
 
 // ---- Transform ----

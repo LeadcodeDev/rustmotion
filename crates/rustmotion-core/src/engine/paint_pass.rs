@@ -216,11 +216,22 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         });
     }
 
-    // 3. opacity layer
+    // 3. opacity / filter layer — one shared layer carries both the group
+    // alpha and the CSS `filter` chain (applies to the node and its subtree).
     let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
-    let opened_opacity_layer = if opacity < 1.0 {
+    let content_filter = node
+        .css
+        .filter
+        .as_deref()
+        .and_then(|list| filters_to_image_filter(list, &length_ctx));
+    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
         let mut paint = Paint::default();
-        paint.set_alpha((opacity * 255.0) as u8);
+        if opacity < 1.0 {
+            paint.set_alpha((opacity * 255.0) as u8);
+        }
+        if let Some(filter) = content_filter {
+            paint.set_image_filter(filter);
+        }
         let rec = SaveLayerRec::default().paint(&paint);
         canvas.save_layer(&rec);
         true
@@ -251,6 +262,26 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
                 continue;
             }
             paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
+        }
+    }
+
+    // 5.5 backdrop-filter: filter what is already painted behind this node,
+    // clipped to its (rounded) border-box, before its own background goes on
+    // top — the glassmorphism pattern.
+    if let Some(filters) = node.css.backdrop_filter.as_deref() {
+        if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
+            let radius = node
+                .css
+                .border_radius
+                .as_ref()
+                .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
+                .unwrap_or([0.0; 4]);
+            canvas.save();
+            canvas.clip_rrect(border_rrect(box_layout, radius), ClipOp::Intersect, true);
+            let rec = SaveLayerRec::default().backdrop(&backdrop);
+            canvas.save_layer(&rec);
+            canvas.restore();
+            canvas.restore();
         }
     }
 
@@ -290,6 +321,148 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         canvas.restore();
     }
     canvas.restore();
+}
+
+// ---- CSS filters ----
+
+/// Build a Skia `ImageFilter` chain from a CSS `filter`/`backdrop-filter`
+/// list. Color functions use the CSS Filter Effects spec matrices; Skia's
+/// `color_filters::matrix_row_major` expects the translation column in
+/// normalized 0..1 space (verified by `css_filter_invert_flips_colors`).
+fn filters_to_image_filter(
+    list: &[crate::css::style::FilterFn],
+    ctx: &LengthContext,
+) -> Option<skia_safe::ImageFilter> {
+    use crate::css::style::FilterFn;
+    use skia_safe::image_filters;
+
+    let mut chain: Option<skia_safe::ImageFilter> = None;
+    for f in list {
+        chain = match f {
+            FilterFn::Blur { radius } => {
+                let r = radius.resolve(ctx).max(0.0);
+                if r <= 0.0 {
+                    chain
+                } else {
+                    image_filters::blur((r / 2.0, r / 2.0), skia_safe::TileMode::Clamp, chain, None)
+                }
+            }
+            FilterFn::DropShadow {
+                offset_x,
+                offset_y,
+                blur,
+                color,
+            } => {
+                let sigma = blur.as_ref().map(|b| b.resolve(ctx) / 2.0).unwrap_or(0.0);
+                let c = color.as_ref().map(parse_color).unwrap_or(SColor::BLACK);
+                image_filters::drop_shadow(
+                    (offset_x.resolve(ctx), offset_y.resolve(ctx)),
+                    (sigma, sigma),
+                    c,
+                    None,
+                    chain,
+                    None,
+                )
+            }
+            other => color_matrix_for(other)
+                .map(|m| skia_safe::color_filters::matrix_row_major(&m, None))
+                .and_then(|cf| image_filters::color_filter(cf, chain, None)),
+        };
+    }
+    chain
+}
+
+/// 4x5 row-major color matrix for a CSS color filter function (translation
+/// column in normalized 0..1 space), or `None` for the non-matrix functions.
+fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
+    use crate::css::style::FilterFn;
+    #[rustfmt::skip]
+    fn saturation(s: f32) -> [f32; 20] {
+        // Luminance weights per the CSS Filter Effects spec.
+        let (r, g, b) = (0.213, 0.715, 0.072);
+        [
+            r + (1.0 - r) * s, g * (1.0 - s),       b * (1.0 - s),       0.0, 0.0,
+            r * (1.0 - s),     g + (1.0 - g) * s,   b * (1.0 - s),       0.0, 0.0,
+            r * (1.0 - s),     g * (1.0 - s),       b + (1.0 - b) * s,   0.0, 0.0,
+            0.0,               0.0,                 0.0,                 1.0, 0.0,
+        ]
+    }
+    match f {
+        FilterFn::Brightness { value } => {
+            let v = value.max(0.0);
+            #[rustfmt::skip]
+            let m = [
+                v, 0.0, 0.0, 0.0, 0.0,
+                0.0, v, 0.0, 0.0, 0.0,
+                0.0, 0.0, v, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Contrast { value } => {
+            let v = value.max(0.0);
+            let t = (1.0 - v) / 2.0;
+            #[rustfmt::skip]
+            let m = [
+                v, 0.0, 0.0, 0.0, t,
+                0.0, v, 0.0, 0.0, t,
+                0.0, 0.0, v, 0.0, t,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Saturate { value } => Some(saturation(value.max(0.0))),
+        FilterFn::Grayscale { value } => Some(saturation(1.0 - value.clamp(0.0, 1.0))),
+        FilterFn::HueRotate { deg } => {
+            let (sin, cos) = deg.to_radians().sin_cos();
+            let (r, g, b) = (0.213, 0.715, 0.072);
+            #[rustfmt::skip]
+            let m = [
+                r + cos * (1.0 - r) + sin * (-r),      g + cos * (-g) + sin * (-g),       b + cos * (-b) + sin * (1.0 - b), 0.0, 0.0,
+                r + cos * (-r) + sin * 0.143,          g + cos * (1.0 - g) + sin * 0.140, b + cos * (-b) + sin * (-0.283),  0.0, 0.0,
+                r + cos * (-r) + sin * (-(1.0 - r)),   g + cos * (-g) + sin * g,          b + cos * (1.0 - b) + sin * b,    0.0, 0.0,
+                0.0,                                   0.0,                               0.0,                              1.0, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Invert { value } => {
+            let v = value.clamp(0.0, 1.0);
+            let s = 1.0 - 2.0 * v;
+            let t = v;
+            #[rustfmt::skip]
+            let m = [
+                s, 0.0, 0.0, 0.0, t,
+                0.0, s, 0.0, 0.0, t,
+                0.0, 0.0, s, 0.0, t,
+                0.0, 0.0, 0.0, 1.0, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Sepia { value } => {
+            let v = value.clamp(0.0, 1.0);
+            let lerp = |a: f32, b: f32| a + (b - a) * v;
+            #[rustfmt::skip]
+            let m = [
+                lerp(1.0, 0.393), lerp(0.0, 0.769), lerp(0.0, 0.189), 0.0, 0.0,
+                lerp(0.0, 0.349), lerp(1.0, 0.686), lerp(0.0, 0.168), 0.0, 0.0,
+                lerp(0.0, 0.272), lerp(0.0, 0.534), lerp(1.0, 0.131), 0.0, 0.0,
+                0.0,              0.0,              0.0,              1.0, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Opacity { value } => {
+            let v = value.clamp(0.0, 1.0);
+            #[rustfmt::skip]
+            let m = [
+                1.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, v, 0.0,
+            ];
+            Some(m)
+        }
+        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } => None,
+    }
 }
 
 // ---- Transform ----
@@ -967,6 +1140,103 @@ mod hit_tests {
         assert!((h.rect.y - 30.0).abs() < 0.5, "y = {}", h.rect.y);
         assert!((h.rect.w - 100.0).abs() < 0.5, "w = {}", h.rect.w);
         assert!((h.rect.h - 80.0).abs() < 0.5, "h = {}", h.rect.h);
+    }
+
+    #[test]
+    fn backdrop_filter_blurs_content_behind() {
+        use crate::css::style::{Background, Color as CssColor, FilterFn};
+        use crate::css::units::Length;
+
+        // Top half black on a white root; a backdrop-blur panel straddles
+        // the boundary. Inside the panel the boundary must smear into greys;
+        // outside it stays a hard black/white edge.
+        let black_top = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(0.0)),
+                top: Some(CLP::Px(0.0)),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                background: Some(Background::Color(CssColor::String("#000000".into()))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let panel = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(50.0)),
+                top: Some(CLP::Px(50.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                backdrop_filter: Some(vec![FilterFn::Blur {
+                    radius: Length::Px(10.0),
+                }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
+                background: Some(Background::Color(CssColor::String("#ffffff".into()))),
+                ..Default::default()
+            },
+            children: vec![black_top, panel],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        root.assign_ids(0);
+
+        let layout = run_layout(&root, (200.0, 200.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 200)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            &root,
+            &layout,
+            &test_frame(200, 200),
+            &NoopDispatcher,
+        );
+
+        let info = skia_safe::ImageInfo::new(
+            (200, 200),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 200 * 200 * 4];
+        assert!(surface.read_pixels(&info, &mut buf, 200 * 4, (0, 0)));
+        let red = |x: usize, y: usize| buf[(y * 200 + x) * 4] as i32;
+
+        // Outside the panel: hard edge preserved.
+        assert!(red(10, 97) < 10, "outside/above must stay black");
+        assert!(red(10, 103) > 245, "outside/below must stay white");
+        // Inside the panel: boundary smeared to intermediate greys.
+        let above = red(100, 97);
+        let below = red(100, 103);
+        assert!(
+            above > 30,
+            "backdrop not blurred above boundary (r={above})"
+        );
+        assert!(
+            below < 225,
+            "backdrop not blurred below boundary (r={below})"
+        );
     }
 
     #[test]
