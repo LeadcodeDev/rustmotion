@@ -2,6 +2,7 @@
 //! the top-level view enum shared across features.
 
 mod edit;
+mod history;
 mod model;
 mod sidecar;
 
@@ -9,6 +10,7 @@ pub use edit::{
     append_annotation, list_annotations, read_field, read_style_object, remove_annotation,
     set_field, set_style,
 };
+pub use history::{history_slot, record_edit, redo, set_saving, undo, SharedHistory};
 pub use model::{empty_scenario, Shared, StudioModel};
 pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
 

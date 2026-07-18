@@ -981,12 +981,22 @@ enum WritePayload {
     },
 }
 
+impl WritePayload {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            WritePayload::Prop { path, .. } | WritePayload::Content { path, .. } => path,
+        }
+    }
+}
+
 /// Schedule a debounced disk write (~250 ms). Any previously scheduled write is
 /// cancelled first so only the last value in a burst reaches the disk.
 ///
-/// On success the model's `write_error` is cleared; on failure it is set to the
-/// OS error message and `generation` is bumped so the hot-reload loop picks it
-/// up and shows the topbar indicator.
+/// On success the model's `write_error` is cleared and the pre-write file state
+/// is pushed onto the undo history; on failure `write_error` is set to the OS
+/// error message and `generation` is bumped so the hot-reload loop picks it up
+/// and shows the topbar indicator. The pending window is surfaced as the
+/// "Saving…" indicator via the history slot.
 fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayload) {
     // Cancel the previous pending write (if any). `Task::cancel` is safe to
     // call on an already-completed task (it's a no-op).
@@ -996,6 +1006,7 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
             prev.cancel();
         }
     }
+    crate::scenario::set_saving(&crate::scenario::history_slot(), true);
 
     let debounce_slot = debounce.0.clone();
     let task = spawn(async move {
@@ -1004,10 +1015,21 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
         // Clear the slot so the next write doesn't try to cancel this one.
         *debounce_slot.borrow_mut() = None;
 
+        // Capture the file state BEFORE the write: one history entry per
+        // effective disk write.
+        let snapshot = std::fs::read_to_string(payload.path()).ok();
         let result = perform_write(&payload);
+        crate::scenario::set_saving(&crate::scenario::history_slot(), false);
+        if let (Ok(true), Some(snapshot)) = (&result, snapshot) {
+            crate::scenario::record_edit(
+                &crate::scenario::history_slot(),
+                payload.path(),
+                snapshot,
+            );
+        }
         let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 // Clear any previous write error on success.
                 m.write_error = None;
             }
@@ -1022,8 +1044,10 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
     *debounce.0.borrow_mut() = Some(task);
 }
 
-/// Execute the actual file write and return `Ok(())` or an error message.
-fn perform_write(payload: &WritePayload) -> Result<(), String> {
+/// Execute the actual file write. Returns `Ok(true)` when the file was
+/// written, `Ok(false)` when the edit was a no-op (nothing to record in the
+/// undo history), or an error message.
+fn perform_write(payload: &WritePayload) -> Result<bool, String> {
     match payload {
         WritePayload::Prop {
             path,
@@ -1038,13 +1062,15 @@ fn perform_write(payload: &WritePayload) -> Result<(), String> {
                     rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
                 {
                     std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    return Ok(true);
                 }
             } else if let Some(updated) = set_style(raw.clone(), pointer, prop, value) {
                 let text =
                     serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
                 std::fs::write(path, text).map_err(|e| format!("write: {e}"))?;
+                return Ok(true);
             }
-            Ok(())
+            Ok(false)
         }
         WritePayload::Content {
             path,
@@ -1058,12 +1084,14 @@ fn perform_write(payload: &WritePayload) -> Result<(), String> {
                     rustmotion::loader::set_html_text_content(&html, pointer, text)
                 {
                     std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    return Ok(true);
                 }
             } else if let Some(updated) = set_field(raw.clone(), pointer, "content", text) {
                 let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
                 std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                return Ok(true);
             }
-            Ok(())
+            Ok(false)
         }
     }
 }
