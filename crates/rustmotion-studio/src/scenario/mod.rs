@@ -1,11 +1,15 @@
 //! Scenario data layer: the live studio model, JSON-pointer style edits, and
 //! the top-level view enum shared across features.
 
+mod baseline;
+mod diff;
 mod edit;
 mod history;
 mod model;
 mod sidecar;
 
+pub use baseline::{baseline_slot, get_baseline, set_baseline};
+pub use diff::{diff_scenarios, ChangeKind, ElementChange};
 pub use edit::{
     append_annotation, list_annotations, read_field, read_style_object, remove_annotation,
     set_field, set_style,

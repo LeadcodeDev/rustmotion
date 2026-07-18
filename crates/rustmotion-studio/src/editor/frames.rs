@@ -1,3 +1,8 @@
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+use rustmotion::encode::video::FrameTask;
 use rustmotion::schema::ResolvedScenario;
 
 /// Render one frame and encode it to JPEG bytes (preview-only; the final video
@@ -29,6 +34,65 @@ pub fn render_frame(
         )
         .expect("encode jpeg");
     jpeg
+}
+
+/// Cached baseline scenario for the diff mode's A-side render, keyed by
+/// (path, source hash) so it is rebuilt only when the baseline itself changes
+/// (Set baseline) — never per frame.
+struct BaselineCache {
+    path: PathBuf,
+    source_hash: u64,
+    scenario: ResolvedScenario,
+    tasks: Vec<FrameTask>,
+}
+
+fn baseline_cache() -> &'static Mutex<Option<BaselineCache>> {
+    static CACHE: OnceLock<Mutex<Option<BaselineCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn source_hash(source: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    h.finish()
+}
+
+/// Render a frame of the BASELINE scenario (diff mode, A side) from its source
+/// string: JSON is loaded directly, HTML is re-transpiled — both entirely from
+/// the string, never from the (already edited) file on disk. The resolved
+/// scenario + frame tasks are cached; only the JPEG encode runs per frame.
+pub fn render_baseline_frame(path: &Path, source: &str, frame: u32) -> Result<Vec<u8>, String> {
+    let hash = source_hash(source);
+    let mut guard = baseline_cache().lock().unwrap_or_else(|e| e.into_inner());
+
+    let stale = !matches!(&*guard, Some(c) if c.path == path && c.source_hash == hash);
+    if stale {
+        let scenario = if rustmotion::loader::is_html_path(path) {
+            let value = rustmotion::loader::html_to_scenario_json(source)
+                .map_err(|e| format!("baseline transpile: {e}"))?;
+            let json = serde_json::to_string(&value).map_err(|e| format!("baseline json: {e}"))?;
+            rustmotion::loader::load_scenario_from_source(None, Some(&json))
+                .map_err(|e| format!("baseline load: {e}"))?
+        } else {
+            rustmotion::loader::load_scenario_from_source(None, Some(source))
+                .map_err(|e| format!("baseline load: {e}"))?
+        };
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        *guard = Some(BaselineCache {
+            path: path.to_path_buf(),
+            source_hash: hash,
+            scenario,
+            tasks,
+        });
+    }
+
+    let cache = guard.as_ref().expect("baseline cache just filled");
+    // Same panic fence as the live-frame handler: a Skia panic must not poison
+    // the cache mutex.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_frame(&cache.scenario, &cache.tasks, frame, 1.0)
+    }))
+    .map_err(|_| "baseline render panicked".to_string())
 }
 
 /// A clickable element box in percentage-of-frame coords, with its kind.

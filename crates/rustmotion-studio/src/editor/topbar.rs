@@ -2,12 +2,17 @@ use std::time::Duration;
 
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    ChevronLeft, Download, Eye, MessageSquare, Monitor, Moon, Play, Redo2, Sun, Undo2,
+    Camera, ChevronLeft, Download, Eye, GitCompareArrows, MessageSquare, Monitor, Moon, Play,
+    Redo2, Sun, Undo2,
 };
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::scenario::{history_slot, redo, undo, Shared, SharedHistory, Theme, View};
+use crate::scenario::{
+    baseline_slot, diff_scenarios, get_baseline, history_slot, redo, set_baseline, undo, Shared,
+    SharedHistory, Theme, View,
+};
 
+use super::diff_panel::DiffSide;
 use super::export::{export_label, export_slot, start_export, use_export_poll, ExportStatus};
 
 /// Snapshot of the history slot for the topbar UI (polled, set-on-change).
@@ -49,13 +54,37 @@ fn use_history_poll(shared: Shared, slot: SharedHistory, mut sig: Signal<History
     });
 }
 
+/// Poll whether the current scenario differs from its baseline (~300 ms) —
+/// drives the Diff toggle's enabled state.
+fn use_diff_poll(shared: Shared, mut sig: Signal<bool>) {
+    use_future(move || {
+        let shared = shared.clone();
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let (path, raw) = {
+                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    (m.path.clone(), m.raw.clone())
+                };
+                let changed = path
+                    .and_then(|p| get_baseline(&baseline_slot(), &p))
+                    .map(|b| !diff_scenarios(&b.raw, &raw).is_empty())
+                    .unwrap_or(false);
+                if changed != sig() {
+                    sig.set(changed);
+                }
+            }
+        }
+    });
+}
+
 /// The editor's top bar (open-slide style): a back-to-library control on the
 /// left, the centered document title, and the action cluster on the right
-/// (theme swap, Inspect overlay toggle, Comments panel toggle, Export, and
-/// Present). `write_error` is `Some` when the last inspector write failed;
-/// shown as a discrete warning indicator using the `--rm-error` token. The
-/// export state (slot + polling) lives here too — the topbar is its only
-/// consumer.
+/// (theme swap, Set baseline, Diff toggle, Inspect overlay toggle, Comments
+/// panel toggle, Export, and Present). `write_error` is `Some` when the last
+/// inspector write failed; shown as a discrete warning indicator using the
+/// `--rm-error` token. The export state (slot + polling) lives here too — the
+/// topbar is its only consumer.
 #[component]
 pub fn TopBar(
     view: Signal<View>,
@@ -66,6 +95,8 @@ pub fn TopBar(
     show_hits: Signal<bool>,
     comment_count: usize,
     write_error: Option<String>,
+    diff_active: Signal<bool>,
+    diff_side: Signal<DiffSide>,
 ) -> Element {
     let shared = use_context::<Shared>();
     let mut theme = use_context::<Signal<Theme>>();
@@ -86,6 +117,12 @@ pub fn TopBar(
     let history_ui = use_signal(HistoryUi::default);
     use_history_poll(shared.clone(), history.clone(), history_ui);
     let hist = history_ui();
+
+    // Diff availability (scenario differs from baseline).
+    let diff_available = use_signal(|| false);
+    use_diff_poll(shared.clone(), diff_available);
+    let diffing = diff_active();
+    let can_diff = diff_available();
 
     rsx! {
         div { style: "position:relative; display:flex; align-items:center; justify-content:space-between; height:40px; padding:0 12px; border-bottom:1px solid var(--rm-border); background:var(--rm-surface-2); flex:none;",
@@ -171,6 +208,32 @@ pub fn TopBar(
                     }
                 }
                 Button {
+                    variant: ButtonVariant::Outline,
+                    size: ButtonSize::IconSm,
+                    title: "Set baseline (snapshot the current state for diff review)",
+                    onclick: {
+                        let shared = shared.clone();
+                        move |_| set_baseline_now(&shared)
+                    },
+                    Camera { size: 15 }
+                }
+                Button {
+                    variant: if diffing { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                    size: ButtonSize::Sm,
+                    // Stays enabled while active so it can always be switched off.
+                    disabled: !can_diff && !diffing,
+                    title: if can_diff || diffing { "Compare against the baseline" } else { "No changes since baseline" },
+                    onclick: move |_| {
+                        let next = !diff_active();
+                        diff_active.set(next);
+                        if next {
+                            diff_side.set(DiffSide::B);
+                        }
+                    },
+                    GitCompareArrows { size: 15 }
+                    "Diff"
+                }
+                Button {
                     variant: if inspecting { ButtonVariant::Secondary } else { ButtonVariant::Outline },
                     size: ButtonSize::Sm,
                     onclick: move |_| show_hits.set(!show_hits()),
@@ -222,6 +285,27 @@ pub fn TopBar(
                     "Present"
                 }
             }
+        }
+    }
+}
+
+/// Re-snapshot the baseline from the current state: source text re-read from
+/// disk, raw taken from the live model (so it matches what future models will
+/// hold). Read failures surface through `write_error`.
+fn set_baseline_now(shared: &Shared) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (m.path.clone(), m.raw.clone())
+    };
+    let Some(path) = path else {
+        return;
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(source) => set_baseline(&baseline_slot(), &path, source, raw),
+        Err(e) => {
+            let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
+            m.write_error = Some(format!("baseline: {e}"));
+            m.generation = m.generation.wrapping_add(1);
         }
     }
 }
