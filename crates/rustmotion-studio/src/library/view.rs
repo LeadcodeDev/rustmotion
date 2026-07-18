@@ -29,7 +29,7 @@ pub fn Library(view: Signal<View>) -> Element {
 
     // Build sections: a "Recent" pseudo-group first, then the workspace groups.
     let sections: Vec<(String, Vec<ScenarioEntry>)> = {
-        let lib = library.lock().unwrap();
+        let lib = library.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = Vec::new();
         if !lib.recents.is_empty() {
             s.push(("Recent".to_string(), lib.recents.clone()));
@@ -149,13 +149,13 @@ fn open_scenario(shared: &Shared, library: &SharedLibrary, mut view: Signal<View
         Err(e) => (empty_scenario(), Some(e.to_string())),
     };
     {
-        let mut m = shared.lock().unwrap();
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
         let g = m.generation.wrapping_add(1);
         *m = StudioModel::new(scenario, error, Some(path.clone()));
         m.generation = g;
     }
     {
-        let mut lib = library.lock().unwrap();
+        let mut lib = library.lock().unwrap_or_else(|e| e.into_inner());
         lib.note_opened(&path);
         lib.retarget_watch(&path);
     }
@@ -164,7 +164,13 @@ fn open_scenario(shared: &Shared, library: &SharedLibrary, mut view: Signal<View
 
 /// Create a fresh scenario file in the workspace and open it.
 fn new_scenario(shared: &Shared, library: &SharedLibrary, view: Signal<View>) {
-    let workspace = { library.lock().unwrap().workspace.clone() };
+    let workspace = {
+        library
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .workspace
+            .clone()
+    };
     let mut path = workspace.join("untitled.json");
     let mut n = 1;
     while path.exists() {

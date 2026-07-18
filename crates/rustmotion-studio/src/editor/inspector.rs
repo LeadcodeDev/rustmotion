@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignJustify, TextAlignStart, X,
@@ -12,6 +15,17 @@ use crate::components::switch::Switch;
 use crate::scenario::{set_field, set_style, Shared};
 
 use super::annotations::AnnotationBox;
+
+// ── Debounce context ─────────────────────────────────────────────────────────
+
+/// Holds the Dioxus [`dioxus_core::Task`] handle of the last scheduled write
+/// so the next keystroke can cancel it before it fires. Provided via Dioxus
+/// context by [`InspectorPanel`] and consumed by the `write_*` helpers.
+///
+/// Uses `Rc<RefCell<>>` because Dioxus's `Task` is `!Send`; all access is
+/// single-threaded (Dioxus desktop runs on one thread).
+#[derive(Clone)]
+pub struct WriteDebounce(Rc<RefCell<Option<dioxus_core::Task>>>);
 
 // ── Schema ───────────────────────────────────────────────────────────────
 
@@ -572,6 +586,8 @@ pub fn InspectorPanel(
     content: Option<String>,
     style: serde_json::Value,
 ) -> Element {
+    // Provide the debounce handle so all child write helpers share one slot.
+    use_context_provider(|| WriteDebounce(Rc::new(RefCell::new(None))));
     let fam = family(&kind);
     rsx! {
         div { style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto;",
@@ -947,54 +963,160 @@ fn hsv_to_hex(c: Hsv<encoding::Srgb, f64>) -> String {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-/// Write a single style property back to the scenario file. The watcher reloads
-/// and refreshes the preview. Empty values are ignored so clearing a field
-/// mid-edit doesn't collapse the element.
-fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
-    if value.trim().is_empty() {
-        return;
+/// The payload for a deferred disk write. Carries everything needed to perform
+/// the write so it can be captured by the spawned task without borrowing.
+enum WritePayload {
+    Prop {
+        path: std::path::PathBuf,
+        raw: serde_json::Value,
+        pointer: String,
+        prop: &'static str,
+        value: String,
+    },
+    Content {
+        path: std::path::PathBuf,
+        raw: serde_json::Value,
+        pointer: String,
+        text: String,
+    },
+}
+
+/// Schedule a debounced disk write (~250 ms). Any previously scheduled write is
+/// cancelled first so only the last value in a burst reaches the disk.
+///
+/// On success the model's `write_error` is cleared; on failure it is set to the
+/// OS error message and `generation` is bumped so the hot-reload loop picks it
+/// up and shows the topbar indicator.
+fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayload) {
+    // Cancel the previous pending write (if any). `Task::cancel` is safe to
+    // call on an already-completed task (it's a no-op).
+    {
+        let mut slot = debounce.0.borrow_mut();
+        if let Some(prev) = slot.take() {
+            prev.cancel();
+        }
     }
-    let (path, raw) = {
-        let m = shared.lock().unwrap();
-        (m.path.clone(), m.raw.clone())
-    };
-    let Some(path) = path else {
-        return;
-    };
-    if rustmotion::loader::is_html_path(&path) {
-        if let Ok(html) = std::fs::read_to_string(&path) {
-            if let Some(updated) =
-                rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
-            {
-                let _ = std::fs::write(&path, updated);
+
+    let debounce_slot = debounce.0.clone();
+    let task = spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+        // Clear the slot so the next write doesn't try to cancel this one.
+        *debounce_slot.borrow_mut() = None;
+
+        let result = perform_write(&payload);
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        match result {
+            Ok(()) => {
+                // Clear any previous write error on success.
+                m.write_error = None;
+            }
+            Err(e) => {
+                m.write_error = Some(e);
+                m.generation = m.generation.wrapping_add(1);
             }
         }
-    } else if let Some(updated) = set_style(raw, pointer, prop, value) {
-        if let Ok(text) = serde_json::to_string_pretty(&updated) {
-            let _ = std::fs::write(&path, text);
+    });
+
+    // Store the new handle for the next cancellation.
+    *debounce.0.borrow_mut() = Some(task);
+}
+
+/// Execute the actual file write and return `Ok(())` or an error message.
+fn perform_write(payload: &WritePayload) -> Result<(), String> {
+    match payload {
+        WritePayload::Prop {
+            path,
+            raw,
+            pointer,
+            prop,
+            value,
+        } => {
+            if rustmotion::loader::is_html_path(path) {
+                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+                if let Some(updated) =
+                    rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
+                {
+                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                }
+            } else if let Some(updated) = set_style(raw.clone(), pointer, prop, value) {
+                let text =
+                    serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
+                std::fs::write(path, text).map_err(|e| format!("write: {e}"))?;
+            }
+            Ok(())
+        }
+        WritePayload::Content {
+            path,
+            raw,
+            pointer,
+            text,
+        } => {
+            if rustmotion::loader::is_html_path(path) {
+                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+                if let Some(updated) =
+                    rustmotion::loader::set_html_text_content(&html, pointer, text)
+                {
+                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                }
+            } else if let Some(updated) = set_field(raw.clone(), pointer, "content", text) {
+                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
+                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+            }
+            Ok(())
         }
     }
 }
 
-/// Write the element's text `content` back to the scenario file. Unlike
-/// [`write_prop`], an empty value is allowed (clearing the text is valid).
-fn write_content(shared: &Shared, pointer: &str, text: &str) {
+/// Write a single style property back to the scenario file. Schedules a debounced
+/// write (~250 ms) so rapid slider drags and keystrokes coalesce into one flush.
+/// Empty values are ignored so clearing a field mid-edit doesn't collapse the
+/// element. Write errors are stored in the model and surfaced in the topbar.
+fn write_prop(shared: &Shared, pointer: &str, prop: &'static str, value: &str) {
+    if value.trim().is_empty() {
+        return;
+    }
     let (path, raw) = {
-        let m = shared.lock().unwrap();
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
     };
     let Some(path) = path else {
         return;
     };
-    if rustmotion::loader::is_html_path(&path) {
-        if let Ok(html) = std::fs::read_to_string(&path) {
-            if let Some(updated) = rustmotion::loader::set_html_text_content(&html, pointer, text) {
-                let _ = std::fs::write(&path, updated);
-            }
-        }
-    } else if let Some(updated) = set_field(raw, pointer, "content", text) {
-        if let Ok(s) = serde_json::to_string_pretty(&updated) {
-            let _ = std::fs::write(&path, s);
-        }
-    }
+    let debounce = consume_context::<WriteDebounce>();
+    schedule_write(
+        &debounce,
+        shared.clone(),
+        WritePayload::Prop {
+            path,
+            raw,
+            pointer: pointer.to_string(),
+            prop,
+            value: value.to_string(),
+        },
+    );
+}
+
+/// Write the element's text `content` back to the scenario file. Unlike
+/// [`write_prop`], an empty value is allowed (clearing the text is valid).
+/// Schedules a debounced write (~250 ms); errors are surfaced in the topbar.
+fn write_content(shared: &Shared, pointer: &str, text: &str) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (m.path.clone(), m.raw.clone())
+    };
+    let Some(path) = path else {
+        return;
+    };
+    let debounce = consume_context::<WriteDebounce>();
+    schedule_write(
+        &debounce,
+        shared.clone(),
+        WritePayload::Content {
+            path,
+            raw,
+            pointer: pointer.to_string(),
+            text: text.to_string(),
+        },
+    );
 }

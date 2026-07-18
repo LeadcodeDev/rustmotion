@@ -8,6 +8,11 @@ use crate::{
     scenario::{append_annotation, remove_annotation, Shared},
 };
 
+/// Write `content` to `path`, returning a user-facing error string on failure.
+fn write_file(path: &std::path::Path, content: &str) -> Result<(), String> {
+    std::fs::write(path, content).map_err(|e| format!("write: {e}"))
+}
+
 /// The left-hand "Comments" panel: lists the scenario's annotations, with
 /// per-comment "go to frame" and "delete" actions.
 #[component]
@@ -60,36 +65,58 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
     let shared = use_context::<Shared>();
     let mut note = use_signal(String::new);
 
-    let submit = move |_| {
-        let text = note();
-        if text.trim().is_empty() {
-            return;
-        }
-        let frame = current();
-        let (path, raw, view, scene) = {
-            let m = shared.lock().unwrap();
-            let (view, scene) = match m.tasks.get(frame as usize) {
-                Some(rustmotion::encode::video::FrameTask::Normal {
-                    view_idx,
-                    scene_idx,
-                    ..
-                }) => (*view_idx, *scene_idx),
-                _ => (0, 0),
+    let submit = {
+        let shared = shared.clone();
+        move |_| {
+            let text = note();
+            if text.trim().is_empty() {
+                return;
+            }
+            let frame = current();
+            let (path, raw, view, scene) = {
+                let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                let (view, scene) = match m.tasks.get(frame as usize) {
+                    Some(rustmotion::encode::video::FrameTask::Normal {
+                        view_idx,
+                        scene_idx,
+                        ..
+                    }) => (*view_idx, *scene_idx),
+                    _ => (0, 0),
+                };
+                (m.path.clone(), m.raw.clone(), view, scene)
             };
-            (m.path.clone(), m.raw.clone(), view, scene)
-        };
-        let ann = serde_json::json!({
-            "id": annotation_id(), "note": text, "status": "open", "frame": frame,
-            "view": view, "scene": scene,
-            "target": { "pointer": pointer, "kind": kind }
-        });
-        let raw = append_annotation(raw, ann);
-        // Annotations live in the scenario JSON; HTML sources have no place to
-        // store them, so skip the write rather than overwrite the HTML.
-        if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
-            if !rustmotion::loader::is_html_path(&path) {
-                let _ = std::fs::write(&path, t);
-                note.set(String::new());
+            let ann = serde_json::json!({
+                "id": annotation_id(), "note": text, "status": "open", "frame": frame,
+                "view": view, "scene": scene,
+                "target": { "pointer": pointer, "kind": kind }
+            });
+            let updated = append_annotation(raw, ann);
+            // Annotations live in the scenario JSON; HTML sources have no place to
+            // store them, so skip the write rather than overwrite the HTML.
+            if let Some(path) = path {
+                if !rustmotion::loader::is_html_path(&path) {
+                    match serde_json::to_string_pretty(&updated) {
+                        Ok(t) => {
+                            let write_result = write_file(&path, &t);
+                            let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            match write_result {
+                                Ok(()) => {
+                                    m.write_error = None;
+                                    note.set(String::new());
+                                }
+                                Err(e) => {
+                                    m.write_error = Some(e);
+                                    m.generation = m.generation.wrapping_add(1);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            m.write_error = Some(format!("json: {e}"));
+                            m.generation = m.generation.wrapping_add(1);
+                        }
+                    }
+                }
             }
         }
     };
@@ -118,13 +145,20 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
 /// Remove an annotation by id from the scenario file (the watcher reloads).
 fn delete_annotation(shared: &Shared, id: &str) {
     let (path, raw) = {
-        let m = shared.lock().unwrap();
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
     };
-    let raw = remove_annotation(raw, id);
-    if let (Some(path), Ok(t)) = (path, serde_json::to_string_pretty(&raw)) {
+    let updated = remove_annotation(raw, id);
+    if let Some(path) = path {
         if !rustmotion::loader::is_html_path(&path) {
-            let _ = std::fs::write(&path, t);
+            let write_result = serde_json::to_string_pretty(&updated)
+                .map_err(|e| format!("json: {e}"))
+                .and_then(|t| write_file(&path, &t));
+            if let Err(e) = write_result {
+                let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
+                m.write_error = Some(e);
+                m.generation = m.generation.wrapping_add(1);
+            }
         }
     }
 }

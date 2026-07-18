@@ -7,6 +7,8 @@ use crate::scenario::{Theme, View};
 /// The editor's top bar (open-slide style): a back-to-library control on the
 /// left, the centered document title, and the action cluster on the right
 /// (theme swap, Inspect overlay toggle, Comments panel toggle, and Present).
+/// `write_error` is `Some` when the last inspector write failed; shown as a
+/// discrete warning indicator using the `--rm-error` token.
 #[component]
 pub fn TopBar(
     view: Signal<View>,
@@ -16,6 +18,7 @@ pub fn TopBar(
     show_annotations: Signal<bool>,
     show_hits: Signal<bool>,
     comment_count: usize,
+    write_error: Option<String>,
 ) -> Element {
     let mut theme = use_context::<Signal<Theme>>();
     let inspecting = show_hits();
@@ -39,8 +42,15 @@ pub fn TopBar(
                 "{title}"
             }
 
-            // ── Right: actions ───────────────────────────────────────
+            // ── Right: write-error indicator + actions ───────────────
             div { style: "display:flex; align-items:center; gap:6px; z-index:1;",
+                if let Some(ref msg) = write_error {
+                    span {
+                        title: "{msg}",
+                        style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis;",
+                        "Changes not saved: {msg}"
+                    }
+                }
                 Button {
                     variant: ButtonVariant::Outline,
                     size: ButtonSize::IconSm,

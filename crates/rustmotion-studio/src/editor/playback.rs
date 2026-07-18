@@ -12,10 +12,20 @@ pub fn use_playback_clock(shared: Shared, mut current: Signal<u32>, playing: Sig
         let shared = shared.clone();
         async move {
             loop {
-                let fps = shared.lock().unwrap().scenario.video.fps.max(1);
+                let fps = shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .scenario
+                    .video
+                    .fps
+                    .max(1);
                 tokio::time::sleep(Duration::from_secs_f64(1.0 / fps as f64)).await;
                 if playing() {
-                    let total = shared.lock().unwrap().total_frames.max(1);
+                    let total = shared
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .total_frames
+                        .max(1);
                     let next = (current() + 1) % total;
                     current.set(next);
                 }
@@ -33,7 +43,7 @@ pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
             let mut last_gen = 0u64;
             loop {
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                let g = shared.lock().unwrap().generation;
+                let g = shared.lock().unwrap_or_else(|e| e.into_inner()).generation;
                 if g != last_gen {
                     last_gen = g;
                     rev.set(rev() + 1);
