@@ -119,7 +119,20 @@ pub fn AnnotationBox(pointer: String, kind: String, current: Signal<u32>) -> Ele
                 let updated = append_annotation(raw, ann);
                 match serde_json::to_string_pretty(&updated) {
                     Ok(t) => {
+                        // Pre-write state for the undo history (JSON annotation
+                        // writes rewrite the scenario file, so they must be in
+                        // the same linear history as inspector edits).
+                        let snapshot = std::fs::read_to_string(&path).ok();
                         let write_result = write_file(&path, &t);
+                        if write_result.is_ok() {
+                            if let Some(s) = snapshot {
+                                crate::scenario::record_edit(
+                                    &crate::scenario::history_slot(),
+                                    &path,
+                                    s,
+                                );
+                            }
+                        }
                         let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
                         match write_result {
                             Ok(()) => {
@@ -190,13 +203,23 @@ fn delete_annotation(shared: &Shared, id: &str) {
         }
     } else {
         let updated = remove_annotation(raw, id);
+        // Pre-write state for the undo history (same linear history as
+        // inspector edits — this rewrites the scenario file).
+        let snapshot = std::fs::read_to_string(&path).ok();
         let write_result = serde_json::to_string_pretty(&updated)
             .map_err(|e| format!("json: {e}"))
             .and_then(|t| write_file(&path, &t));
-        if let Err(e) = write_result {
-            let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
-            m.write_error = Some(e);
-            m.generation = m.generation.wrapping_add(1);
+        match write_result {
+            Ok(()) => {
+                if let Some(s) = snapshot {
+                    crate::scenario::record_edit(&crate::scenario::history_slot(), &path, s);
+                }
+            }
+            Err(e) => {
+                let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
+                m.write_error = Some(e);
+                m.generation = m.generation.wrapping_add(1);
+            }
         }
     }
 }

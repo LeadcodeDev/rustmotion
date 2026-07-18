@@ -3,7 +3,9 @@ use dioxus::desktop::{
 };
 use dioxus::prelude::*;
 
-use crate::scenario::{list_annotations, read_field, read_style_object, Shared, View};
+use crate::scenario::{
+    history_slot, list_annotations, read_field, read_style_object, redo, undo, Shared, View,
+};
 
 use super::annotations::AnnotationsPanel;
 use super::frames::{frame_hits, render_frame, scene_prefix, HitPct};
@@ -142,8 +144,42 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let panel = inspector();
     let panel_w = if panel.is_some() { "300px" } else { "0px" };
 
+    // Undo/redo keyboard shortcuts: the root div is focusable (and focused on
+    // mount) so Cmd+Z / Shift+Cmd+Z (Ctrl on non-mac) reach it — key events in
+    // the subtree bubble up to it. The inspector slot stops keydown propagation
+    // so text fields keep their native editing undo.
+    let history = use_hook(history_slot);
+    let on_shortcut = {
+        let shared = shared.clone();
+        let history = history.clone();
+        move |evt: KeyboardEvent| {
+            let mods = evt.modifiers();
+            if !(mods.meta() || mods.ctrl()) {
+                return;
+            }
+            let is_z = matches!(evt.key(), Key::Character(ref c) if c.eq_ignore_ascii_case("z"));
+            if !is_z {
+                return;
+            }
+            evt.prevent_default();
+            if mods.shift() {
+                redo(&shared, &history);
+            } else {
+                undo(&shared, &history);
+            }
+        }
+    };
+
     rsx! {
-        div { style: "margin:0; background:var(--rm-bg); height:100vh; overflow:hidden; color:var(--rm-text); font:13px -apple-system,sans-serif; display:flex; flex-direction:column;",
+        div {
+            style: "margin:0; background:var(--rm-bg); height:100vh; overflow:hidden; color:var(--rm-text); font:13px -apple-system,sans-serif; display:flex; flex-direction:column; outline:none;",
+            tabindex: "0",
+            onmounted: move |evt| {
+                spawn(async move {
+                    let _ = evt.set_focus(true).await;
+                });
+            },
+            onkeydown: on_shortcut,
             TopBar {
                 view,
                 title,
@@ -159,7 +195,11 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                     Canvas { current, rev, show_hits, selected }
                     PlaybackBar { current, playing, total }
                 }
-                div { style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
+                div {
+                    style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
+                    // Keep Cmd+Z inside inspector inputs/textareas native
+                    // (text-field undo), not intercepted by the editor.
+                    onkeydown: move |evt: KeyboardEvent| evt.stop_propagation(),
                     if let Some((pointer, style, kind, content)) = panel {
                         InspectorPanel { selected, pointer, kind, current, content, style }
                     }
