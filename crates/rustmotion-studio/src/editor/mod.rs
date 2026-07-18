@@ -2,6 +2,7 @@
 //! inspector, and the comments/annotations panel.
 
 mod annotations;
+mod export;
 pub mod frames;
 mod inspector;
 mod playback;

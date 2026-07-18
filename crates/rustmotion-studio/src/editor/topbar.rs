@@ -1,14 +1,18 @@
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{ChevronLeft, Eye, MessageSquare, Monitor, Moon, Play, Sun};
+use dioxus_icons::lucide::{ChevronLeft, Download, Eye, MessageSquare, Monitor, Moon, Play, Sun};
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::scenario::{Theme, View};
+use crate::scenario::{Shared, Theme, View};
+
+use super::export::{export_label, export_slot, start_export, use_export_poll, ExportStatus};
 
 /// The editor's top bar (open-slide style): a back-to-library control on the
 /// left, the centered document title, and the action cluster on the right
-/// (theme swap, Inspect overlay toggle, Comments panel toggle, and Present).
-/// `write_error` is `Some` when the last inspector write failed; shown as a
-/// discrete warning indicator using the `--rm-error` token.
+/// (theme swap, Inspect overlay toggle, Comments panel toggle, Export, and
+/// Present). `write_error` is `Some` when the last inspector write failed;
+/// shown as a discrete warning indicator using the `--rm-error` token. The
+/// export state (slot + polling) lives here too — the topbar is its only
+/// consumer.
 #[component]
 pub fn TopBar(
     view: Signal<View>,
@@ -20,10 +24,19 @@ pub fn TopBar(
     comment_count: usize,
     write_error: Option<String>,
 ) -> Element {
+    let shared = use_context::<Shared>();
     let mut theme = use_context::<Signal<Theme>>();
     let inspecting = show_hits();
     let commenting = show_annotations();
     let current_theme = theme();
+
+    // Export state: the cross-thread slot the encode thread writes, and the
+    // polled signal that drives the button label / status text.
+    let export = use_hook(export_slot);
+    let mut export_status = use_signal(|| ExportStatus::Idle);
+    use_export_poll(export.clone(), export_status);
+    let status = export_status();
+    let exporting = status.is_running();
 
     rsx! {
         div { style: "position:relative; display:flex; align-items:center; justify-content:space-between; height:40px; padding:0 12px; border-bottom:1px solid var(--rm-border); background:var(--rm-surface-2); flex:none;",
@@ -42,7 +55,7 @@ pub fn TopBar(
                 "{title}"
             }
 
-            // ── Right: write-error indicator + actions ───────────────
+            // ── Right: indicators + actions ──────────────────────────
             div { style: "display:flex; align-items:center; gap:6px; z-index:1;",
                 if let Some(ref msg) = write_error {
                     span {
@@ -50,6 +63,23 @@ pub fn TopBar(
                         style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis;",
                         "Changes not saved: {msg}"
                     }
+                }
+                match &status {
+                    ExportStatus::Done(path) => rsx! {
+                        span {
+                            title: "{path.display()}",
+                            style: "color:var(--rm-text-muted); font-size:11px; white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis;",
+                            "Exported: {path.display()}"
+                        }
+                    },
+                    ExportStatus::Failed(reason) => rsx! {
+                        span {
+                            title: "{reason}",
+                            style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis;",
+                            "Export failed: {reason}"
+                        }
+                    },
+                    _ => rsx! {},
                 }
                 Button {
                     variant: ButtonVariant::Outline,
@@ -80,6 +110,28 @@ pub fn TopBar(
                             "{comment_count}"
                         }
                     }
+                }
+                Button {
+                    variant: ButtonVariant::Secondary,
+                    size: ButtonSize::Sm,
+                    disabled: exporting,
+                    onclick: {
+                        let shared = shared.clone();
+                        let export = export.clone();
+                        move |_| {
+                            if !exporting {
+                                start_export(&shared, &export);
+                                // Instant feedback; the poll refines it within 150 ms.
+                                export_status.set(ExportStatus::Running {
+                                    phase: "Rendering",
+                                    done: 0,
+                                    total: 0,
+                                });
+                            }
+                        }
+                    },
+                    Download { size: 14 }
+                    "{export_label(&status)}"
                 }
                 Button {
                     variant: ButtonVariant::Primary,
