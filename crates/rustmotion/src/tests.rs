@@ -97,6 +97,38 @@ mod component_smoke {
             "positioned",
             r#"{"type":"positioned","children":[{"type":"text","content":"hi","x":0,"y":0}]}"#,
         ),
+        // Media & diagram components (minimal required fields)
+        ("image", r#"{"type":"image","src":"a.png"}"#),
+        ("video", r#"{"type":"video","src":"a.mp4"}"#),
+        ("gif", r#"{"type":"gif","src":"a.gif"}"#),
+        (
+            "caption",
+            r#"{"type":"caption","words":[{"text":"hi","start":0.0,"end":1.0}]}"#,
+        ),
+        (
+            "connector",
+            r#"{"type":"connector","from":{"x":0,"y":0},"to":{"x":10,"y":10}}"#,
+        ),
+        ("avatar", r#"{"type":"avatar","src":"a.png"}"#),
+        (
+            "avatar_group",
+            r#"{"type":"avatar_group","avatars":[{"src":"a.png"}]}"#,
+        ),
+        ("arrow", r#"{"type":"arrow","x2":10,"y2":10}"#),
+        ("comparison", r#"{"type":"comparison"}"#),
+        (
+            "dot_map",
+            r#"{"type":"dot_map","points":[{"lat":48.8,"lng":2.3}]}"#,
+        ),
+        ("line", r#"{"type":"line","x2":10,"y2":10}"#),
+        ("lottie", r#"{"type":"lottie"}"#),
+        (
+            "mockup",
+            r#"{"type":"mockup","device":"browser","src":"a.png"}"#,
+        ),
+        ("notification", r#"{"type":"notification","title":"Hi"}"#),
+        ("pill_nav", r#"{"type":"pill_nav","items":["A","B"]}"#),
+        ("tooltip", r#"{"type":"tooltip","text":"hi"}"#),
     ];
 
     #[test]
@@ -115,6 +147,116 @@ mod component_smoke {
                 failures.join("\n")
             );
         }
+    }
+
+    /// Input-only `type` aliases and the canonical tag they must serialize to.
+    const COMPONENT_ALIASES: &[(&str, &str)] =
+        &[("container", "div"), ("progress_bar", "progress")];
+
+    #[test]
+    fn all_components_serde_round_trip() {
+        // deserialize → serialize → deserialize → serialize: the canonical
+        // form must itself deserialize and re-serialize identically. Locks
+        // tags, aliases and field names against silent schema drift (the
+        // `container` alias was once lost by a bare rename to `div`).
+        let mut failures = Vec::new();
+        for (name, json) in COMPONENT_JSONS {
+            let parsed: Component = match serde_json::from_str(json) {
+                Ok(c) => c,
+                Err(e) => {
+                    failures.push(format!("{name}: does not deserialize: {e}"));
+                    continue;
+                }
+            };
+            let canonical = match serde_json::to_value(&parsed) {
+                Ok(v) => v,
+                Err(e) => {
+                    failures.push(format!("{name}: does not serialize: {e}"));
+                    continue;
+                }
+            };
+            match serde_json::from_value::<Component>(canonical.clone()) {
+                Ok(reparsed) => {
+                    let again = serde_json::to_value(&reparsed).unwrap();
+                    if canonical != again {
+                        failures.push(format!("{name}: unstable serialization"));
+                    }
+                }
+                Err(e) => {
+                    failures.push(format!("{name}: canonical form does not deserialize: {e}"));
+                }
+            }
+        }
+        if !failures.is_empty() {
+            panic!(
+                "{} component(s) fail serde round-trip:\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn component_aliases_map_to_canonical_tags() {
+        for (alias, canonical) in COMPONENT_ALIASES {
+            let (_, json) = COMPONENT_JSONS
+                .iter()
+                .find(|(n, _)| n == canonical || n == alias)
+                .unwrap_or_else(|| panic!("no corpus entry for {canonical}"));
+            let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+            value["type"] = serde_json::Value::String(alias.to_string());
+            let parsed: Component = serde_json::from_value(value)
+                .unwrap_or_else(|e| panic!("alias {alias} does not deserialize: {e}"));
+            let tag = serde_json::to_value(&parsed).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                &tag, canonical,
+                "alias {alias} must serialize to canonical tag {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_covers_every_component_tag() {
+        // Every `type` tag advertised by the generated JSON schema must have
+        // a corpus entry, so the deserialize/round-trip tests above cannot
+        // silently lose coverage when a component is added.
+        let schema = serde_json::to_value(schemars::schema_for!(Component)).unwrap();
+        let one_of = schema["oneOf"]
+            .as_array()
+            .expect("Component schema should be a oneOf over tagged variants");
+        let schema_tags: Vec<String> = one_of
+            .iter()
+            .filter_map(|v| v["properties"]["type"]["enum"][0].as_str())
+            .map(str::to_string)
+            .collect();
+        assert!(
+            !schema_tags.is_empty(),
+            "no tags extracted from schema — schemars layout changed?"
+        );
+
+        let covered: std::collections::HashSet<String> = COMPONENT_JSONS
+            .iter()
+            .map(|(name, json)| {
+                let parsed: Component =
+                    serde_json::from_str(json).unwrap_or_else(|e| panic!("{name}: {e}"));
+                serde_json::to_value(&parsed).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+
+        let missing: Vec<&String> = schema_tags
+            .iter()
+            .filter(|t| !covered.contains(*t))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "component tags with no minimal-JSON corpus entry: {missing:?}"
+        );
     }
 
     #[test]
