@@ -4,15 +4,15 @@ use super::Codeblock;
 
 /// Computed dimensions for a code block
 #[allow(dead_code)]
-pub(super) struct CodeDimensions {
-    pub(super) line_count: usize,
-    pub(super) max_line_width: f32,
-    pub(super) gutter_width: f32,
-    pub(super) total_width: f32,
-    pub(super) total_height: f32,
+pub(crate) struct CodeDimensions {
+    pub(crate) line_count: usize,
+    pub(crate) max_line_width: f32,
+    pub(crate) gutter_width: f32,
+    pub(crate) total_width: f32,
+    pub(crate) total_height: f32,
 }
 
-pub(super) fn compute_code_dimensions(
+pub(crate) fn compute_code_dimensions(
     code: &str,
     font: &Font,
     padding: (f32, f32, f32, f32),

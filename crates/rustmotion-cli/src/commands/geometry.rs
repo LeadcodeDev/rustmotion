@@ -859,7 +859,9 @@ mod tests {
     #[test]
     fn auto_scroll_disabled_codeblock_overflows() {
         // 20 lines × 14 px × 1.5 line-height + chrome + padding ≈ 487 px.
-        // Box height capped at 200 → AutoScrollDisabledOverflow.
+        // Box height capped at 200 via style.height → AutoScrollDisabledOverflow.
+        // Note: "size" is a legacy field silently ignored by the schema; use
+        // style.height to actually constrain the box in the layout pass.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -868,7 +870,7 @@ mod tests {
                     "type": "codeblock",
                     "code": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20",
                     "auto_scroll": false,
-                    "size": { "width": 800, "height": 200 },
+                    "style": { "width": "800px", "height": "200px" },
                     "x": 100, "y": 100
                 }]
             }]
