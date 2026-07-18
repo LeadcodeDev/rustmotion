@@ -35,18 +35,26 @@ pub fn encode_with_ffmpeg(
         return Err(RustmotionError::NoFrames);
     }
 
-    // Process audio
+    // Process audio — merge scenario.audio with tracks extracted from embedded
+    // video components.
     let total_duration = total_frames as f64 / fps as f64;
-    let audio_tmp_dir = if !scenario.audio.is_empty() {
+    let video_tracks = super::super::video_audio::collect_video_audio_tracks(scenario);
+    let merged_audio: Vec<crate::schema::AudioTrack> = {
+        let mut all = scenario.audio.clone();
+        all.extend(video_tracks);
+        all
+    };
+
+    let audio_tmp_dir = if !merged_audio.is_empty() {
         Some(std::env::temp_dir().join(format!("rustmotion_audio_{}", std::process::id())))
     } else {
         None
     };
-    let pcm_data = if !scenario.audio.is_empty() {
+    let pcm_data = if !merged_audio.is_empty() {
         if let Some(ref tmp_dir) = audio_tmp_dir {
             std::fs::create_dir_all(tmp_dir)?;
         }
-        super::super::audio::mix_audio_tracks(&scenario.audio, total_duration)?
+        super::super::audio::mix_audio_tracks(&merged_audio, total_duration)?
     } else {
         None
     };
