@@ -82,6 +82,29 @@ pub enum AnimationEffect {
 }
 
 impl AnimationEffect {
+    /// Shift the effect's start delay by `by` seconds. Used by `timeline`
+    /// steps, whose animations run relative to the step's `at`. Continuous
+    /// effects without a delay concept (glow, wiggle, orbit, motion blur)
+    /// are unaffected.
+    pub fn shift_delay(&mut self, by: f64) {
+        use AnimationEffect::*;
+        match self {
+            FadeIn(t) | FadeInUp(t) | FadeInDown(t) | FadeInLeft(t) | FadeInRight(t)
+            | SlideInLeft(t) | SlideInRight(t) | SlideInUp(t) | SlideInDown(t) | ScaleIn(t)
+            | BounceIn(t) | BlurIn(t) | RotateIn(t) | ElasticIn(t) | FadeOut(t) | FadeOutUp(t)
+            | FadeOutDown(t) | SlideOutLeft(t) | SlideOutRight(t) | SlideOutUp(t)
+            | SlideOutDown(t) | ScaleOut(t) | BounceOut(t) | BlurOut(t) | RotateOut(t)
+            | Pulse(t) | Float(t) | Shake(t) | Spin(t) | FlipInX(t) | FlipInY(t) | FlipOutX(t)
+            | FlipOutY(t) | DrawIn(t) | StrokeReveal(t) | Typewriter(t) | WipeLeft(t)
+            | WipeRight(t) | Float3d(t) => t.delay += by,
+            TiltIn(c) => c.delay += by,
+            CharScaleIn(c) | CharFadeIn(c) | CharWave(c) | CharBounce(c) | CharRotateIn(c)
+            | CharSlideUp(c) => c.delay += by,
+            Keyframes(c) => c.delay += by,
+            Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) => {}
+        }
+    }
+
     /// If this is a preset variant, return the corresponding AnimationPreset and timing.
     pub fn as_preset(&self) -> Option<(AnimationPreset, &AnimationTiming)> {
         match self {

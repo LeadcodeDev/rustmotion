@@ -4,7 +4,8 @@ use skia_safe::Canvas;
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::traits::{PaintCtx, Painter};
+use rustmotion_core::schema::TimelineStep;
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 use crate::ChildComponent;
 
@@ -16,9 +17,15 @@ pub struct Positioned {
     pub children: Vec<ChildComponent>,
     #[serde(default)]
     pub style: CssStyle,
+    #[serde(flatten)]
+    pub timing: TimingConfig,
+    #[serde(default)]
+    pub timeline: Vec<TimelineStep>,
 }
 
 rustmotion_core::impl_traits!(Positioned {
+    Animatable => animation,
+    Timed => timing,
     Styled => style,
 });
 

@@ -538,6 +538,77 @@ mod component_smoke {
         );
     }
 
+    /// Build a one-child scene with a red 100x80 rect carrying `extra` fields
+    /// merged into the component JSON, absolutely positioned at (60, 40).
+    fn red_rect_scene(extra: serde_json::Value) -> Vec<crate::components::ChildComponent> {
+        let mut json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "fill": "#ff3366",
+            "style": { "width": "100px", "height": "80px" }
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            json[k] = v.clone();
+        }
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        vec![crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }]
+    }
+
+    fn red_sum(buf: &[u8]) -> u64 {
+        buf.chunks_exact(4).map(|p| p[0] as u64).sum()
+    }
+
+    #[test]
+    fn start_at_hides_component_before_its_window() {
+        // start_at gates *visibility* in the paint pass: nothing painted
+        // before the window opens, normal paint after. It was silently
+        // ignored by the box pipeline before this test existed.
+        let scene = red_rect_scene(serde_json::json!({ "start_at": 2.0 }));
+        let before = render_new_at(&scene, 400, 300, 1.0, 4.0);
+        let after = render_new_at(&scene, 400, 300, 3.0, 4.0);
+        assert_eq!(
+            red_sum(&before),
+            0,
+            "component painted before its start_at window"
+        );
+        assert!(red_sum(&after) > 0, "component absent after start_at");
+    }
+
+    #[test]
+    fn end_at_hides_component_after_its_window() {
+        let scene = red_rect_scene(serde_json::json!({ "end_at": 2.0 }));
+        let before = render_new_at(&scene, 400, 300, 1.0, 4.0);
+        let after = render_new_at(&scene, 400, 300, 3.0, 4.0);
+        assert!(red_sum(&before) > 0, "component absent before end_at");
+        assert_eq!(
+            red_sum(&after),
+            0,
+            "component painted after its end_at window"
+        );
+    }
+
+    #[test]
+    fn timeline_steps_trigger_delayed_animations() {
+        // A timeline step resolves as its animations with `delay += at`:
+        // fade_in(1s) at t=2 must be ~5% opaque at t=2.05 and ~95% at t=2.95.
+        let scene = red_rect_scene(serde_json::json!({
+            "timeline": [{ "at": 2.0, "animation": [{ "name": "fade_in", "duration": 1.0 }] }]
+        }));
+        let early = render_new_at(&scene, 400, 300, 2.05, 4.0);
+        let late = render_new_at(&scene, 400, 300, 2.95, 4.0);
+        let (early_red, late_red) = (red_sum(&early), red_sum(&late));
+        assert!(
+            late_red > early_red * 3,
+            "timeline fade_in did not amplify red over its window (early={early_red}, late={late_red})"
+        );
+    }
+
     /// X centroid of lit pixels, weighted by red intensity.
     /// Returns None when no pixels are lit.
     fn red_centroid_x(buf: &[u8], width: u32) -> Option<f64> {

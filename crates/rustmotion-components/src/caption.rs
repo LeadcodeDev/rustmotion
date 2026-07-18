@@ -9,7 +9,7 @@ use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
 };
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
-use rustmotion_core::traits::{PaintCtx, Painter};
+use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Caption {
@@ -22,6 +22,8 @@ pub struct Caption {
     pub max_width: Option<f32>,
     #[serde(default)]
     pub style: CssStyle,
+    #[serde(flatten)]
+    pub timing: TimingConfig,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
@@ -30,6 +32,7 @@ pub struct Caption {
 
 rustmotion_core::impl_traits!(Caption {
     Animatable => animation,
+    Timed => timing,
     Styled => style,
 });
 

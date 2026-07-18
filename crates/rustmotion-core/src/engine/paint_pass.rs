@@ -155,6 +155,13 @@ struct PaintContext<'a> {
 }
 
 fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
+    // Visibility window (start_at/end_at): the node keeps its layout space
+    // but paints nothing — subtree included — outside the window.
+    if let Some(window) = &node.window {
+        if !window.contains(ctx.frame.time) {
+            return;
+        }
+    }
     let Some(box_layout) = ctx.layout.get(node.id) else {
         return;
     };
@@ -923,6 +930,7 @@ mod hit_tests {
             children: vec![],
             intrinsic: None,
             source_path: None,
+            window: None,
         };
         let mut root = BoxNode {
             id: 0,
@@ -937,6 +945,7 @@ mod hit_tests {
             children: vec![leaf],
             intrinsic: None,
             source_path: None,
+            window: None,
         };
         root.assign_ids(0);
 
@@ -982,6 +991,7 @@ mod hit_tests {
             children: vec![],
             intrinsic: None,
             source_path: None,
+            window: None,
         };
         let mut root = BoxNode {
             id: 0,
@@ -996,6 +1006,7 @@ mod hit_tests {
             children: vec![leaf],
             intrinsic: None,
             source_path: None,
+            window: None,
         };
         root.assign_ids(0);
 
