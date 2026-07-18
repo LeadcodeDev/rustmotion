@@ -59,8 +59,14 @@ pub enum HtmlError {
     InvalidAnimDsl(String),
     #[error("transition-duration and transition-easing require a transition attribute")]
     TransitionParamsWithoutTransition,
-    #[error("<font> requires both family and path (or src) attributes")]
+    /// Emitted when `<font>` has neither `path`/`src` nor `source`.
+    #[error(
+        "<font> requires either 'path'/'src' (local file) or 'source' (e.g. source=\"google\")"
+    )]
     MissingFontAttributes,
+    /// Emitted when `<font>` sets both `path`/`src` and `source` — they are mutually exclusive.
+    #[error("<font family=\"{family}\">: 'path'/'src' and 'source' are mutually exclusive")]
+    FontPathAndSourceConflict { family: String },
 }
 
 /// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
@@ -112,18 +118,48 @@ pub(crate) fn parse_background_attr(raw: &str) -> Result<Value, HtmlError> {
     }
 }
 
-/// Map a `<font>` element to a `{"family": ..., "path": ...}` JSON object.
+/// Map a `<font>` element to a FontEntry JSON object.
+///
+/// Two modes:
+/// - **Local**: `<font family="Inter" path="fonts/Inter.ttf">` or `src=` alias.
+/// - **Google Fonts**: `<font family="Inter" source="google" weights="400,700">`.
+///
+/// `path`/`src` and `source` are mutually exclusive — an error is returned if
+/// both are present.
 fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     let attrs = element_attrs(handle);
     let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
 
     let family = get("family").ok_or(HtmlError::MissingFontAttributes)?;
-    // Accept both `path` and `src` attribute names.
-    let path = get("path")
-        .or_else(|| get("src"))
-        .ok_or(HtmlError::MissingFontAttributes)?;
+    let path = get("path").or_else(|| get("src"));
+    let source = get("source");
 
-    Ok(serde_json::json!({ "family": family, "path": path }))
+    match (path, source) {
+        // Conflict: both local path and remote source set.
+        (Some(_), Some(_)) => Err(HtmlError::FontPathAndSourceConflict { family }),
+
+        // Google Fonts mode.
+        (None, Some(source_val)) => {
+            let mut obj = serde_json::json!({ "family": family, "source": source_val });
+            // Parse optional weights="400,700" CSV into a JSON array of integers.
+            if let Some(weights_raw) = get("weights") {
+                let parsed: Vec<u16> = weights_raw
+                    .split(',')
+                    .filter_map(|w| w.trim().parse::<u16>().ok())
+                    .collect();
+                if !parsed.is_empty() {
+                    obj["weights"] = Value::Array(parsed.into_iter().map(Value::from).collect());
+                }
+            }
+            Ok(obj)
+        }
+
+        // Local file mode.
+        (Some(p), None) => Ok(serde_json::json!({ "family": family, "path": p })),
+
+        // Neither path nor source.
+        (None, None) => Err(HtmlError::MissingFontAttributes),
+    }
 }
 
 /// Walk the immediate children of `parent`, collecting `<scene>` and `<font>`
@@ -492,6 +528,62 @@ mod lib_tests {
         assert!(
             v.get("fonts").is_none(),
             "fonts key should be absent when no fonts declared"
+        );
+    }
+
+    // --- Google Fonts HTML tests ---
+
+    #[test]
+    fn font_with_source_google_transpiles_correctly() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter" source="google">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let v = crate::html_to_scenario_value(html).unwrap();
+        let fonts = &v["fonts"];
+        assert_eq!(fonts[0]["family"], json!("Inter"));
+        assert_eq!(fonts[0]["source"], json!("google"));
+        assert!(
+            fonts[0].get("path").is_none(),
+            "path must be absent for google source"
+        );
+    }
+
+    #[test]
+    fn font_with_source_google_and_weights_transpiles_correctly() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter" source="google" weights="400,700">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let v = crate::html_to_scenario_value(html).unwrap();
+        let fonts = &v["fonts"];
+        assert_eq!(fonts[0]["source"], json!("google"));
+        assert_eq!(fonts[0]["weights"], json!([400, 700]));
+    }
+
+    #[test]
+    fn font_with_path_and_source_is_error() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter" path="fonts/Inter.ttf" source="google">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::FontPathAndSourceConflict { .. }),
+            "expected FontPathAndSourceConflict, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn font_with_src_and_source_is_error() {
+        let html = r##"<rustmotion width="1920" height="1080">
+            <font family="Inter" src="fonts/Inter.ttf" source="google">
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::FontPathAndSourceConflict { .. }),
+            "expected FontPathAndSourceConflict, got: {err:?}"
         );
     }
 

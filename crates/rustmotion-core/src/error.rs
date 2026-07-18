@@ -69,6 +69,41 @@ pub enum RustmotionError {
     #[error("No fonts available on this system")]
     FontNotFound,
 
+    // --- Google Fonts ---
+    #[error(
+        "FontEntry for '{family}' has source=\"google\" but also sets 'path' — use one or the other"
+    )]
+    FontSourceAndPathConflict { family: String },
+
+    #[error(
+        "FontEntry for '{family}' requires either 'path' (local file) or 'source' (e.g. \"google\")"
+    )]
+    FontMissingPath { family: String },
+
+    #[error(
+        "Google Fonts: failed to fetch CSS for '{family}' (url: {url}): {reason}\n\
+         Tip: if you are offline, manually place a TTF for each weight at:\n  {cache_hint}"
+    )]
+    GoogleFontsFetch {
+        family: String,
+        url: String,
+        reason: String,
+        cache_hint: String,
+    },
+
+    #[error(
+        "Google Fonts: no font URLs found in CSS response for '{family}' — \
+         the family name may be misspelled or unavailable"
+    )]
+    GoogleFontsNoUrls { family: String },
+
+    #[error("Google Fonts: failed to download TTF for '{family}' weight {weight}: {reason}")]
+    GoogleFontsTtfFetch {
+        family: String,
+        weight: u16,
+        reason: String,
+    },
+
     // --- Include system ---
     #[error("Include depth limit ({limit}) exceeded while resolving '{path}'")]
     IncludeDepthExceeded { limit: u8, path: String },
