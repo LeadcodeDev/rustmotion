@@ -94,9 +94,15 @@ pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
                 source: e,
             })?;
             // HTML input is transpiled to the scenario JSON first, then validated
-            // through the identical JSON pipeline below.
+            // through the identical JSON pipeline below. Sidecar annotations
+            // are merged so validate/render see the same scenario as the
+            // studio and `load_input`.
             let s = if rustmotion::loader::is_html_path(path) {
-                let value = rustmotion::loader::html_to_scenario_json(&s)?;
+                let mut value = rustmotion::loader::html_to_scenario_json(&s)?;
+                let annotations = rustmotion::loader::load_html_annotations_sidecar(path)?;
+                if !annotations.is_empty() {
+                    value["annotations"] = serde_json::Value::Array(annotations);
+                }
                 serde_json::to_string(&value).map_err(RustmotionError::from)?
             } else {
                 s
