@@ -86,7 +86,7 @@ pub fn run_preview_root(
         if let Some(p) = input_path.clone() {
             let _ = tx.send(WatchMsg::Retarget(p));
         }
-        library.lock().unwrap().watch_tx = Some(tx);
+        library.lock().unwrap_or_else(|e| e.into_inner()).watch_tx = Some(tx);
     }
 
     dioxus::LaunchBuilder::desktop()
@@ -129,13 +129,14 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                 }
                 WatchMsg::Changed => {
                     if let Some(p) = current.clone() {
-                        if let Ok(scenario) = rustmotion::loader::load_input(&p) {
-                            if let Ok(mut m) = shared.lock() {
-                                let g = m.generation.wrapping_add(1);
-                                *m = StudioModel::new(scenario, None, Some(p.clone()));
-                                m.generation = g;
-                            }
-                        }
+                        let (scenario, error) = match rustmotion::loader::load_input(&p) {
+                            Ok(s) => (s, None),
+                            Err(e) => (crate::scenario::empty_scenario(), Some(e.to_string())),
+                        };
+                        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        let g = m.generation.wrapping_add(1);
+                        *m = StudioModel::new(scenario, error, Some(p.clone()));
+                        m.generation = g;
                     }
                 }
             }

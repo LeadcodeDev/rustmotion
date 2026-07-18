@@ -39,6 +39,10 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let show_hits = use_signal(|| true);
 
     // Asset handler: GET /frame/{idx} -> JPEG of that frame.
+    //
+    // Safety note: we clone the data we need *before* dropping the lock, then
+    // render *outside* the lock so a Skia panic cannot poison the Mutex and
+    // kill the session for all future requests.
     let handler_shared = shared.clone();
     use_asset_handler(
         "frame",
@@ -50,27 +54,47 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                 .and_then(|s| s.split('?').next())
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            let jpeg = {
-                let m = handler_shared.lock().unwrap();
-                render_frame(&m.scenario, &m.tasks, idx, 1.0)
+
+            // Render inside the lock but wrapped in `catch_unwind` so a Skia
+            // panic converts to an error instead of poisoning the Mutex.
+            // `catch_unwind` converts the panic to `Err`; the MutexGuard then
+            // drops normally (no unwind ⟹ no poison).
+            let result = {
+                let m = handler_shared.lock().unwrap_or_else(|e| e.into_inner());
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_frame(&m.scenario, &m.tasks, idx, 1.0)
+                }))
             };
-            responder.respond(
-                Response::builder()
-                    .header("Content-Type", "image/jpeg")
-                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
-                    .header("Pragma", "no-cache")
-                    .header("Expires", "0")
-                    .body(jpeg)
-                    .unwrap(),
-            );
+            match result {
+                Ok(jpeg) => {
+                    responder.respond(
+                        Response::builder()
+                            .header("Content-Type", "image/jpeg")
+                            .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                            .header("Pragma", "no-cache")
+                            .header("Expires", "0")
+                            .body(jpeg)
+                            .unwrap(),
+                    );
+                }
+                Err(_) => {
+                    responder.respond(
+                        Response::builder()
+                            .status(500)
+                            .header("Content-Type", "text/plain")
+                            .body(b"render error".to_vec())
+                            .unwrap(),
+                    );
+                }
+            }
         },
     );
 
     use_playback_clock(shared.clone(), current, playing);
     use_hot_reload(shared.clone(), rev);
 
-    let (total, err, title, annotations) = {
-        let m = shared.lock().unwrap();
+    let (total, err, write_err, title, annotations) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         let title = m
             .path
             .as_ref()
@@ -81,6 +105,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
         (
             m.total_frames,
             m.error.clone(),
+            m.write_error.clone(),
             title,
             list_annotations(&m.raw),
         )
@@ -96,7 +121,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let inspector_shared = shared.clone();
     let inspector = use_memo(move || {
         selected().map(|(_, pointer, kind)| {
-            let m = inspector_shared.lock().unwrap();
+            let m = inspector_shared.lock().unwrap_or_else(|e| e.into_inner());
             let style = read_style_object(&m.raw, &pointer);
             let content = read_field(&m.raw, &pointer, "content");
             (pointer, style, kind, content)
@@ -127,6 +152,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                 show_annotations,
                 show_hits,
                 comment_count,
+                write_error: write_err,
             }
             div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
                 div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
@@ -159,7 +185,7 @@ fn Canvas(
 ) -> Element {
     let shared = use_context::<Shared>();
     let (max, vw, vh) = {
-        let m = shared.lock().unwrap();
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (
             m.total_frames.saturating_sub(1),
             m.scenario.video.width,
@@ -170,7 +196,7 @@ fn Canvas(
     let r = rev();
 
     let hits = if show_hits() {
-        let m = shared.lock().unwrap();
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         let prefix = scene_prefix(&m.raw, &m.tasks, cur);
         frame_hits(&m.scenario, &m.tasks, cur, &prefix)
     } else {

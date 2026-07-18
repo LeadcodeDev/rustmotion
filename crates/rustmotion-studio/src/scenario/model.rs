@@ -10,7 +10,11 @@ pub struct StudioModel {
     pub scenario: ResolvedScenario,
     pub tasks: Vec<FrameTask>,
     pub total_frames: u32,
+    /// Load/parse error surfaced as a full-screen banner in the editor.
     pub error: Option<String>,
+    /// Disk-write error surfaced as a topbar indicator. Cleared on the next
+    /// successful write or on model reload.
+    pub write_error: Option<String>,
     /// Bumped on every hot-reload so the UI can detect a change.
     pub generation: u64,
     /// Path to the scenario file (for inspector write-back).
@@ -47,6 +51,7 @@ impl StudioModel {
             tasks,
             total_frames,
             error,
+            write_error: None,
             generation: 0,
             path,
             raw,

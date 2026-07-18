@@ -119,7 +119,7 @@ pub fn StudioRoot() -> Element {
                 .unwrap_or(usize::MAX);
 
             let (cached, path) = {
-                let lib = thumb_lib.lock().unwrap();
+                let lib = thumb_lib.lock().unwrap_or_else(|e| e.into_inner());
                 let path = lib.path_at(i);
                 let cached = path.as_ref().and_then(|p| lib.thumb_cache.get(p).cloned());
                 (cached, path)
@@ -131,7 +131,11 @@ pub fn StudioRoot() -> Element {
                 match render_thumbnail(&p) {
                     Some(jpeg) => {
                         let arc = Arc::new(jpeg);
-                        thumb_lib.lock().unwrap().thumb_cache.insert(p, arc.clone());
+                        thumb_lib
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .thumb_cache
+                            .insert(p, arc.clone());
                         (*arc).clone()
                     }
                     None => Vec::new(),
