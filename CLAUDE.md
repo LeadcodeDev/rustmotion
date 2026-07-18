@@ -22,6 +22,7 @@ CLI :
 - `--fix` — auto-fix sûr (`wrap: true`, `auto_scroll: true`)
 - `--report r.json` — rapport JSON
 - `--strict-anim` — vérification frame par frame
+- `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
 - `--lenient` — warnings au lieu d'errors
 
 ## Encodage
@@ -137,7 +138,7 @@ crates/
 │
 ├── rustmotion-components/src/
 │   ├── lib.rs                  # Enum Component + dispatch (as_painter, as_animatable, etc.)
-│   ├── box_builder.rs          # build_scene() → BoxBuilderResult, component_size()
+│   ├── box_builder.rs          # build_scene() → BuiltScene (components + stagger_delays)
 │   ├── intrinsic.rs            # TextIntrinsic, BadgeIntrinsic, CounterIntrinsic, etc.
 │   ├── legacy_dispatch.rs      # LegacyPaintDispatcher (bridge NodeId → Painter)
 │   ├── chart/                  # 10 fichiers (mod + bar/line/pie/radar/scatter/radial/funnel/waterfall/axes)
@@ -154,13 +155,13 @@ crates/
 3. Ajouter le variant dans l'enum `Component` dans `lib.rs`
 4. Ajouter les match arms dans les méthodes de dispatch (`as_painter`, `as_animatable`, `as_timed`, `as_styled`)
 5. Ajouter `pub mod mon_composant;` et `pub use mon_composant::MonComposant;` dans `lib.rs`
-6. Ajouter un arm dans `box_builder.rs::component_size()` si le composant a une taille fixe
+6. Si le composant a une taille fixe: la déclarer via apply_intrinsic_overrides dans box_builder.rs
 7. Si le composant mesure son propre contenu : ajouter `XxxIntrinsic` dans `intrinsic.rs`
 
 ### Tests
 
 ```bash
-cargo test                    # 31 tests (layout + variables + smoke)
+cargo test --workspace        # ~200 tests (layout + serde round-trip + pixel regressions + smoke)
 cargo check                   # Vérification compilation
 rustmotion validate file.json # Validation scénario
 ```
