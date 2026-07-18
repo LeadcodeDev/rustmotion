@@ -302,7 +302,7 @@ mod component_smoke {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let built = build_scene(&scene, (400.0, 300.0));
                 let layout = run_layout(&built.root, (400.0, 300.0), &ConversionContext::default());
-                let dispatcher = LegacyPaintDispatcher::new(&built.components);
+                let dispatcher = LegacyPaintDispatcher::for_scene(&built);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
             if result.is_err() {
@@ -383,7 +383,7 @@ mod component_smoke {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let built = build_scene(&scene, (400.0, 300.0));
                 let layout = run_layout(&built.root, (400.0, 300.0), &ConversionContext::default());
-                let dispatcher = LegacyPaintDispatcher::new(&built.components);
+                let dispatcher = LegacyPaintDispatcher::for_scene(&built);
                 paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
             }));
             if result.is_err() {
@@ -440,7 +440,7 @@ mod component_smoke {
             (w as f32, h as f32),
             &ConversionContext::default(),
         );
-        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
             time,
             frame_index: (time * 30.0) as u32,
@@ -672,6 +672,56 @@ mod component_smoke {
         assert!(
             flipped > 3000,
             "invert(1) did not flip the rect's colors (flipped px = {flipped})"
+        );
+    }
+
+    #[test]
+    fn container_stagger_offsets_child_animations() {
+        // flex `stagger: 0.2` with three children fading in over 0.2s each.
+        // At t=0.25: child 0 finished, child 1 early in its (ease-out) fade,
+        // child 2 not started (delay 0.4). The stagger field existed in the
+        // schema but was wired to nothing.
+        let json = serde_json::json!({
+            "type": "flex",
+            "stagger": 0.2,
+            "style": { "flex-direction": "column", "gap": "10px", "width": "300px" },
+            "children": [
+                { "type": "shape", "shape": "rect", "fill": "#ff3366",
+                  "style": { "width": "100px", "height": "40px",
+                             "animation": [{ "name": "fade_in", "duration": 0.2 }] } },
+                { "type": "shape", "shape": "rect", "fill": "#ff3366",
+                  "style": { "width": "100px", "height": "40px",
+                             "animation": [{ "name": "fade_in", "duration": 0.2 }] } },
+                { "type": "shape", "shape": "rect", "fill": "#ff3366",
+                  "style": { "width": "100px", "height": "40px",
+                             "animation": [{ "name": "fade_in", "duration": 0.2 }] } }
+            ]
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize");
+        let child = crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let buf = render_new_at(&[child], 300, 200, 0.25, 2.0);
+        // Children flow in a column with a 10px gap: bands 0..40, 50..90, 100..140.
+        let band_red = |y0: usize, y1: usize| -> u64 {
+            (y0..y1)
+                .flat_map(|y| (0..300).map(move |x| (y * 300 + x) * 4))
+                .map(|i| buf[i] as u64)
+                .sum()
+        };
+        let (b0, b1, b2) = (band_red(0, 40), band_red(50, 90), band_red(100, 140));
+        assert!(b0 > 0, "first child must be visible at t=0.25");
+        assert!(
+            b1 > 0 && b1 * 4 < b0 * 3,
+            "second child must be partially faded (b0={b0}, b1={b1})"
+        );
+        assert_eq!(
+            b2, 0,
+            "third child must not have started (stagger delay 0.4 > t=0.25)"
         );
     }
 
