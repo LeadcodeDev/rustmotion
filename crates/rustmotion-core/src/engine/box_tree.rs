@@ -24,6 +24,24 @@ pub struct BoxNode {
     /// JSON path of this node relative to its scene's `children` array, e.g.
     /// "/children/2/children/0". `None` for synthetic nodes (the scene root).
     pub source_path: Option<String>,
+    /// Visibility window from the component's `start_at`/`end_at` (seconds,
+    /// scene-relative). Outside the window the node and its subtree are not
+    /// painted but still occupy layout space (CSS `visibility` semantics —
+    /// siblings must not jump when the component appears).
+    pub window: Option<PaintWindow>,
+}
+
+/// Half-open visibility window `[start, end)`; `None` bounds are unbounded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaintWindow {
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+}
+
+impl PaintWindow {
+    pub fn contains(&self, t: f64) -> bool {
+        self.start.is_none_or(|s| t >= s) && self.end.is_none_or(|e| t < e)
+    }
 }
 
 impl BoxNode {
@@ -35,6 +53,7 @@ impl BoxNode {
             children,
             intrinsic: None,
             source_path: None,
+            window: None,
         }
     }
 
@@ -46,6 +65,7 @@ impl BoxNode {
             children: Vec::new(),
             intrinsic: Some(intrinsic),
             source_path: None,
+            window: None,
         }
     }
 

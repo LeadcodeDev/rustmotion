@@ -1,14 +1,36 @@
 # Rule: Sequential Component Reveals
 
-## Critical: `start_at`, `end_at`, and `timeline` are NOT processed in the rendering pipeline
+## Timing semantics: `start_at`/`end_at` vs `style.animation` vs `timeline`
 
-These fields exist on component structs but are **silently ignored** for box-based components (card, div, text, icon, etc.) in the new CSS rendering pipeline. Using them produces no effect — the component is always visible regardless of `start_at`.
+All three are processed by the rendering pipeline. Pick by intent:
 
-**Only `style.animation` effects are processed.**
+| Field | Effect | Use for |
+|---|---|---|
+| `start_at` / `end_at` | Hard visibility window `[start_at, end_at)` — the component (and its subtree) paints nothing outside the window but **keeps its layout space** (CSS `visibility` semantics: siblings don't jump) | Hard cuts: appear/disappear without animation |
+| `style.animation` | Animated effects; `delay` is absolute scene time | Entrances, exits, continuous effects |
+| `timeline` | `[{ "at": t, "animation": [...] }]` — each step's animations run with `delay += at` | Grouping several timed animation phases on one component |
+
+`start_at`/`end_at` control **visibility**, not animation timing. To delay an animation, use the animation's `delay` (or a `timeline` step's `at`).
+
+```json
+// Hard cut: card visible only between t=2 and t=5
+{ "type": "card", "start_at": 2.0, "end_at": 5.0, "style": {}, "children": [...] }
+
+// Timeline: pulse at t=1, fade out at t=3
+{
+  "type": "icon", "icon": "bell",
+  "timeline": [
+    { "at": 1.0, "animation": [{ "name": "pulse", "duration": 0.6 }] },
+    { "at": 3.0, "animation": [{ "name": "fade_out", "duration": 0.5 }] }
+  ]
+}
+```
+
+**Combining:** a `start_at` hard cut composes with an entrance animation whose `delay` equals `start_at` (the window reveals the element exactly when the animation begins).
 
 ---
 
-## Sequential reveals: the correct pattern
+## Sequential reveals with animated handoff: the parallax pattern
 
 To make components appear sequentially (each replacing the previous with an entrance + parallax exit), use:
 1. All components at the same `position: absolute` coordinates
@@ -17,7 +39,7 @@ To make components appear sequentially (each replacing the previous with an entr
 
 ### Why it works
 
-Animation preset keyframes use absolute scene time. Before the entrance `delay`, the preset's first keyframe returns `opacity: 0.0`, making the component invisible. No `start_at` needed.
+Animation preset keyframes use absolute scene time. Before the entrance `delay`, the preset's first keyframe returns `opacity: 0.0`, making the component invisible.
 
 For `scale_in` with `delay: 2.0, duration: 0.5`:
 - t < 2.0 → opacity = 0 (first keyframe value at t=2.0 is 0.0)
@@ -54,25 +76,14 @@ For `scale_in` with `delay: 2.0, duration: 0.5`:
     ]
   },
   "children": [...]
-},
-{
-  "type": "card",
-  "position": "absolute",
-  "x": 200, "y": 400,
-  "style": {
-    "width": 1500, "padding": 40, "border-radius": 20,
-    "background": "#0C1A2E", "z-index": 3,
-    "animation": [
-      { "name": "scale_in", "delay": 4.5, "duration": 0.5 }
-    ]
-  },
-  "children": [...]
 }
 ```
 
 **Timing design:** Card N's `slide_out_up.delay` = Card N+1's `scale_in.delay`. They animate simultaneously for a smooth parallax handoff.
 
 **Z-index rule:** Later cards get higher z-index so they appear above the exiting card during the overlap window.
+
+**Layout note:** exited components still occupy layout space. For flowed (non-absolute) layouts where the element must disappear *and* free its slot, absolute positioning remains the pattern — `end_at` hides pixels, not layout.
 
 ---
 
@@ -84,25 +95,4 @@ For items entering one by one without exits, use increasing `delay` on sibling e
 { "type": "text", "content": "First",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.0, "duration": 0.6 }] } },
 { "type": "text", "content": "Second", "style": { "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }] } },
 { "type": "text", "content": "Third",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.4, "duration": 0.6 }] } }
-```
-
----
-
-## What NOT to do
-
-```json
-// ❌ start_at is ignored — card is always visible
-{
-  "type": "card",
-  "start_at": 2.0,
-  "timeline": [{ "at": 0.0, "animation": [{"name": "scale_in"}] }],
-  "style": { "z-index": 1 }
-}
-
-// ❌ end_at is ignored — card never disappears
-{
-  "type": "card",
-  "end_at": 3.0,
-  "style": {}
-}
 ```

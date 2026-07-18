@@ -24,6 +24,10 @@ macro_rules! impl_traits {
             fn animation_effects(&self) -> &[$crate::schema::AnimationEffect] {
                 &self.style.animation
             }
+
+            fn timeline_steps(&self) -> &[$crate::schema::TimelineStep] {
+                &self.timeline
+            }
         }
     };
 

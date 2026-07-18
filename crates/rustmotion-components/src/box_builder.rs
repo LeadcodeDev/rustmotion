@@ -129,6 +129,7 @@ where
         children: child_boxes,
         intrinsic: None,
         source_path: None,
+        window: None,
     };
 
     BuiltScene { root, components }
@@ -175,14 +176,41 @@ fn build_child<'a>(
     if let Some(actx) = anim {
         if let Some(animatable) = child.component.as_animatable() {
             let effects = animatable.animation_effects();
-            if !effects.is_empty() {
-                let props = resolve_props_for_effects(effects, actx.time, actx.scene_duration);
+            let steps = animatable.timeline_steps();
+            let props = if steps.is_empty() {
+                if effects.is_empty() {
+                    None
+                } else {
+                    Some(resolve_props_for_effects(
+                        effects,
+                        actx.time,
+                        actx.scene_duration,
+                    ))
+                }
+            } else {
+                // Timeline steps resolve as their animations shifted by the
+                // step's `at` (merged with the plain `style.animation` list).
+                let merged = merge_timeline_effects(effects, steps);
+                Some(resolve_props_for_effects(
+                    &merged,
+                    actx.time,
+                    actx.scene_duration,
+                ))
+            };
+            if let Some(props) = props {
                 if props_has_paint_overrides(&props) {
                     apply_animated_props(&mut css, &props);
                 }
             }
         }
     }
+
+    // Visibility window (start_at/end_at) — enforced by the paint pass.
+    let window = child.component.as_timed().and_then(|t| {
+        let (start, end) = t.timing();
+        (start.is_some() || end.is_some())
+            .then_some(rustmotion_core::engine::box_tree::PaintWindow { start, end })
+    });
 
     let children_boxes = container_children(&child.component, components, next_id, anim, &path);
     let intrinsic = component_intrinsic(&child.component);
@@ -194,7 +222,26 @@ fn build_child<'a>(
         children: children_boxes,
         intrinsic,
         source_path: Some(path),
+        window,
     }
+}
+
+/// Flatten `timeline` steps into plain animation effects: each step's
+/// animations run with `delay += step.at`, appended after the component's
+/// own `style.animation` list.
+fn merge_timeline_effects(
+    effects: &[rustmotion_core::schema::AnimationEffect],
+    steps: &[rustmotion_core::schema::TimelineStep],
+) -> Vec<rustmotion_core::schema::AnimationEffect> {
+    let mut merged = effects.to_vec();
+    for step in steps {
+        for effect in &step.animation {
+            let mut e = effect.clone();
+            e.shift_delay(step.at);
+            merged.push(e);
+        }
+    }
+    merged
 }
 
 /// Quick gate: does this resolved `AnimatedProperties` carry any property

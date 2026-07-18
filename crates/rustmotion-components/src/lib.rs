@@ -294,7 +294,7 @@ impl Component {
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
-            Component::Positioned(_) => None,
+            Component::Positioned(c) => Some(c),
         }
     }
 
@@ -353,7 +353,8 @@ impl Component {
             Component::Grid(c) => Some(c),
             Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
-            Component::Caption(_) | Component::Positioned(_) => None,
+            Component::Caption(c) => Some(c),
+            Component::Positioned(c) => Some(c),
         }
     }
 
