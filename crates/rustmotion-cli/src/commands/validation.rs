@@ -14,6 +14,7 @@ use rustmotion::error::{Result, RustmotionError};
 use rustmotion::include::{self, IncludeSource};
 use rustmotion::schema::{ResolvedScenario, Scenario};
 use rustmotion::variables;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::geometry::{validate_geometry, validate_geometry_animated, GeometryViolation};
@@ -24,6 +25,10 @@ pub enum ValidationSource<'a> {
     File(&'a Path),
     Inline(&'a str),
 }
+
+/// Runtime variable overrides from `--props` / `--var` flags.
+/// An empty map means "use defaults only".
+pub type VarOverrides = HashMap<String, serde_json::Value>;
 
 /// A scenario after parsing, variable resolution, and include resolution.
 /// Keeps the raw JSON around so it can be inspected by validators (e.g. for
@@ -87,6 +92,14 @@ impl ValidationReport {
 /// Load + parse + apply variable defaults + resolve includes. Returns the
 /// raw JSON (post-substitution) and the resolved scenario.
 pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
+    load_with_vars(source, None)
+}
+
+/// Like [`load`] but injects runtime variable overrides before substitution.
+pub fn load_with_vars(
+    source: ValidationSource<'_>,
+    overrides: Option<&VarOverrides>,
+) -> Result<LoadedScenario> {
     let (json_str, source_path, include_source) = match source {
         ValidationSource::File(path) => {
             let s = std::fs::read_to_string(path).map_err(|e| RustmotionError::FileRead {
@@ -119,7 +132,11 @@ pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
     let mut json_value: serde_json::Value =
         serde_json::from_str(&json_str).map_err(RustmotionError::from)?;
 
-    variables::apply_defaults(&mut json_value)?;
+    let label = source_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<inline>".to_string());
+    variables::apply_variables(&mut json_value, overrides, &label)?;
 
     let scenario: Scenario = serde_json::from_value(json_value.clone())?;
     let resolved = include::resolve_includes(scenario, &include_source)?;

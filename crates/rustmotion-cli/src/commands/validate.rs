@@ -2,7 +2,7 @@ use rustmotion::error::{Result, RustmotionError};
 use std::path::{Path, PathBuf};
 
 use super::geometry::{GeometryViolation, ViolationKind};
-use super::validation::{self, ValidationReport, ValidationSource};
+use super::validation::{self, ValidationReport, ValidationSource, VarOverrides};
 
 pub fn cmd_validate(
     input: &PathBuf,
@@ -11,8 +11,9 @@ pub fn cmd_validate(
     strict_anim: bool,
     strict_attrs: bool,
     lenient: bool,
+    overrides: Option<&VarOverrides>,
 ) -> Result<()> {
-    let loaded = match validation::load(ValidationSource::File(input)) {
+    let loaded = match validation::load_with_vars(ValidationSource::File(input), overrides) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -49,7 +50,7 @@ pub fn cmd_validate(
 
             // Re-run checks after the fixes so the rest of the function reflects
             // the on-disk state.
-            let reloaded = validation::load(ValidationSource::File(input))?;
+            let reloaded = validation::load_with_vars(ValidationSource::File(input), overrides)?;
             report_out = validation::run_checks(&reloaded, strict_anim);
             if strict_attrs {
                 report_out.promote_attr_warnings();
