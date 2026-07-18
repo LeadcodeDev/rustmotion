@@ -4,6 +4,7 @@ mod render;
 mod schema;
 mod still;
 mod validate;
+mod validate_attrs;
 mod validate_schema;
 pub mod validation;
 

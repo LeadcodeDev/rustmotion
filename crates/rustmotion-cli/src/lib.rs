@@ -137,6 +137,10 @@ enum Commands {
         #[arg(long)]
         strict_anim: bool,
 
+        /// Treat unknown component attributes as errors instead of warnings.
+        #[arg(long)]
+        strict_attrs: bool,
+
         /// Treat geometry violations as warnings instead of errors.
         #[arg(long)]
         lenient: bool,
@@ -319,8 +323,16 @@ pub fn run() -> Result<()> {
             report,
             fix,
             strict_anim,
+            strict_attrs,
             lenient,
-        } => commands::cmd_validate(&file, report.as_deref(), fix, strict_anim, lenient),
+        } => commands::cmd_validate(
+            &file,
+            report.as_deref(),
+            fix,
+            strict_anim,
+            strict_attrs,
+            lenient,
+        ),
         Commands::Schema { output } => commands::cmd_schema(output.as_deref()),
         Commands::Info { file } => commands::cmd_info(&file),
         Commands::Skills { action } => match action {

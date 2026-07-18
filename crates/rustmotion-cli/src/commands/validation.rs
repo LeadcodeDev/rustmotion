@@ -42,6 +42,9 @@ pub struct ValidationReport {
     pub unresolved_vars: Vec<String>,
     /// Non-blocking advisory messages (do not prevent rendering).
     pub warnings: Vec<String>,
+    /// Unknown component attributes (silently ignored at load). Advisory by
+    /// default; promoted to blocking errors by `--strict-attrs`.
+    pub attr_warnings: Vec<String>,
 }
 
 impl ValidationReport {
@@ -72,6 +75,12 @@ impl ValidationReport {
             geometry_violations: self.geom_violations.len(),
             unresolved_vars: self.unresolved_vars.len(),
         }
+    }
+
+    /// `--strict-attrs`: turn unknown-attribute warnings into blocking schema
+    /// errors.
+    pub fn promote_attr_warnings(&mut self) {
+        self.schema_errors.append(&mut self.attr_warnings);
     }
 }
 
@@ -124,13 +133,17 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     if strict_anim {
         geom_violations.extend(validate_geometry_animated(&loaded.scenario));
     }
-    let (schema_errors, mut warnings) = validate_scenario(&loaded.scenario);
+    let (mut schema_errors, mut warnings) = validate_scenario(&loaded.scenario);
     warnings.extend(warn_misplaced_animation(&loaded.raw));
+    let (attr_errors, attr_warnings) =
+        super::validate_attrs::check_component_attrs(&loaded.scenario);
+    schema_errors.extend(attr_errors);
     ValidationReport {
         schema_errors,
         geom_violations,
         unresolved_vars: variables::find_unresolved(&loaded.raw),
         warnings,
+        attr_warnings,
     }
 }
 
@@ -224,6 +237,9 @@ pub fn print_report(report: &ValidationReport, source_label: &str) {
     for w in &report.warnings {
         eprintln!("Warning: {}", w);
     }
+    for w in &report.attr_warnings {
+        eprintln!("Warning: {}", w);
+    }
     for name in &report.unresolved_vars {
         eprintln!(
             "Warning: unresolved variable reference '${}' in '{}'",
@@ -240,6 +256,29 @@ pub fn print_report(report: &ValidationReport, source_label: &str) {
             eprintln!("{}", format_violation(v));
             eprintln!();
         }
+    }
+}
+
+#[cfg(test)]
+mod html_css_error_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_css_property_from_html_is_a_readable_validate_error() {
+        // CssStyle is deny_unknown_fields: a typo'd CSS property must surface
+        // as a validation error naming the property, not silently drop the
+        // child at render time.
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-siez:96">Hi</h1></scene></rustmotion>"##;
+        let value = rustmotion::loader::html_to_scenario_json(html).expect("transpiles");
+        let json = serde_json::to_string(&value).unwrap();
+        let loaded = load(ValidationSource::Inline(&json)).expect("loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.iter().any(|e| e.contains("font-siez")),
+            "expected a schema error naming the unknown CSS property: {:?}",
+            report.schema_errors
+        );
+        assert!(report.is_blocking(false), "must block rendering");
     }
 }
 

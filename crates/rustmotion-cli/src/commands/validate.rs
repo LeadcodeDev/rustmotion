@@ -9,6 +9,7 @@ pub fn cmd_validate(
     report: Option<&Path>,
     fix: bool,
     strict_anim: bool,
+    strict_attrs: bool,
     lenient: bool,
 ) -> Result<()> {
     let loaded = match validation::load(ValidationSource::File(input)) {
@@ -20,6 +21,9 @@ pub fn cmd_validate(
     };
 
     let mut report_out = validation::run_checks(&loaded, strict_anim);
+    if strict_attrs {
+        report_out.promote_attr_warnings();
+    }
 
     if let Some(report_path) = report {
         write_report(report_path, &report_out)?;
@@ -47,6 +51,9 @@ pub fn cmd_validate(
             // the on-disk state.
             let reloaded = validation::load(ValidationSource::File(input))?;
             report_out = validation::run_checks(&reloaded, strict_anim);
+            if strict_attrs {
+                report_out.promote_attr_warnings();
+            }
         }
     }
 
@@ -86,6 +93,7 @@ fn write_report(path: &Path, report: &ValidationReport) -> Result<()> {
         "geometry_violations": report.geom_violations,
         "unresolved_vars": report.unresolved_vars,
         "warnings": report.warnings,
+        "attr_warnings": report.attr_warnings,
     });
     let pretty = serde_json::to_string_pretty(&json)
         .map_err(|e| RustmotionError::Generic(format!("serialize report: {}", e)))?;
