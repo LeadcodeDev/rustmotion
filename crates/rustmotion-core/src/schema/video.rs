@@ -526,6 +526,12 @@ pub enum CaptionStyle {
     Highlight,
     Karaoke,
     WordByWord,
+    /// TikTok-style: only the active word is shown, centered, with a
+    /// spring-like scale-in and a rounded pill background.
+    WordPop,
+    /// Karaoke line (all words visible, wrapped) where the active word
+    /// scales up, takes `active_color` and gets a pill background.
+    KaraokePop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

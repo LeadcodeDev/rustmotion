@@ -24,6 +24,10 @@ const SKILL_FILES: &[SkillFile] = &[
         content: include_str!("../../../.claude/skills/rustmotion/rules/3d-perspective.md"),
     },
     SkillFile {
+        path: ".claude/skills/rustmotion/rules/captions-workflow.md",
+        content: include_str!("../../../.claude/skills/rustmotion/rules/captions-workflow.md"),
+    },
+    SkillFile {
         path: ".claude/skills/rustmotion/rules/card-flex-layout.md",
         content: include_str!("../../../.claude/skills/rustmotion/rules/card-flex-layout.md"),
     },
