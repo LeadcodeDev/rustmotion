@@ -222,6 +222,16 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
 
 /// Apply variable substitution to a JSON Value.
 /// Extracts the "variables" definitions, merges with optional overrides, then substitutes.
+///
+/// When a `config` block is present, overrides must reference declared variables (unknown
+/// names produce `UndefinedVariable`).
+///
+/// When there is **no** `config` block but `overrides` are provided (e.g. from the CLI for
+/// an HTML scenario that cannot carry a `config` key), the overrides are applied as raw
+/// value substitutions without type declarations — any `$name` found in the document is
+/// replaced by the override value as-is. Unresolved references after this pass are ignored
+/// (no `UnresolvedVariable` error), because the document may legitimately contain no
+/// variable references at all.
 pub fn apply_variables(
     value: &mut Value,
     overrides: Option<&HashMap<String, Value>>,
@@ -259,7 +269,16 @@ pub fn apply_variables(
 
             Ok(())
         }
-        None => Ok(()),
+        None => {
+            // No config block. If overrides were supplied (e.g. from the CLI for an HTML
+            // scenario), apply them as raw substitutions — no declaration required.
+            if let Some(ovr) = overrides {
+                if !ovr.is_empty() {
+                    substitute(value, ovr, path)?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 

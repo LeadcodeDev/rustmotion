@@ -5,6 +5,7 @@ pub mod tui;
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::loader::load_input;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -92,6 +93,17 @@ enum Commands {
         /// per-frame viewport overflow during the implicit validation pass.
         #[arg(long)]
         strict_anim: bool,
+
+        /// Load variable overrides from a JSON object file (e.g. {"color":"#f00"}).
+        /// Keys must match variables declared in the scenario's `config` block.
+        #[arg(long, value_name = "FILE")]
+        props: Option<PathBuf>,
+
+        /// Set a single variable override as key=value (repeatable).
+        /// The value is parsed as JSON if valid, otherwise treated as a string.
+        /// --var takes precedence over --props for the same key.
+        #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
+        var: Vec<String>,
     },
 
     /// Export a single frame as a still image (PNG, JPEG, WebP)
@@ -115,6 +127,14 @@ enum Commands {
         /// JPEG quality (1-100)
         #[arg(long, default_value = "90")]
         quality: u8,
+
+        /// Load variable overrides from a JSON object file.
+        #[arg(long, value_name = "FILE")]
+        props: Option<PathBuf>,
+
+        /// Set a single variable override as key=value (repeatable).
+        #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
+        var: Vec<String>,
     },
 
     /// Validate a JSON scenario without rendering
@@ -144,6 +164,56 @@ enum Commands {
         /// Treat geometry violations as warnings instead of errors.
         #[arg(long)]
         lenient: bool,
+
+        /// Load variable overrides from a JSON object file.
+        #[arg(long, value_name = "FILE")]
+        props: Option<PathBuf>,
+
+        /// Set a single variable override as key=value (repeatable).
+        #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
+        var: Vec<String>,
+    },
+
+    /// Render one video per line of a JSONL data file
+    Batch {
+        /// Path to the scenario template file (JSON or HTML dialect)
+        #[arg(short = 'f', long)]
+        file: PathBuf,
+
+        /// Path to a JSONL file where each line is a JSON object of variable overrides
+        #[arg(long)]
+        data: PathBuf,
+
+        /// Directory to write output files into
+        #[arg(long)]
+        output_dir: PathBuf,
+
+        /// Output filename template. Use {field} for values from each data line
+        /// and {index} for the 0-based line number. Default: "{index}.mp4".
+        #[arg(long, default_value = "{index}.mp4")]
+        name_template: String,
+
+        /// Video codec (h264, h265, vp9, prores)
+        #[arg(long)]
+        codec: Option<String>,
+
+        /// Constant Rate Factor (0-51, lower = better quality)
+        #[arg(long)]
+        crf: Option<u8>,
+
+        /// Output file format (mp4, webm, mov, gif, png-seq)
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Enable transparent background
+        #[arg(long)]
+        transparent: bool,
+
+        /// Number of videos to render in parallel (default: 1 / sequential).
+        /// Note: the render itself already uses all cores via rayon; --jobs
+        /// parallelises across videos, which may saturate the machine.
+        #[arg(long, default_value = "1")]
+        jobs: usize,
     },
 
     /// Print the JSON Schema for scenario files
@@ -215,6 +285,88 @@ pub(crate) enum OutputFormat {
     Json,
 }
 
+/// Parse `--var key=value` flags into a map. Values that parse as valid JSON
+/// scalars or objects are stored as their JSON type; bare strings that are not
+/// valid JSON are stored as JSON strings.
+///
+/// Parsing rules (applied in order):
+///   1. Split on the first `=`. Keys without `=` are an error.
+///   2. Try `serde_json::from_str` on the value part.
+///   3. If that fails, treat the raw string as a JSON string value.
+///
+/// Examples:
+///   `--var count=42`        → `count: Number(42)`
+///   `--var flag=true`       → `flag: Bool(true)`
+///   `--var name=hello`      → `name: String("hello")`  (bare string, not valid JSON)
+///   `--var name='"hello"'`  → `name: String("hello")`  (explicit JSON string)
+fn parse_var_flags(vars: &[String]) -> Result<HashMap<String, serde_json::Value>> {
+    let mut map = HashMap::new();
+    for entry in vars {
+        let (key, raw_val) = entry.split_once('=').ok_or_else(|| {
+            RustmotionError::Generic(format!(
+                "--var '{}' is missing '=': expected KEY=VALUE",
+                entry
+            ))
+        })?;
+        if key.is_empty() {
+            return Err(RustmotionError::Generic(format!(
+                "--var '{}': key must not be empty",
+                entry
+            )));
+        }
+        let value: serde_json::Value = serde_json::from_str(raw_val)
+            .unwrap_or_else(|_| serde_json::Value::String(raw_val.to_string()));
+        map.insert(key.to_string(), value);
+    }
+    Ok(map)
+}
+
+/// Load a `--props <file.json>` JSON object into a variable map.
+fn load_props_file(path: &PathBuf) -> Result<HashMap<String, serde_json::Value>> {
+    let text = std::fs::read_to_string(path).map_err(|e| RustmotionError::FileRead {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let val: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        RustmotionError::Generic(format!(
+            "--props file '{}' is not valid JSON: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    match val {
+        serde_json::Value::Object(map) => Ok(map.into_iter().collect()),
+        _ => Err(RustmotionError::Generic(format!(
+            "--props file '{}' must be a JSON object {{...}}, got a different type",
+            path.display()
+        ))),
+    }
+}
+
+/// Merge `--props` and `--var` flags into a single override map.
+/// `--var` takes precedence over `--props` for the same key.
+/// Returns `None` if neither flag was supplied (no-override fast path).
+fn build_overrides(
+    props: Option<&PathBuf>,
+    var_flags: &[String],
+) -> Result<Option<HashMap<String, serde_json::Value>>> {
+    let has_props = props.is_some();
+    let has_vars = !var_flags.is_empty();
+    if !has_props && !has_vars {
+        return Ok(None);
+    }
+    let mut map = if let Some(p) = props {
+        load_props_file(p)?
+    } else {
+        HashMap::new()
+    };
+    // --var wins over --props
+    for (k, v) in parse_var_flags(var_flags)? {
+        map.insert(k, v);
+    }
+    Ok(Some(map))
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -245,12 +397,21 @@ pub fn run() -> Result<()> {
             no_validate,
             lenient,
             strict_anim,
+            props,
+            var,
         } => {
             // Validate codec / CRF up-front so we never spawn an encoder with bad args.
             commands::validation::check_codec(codec.as_deref())?;
             commands::validation::check_crf(crf)?;
 
+            let overrides = build_overrides(props.as_ref(), &var)?;
+
             if watch {
+                if overrides.is_some() {
+                    return Err(RustmotionError::Generic(
+                        "--props / --var are not supported in --watch mode".to_string(),
+                    ));
+                }
                 let input_path = file.ok_or(RustmotionError::WatchRequiresFile)?;
                 commands::cmd_watch(
                     &input_path,
@@ -274,7 +435,7 @@ pub fn run() -> Result<()> {
                     (None, None) => return Err(RustmotionError::MissingInput),
                 };
 
-                let loaded = commands::validation::load(source)?;
+                let loaded = commands::validation::load_with_vars(source, overrides.as_ref())?;
 
                 if !cli.quiet {
                     commands::validation::warn_on_silent_defaults(&loaded);
@@ -314,8 +475,11 @@ pub fn run() -> Result<()> {
             time,
             format,
             quality,
+            props,
+            var,
         } => {
-            let scenario = load_input(&file)?;
+            let overrides = build_overrides(props.as_ref(), &var)?;
+            let scenario = rustmotion::loader::load_input_with_vars(&file, overrides.as_ref())?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
         Commands::Validate {
@@ -325,14 +489,46 @@ pub fn run() -> Result<()> {
             strict_anim,
             strict_attrs,
             lenient,
-        } => commands::cmd_validate(
-            &file,
-            report.as_deref(),
-            fix,
-            strict_anim,
-            strict_attrs,
-            lenient,
-        ),
+            props,
+            var,
+        } => {
+            let overrides = build_overrides(props.as_ref(), &var)?;
+            commands::cmd_validate(
+                &file,
+                report.as_deref(),
+                fix,
+                strict_anim,
+                strict_attrs,
+                lenient,
+                overrides.as_ref(),
+            )
+        }
+        Commands::Batch {
+            file,
+            data,
+            output_dir,
+            name_template,
+            codec,
+            crf,
+            format,
+            transparent,
+            jobs,
+        } => {
+            commands::validation::check_codec(codec.as_deref())?;
+            commands::validation::check_crf(crf)?;
+            commands::cmd_batch(
+                &file,
+                &data,
+                &output_dir,
+                &name_template,
+                codec,
+                crf,
+                format,
+                transparent,
+                jobs,
+                cli.quiet,
+            )
+        }
         Commands::Schema { output } => commands::cmd_schema(output.as_deref()),
         Commands::Info { file } => commands::cmd_info(&file),
         Commands::Skills { action } => match action {
@@ -505,4 +701,70 @@ fn uninstall_completions() -> Result<()> {
 
     eprintln!("Completions uninstalled. Restart your shell.");
     Ok(())
+}
+
+#[cfg(test)]
+mod var_parsing_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// "42" parses as Number, not String.
+    #[test]
+    fn var_flag_numeric_string_parses_as_number() {
+        let flags = vec!["count=42".to_string()];
+        let map = parse_var_flags(&flags).unwrap();
+        assert_eq!(map["count"], json!(42));
+    }
+
+    /// "true" parses as Bool.
+    #[test]
+    fn var_flag_true_parses_as_bool() {
+        let flags = vec!["flag=true".to_string()];
+        let map = parse_var_flags(&flags).unwrap();
+        assert_eq!(map["flag"], json!(true));
+    }
+
+    /// A bare word that is not valid JSON becomes a String.
+    #[test]
+    fn var_flag_bare_word_is_string() {
+        let flags = vec!["name=hello".to_string()];
+        let map = parse_var_flags(&flags).unwrap();
+        assert_eq!(map["name"], json!("hello"));
+    }
+
+    /// An explicitly-quoted JSON string `'"42"'` becomes String("42").
+    #[test]
+    fn var_flag_quoted_number_is_string() {
+        let flags = vec!["name=\"42\"".to_string()];
+        let map = parse_var_flags(&flags).unwrap();
+        assert_eq!(map["name"], json!("42"));
+    }
+
+    /// --var wins over --props for the same key.
+    #[test]
+    fn var_wins_over_props_for_same_key() {
+        // Build a fake props map directly (no file I/O needed for unit test)
+        let mut props_map: HashMap<String, serde_json::Value> = HashMap::new();
+        props_map.insert("color".to_string(), json!("#000000"));
+
+        // Simulate merge logic that build_overrides does
+        let var_flags = vec!["color=#ffffff".to_string()];
+        let var_map = parse_var_flags(&var_flags).unwrap();
+
+        // --var must overwrite --props
+        let mut merged = props_map;
+        for (k, v) in var_map {
+            merged.insert(k, v);
+        }
+        assert_eq!(merged["color"], json!("#ffffff"));
+    }
+
+    /// Missing '=' in --var is an error.
+    #[test]
+    fn var_flag_missing_eq_is_error() {
+        let flags = vec!["noequals".to_string()];
+        let result = parse_var_flags(&flags);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("KEY=VALUE"));
+    }
 }

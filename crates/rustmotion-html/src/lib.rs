@@ -1,4 +1,33 @@
 //! HTML/CSS → Rustmotion scenario JSON transpiler (browserless, compiled in).
+//!
+//! ## Variable substitution (`$name`) from the CLI
+//!
+//! HTML scenarios cannot carry a `config` block (there is no element for it),
+//! so they do not declare variables with types and defaults. However, `$name`
+//! references in element text content are still replaced post-transpilation when
+//! variable overrides are provided via `--var` / `--props` on the CLI:
+//!
+//! ```html
+//! <!-- hero.html -->
+//! <rustmotion width="1920" height="1080" fps="30">
+//!   <scene duration="3">
+//!     <h1 style="font-size:96; color:#fff">Welcome, $username!</h1>
+//!   </scene>
+//! </rustmotion>
+//! ```
+//!
+//! ```sh
+//! rustmotion render -f hero.html --var username=Alice -o alice.mp4
+//! ```
+//!
+//! Because there is no `config` block, **unknown override keys are not an error**
+//! — they are simply available for substitution but silently unused if no `$name`
+//! reference matches. Unresolved `$name` references after substitution are also
+//! silently ignored (no `UnresolvedVariable` error), since the document may
+//! contain no variable references at all.
+//!
+//! For type-safe variables with defaults and schema validation, use a JSON
+//! scenario with a `config` block instead.
 
 mod element;
 mod scene;
