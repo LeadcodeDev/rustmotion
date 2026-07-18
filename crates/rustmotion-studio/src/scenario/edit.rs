@@ -83,8 +83,16 @@ pub fn list_annotations(raw: &Value) -> Vec<(String, String, u64, String)> {
         .map(|a| {
             a.iter()
                 .map(|x| {
-                    let id = x.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let note = x.get("note").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = x
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let note = x
+                        .get("note")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let frame = x.get("frame").and_then(|v| v.as_u64()).unwrap_or(0);
                     let kind = x
                         .get("target")

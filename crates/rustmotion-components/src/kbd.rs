@@ -68,7 +68,6 @@ impl Kbd {
             .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
         skia_safe::Font::from_typeface(typeface, fs)
     }
-
 }
 
 impl Kbd {
@@ -77,7 +76,10 @@ impl Kbd {
         let h = layout_h;
         let radius = 6.0;
 
-        let bg_color = self.style.background_color_str().unwrap_or(&self.background_color);
+        let bg_color = self
+            .style
+            .background_color_str()
+            .unwrap_or(&self.background_color);
 
         // Shadow (bottom edge to simulate physical key depth)
         let shadow_h = 3.0;

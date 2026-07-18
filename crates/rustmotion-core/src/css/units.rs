@@ -21,7 +21,9 @@ pub enum Length {
 }
 
 impl Default for Length {
-    fn default() -> Self { Length::Px(0.0) }
+    fn default() -> Self {
+        Length::Px(0.0)
+    }
 }
 
 /// A CSS length OR percentage (e.g. `width`, `padding`, `top`).
@@ -33,7 +35,9 @@ pub enum LengthPercentage {
 }
 
 impl Default for LengthPercentage {
-    fn default() -> Self { LengthPercentage::Px(0.0) }
+    fn default() -> Self {
+        LengthPercentage::Px(0.0)
+    }
 }
 
 /// Internal parsed representation. Once parsed we know which unit it is.
@@ -210,20 +214,29 @@ mod tests {
 
     #[test]
     fn resolve_percent_against_parent() {
-        let ctx = LengthContext { parent_size: 200.0, ..Default::default() };
+        let ctx = LengthContext {
+            parent_size: 200.0,
+            ..Default::default()
+        };
         let p = ParsedLength::Percent(50.0);
         assert_eq!(p.resolve(&ctx), Some(100.0));
     }
 
     #[test]
     fn resolve_em_uses_font_size() {
-        let ctx = LengthContext { font_size: 20.0, ..Default::default() };
+        let ctx = LengthContext {
+            font_size: 20.0,
+            ..Default::default()
+        };
         assert_eq!(ParsedLength::Em(1.5).resolve(&ctx), Some(30.0));
     }
 
     #[test]
     fn resolve_vw_uses_viewport() {
-        let ctx = LengthContext { viewport_width: 1000.0, ..Default::default() };
+        let ctx = LengthContext {
+            viewport_width: 1000.0,
+            ..Default::default()
+        };
         assert_eq!(ParsedLength::Vw(50.0).resolve(&ctx), Some(500.0));
     }
 

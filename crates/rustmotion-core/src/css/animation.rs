@@ -34,13 +34,19 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
         tx.push(TransformFn::Scale { x: sx, y: sy });
     }
     if props.rotation.abs() > 1e-3 {
-        tx.push(TransformFn::Rotate { deg: props.rotation });
+        tx.push(TransformFn::Rotate {
+            deg: props.rotation,
+        });
     }
     if props.rotate_x.abs() > 1e-3 {
-        tx.push(TransformFn::RotateX { deg: props.rotate_x });
+        tx.push(TransformFn::RotateX {
+            deg: props.rotate_x,
+        });
     }
     if props.rotate_y.abs() > 1e-3 {
-        tx.push(TransformFn::RotateY { deg: props.rotate_y });
+        tx.push(TransformFn::RotateY {
+            deg: props.rotate_y,
+        });
     }
     if !tx.is_empty() {
         // Append rather than replace so a CSS-defined transform composes with

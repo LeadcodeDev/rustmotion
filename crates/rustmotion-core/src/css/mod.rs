@@ -10,10 +10,10 @@
 //! Layout is computed by [`taffy`]; paint is done by Skia in `engine::paint_pass`.
 
 pub mod animation;
-pub mod style;
-pub mod units;
 pub mod cascade;
+pub mod style;
 pub mod taffy_bridge;
+pub mod units;
 
 pub use animation::apply_animated_props;
 pub use style::CssStyle;

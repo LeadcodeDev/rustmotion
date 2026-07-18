@@ -6,9 +6,14 @@ use skia_safe::{Canvas, Paint, PaintStyle, Point};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{build_shape_path, color4f_from_hex, draw_shape_path, font_mgr, paint_from_hex, wrap_text_with_fallback, draw_text_with_fallback, measure_text_with_fallback, emoji_typeface};
+use rustmotion_core::engine::renderer::{
+    build_shape_path, color4f_from_hex, draw_shape_path, draw_text_with_fallback, emoji_typeface,
+    font_mgr, measure_text_with_fallback, paint_from_hex, wrap_text_with_fallback,
+};
 use rustmotion_core::error::RustmotionError;
-use rustmotion_core::schema::{Fill, GradientType, ShapeText, ShapeType, Stroke, TextAlign, TimelineStep, FontWeight};
+use rustmotion_core::schema::{
+    Fill, FontWeight, GradientType, ShapeText, ShapeType, Stroke, TextAlign, TimelineStep,
+};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -52,8 +57,11 @@ impl Painter for Shape {
             let mut paint = match fill {
                 Fill::Solid(color) => paint_from_hex(color),
                 Fill::Gradient(gradient) => {
-                    let colors: Vec<skia_safe::Color4f> =
-                        gradient.colors.iter().map(|c| color4f_from_hex(c)).collect();
+                    let colors: Vec<skia_safe::Color4f> = gradient
+                        .colors
+                        .iter()
+                        .map(|c| color4f_from_hex(c))
+                        .collect();
                     let stops: Option<Vec<f32>> = gradient.stops.clone();
                     let mut paint = Paint::default();
                     paint.set_anti_alias(true);
@@ -111,7 +119,11 @@ impl Painter for Shape {
         if let Some(stroke) = &self.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
-            let stroke_w = if props.stroke_width >= 0.0 { props.stroke_width } else { stroke.width };
+            let stroke_w = if props.stroke_width >= 0.0 {
+                props.stroke_width
+            } else {
+                stroke.width
+            };
             paint.set_stroke_width(stroke_w);
 
             if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
@@ -157,7 +169,11 @@ fn render_shape_text(
     let font_style = match text.font_weight {
         FontWeight::Bold => skia_safe::FontStyle::bold(),
         FontWeight::Normal => skia_safe::FontStyle::normal(),
-        FontWeight::Weight(w) => skia_safe::FontStyle::new(skia_safe::font_style::Weight::from(w as i32), skia_safe::font_style::Width::NORMAL, skia_safe::font_style::Slant::Upright),
+        FontWeight::Weight(w) => skia_safe::FontStyle::new(
+            skia_safe::font_style::Weight::from(w as i32),
+            skia_safe::font_style::Width::NORMAL,
+            skia_safe::font_style::Slant::Upright,
+        ),
     };
 
     let typeface = fm
@@ -215,7 +231,16 @@ fn render_shape_text(
             TextAlign::Right => area_x + area_w - line_width,
         };
         let y = y_start + i as f32 * line_height;
-        draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, &paint);
+        draw_text_with_fallback(
+            canvas,
+            line,
+            &font,
+            &emoji_font,
+            letter_spacing,
+            x,
+            y,
+            &paint,
+        );
     }
 
     Ok(())

@@ -307,7 +307,9 @@ impl<'de> Deserialize<'de> for SizeDimension {
 }
 
 /// Deserialize `animation` as either a single AnimationEffect or a Vec.
-pub fn deserialize_animation_effects<'de, D>(deserializer: D) -> Result<Vec<AnimationEffect>, D::Error>
+pub fn deserialize_animation_effects<'de, D>(
+    deserializer: D,
+) -> Result<Vec<AnimationEffect>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -333,8 +335,7 @@ where
         where
             M: de::MapAccess<'de>,
         {
-            let effect =
-                AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            let effect = AnimationEffect::deserialize(de::value::MapAccessDeserializer::new(map))?;
             Ok(vec![effect])
         }
     }

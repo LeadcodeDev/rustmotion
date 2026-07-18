@@ -107,16 +107,8 @@ impl TagCloud {
         let palette = self.palette();
 
         // Collect weights
-        let min_weight = self
-            .tags
-            .iter()
-            .map(|t| t.weight)
-            .fold(f64::MAX, f64::min);
-        let max_weight = self
-            .tags
-            .iter()
-            .map(|t| t.weight)
-            .fold(f64::MIN, f64::max);
+        let min_weight = self.tags.iter().map(|t| t.weight).fold(f64::MAX, f64::min);
+        let max_weight = self.tags.iter().map(|t| t.weight).fold(f64::MIN, f64::max);
 
         // Sort tags by weight descending (indices for stagger)
         let mut sorted_indices: Vec<usize> = (0..self.tags.len()).collect();
@@ -211,13 +203,14 @@ impl TagCloud {
 
         // Compute total content height for vertical centering
         let total_height = if let Some(last) = placed.last() {
-            last.y + placed.iter().fold(0.0_f32, |max_h, p| {
-                if (p.y - last.y).abs() < 0.01 {
-                    max_h.max(p.line_height)
-                } else {
-                    max_h
-                }
-            })
+            last.y
+                + placed.iter().fold(0.0_f32, |max_h, p| {
+                    if (p.y - last.y).abs() < 0.01 {
+                        max_h.max(p.line_height)
+                    } else {
+                        max_h
+                    }
+                })
         } else {
             0.0
         };
@@ -230,9 +223,8 @@ impl TagCloud {
             // Staggered opacity animation
             let tag_alpha = if self.animated {
                 let stagger_delay = (draw_order as f64 / tag_count as f64) * 0.6;
-                let tag_progress =
-                    ((time - stagger_delay) / (self.animation_duration * 0.4)).clamp(0.0, 1.0)
-                        as f32;
+                let tag_progress = ((time - stagger_delay) / (self.animation_duration * 0.4))
+                    .clamp(0.0, 1.0) as f32;
                 tag_progress * progress
             } else {
                 1.0

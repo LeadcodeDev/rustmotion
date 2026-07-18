@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Paint, PaintStyle, Path, Rect, RRect};
+use skia_safe::{Canvas, Paint, PaintStyle, Path, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -122,20 +122,21 @@ impl Mockup {
             return Ok(cached.clone());
         }
 
-        let data = std::fs::read(&self.src)
-            .map_err(|e| RustmotionError::ImageLoad { path: self.src.clone(), reason: e.to_string() })?;
+        let data = std::fs::read(&self.src).map_err(|e| RustmotionError::ImageLoad {
+            path: self.src.clone(),
+            reason: e.to_string(),
+        })?;
         let skia_data = skia_safe::Data::new_copy(&data);
-        let decoded = skia_safe::Image::from_encoded(skia_data)
-            .ok_or_else(|| RustmotionError::ImageDecode { path: self.src.clone() })?;
+        let decoded = skia_safe::Image::from_encoded(skia_data).ok_or_else(|| {
+            RustmotionError::ImageDecode {
+                path: self.src.clone(),
+            }
+        })?;
         cache.insert(self.src.clone(), decoded.clone());
         Ok(decoded)
     }
 
-    fn draw_content_image(
-        &self,
-        canvas: &Canvas,
-        screen_rect: Rect,
-    ) -> Result<()> {
+    fn draw_content_image(&self, canvas: &Canvas, screen_rect: Rect) -> Result<()> {
         let img = self.load_content_image()?;
         let img_w = img.width() as f32;
         let img_h = img.height() as f32;
@@ -158,13 +159,7 @@ impl Mockup {
         Ok(())
     }
 
-    fn render_phone(
-        &self,
-        canvas: &Canvas,
-        w: f32,
-        h: f32,
-        m: &DeviceMetrics,
-    ) -> Result<()> {
+    fn render_phone(&self, canvas: &Canvas, w: f32, h: f32, m: &DeviceMetrics) -> Result<()> {
         // Device body
         let body_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let body_rrect = RRect::new_rect_xy(body_rect, m.corner_radius, m.corner_radius);
@@ -185,7 +180,8 @@ impl Mockup {
         let mut screen_bg = paint_from_hex(self.theme.screen_bg());
         screen_bg.set_style(PaintStyle::Fill);
         let screen_radius = m.corner_radius - m.bezel_side;
-        let screen_rrect = RRect::new_rect_xy(screen_rect, screen_radius.max(0.0), screen_radius.max(0.0));
+        let screen_rrect =
+            RRect::new_rect_xy(screen_rect, screen_radius.max(0.0), screen_radius.max(0.0));
         canvas.draw_rrect(screen_rrect, &screen_bg);
 
         // Content image
@@ -237,21 +233,17 @@ impl Mockup {
             indicator_paint.set_style(PaintStyle::Fill);
             indicator_paint.set_anti_alias(true);
 
-            let indicator_rect = Rect::from_xywh(indicator_x, indicator_y, indicator_w, indicator_h);
-            let indicator_rrect = RRect::new_rect_xy(indicator_rect, indicator_h / 2.0, indicator_h / 2.0);
+            let indicator_rect =
+                Rect::from_xywh(indicator_x, indicator_y, indicator_w, indicator_h);
+            let indicator_rrect =
+                RRect::new_rect_xy(indicator_rect, indicator_h / 2.0, indicator_h / 2.0);
             canvas.draw_rrect(indicator_rrect, &indicator_paint);
         }
 
         Ok(())
     }
 
-    fn render_laptop(
-        &self,
-        canvas: &Canvas,
-        w: f32,
-        h: f32,
-        m: &DeviceMetrics,
-    ) -> Result<()> {
+    fn render_laptop(&self, canvas: &Canvas, w: f32, h: f32, m: &DeviceMetrics) -> Result<()> {
         let screen_h = h * 0.85;
         let _base_h = h - screen_h;
 
@@ -301,13 +293,7 @@ impl Mockup {
         Ok(())
     }
 
-    fn render_browser(
-        &self,
-        canvas: &Canvas,
-        w: f32,
-        h: f32,
-        m: &DeviceMetrics,
-    ) -> Result<()> {
+    fn render_browser(&self, canvas: &Canvas, w: f32, h: f32, m: &DeviceMetrics) -> Result<()> {
         // Window background
         let body_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let body_rrect = RRect::new_rect_xy(body_rect, m.corner_radius, m.corner_radius);

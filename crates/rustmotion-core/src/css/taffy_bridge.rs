@@ -9,8 +9,8 @@
 use taffy::prelude as tf;
 
 use super::style::{
-    AlignContent, AlignItems, AlignSelf, CssStyle, Display, Edges, FlexDirection, FlexWrap,
-    Gap, JustifyContent, Overflow, Position, Size,
+    AlignContent, AlignItems, AlignSelf, CssStyle, Display, Edges, FlexDirection, FlexWrap, Gap,
+    JustifyContent, Overflow, Position, Size,
 };
 use super::units::{LengthContext, LengthPercentage, ParsedLength};
 
@@ -21,7 +21,9 @@ pub struct ConversionContext {
 
 impl Default for ConversionContext {
     fn default() -> Self {
-        Self { length: LengthContext::default() }
+        Self {
+            length: LengthContext::default(),
+        }
     }
 }
 
@@ -126,7 +128,10 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
             Gap::Uniform(v) => (lp_to_lp(v, ctx), lp_to_lp(v, ctx)),
             Gap::RowColumn { row, column } => (lp_to_lp(row, ctx), lp_to_lp(column, ctx)),
         };
-        style.gap = tf::Size { width: col, height: row };
+        style.gap = tf::Size {
+            width: col,
+            height: row,
+        };
     }
 
     // Overflow
@@ -203,7 +208,9 @@ fn lp_to_lp_auto(
     v: Option<&LengthPercentage>,
     ctx: &ConversionContext,
 ) -> tf::LengthPercentageAuto {
-    let Some(v) = v else { return tf::LengthPercentageAuto::auto() };
+    let Some(v) = v else {
+        return tf::LengthPercentageAuto::auto();
+    };
     match v.parse() {
         ParsedLength::Auto => tf::LengthPercentageAuto::auto(),
         ParsedLength::Px(p) => tf::LengthPercentageAuto::length(p),
@@ -222,7 +229,9 @@ fn lp_to_lp_auto(
 
 /// Convert `Size` → taffy `Dimension`.
 fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
-    let Some(s) = s else { return tf::Dimension::auto() };
+    let Some(s) = s else {
+        return tf::Dimension::auto();
+    };
     match s {
         Size::Auto(_) => tf::Dimension::auto(),
         Size::Length(lp) => match lp.parse() {
@@ -243,10 +252,7 @@ fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
     }
 }
 
-fn edges_to_rect_lp(
-    e: Option<&Edges>,
-    ctx: &ConversionContext,
-) -> tf::Rect<tf::LengthPercentage> {
+fn edges_to_rect_lp(e: Option<&Edges>, ctx: &ConversionContext) -> tf::Rect<tf::LengthPercentage> {
     let Some(e) = e else {
         return tf::Rect {
             top: tf::LengthPercentage::length(0.0),

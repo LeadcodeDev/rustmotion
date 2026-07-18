@@ -4,12 +4,14 @@ use openh264::OpenH264API;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::engine::{rgba_to_yuv420, preextract_video_frames, prefetch_icons};
+use crate::engine::{preextract_video_frames, prefetch_icons, rgba_to_yuv420};
 use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
 
 use super::mux::mux_h264_to_mp4;
-use super::tasks::{build_frame_tasks, build_scene_frame_tasks, hash_scene, render_frame_task, SceneSegment};
+use super::tasks::{
+    build_frame_tasks, build_scene_frame_tasks, hash_scene, render_frame_task, SceneSegment,
+};
 use super::EncodeProgress;
 
 /// Create an OpenH264 encoder with standard settings for the given video dimensions.
@@ -72,7 +74,9 @@ pub fn encode_video(
             let yuv = yuv_result?;
             encoder.force_intra_frame();
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
-            let bitstream = encoder.encode(&yuv_buf).map_err(|e| RustmotionError::from(e.to_string()))?;
+            let bitstream = encoder
+                .encode(&yuv_buf)
+                .map_err(|e| RustmotionError::from(e.to_string()))?;
             bitstream.write_vec(&mut h264_data);
         }
     }
@@ -82,7 +86,15 @@ pub fn encode_video(
     }
 
     let total_duration = total_frames as f64 / fps as f64;
-    mux_h264_to_mp4(&h264_data, output_path, width, height, fps, scenario, total_duration)?;
+    mux_h264_to_mp4(
+        &h264_data,
+        output_path,
+        width,
+        height,
+        fps,
+        scenario,
+        total_duration,
+    )?;
 
     Ok(())
 }
@@ -107,7 +119,9 @@ pub fn encode_video_incremental(
     }
     if scenario.views.len() > 1 {
         return Err(RustmotionError::IncrementalUnsupported {
-            reason: "incremental encoding requires a single slide view (composition has multiple views)".to_string(),
+            reason:
+                "incremental encoding requires a single slide view (composition has multiple views)"
+                    .to_string(),
         });
     }
     if !matches!(scenario.views[0].view_type, crate::schema::ViewType::Slide) {
@@ -192,7 +206,10 @@ pub fn encode_video_incremental(
             .collect();
 
         if let Some(ref mut cb) = on_progress {
-            cb(EncodeProgress::Rendering(counter.load(Ordering::Relaxed), frames_to_render));
+            cb(EncodeProgress::Rendering(
+                counter.load(Ordering::Relaxed),
+                frames_to_render,
+            ));
         }
 
         all_yuv.extend(batch_results);
@@ -205,7 +222,8 @@ pub fn encode_video_incremental(
 
     let mut encoder = create_encoder(width, height, fps)?;
     let mut yuv_iter = all_yuv.into_iter();
-    let mut rendered_segments: std::collections::HashMap<usize, Vec<u8>> = std::collections::HashMap::new();
+    let mut rendered_segments: std::collections::HashMap<usize, Vec<u8>> =
+        std::collections::HashMap::new();
     let mut encoded_count: u32 = 0;
 
     for &(scene_idx, frame_count) in &scene_frame_counts {
@@ -215,7 +233,9 @@ pub fn encode_video_incremental(
             let yuv = yuv_iter.next().unwrap()?;
             encoder.force_intra_frame();
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
-            let bitstream = encoder.encode(&yuv_buf).map_err(|e| RustmotionError::from(e.to_string()))?;
+            let bitstream = encoder
+                .encode(&yuv_buf)
+                .map_err(|e| RustmotionError::from(e.to_string()))?;
             bitstream.write_vec(&mut segment_h264);
             encoded_count += 1;
             if let Some(ref mut cb) = on_progress {
@@ -254,7 +274,15 @@ pub fn encode_video_incremental(
     }
 
     let total_duration = total_frames as f64 / fps as f64;
-    mux_h264_to_mp4(&h264_data, output_path, width, height, fps, scenario, total_duration)?;
+    mux_h264_to_mp4(
+        &h264_data,
+        output_path,
+        width,
+        height,
+        fps,
+        scenario,
+        total_duration,
+    )?;
 
     if !quiet && on_progress.is_none() {
         eprintln!("Done!");

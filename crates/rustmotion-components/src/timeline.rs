@@ -5,7 +5,9 @@ use skia_safe::{Canvas, Font, FontStyle, PaintStyle, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::schema::TimelineStep as AnimTimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -77,16 +79,36 @@ pub enum TimelineDirection {
     Vertical,
 }
 
-fn default_timeline_width() -> f32 { 800.0 }
-fn default_node_radius() -> f32 { 24.0 }
-fn default_bar_color() -> String { "#333333".to_string() }
-fn default_bar_fill_color() -> String { "#58A6FF".to_string() }
-fn default_bar_height() -> f32 { 4.0 }
-fn default_fill_progress() -> f32 { 1.0 }
-fn default_label_font_size() -> f32 { 16.0 }
-fn default_label_color() -> String { "#FFFFFF".to_string() }
-fn default_sublabel_color() -> String { "#8B949E".to_string() }
-fn default_node_color() -> String { "#58A6FF".to_string() }
+fn default_timeline_width() -> f32 {
+    800.0
+}
+fn default_node_radius() -> f32 {
+    24.0
+}
+fn default_bar_color() -> String {
+    "#333333".to_string()
+}
+fn default_bar_fill_color() -> String {
+    "#58A6FF".to_string()
+}
+fn default_bar_height() -> f32 {
+    4.0
+}
+fn default_fill_progress() -> f32 {
+    1.0
+}
+fn default_label_font_size() -> f32 {
+    16.0
+}
+fn default_label_color() -> String {
+    "#FFFFFF".to_string()
+}
+fn default_sublabel_color() -> String {
+    "#8B949E".to_string()
+}
+fn default_node_color() -> String {
+    "#58A6FF".to_string()
+}
 
 rustmotion_core::impl_traits!(Timeline {
     Animatable => animation,
@@ -97,14 +119,20 @@ rustmotion_core::impl_traits!(Timeline {
 impl Timeline {
     fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
         let n = self.steps.len();
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
 
         let fm = font_mgr();
-        let typeface = fm.match_family_style("Inter", FontStyle::normal())
+        let typeface = fm
+            .match_family_style("Inter", FontStyle::normal())
             .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
             .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
             .or_else(|| fm.match_family_style("sans-serif", FontStyle::normal()))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, FontStyle::normal()).expect("No fallback font"));
+            .unwrap_or_else(|| {
+                fm.legacy_make_typeface(None, FontStyle::normal())
+                    .expect("No fallback font")
+            });
         let font = Font::from_typeface(&typeface, self.font_size);
         let icon_font = Font::from_typeface(&typeface, self.node_radius * 0.8);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.node_radius * 0.8));
@@ -113,14 +141,38 @@ impl Timeline {
         let ascent = -metrics.ascent;
 
         let r = self.node_radius;
-        let fill_progress = if props.draw_progress >= 0.0 { props.draw_progress } else { self.fill_progress };
+        let fill_progress = if props.draw_progress >= 0.0 {
+            props.draw_progress
+        } else {
+            self.fill_progress
+        };
 
         match self.direction {
             TimelineDirection::Horizontal => {
-                self.render_horizontal(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent);
+                self.render_horizontal(
+                    canvas,
+                    n,
+                    r,
+                    fill_progress,
+                    &font,
+                    &icon_font,
+                    &emoji_font,
+                    &sublabel_font,
+                    ascent,
+                );
             }
             TimelineDirection::Vertical => {
-                self.render_vertical(canvas, n, r, fill_progress, &font, &icon_font, &emoji_font, &sublabel_font, ascent);
+                self.render_vertical(
+                    canvas,
+                    n,
+                    r,
+                    fill_progress,
+                    &font,
+                    &icon_font,
+                    &emoji_font,
+                    &sublabel_font,
+                    ascent,
+                );
             }
         }
     }
@@ -144,40 +196,62 @@ impl Timeline {
         let spacing = if n > 1 { total_w / (n - 1) as f32 } else { 0.0 };
 
         // Draw background bar
-        let bar_rect = Rect::from_xywh(
-            0.0, bar_y - self.bar_height / 2.0,
-            total_w, self.bar_height,
-        );
+        let bar_rect =
+            Rect::from_xywh(0.0, bar_y - self.bar_height / 2.0, total_w, self.bar_height);
         let mut bar_paint = paint_from_hex(&self.bar_color);
         bar_paint.set_style(PaintStyle::Fill);
-        canvas.draw_round_rect(bar_rect, self.bar_height / 2.0, self.bar_height / 2.0, &bar_paint);
+        canvas.draw_round_rect(
+            bar_rect,
+            self.bar_height / 2.0,
+            self.bar_height / 2.0,
+            &bar_paint,
+        );
 
         // Draw filled bar
         if fill_progress > 0.001 {
             let fill_w = total_w * fill_progress.clamp(0.0, 1.0);
-            let fill_rect = Rect::from_xywh(
-                0.0, bar_y - self.bar_height / 2.0,
-                fill_w, self.bar_height,
-            );
+            let fill_rect =
+                Rect::from_xywh(0.0, bar_y - self.bar_height / 2.0, fill_w, self.bar_height);
             let mut fill_paint = paint_from_hex(&self.bar_fill_color);
             fill_paint.set_style(PaintStyle::Fill);
             canvas.save();
-            canvas.clip_rect(Rect::from_xywh(0.0, bar_y - self.bar_height / 2.0, total_w, self.bar_height), skia_safe::ClipOp::Intersect, false);
-            canvas.draw_round_rect(fill_rect, self.bar_height / 2.0, self.bar_height / 2.0, &fill_paint);
+            canvas.clip_rect(
+                Rect::from_xywh(0.0, bar_y - self.bar_height / 2.0, total_w, self.bar_height),
+                skia_safe::ClipOp::Intersect,
+                false,
+            );
+            canvas.draw_round_rect(
+                fill_rect,
+                self.bar_height / 2.0,
+                self.bar_height / 2.0,
+                &fill_paint,
+            );
             canvas.restore();
         }
 
         // Draw nodes and labels
         for (i, step) in self.steps.iter().enumerate() {
-            let cx = if n > 1 { i as f32 * spacing } else { total_w / 2.0 };
+            let cx = if n > 1 {
+                i as f32 * spacing
+            } else {
+                total_w / 2.0
+            };
             let cy = bar_y;
 
             // Determine if this step is "active" (filled bar has reached it)
-            let step_progress = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+            let step_progress = if n > 1 {
+                i as f32 / (n - 1) as f32
+            } else {
+                0.0
+            };
             let is_active = fill_progress >= step_progress;
 
             // Node circle
-            let node_color = if is_active { &step.color } else { &self.bar_color };
+            let node_color = if is_active {
+                &step.color
+            } else {
+                &self.bar_color
+            };
             let mut node_paint = paint_from_hex(node_color);
             node_paint.set_style(PaintStyle::Fill);
             node_paint.set_anti_alias(true);
@@ -193,7 +267,16 @@ impl Timeline {
                 let iy = cy + (icon_ascent - icon_descent) / 2.0;
                 let mut icon_paint = paint_from_hex("#FFFFFF");
                 icon_paint.set_anti_alias(true);
-                draw_text_with_fallback(canvas, icon, icon_font, emoji_font, 0.0, ix, iy, &icon_paint);
+                draw_text_with_fallback(
+                    canvas,
+                    icon,
+                    icon_font,
+                    emoji_font,
+                    0.0,
+                    ix,
+                    iy,
+                    &icon_paint,
+                );
             }
 
             // Label below
@@ -211,7 +294,16 @@ impl Timeline {
                 let sy = ly + self.font_size * 1.2;
                 let mut sub_paint = paint_from_hex(&self.sublabel_color);
                 sub_paint.set_anti_alias(true);
-                draw_text_with_fallback(canvas, sublabel, sublabel_font, &None, 0.0, sx, sy, &sub_paint);
+                draw_text_with_fallback(
+                    canvas,
+                    sublabel,
+                    sublabel_font,
+                    &None,
+                    0.0,
+                    sx,
+                    sy,
+                    &sub_paint,
+                );
             }
         }
     }
@@ -233,34 +325,48 @@ impl Timeline {
         let total_h = if n > 1 { (n - 1) as f32 * spacing } else { 0.0 };
 
         // Background bar
-        let bar_rect = Rect::from_xywh(
-            bar_x - self.bar_height / 2.0, 0.0,
-            self.bar_height, total_h,
-        );
+        let bar_rect =
+            Rect::from_xywh(bar_x - self.bar_height / 2.0, 0.0, self.bar_height, total_h);
         let mut bar_paint = paint_from_hex(&self.bar_color);
         bar_paint.set_style(PaintStyle::Fill);
-        canvas.draw_round_rect(bar_rect, self.bar_height / 2.0, self.bar_height / 2.0, &bar_paint);
+        canvas.draw_round_rect(
+            bar_rect,
+            self.bar_height / 2.0,
+            self.bar_height / 2.0,
+            &bar_paint,
+        );
 
         // Filled bar
         if fill_progress > 0.001 {
             let fill_h = total_h * fill_progress.clamp(0.0, 1.0);
-            let fill_rect = Rect::from_xywh(
-                bar_x - self.bar_height / 2.0, 0.0,
-                self.bar_height, fill_h,
-            );
+            let fill_rect =
+                Rect::from_xywh(bar_x - self.bar_height / 2.0, 0.0, self.bar_height, fill_h);
             let mut fill_paint = paint_from_hex(&self.bar_fill_color);
             fill_paint.set_style(PaintStyle::Fill);
-            canvas.draw_round_rect(fill_rect, self.bar_height / 2.0, self.bar_height / 2.0, &fill_paint);
+            canvas.draw_round_rect(
+                fill_rect,
+                self.bar_height / 2.0,
+                self.bar_height / 2.0,
+                &fill_paint,
+            );
         }
 
         for (i, step) in self.steps.iter().enumerate() {
             let cx = bar_x;
             let cy = if n > 1 { i as f32 * spacing } else { 0.0 };
 
-            let step_progress = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+            let step_progress = if n > 1 {
+                i as f32 / (n - 1) as f32
+            } else {
+                0.0
+            };
             let is_active = fill_progress >= step_progress;
 
-            let node_color = if is_active { &step.color } else { &self.bar_color };
+            let node_color = if is_active {
+                &step.color
+            } else {
+                &self.bar_color
+            };
             let mut node_paint = paint_from_hex(node_color);
             node_paint.set_style(PaintStyle::Fill);
             node_paint.set_anti_alias(true);
@@ -275,7 +381,16 @@ impl Timeline {
                 let iy = cy + (icon_ascent - icon_descent) / 2.0;
                 let mut icon_paint = paint_from_hex("#FFFFFF");
                 icon_paint.set_anti_alias(true);
-                draw_text_with_fallback(canvas, icon, icon_font, emoji_font, 0.0, ix, iy, &icon_paint);
+                draw_text_with_fallback(
+                    canvas,
+                    icon,
+                    icon_font,
+                    emoji_font,
+                    0.0,
+                    ix,
+                    iy,
+                    &icon_paint,
+                );
             }
 
             // Label to the right

@@ -166,12 +166,8 @@ impl Treemap {
             let cy = inset_rect.top + inset_rect.height() / 2.0;
             let scaled_w = inset_rect.width() * progress;
             let scaled_h = inset_rect.height() * progress;
-            let scaled_rect = Rect::from_xywh(
-                cx - scaled_w / 2.0,
-                cy - scaled_h / 2.0,
-                scaled_w,
-                scaled_h,
-            );
+            let scaled_rect =
+                Rect::from_xywh(cx - scaled_w / 2.0, cy - scaled_h / 2.0, scaled_w, scaled_h);
 
             // Color
             let color_str = item
@@ -214,7 +210,8 @@ impl Treemap {
                 let (_, metrics) = font.metrics();
 
                 let text_x = scaled_rect.left + (scaled_rect.width() - text_w) / 2.0;
-                let text_y = scaled_rect.top + scaled_rect.height() / 2.0
+                let text_y = scaled_rect.top
+                    + scaled_rect.height() / 2.0
                     + (-metrics.ascent - metrics.descent) / 2.0;
 
                 draw_text_with_fallback(

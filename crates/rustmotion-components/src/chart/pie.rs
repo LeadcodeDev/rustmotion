@@ -40,7 +40,13 @@ impl Chart {
         Ok(())
     }
 
-    pub(super) fn render_donut(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+    pub(super) fn render_donut(
+        &self,
+        canvas: &Canvas,
+        w: f32,
+        h: f32,
+        progress: f32,
+    ) -> Result<()> {
         // Draw pie first
         self.render_pie(canvas, w, h, progress)?;
 

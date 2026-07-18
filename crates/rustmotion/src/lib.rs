@@ -10,10 +10,10 @@ pub use rustmotion_components as components;
 // Re-export engine from core + local extensions
 pub mod engine {
     pub use rustmotion_core::engine::*;
+    pub mod preload;
     pub mod render;
     pub mod world;
-    pub mod preload;
-    pub use preload::{prefetch_icons, preextract_video_frames};
+    pub use preload::{preextract_video_frames, prefetch_icons};
 }
 
 // Local modules

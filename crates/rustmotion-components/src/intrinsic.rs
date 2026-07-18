@@ -8,8 +8,7 @@
 use skia_safe::{Font, FontStyle as SkFontStyle};
 
 use rustmotion_core::css::style::{
-    CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    LineHeight,
+    CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, LineHeight,
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::renderer::{
@@ -62,7 +61,12 @@ impl TextIntrinsic {
 
     /// Build with an explicit `wrap` override (used by atomic components like
     /// counter, kbd, badge that never wrap).
-    pub fn from_parts_with_wrap(content: &str, style: &CssStyle, max_width: Option<f32>, wrap: bool) -> Self {
+    pub fn from_parts_with_wrap(
+        content: &str,
+        style: &CssStyle,
+        max_width: Option<f32>,
+        wrap: bool,
+    ) -> Self {
         let mut t = Self::from_parts(content, style, max_width);
         t.wrap = wrap;
         t
@@ -123,7 +127,10 @@ impl TextIntrinsic {
             .or_else(|| fm.match_family_style("Helvetica", sk_style))
             .or_else(|| fm.match_family_style("Arial", sk_style))
             .or_else(|| fm.match_family_style("sans-serif", sk_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, sk_style).expect("no fallback font"));
+            .unwrap_or_else(|| {
+                fm.legacy_make_typeface(None, sk_style)
+                    .expect("no fallback font")
+            });
         Font::from_typeface(typeface, self.font_size)
     }
 }
@@ -240,10 +247,11 @@ impl CounterIntrinsic {
         } else {
             absmax
         };
-        let display =
-            format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
+        let display = format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
         // Counter is atomic: it never wraps.
-        Self(TextIntrinsic::from_parts_with_wrap(&display, &c.style, None, false))
+        Self(TextIntrinsic::from_parts_with_wrap(
+            &display, &c.style, None, false,
+        ))
     }
 }
 
@@ -351,7 +359,10 @@ mod tests {
             content: "Hello World".into(),
             max_width: None,
             timing: Default::default(),
-            style: CssStyle { font_size: Some(Length::Px(32.0)), ..Default::default() },
+            style: CssStyle {
+                font_size: Some(Length::Px(32.0)),
+                ..Default::default()
+            },
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,
@@ -364,7 +375,11 @@ mod tests {
             (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
         );
         assert!(w > 0.0, "width should be > 0, got {}", w);
-        assert!(h > 30.0, "height should be roughly font_size * line_height, got {}", h);
+        assert!(
+            h > 30.0,
+            "height should be roughly font_size * line_height, got {}",
+            h
+        );
     }
 
     #[test]
@@ -373,7 +388,10 @@ mod tests {
             content: "the quick brown fox jumps over the lazy dog".into(),
             max_width: None,
             timing: Default::default(),
-            style: CssStyle { font_size: Some(Length::Px(20.0)), ..Default::default() },
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                ..Default::default()
+            },
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,
@@ -403,7 +421,10 @@ mod tests {
             content: "".into(),
             max_width: None,
             timing: Default::default(),
-            style: CssStyle { font_size: Some(Length::Px(24.0)), ..Default::default() },
+            style: CssStyle {
+                font_size: Some(Length::Px(24.0)),
+                ..Default::default()
+            },
             timeline: Vec::new(),
             stagger: None,
             text_shadow: None,

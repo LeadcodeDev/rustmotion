@@ -19,7 +19,9 @@ impl CanvasGuard {
     #[inline]
     pub fn new(canvas: &Canvas) -> Self {
         canvas.save();
-        Self { canvas: canvas as *const Canvas }
+        Self {
+            canvas: canvas as *const Canvas,
+        }
     }
 }
 
@@ -30,6 +32,8 @@ impl Drop for CanvasGuard {
         // `new`, and Skia canvases are not Send/Sync — the guard cannot
         // outlive the borrow because we hold no lifetime, but in practice
         // every call site keeps the canvas alive for the entire scope.
-        unsafe { (*self.canvas).restore(); }
+        unsafe {
+            (*self.canvas).restore();
+        }
     }
 }

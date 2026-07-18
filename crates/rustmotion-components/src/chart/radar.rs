@@ -8,7 +8,13 @@ use rustmotion_core::engine::renderer::{
 use super::Chart;
 
 impl Chart {
-    pub(super) fn render_radar(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+    pub(super) fn render_radar(
+        &self,
+        canvas: &Canvas,
+        w: f32,
+        h: f32,
+        progress: f32,
+    ) -> Result<()> {
         let n_axes = self.axes.len();
         if n_axes < 3 || self.radar_data.is_empty() {
             return Ok(());
@@ -85,16 +91,9 @@ impl Chart {
             if rd.values.len() != n_axes {
                 continue;
             }
-            let max_val = rd
-                .values
-                .iter()
-                .fold(0.0_f64, |a, &b| a.max(b))
-                .max(0.001);
+            let max_val = rd.values.iter().fold(0.0_f64, |a, &b| a.max(b)).max(0.001);
 
-            let color_str = rd
-                .color
-                .as_deref()
-                .unwrap_or_else(|| self.get_color(di));
+            let color_str = rd.color.as_deref().unwrap_or_else(|| self.get_color(di));
 
             let mut data_path = Path::new();
             for (i, &val) in rd.values.iter().enumerate() {

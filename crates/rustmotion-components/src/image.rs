@@ -42,9 +42,13 @@ impl Painter for Image {
         let img = if let Some(cached) = cache.get(&self.src) {
             cached.clone()
         } else {
-            let Ok(data) = std::fs::read(&self.src) else { return };
+            let Ok(data) = std::fs::read(&self.src) else {
+                return;
+            };
             let skia_data = skia_safe::Data::new_copy(&data);
-            let Some(decoded) = skia_safe::Image::from_encoded(skia_data) else { return };
+            let Some(decoded) = skia_safe::Image::from_encoded(skia_data) else {
+                return;
+            };
             cache.insert(self.src.clone(), decoded.clone());
             decoded
         };

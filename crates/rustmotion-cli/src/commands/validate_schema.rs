@@ -13,9 +13,7 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
         errors.push("video.width and video.height must be > 0".to_string());
     }
     if scenario.video.width % 2 != 0 || scenario.video.height % 2 != 0 {
-        errors.push(
-            "video.width and video.height must be even (required for H.264)".to_string(),
-        );
+        errors.push("video.width and video.height must be even (required for H.264)".to_string());
     }
     if scenario.video.fps == 0 {
         errors.push("video.fps must be > 0".to_string());
@@ -29,10 +27,7 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
             if scene.duration <= 0.0 {
-                errors.push(format!(
-                    "views[{}].scenes[{}].duration must be > 0",
-                    vi, si
-                ));
+                errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
             }
 
             let children = rustmotion::engine::render::deserialize_children(scene);
@@ -48,10 +43,7 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
 
     for (i, audio) in scenario.audio.iter().enumerate() {
         if !std::path::Path::new(&audio.src).exists() {
-            errors.push(format!(
-                "audio[{}].src: file not found '{}'",
-                i, audio.src
-            ));
+            errors.push(format!("audio[{}].src: file not found '{}'", i, audio.src));
         }
     }
 
@@ -72,17 +64,16 @@ fn validate_children(
             let (start, end) = timed.timing();
             if let (Some(s), Some(e)) = (start, end) {
                 if s >= e {
-                    errors.push(format!(
-                        "{}: start_at ({}) must be < end_at ({})",
-                        p, s, e
-                    ));
+                    errors.push(format!("{}: start_at ({}) must be < end_at ({})", p, s, e));
                 }
             }
         }
 
         // Animation completion budget check: ensure entrance animations finish within the scene.
         if let Some(anim) = child.component.as_animatable() {
-            let start_at = child.component.as_timed()
+            let start_at = child
+                .component
+                .as_timed()
                 .and_then(|t| t.timing().0)
                 .unwrap_or(0.0);
 
@@ -155,8 +146,10 @@ fn validate_children(
                 }
             }
             Component::Counter(c) => {
-                let from_len = counter_display_len(c.from, c.decimals, &c.separator, &c.prefix, &c.suffix);
-                let to_len = counter_display_len(c.to, c.decimals, &c.separator, &c.prefix, &c.suffix);
+                let from_len =
+                    counter_display_len(c.from, c.decimals, &c.separator, &c.prefix, &c.suffix);
+                let to_len =
+                    counter_display_len(c.to, c.decimals, &c.separator, &c.prefix, &c.suffix);
                 if from_len != to_len {
                     warnings.push(format!(
                         "{}: counter from={} to={} — display width changes from {} to {} chars. \
@@ -300,7 +293,11 @@ fn counter_display_len(
     };
 
     let sign = if value < 0.0 { 1 } else { 0 };
-    let decimal_chars = if decimals > 0 { 1 + decimals as usize } else { 0 };
+    let decimal_chars = if decimals > 0 {
+        1 + decimals as usize
+    } else {
+        0
+    };
     let prefix_len = prefix.as_deref().map(str::len).unwrap_or(0);
     let suffix_len = suffix.as_deref().map(str::len).unwrap_or(0);
 

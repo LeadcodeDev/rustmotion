@@ -1,9 +1,9 @@
+use crate::tui;
+use crate::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
-use crate::tui;
-use crate::OutputFormat;
 use std::path::{Path, PathBuf};
 
 use crate::commands::validation::{self, ValidationSource};
@@ -67,44 +67,68 @@ pub fn cmd_render(
         }
     } else {
         // Determine output format
-        let fmt = format.as_deref().unwrap_or_else(|| {
-            output.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("mp4")
-        });
+        let fmt = format
+            .as_deref()
+            .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
 
         let config = &scenario.video;
-        let output_str = output.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
-            path: output.to_string_lossy().into_owned(),
-        })?;
+        let output_str = output
+            .to_str()
+            .ok_or_else(|| RustmotionError::NonUtf8Path {
+                path: output.to_string_lossy().into_owned(),
+            })?;
 
         // Helper: create TUI and wrap encode call with progress
         let make_tui = |codec_label: &str| -> Option<tui::TuiProgress> {
-            if quiet { return None; }
+            if quiet {
+                return None;
+            }
             let total = encode::build_frame_tasks(&scenario).len() as u32;
-            tui::TuiProgress::new(total, output_str, config.width, config.height, config.fps, codec_label).ok()
+            tui::TuiProgress::new(
+                total,
+                output_str,
+                config.width,
+                config.height,
+                config.fps,
+                codec_label,
+            )
+            .ok()
         };
 
         match fmt {
             "png-seq" => {
                 let mut tui = make_tui("png");
                 let mut cb = |p: encode::EncodeProgress| {
-                    if let (Some(ref mut t), encode::EncodeProgress::Rendering(c, _)) = (&mut tui, &p) {
+                    if let (Some(ref mut t), encode::EncodeProgress::Rendering(c, _)) =
+                        (&mut tui, &p)
+                    {
                         t.set_progress(*c);
                     }
                 };
-                encode::encode_png_sequence(&scenario, output_str, quiet, transparent, Some(&mut cb))?;
-                if let Some(ref mut t) = tui { t.finish("Done!"); }
+                encode::encode_png_sequence(
+                    &scenario,
+                    output_str,
+                    quiet,
+                    transparent,
+                    Some(&mut cb),
+                )?;
+                if let Some(ref mut t) = tui {
+                    t.finish("Done!");
+                }
             }
             "gif" => {
                 let mut tui = make_tui("gif");
                 let mut cb = |p: encode::EncodeProgress| {
-                    if let (Some(ref mut t), encode::EncodeProgress::Rendering(c, _)) = (&mut tui, &p) {
+                    if let (Some(ref mut t), encode::EncodeProgress::Rendering(c, _)) =
+                        (&mut tui, &p)
+                    {
                         t.set_progress(*c);
                     }
                 };
                 encode::encode_gif(&scenario, output_str, quiet, Some(&mut cb))?;
-                if let Some(ref mut t) = tui { t.finish("Done!"); }
+                if let Some(ref mut t) = tui {
+                    t.finish("Done!");
+                }
             }
             "raw" => {
                 encode::encode_raw_stdout(&scenario, false)?;
@@ -131,8 +155,18 @@ pub fn cmd_render(
                             }
                         }
                     };
-                    encode::encode_with_ffmpeg(&scenario, output_str, quiet, codec_str, crf, transparent, Some(&mut cb))?;
-                    if let Some(ref mut t) = tui { t.finish("Done!"); }
+                    encode::encode_with_ffmpeg(
+                        &scenario,
+                        output_str,
+                        quiet,
+                        codec_str,
+                        crf,
+                        transparent,
+                        Some(&mut cb),
+                    )?;
+                    if let Some(ref mut t) = tui {
+                        t.finish("Done!");
+                    }
                 } else {
                     let mut tui = make_tui("h264");
                     let mut cb = |p: encode::EncodeProgress| {
@@ -148,7 +182,9 @@ pub fn cmd_render(
                         }
                     };
                     encode::encode_video(&scenario, output_str, quiet, Some(&mut cb))?;
-                    if let Some(ref mut t) = tui { t.finish("Done!"); }
+                    if let Some(ref mut t) = tui {
+                        t.finish("Done!");
+                    }
                 }
             }
         }
@@ -182,25 +218,25 @@ pub fn cmd_watch(
     lenient: bool,
     strict_anim: bool,
 ) -> Result<()> {
-    use notify::{Watcher, RecursiveMode};
+    use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
 
     // Determine if we can use incremental rendering (native h264 only)
-    let fmt = format.as_deref().unwrap_or_else(|| {
-        output.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("mp4")
-    });
+    let fmt = format
+        .as_deref()
+        .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
     let use_ffmpeg = codec.as_deref().map_or(false, |c| c != "h264")
         || matches!(fmt, "webm" | "mov")
         || transparent;
-    let can_incremental = frame.is_none()
-        && !matches!(fmt, "png-seq" | "gif" | "raw")
-        && !use_ffmpeg;
+    let can_incremental =
+        frame.is_none() && !matches!(fmt, "png-seq" | "gif" | "raw") && !use_ffmpeg;
 
-    let output_str = output.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
-        path: output.to_string_lossy().into_owned(),
-    })?.to_string();
+    let output_str = output
+        .to_str()
+        .ok_or_else(|| RustmotionError::NonUtf8Path {
+            path: output.to_string_lossy().into_owned(),
+        })?
+        .to_string();
 
     // State for incremental rendering
     let mut prev_segments: Option<Vec<encode::SceneSegment>> = None;
@@ -231,7 +267,8 @@ pub fn cmd_watch(
                     scenario.video.height,
                     scenario.video.fps,
                     codec_label,
-                ).ok();
+                )
+                .ok();
             }
 
             if can_incremental {
@@ -243,7 +280,9 @@ pub fn cmd_watch(
                 let mut cb = |progress: encode::EncodeProgress| {
                     if let Some(ref mut tui) = tui_watch {
                         match progress {
-                            encode::EncodeProgress::Rendering(current, total) => tui.set_frame_progress(current, total),
+                            encode::EncodeProgress::Rendering(current, total) => {
+                                tui.set_frame_progress(current, total)
+                            }
                             encode::EncodeProgress::Encoding(current, total) => {
                                 if !encoding_started {
                                     tui.set_phase(tui::WatchPhase::Encoding);
@@ -251,11 +290,19 @@ pub fn cmd_watch(
                                 }
                                 tui.set_frame_progress(current, total);
                             }
-                            encode::EncodeProgress::Muxing => tui.set_phase(tui::WatchPhase::Muxing),
+                            encode::EncodeProgress::Muxing => {
+                                tui.set_phase(tui::WatchPhase::Muxing)
+                            }
                         }
                     }
                 };
-                match encode::encode_video_incremental(&scenario, &output_str, quiet, None, Some(&mut cb)) {
+                match encode::encode_video_incremental(
+                    &scenario,
+                    &output_str,
+                    quiet,
+                    None,
+                    Some(&mut cb),
+                ) {
                     Ok(segments) => {
                         prev_segments = Some(segments);
                         prev_config_hash = Some(config_hash);
@@ -267,7 +314,17 @@ pub fn cmd_watch(
                 }
             } else {
                 engine::clear_asset_cache();
-                if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                if let Err(e) = cmd_render(
+                    scenario,
+                    output,
+                    frame,
+                    output_format,
+                    quiet,
+                    codec.clone(),
+                    crf,
+                    format.clone(),
+                    transparent,
+                ) {
                     eprintln!("Render error: {}", e);
                 }
                 if let Some(ref mut tui) = tui_watch {
@@ -280,13 +337,15 @@ pub fn cmd_watch(
 
     let (tx, rx) = mpsc::channel();
 
-    let mut watcher = notify::recommended_watcher(move |res: std::result::Result<notify::Event, notify::Error>| {
-        if let Ok(event) = res {
-            if event.kind.is_modify() || event.kind.is_create() {
-                let _ = tx.send(());
+    let mut watcher = notify::recommended_watcher(
+        move |res: std::result::Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                if event.kind.is_modify() || event.kind.is_create() {
+                    let _ = tx.send(());
+                }
             }
-        }
-    })?;
+        },
+    )?;
 
     watcher.watch(input.as_ref(), RecursiveMode::NonRecursive)?;
 
@@ -339,31 +398,45 @@ pub fn cmd_watch(
                     // Count changed scenes for the TUI
                     let view0_scenes = scenario.views.get(0).map(|v| &v.scenes[..]).unwrap_or(&[]);
                     let num_scenes = view0_scenes.len();
-                    let scene_hashes: Vec<u64> = view0_scenes.iter()
+                    let scene_hashes: Vec<u64> = view0_scenes
+                        .iter()
                         .map(|s| encode::hash_video_config_scene(s))
                         .collect();
                     let changed = if let Some(ref prev) = use_prev {
                         if prev.len() == num_scenes {
-                            (0..num_scenes).filter(|&i| {
-                                let hash_changed = scene_hashes[i] != prev[i].scene_hash;
-                                let next_changed = if i + 1 < num_scenes {
-                                    scene_hashes[i + 1] != prev[i + 1].scene_hash
-                                        && view0_scenes[i + 1].transition.is_some()
-                                } else { false };
-                                hash_changed || next_changed
-                            }).count()
-                        } else { num_scenes }
-                    } else { num_scenes };
+                            (0..num_scenes)
+                                .filter(|&i| {
+                                    let hash_changed = scene_hashes[i] != prev[i].scene_hash;
+                                    let next_changed = if i + 1 < num_scenes {
+                                        scene_hashes[i + 1] != prev[i + 1].scene_hash
+                                            && view0_scenes[i + 1].transition.is_some()
+                                    } else {
+                                        false
+                                    };
+                                    hash_changed || next_changed
+                                })
+                                .count()
+                        } else {
+                            num_scenes
+                        }
+                    } else {
+                        num_scenes
+                    };
 
                     if let Some(ref mut tui) = tui_watch {
-                        tui.set_phase(tui::WatchPhase::Rerendering { changed, total: num_scenes });
+                        tui.set_phase(tui::WatchPhase::Rerendering {
+                            changed,
+                            total: num_scenes,
+                        });
                     }
 
                     let mut encoding_started = false;
                     let mut cb = |progress: encode::EncodeProgress| {
                         if let Some(ref mut tui) = tui_watch {
                             match progress {
-                                encode::EncodeProgress::Rendering(current, total) => tui.set_frame_progress(current, total),
+                                encode::EncodeProgress::Rendering(current, total) => {
+                                    tui.set_frame_progress(current, total)
+                                }
                                 encode::EncodeProgress::Encoding(current, total) => {
                                     if !encoding_started {
                                         tui.set_phase(tui::WatchPhase::Encoding);
@@ -371,11 +444,19 @@ pub fn cmd_watch(
                                     }
                                     tui.set_frame_progress(current, total);
                                 }
-                                encode::EncodeProgress::Muxing => tui.set_phase(tui::WatchPhase::Muxing),
+                                encode::EncodeProgress::Muxing => {
+                                    tui.set_phase(tui::WatchPhase::Muxing)
+                                }
                             }
                         }
                     };
-                    match encode::encode_video_incremental(&scenario, &output_str, quiet, use_prev, Some(&mut cb)) {
+                    match encode::encode_video_incremental(
+                        &scenario,
+                        &output_str,
+                        quiet,
+                        use_prev,
+                        Some(&mut cb),
+                    ) {
                         Ok(segments) => {
                             prev_segments = Some(segments);
                             prev_config_hash = Some(config_hash);
@@ -387,7 +468,17 @@ pub fn cmd_watch(
                     }
                 } else {
                     engine::clear_asset_cache();
-                    if let Err(e) = cmd_render(scenario, output, frame, output_format, quiet, codec.clone(), crf, format.clone(), transparent) {
+                    if let Err(e) = cmd_render(
+                        scenario,
+                        output,
+                        frame,
+                        output_format,
+                        quiet,
+                        codec.clone(),
+                        crf,
+                        format.clone(),
+                        transparent,
+                    ) {
                         eprintln!("Render error: {}", e);
                     }
                     if let Some(ref mut tui) = tui_watch {
@@ -418,7 +509,11 @@ pub fn cmd_watch(
     }
 }
 
-fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &PathBuf) -> Result<()> {
+fn render_single_frame(
+    scenario: &ResolvedScenario,
+    frame_num: u32,
+    output: &PathBuf,
+) -> Result<()> {
     // Use the same task pipeline as the encoder so `--frame N` always shows
     // exactly what frame N of the rendered MP4 contains. Summing scene
     // durations directly would skip transition overlaps and drift the
@@ -428,7 +523,10 @@ fn render_single_frame(scenario: &ResolvedScenario, frame_num: u32, output: &Pat
     let total = tasks.len() as u32;
     let task = tasks
         .get(frame_num as usize)
-        .ok_or(RustmotionError::FrameOutOfRange { frame: frame_num, total })?;
+        .ok_or(RustmotionError::FrameOutOfRange {
+            frame: frame_num,
+            total,
+        })?;
 
     let rgba = encode::render_frame_task_scaled(config, scenario, task, 1.0)?;
     let img = image::RgbaImage::from_raw(config.width, config.height, rgba)

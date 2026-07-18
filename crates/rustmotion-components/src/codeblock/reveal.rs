@@ -1,10 +1,12 @@
 use skia_safe::{Canvas, Font, Paint, Rect, TextBlob};
 
-use rustmotion_core::engine::animator::ease;
-use rustmotion_core::engine::renderer::{draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex};
-use rustmotion_core::schema::{CodeblockHighlight, RevealMode};
-use super::Codeblock;
 use super::highlight::HighlightedLine;
+use super::Codeblock;
+use rustmotion_core::engine::animator::ease;
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+};
+use rustmotion_core::schema::{CodeblockHighlight, RevealMode};
 
 // ─── Reveal ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +92,14 @@ pub(super) fn draw_line_numbers(
 }
 
 /// Draw a single line number at an arbitrary Y with given opacity
-pub(super) fn draw_line_number_at(canvas: &Canvas, font: &Font, x: f32, y: f32, num: usize, opacity: f32) {
+pub(super) fn draw_line_number_at(
+    canvas: &Canvas,
+    font: &Font,
+    x: f32,
+    y: f32,
+    num: usize,
+    opacity: f32,
+) {
     let num_str = format!("{}", num);
     let mut paint = paint_from_hex("#65737E");
     paint.set_anti_alias(true);
@@ -227,7 +236,16 @@ pub(super) fn draw_single_highlighted_line_partial(
         );
 
         let emoji_f = emoji_typeface().map(|tf| Font::from_typeface(tf, font.size()));
-        draw_text_with_fallback(canvas, &text_to_draw, font, &emoji_f, 0.0, cursor_x, y, &paint);
+        draw_text_with_fallback(
+            canvas,
+            &text_to_draw,
+            font,
+            &emoji_f,
+            0.0,
+            cursor_x,
+            y,
+            &paint,
+        );
         let w = measure_text_with_fallback(&text_to_draw, font, &emoji_f, 0.0);
         cursor_x += w;
         chars_drawn += text_to_draw.len();

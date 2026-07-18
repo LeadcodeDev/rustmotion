@@ -1,9 +1,7 @@
 use rustmotion_core::error::Result;
 use skia_safe::{Canvas, PaintStyle, Rect};
 
-use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, paint_from_hex,
-};
+use rustmotion_core::engine::renderer::{draw_text_with_fallback, emoji_typeface, paint_from_hex};
 
 use super::axes::contrast_text_color;
 use super::Chart;
@@ -21,13 +19,11 @@ impl Chart {
             .fold(0.0_f64, f64::max)
             .max(0.001);
 
-        let x_labels: Vec<String> = self
-            .data
-            .iter()
-            .filter_map(|d| d.label.clone())
-            .collect();
+        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
 
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true);
+        self.draw_axes(
+            canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true,
+        );
 
         let n = self.data.len();
         let gap = 8.0;
@@ -164,7 +160,9 @@ impl Chart {
             .max(0.001);
 
         let x_labels: Vec<String> = self.categories.clone();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true);
+        self.draw_axes(
+            canvas, ml, mt, chart_w, chart_h, 0.0, max_val, &x_labels, true,
+        );
 
         let gap = 8.0;
         let bar_w = (chart_w - gap * (n_cats + 1) as f32) / n_cats as f32;

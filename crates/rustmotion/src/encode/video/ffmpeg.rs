@@ -57,17 +57,30 @@ pub fn encode_with_ffmpeg(
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args([
         "-y",
-        "-loglevel", "error",
-        "-f", "rawvideo",
-        "-pixel_format", "rgba",
-        "-video_size", &format!("{}x{}", width, height),
-        "-framerate", &fps.to_string(),
-        "-i", "pipe:0",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgba",
+        "-video_size",
+        &format!("{}x{}", width, height),
+        "-framerate",
+        &fps.to_string(),
+        "-i",
+        "pipe:0",
     ]);
 
     match codec {
         "h265" | "hevc" => {
-            cmd.args(["-c:v", "libx265", "-crf", &crf_val.to_string(), "-preset", "medium"]);
+            cmd.args([
+                "-c:v",
+                "libx265",
+                "-crf",
+                &crf_val.to_string(),
+                "-preset",
+                "medium",
+            ]);
             if transparent {
                 cmd.args(["-pix_fmt", "yuva420p"]);
             } else {
@@ -75,7 +88,14 @@ pub fn encode_with_ffmpeg(
             }
         }
         "vp9" => {
-            cmd.args(["-c:v", "libvpx-vp9", "-crf", &crf_val.to_string(), "-b:v", "0"]);
+            cmd.args([
+                "-c:v",
+                "libvpx-vp9",
+                "-crf",
+                &crf_val.to_string(),
+                "-b:v",
+                "0",
+            ]);
             if transparent {
                 cmd.args(["-pix_fmt", "yuva420p"]);
             } else {
@@ -91,20 +111,42 @@ pub fn encode_with_ffmpeg(
             }
         }
         _ => {
-            cmd.args(["-c:v", "libx264", "-crf", &crf_val.to_string(), "-preset", "medium", "-profile:v", "high10", "-pix_fmt", "yuv420p10le"]);
+            cmd.args([
+                "-c:v",
+                "libx264",
+                "-crf",
+                &crf_val.to_string(),
+                "-preset",
+                "medium",
+                "-profile:v",
+                "high10",
+                "-pix_fmt",
+                "yuv420p10le",
+            ]);
         }
     }
 
     if let Some(ref pcm) = pcm_data {
         let audio_path = audio_tmp_dir.as_ref().unwrap().join("audio.raw");
         std::fs::write(&audio_path, pcm)?;
-        let audio_path_str = audio_path.to_str().ok_or_else(|| RustmotionError::NonUtf8Path {
-            path: audio_path.to_string_lossy().into_owned(),
-        })?;
+        let audio_path_str = audio_path
+            .to_str()
+            .ok_or_else(|| RustmotionError::NonUtf8Path {
+                path: audio_path.to_string_lossy().into_owned(),
+            })?;
         cmd.args([
-            "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
+            "-f",
+            "s16le",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-i",
             audio_path_str,
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
         ]);
     }
 
@@ -116,12 +158,11 @@ pub fn encode_with_ffmpeg(
     // only on failure.
     cmd.stderr(std::process::Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| RustmotionError::FfmpegSpawn { reason: e.to_string() })?;
+    let mut child = cmd.spawn().map_err(|e| RustmotionError::FfmpegSpawn {
+        reason: e.to_string(),
+    })?;
 
-    let mut stdin = child.stdin.take()
-        .ok_or(RustmotionError::FfmpegPipe)?;
+    let mut stdin = child.stdin.take().ok_or(RustmotionError::FfmpegPipe)?;
     let stderr_handle = child.stderr.take();
 
     // Render frames in parallel batches, pipe RGBA sequentially
@@ -152,7 +193,9 @@ pub fn encode_with_ffmpeg(
             match result {
                 Ok(rgba) => {
                     if let Err(e) = stdin.write_all(&rgba) {
-                        pipe_error = Some(RustmotionError::FfmpegWrite { reason: e.to_string() });
+                        pipe_error = Some(RustmotionError::FfmpegWrite {
+                            reason: e.to_string(),
+                        });
                         break;
                     }
                 }
@@ -170,8 +213,9 @@ pub fn encode_with_ffmpeg(
         cb(EncodeProgress::Muxing);
     }
 
-    let status = child.wait()
-        .map_err(|e| RustmotionError::FfmpegWait { reason: e.to_string() })?;
+    let status = child.wait().map_err(|e| RustmotionError::FfmpegWait {
+        reason: e.to_string(),
+    })?;
 
     // Drain stderr (best effort)
     let stderr_text = stderr_handle.map(|mut h| {
@@ -199,10 +243,13 @@ pub fn encode_with_ffmpeg(
     if !status.success() {
         // Extract the last few lines of stderr — ffmpeg's actual error message
         // typically appears in the final 5-10 lines.
-        let stderr_summary = stderr_text.as_ref().map(|s| {
-            let lines: Vec<&str> = s.lines().rev().take(8).collect();
-            lines.into_iter().rev().collect::<Vec<_>>().join("\n")
-        }).filter(|s| !s.trim().is_empty());
+        let stderr_summary = stderr_text
+            .as_ref()
+            .map(|s| {
+                let lines: Vec<&str> = s.lines().rev().take(8).collect();
+                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+            })
+            .filter(|s| !s.trim().is_empty());
 
         if !quiet {
             if let Some(ref text) = stderr_text {
@@ -211,7 +258,10 @@ pub fn encode_with_ffmpeg(
                 }
             }
         }
-        return Err(RustmotionError::FfmpegFailed { stderr: stderr_summary }.into());
+        return Err(RustmotionError::FfmpegFailed {
+            stderr: stderr_summary,
+        }
+        .into());
     }
 
     Ok(())

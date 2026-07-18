@@ -198,11 +198,9 @@ impl Notification {
                         skia_safe::AlphaType::Premul,
                         None,
                     );
-                    if let Some(decoded) = skia_safe::images::raster_from_data(
-                        &info,
-                        img_data,
-                        icon_w as usize * 4,
-                    ) {
+                    if let Some(decoded) =
+                        skia_safe::images::raster_from_data(&info, img_data, icon_w as usize * 4)
+                    {
                         cache.insert(cache_key, decoded.clone());
                         decoded
                     } else {

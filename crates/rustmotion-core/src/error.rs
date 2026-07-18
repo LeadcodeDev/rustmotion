@@ -89,7 +89,9 @@ pub enum RustmotionError {
     #[error("Include: file not found '{path}'")]
     IncludeFileNotFound { path: String },
 
-    #[error("Scenario cannot have both top-level 'scenes' and 'composition' — use one or the other")]
+    #[error(
+        "Scenario cannot have both top-level 'scenes' and 'composition' — use one or the other"
+    )]
     CompositionAndScenesConflict,
 
     #[error("Unknown background template '{name}' referenced via $ref")]
@@ -227,7 +229,9 @@ pub enum RustmotionError {
     LottieRender { reason: String },
 
     // --- Skills ---
-    #[error("Unknown skill or rule: '{name}'. Run `rustmotion skills list` to see available rules.")]
+    #[error(
+        "Unknown skill or rule: '{name}'. Run `rustmotion skills list` to see available rules."
+    )]
     UnknownSkill { name: String },
 
     // --- IO ---

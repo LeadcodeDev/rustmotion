@@ -114,11 +114,7 @@ fn parse_single_var_ref(s: &str) -> Option<&str> {
 
 /// Perform string interpolation: replace $name occurrences within a larger string.
 /// Handles $$ escape sequences.
-fn interpolate_string(
-    s: &str,
-    vars: &HashMap<String, Value>,
-    path: &str,
-) -> Result<String> {
+fn interpolate_string(s: &str, vars: &HashMap<String, Value>, path: &str) -> Result<String> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
@@ -267,9 +263,7 @@ pub fn apply_variables(
 
             Ok(())
         }
-        None => {
-            Ok(())
-        }
+        None => Ok(()),
     }
 }
 
@@ -427,19 +421,13 @@ mod tests {
         vars.insert("name".to_string(), json!("resolved"));
         substitute(&mut val, &vars, "test").unwrap();
         // "config" block should be untouched
-        assert_eq!(
-            val["config"]["name"]["default"],
-            json!("$not_a_ref")
-        );
+        assert_eq!(val["config"]["name"]["default"], json!("$not_a_ref"));
         assert_eq!(val["text"], json!("resolved"));
     }
 
     #[test]
     fn test_recursive_array_substitution() {
-        let mut val = json!([
-            "$a",
-            ["$b", "$c"]
-        ]);
+        let mut val = json!(["$a", ["$b", "$c"]]);
         let mut vars = HashMap::new();
         vars.insert("a".to_string(), json!(1));
         vars.insert("b".to_string(), json!(2));

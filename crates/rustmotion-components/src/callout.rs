@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, Rect, RRect};
+use skia_safe::{Canvas, PaintStyle, Path, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;

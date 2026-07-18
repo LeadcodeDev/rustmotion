@@ -13,8 +13,8 @@
 use std::sync::{Mutex, OnceLock};
 
 use cosmic_text::{
-    Attrs, Buffer, Color as CColor, Family, FontSystem, Metrics, Shaping,
-    SwashCache, SwashContent, Weight, Wrap,
+    Attrs, Buffer, Color as CColor, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent,
+    Weight, Wrap,
 };
 use skia_safe::{images, Canvas, Color, ColorType, Data, ImageInfo, Paint, Point};
 
@@ -91,7 +91,10 @@ fn attrs_for<'a>(style: &'a TextStyle) -> Attrs<'a> {
 /// Measure a text string given font + line constraints.
 pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
     if text.is_empty() {
-        return TextMetrics { width: 0.0, height: metrics_for(style).line_height };
+        return TextMetrics {
+            width: 0.0,
+            height: metrics_for(style).line_height,
+        };
     }
     let mut fs = font_system().lock().unwrap();
     let metrics = metrics_for(style);
@@ -156,9 +159,12 @@ pub fn paint_text(
                 physical.x as f32 + img.placement.left as f32,
                 physical.y as f32 - img.placement.top as f32,
                 img.content == SwashContent::Color,
-                glyph.color_opt.map(|c| Color::from_argb(c.a(), c.r(), c.g(), c.b())).unwrap_or_else(|| {
-                    Color::from_argb(ccolor.a(), ccolor.r(), ccolor.g(), ccolor.b())
-                }),
+                glyph
+                    .color_opt
+                    .map(|c| Color::from_argb(c.a(), c.r(), c.g(), c.b()))
+                    .unwrap_or_else(|| {
+                        Color::from_argb(ccolor.a(), ccolor.r(), ccolor.g(), ccolor.b())
+                    }),
             );
         }
     }
@@ -224,7 +230,13 @@ mod tests {
 
     #[test]
     fn measure_hello_world_has_positive_width() {
-        let m = measure_text("Hello, world!", &TextStyle { font_size: 24.0, ..Default::default() });
+        let m = measure_text(
+            "Hello, world!",
+            &TextStyle {
+                font_size: 24.0,
+                ..Default::default()
+            },
+        );
         assert!(m.width > 0.0);
         assert!(m.height > 0.0);
     }

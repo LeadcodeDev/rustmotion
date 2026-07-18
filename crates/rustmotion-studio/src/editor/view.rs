@@ -1,4 +1,6 @@
-use dioxus::desktop::{use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder};
+use dioxus::desktop::{
+    use_asset_handler, wry::http::Response, AssetRequest, RequestAsyncResponder,
+};
 use dioxus::prelude::*;
 
 use crate::scenario::{list_annotations, read_field, read_style_object, Shared, View};
@@ -76,7 +78,12 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             .and_then(|s| s.to_str())
             .unwrap_or("Untitled")
             .to_string();
-        (m.total_frames, m.error.clone(), title, list_annotations(&m.raw))
+        (
+            m.total_frames,
+            m.error.clone(),
+            title,
+            list_annotations(&m.raw),
+        )
     };
     let comment_count = annotations.len();
 

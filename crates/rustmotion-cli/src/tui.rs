@@ -1,8 +1,8 @@
 use std::io::{self, Stderr};
 use std::time::Instant;
 
-use crossterm::execute;
 use crossterm::cursor::{Hide, Show};
+use crossterm::execute;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout},
@@ -85,10 +85,7 @@ impl TuiProgress {
     }
 
     fn cleanup(&mut self) {
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            Show,
-        );
+        let _ = execute!(self.terminal.backend_mut(), Show,);
     }
 
     fn draw(&mut self) -> rustmotion::error::Result<()> {
@@ -293,22 +290,18 @@ impl TuiWatch {
             ),
             WatchPhase::Watching => (
                 if state.render_count > 0 {
-                    format!("Waiting for changes (incremental mode ready, {} render{})",
+                    format!(
+                        "Waiting for changes (incremental mode ready, {} render{})",
                         state.render_count,
-                        if state.render_count > 1 { "s" } else { "" })
+                        if state.render_count > 1 { "s" } else { "" }
+                    )
                 } else {
                     "Waiting for changes (incremental mode ready)".to_string()
                 },
                 Color::Green,
             ),
-            WatchPhase::Encoding => (
-                "Encoding H.264...".to_string(),
-                Color::Yellow,
-            ),
-            WatchPhase::Muxing => (
-                "Muxing MP4...".to_string(),
-                Color::Yellow,
-            ),
+            WatchPhase::Encoding => ("Encoding H.264...".to_string(), Color::Yellow),
+            WatchPhase::Muxing => ("Muxing MP4...".to_string(), Color::Yellow),
             WatchPhase::Rerendering { changed, total } => (
                 format!("Re-rendering {}/{} changed scenes...", changed, total),
                 Color::Cyan,
@@ -334,10 +327,7 @@ impl TuiWatch {
 
         let input_path = state.input_path.clone();
         let output_path = state.output_path.clone();
-        let config_line = format!(
-            "{} @ {}fps · {}",
-            state.resolution, state.fps, state.codec
-        );
+        let config_line = format!("{} @ {}fps · {}", state.resolution, state.fps, state.codec);
 
         // Build all 5 lines (fixed height, always overwrite everything)
         let line0 = Line::from(vec![
@@ -362,7 +352,10 @@ impl TuiWatch {
                 WatchPhase::Encoding => "Encode    ",
                 _ => "Frames    ",
             };
-            let progress_label = format!("{}/{}  {}%", state.frames_current, state.frames_total, percent);
+            let progress_label = format!(
+                "{}/{}  {}%",
+                state.frames_current, state.frames_total, percent
+            );
             let bar_width: usize = 20;
             let filled = (ratio * bar_width as f64).round() as usize;
             let unfilled = bar_width - filled;
@@ -401,10 +394,7 @@ impl TuiWatch {
     }
 
     fn cleanup(&mut self) {
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            Show,
-        );
+        let _ = execute!(self.terminal.backend_mut(), Show,);
     }
 }
 

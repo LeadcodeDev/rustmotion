@@ -33,7 +33,10 @@ pub struct SizeRange {
 
 impl Default for SizeRange {
     fn default() -> Self {
-        Self { min: 4.0, max: 12.0 }
+        Self {
+            min: 4.0,
+            max: 12.0,
+        }
     }
 }
 
@@ -150,7 +153,8 @@ impl Painter for Particle {
 
             let base_x = rv[0] as f32 * w;
             let base_y = rv[1] as f32 * h;
-            let size = self.size_range.min + rv[2] as f32 * (self.size_range.max - self.size_range.min);
+            let size =
+                self.size_range.min + rv[2] as f32 * (self.size_range.max - self.size_range.min);
             let color_idx = (rv[3] * colors.len() as f64) as usize % colors.len();
             let phase = rv[4] as f32 * std::f32::consts::TAU;
             let speed_var = 0.7 + rv[5] as f32 * 0.6;
@@ -238,7 +242,9 @@ impl Painter for Particle {
                     paint.set_alpha_f(pulse * 0.6);
 
                     let blur_sigma = radius * 0.6;
-                    if let Some(mask) = MaskFilter::blur(skia_safe::BlurStyle::Normal, blur_sigma, false) {
+                    if let Some(mask) =
+                        MaskFilter::blur(skia_safe::BlurStyle::Normal, blur_sigma, false)
+                    {
                         paint.set_mask_filter(mask);
                     }
 

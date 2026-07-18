@@ -51,10 +51,7 @@ pub struct BuiltScene<'a> {
 /// The implicit scene root is a `display: flex; flex-direction: column;
 /// width/height: 100%`; children flow vertically unless they specify
 /// `position: { x, y }`, in which case they become `position: absolute`.
-pub fn build_scene<'a>(
-    children: &'a [ChildComponent],
-    viewport: (f32, f32),
-) -> BuiltScene<'a> {
+pub fn build_scene<'a>(children: &'a [ChildComponent], viewport: (f32, f32)) -> BuiltScene<'a> {
     build_scene_with_root(children, viewport, default_root_css(viewport))
 }
 
@@ -87,7 +84,12 @@ pub fn build_scene_with_anim<'a>(
     viewport: (f32, f32),
     anim: BuildAnimationCtx,
 ) -> BuiltScene<'a> {
-    build_scene_from_refs(children.iter(), viewport, default_root_css(viewport), Some(anim))
+    build_scene_from_refs(
+        children.iter(),
+        viewport,
+        default_root_css(viewport),
+        Some(anim),
+    )
 }
 
 /// Same as [`build_scene_with_root`] but accepts an iterator over
@@ -224,9 +226,13 @@ fn component_intrinsic(
         GradientText(t) => Some(Arc::new(
             crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
         )),
-        Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(c))),
+        Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(
+            c,
+        ))),
         Kbd(k) => Some(Arc::new(crate::intrinsic::KbdIntrinsic::from_kbd(k))),
-        Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(c))),
+        Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(
+            c,
+        ))),
         Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
         _ => None,
     }
@@ -252,7 +258,15 @@ fn container_children<'a>(
     children
         .iter()
         .enumerate()
-        .map(|(j, c)| build_child(c, components, next_id, anim, format!("{parent_path}/children/{j}")))
+        .map(|(j, c)| {
+            build_child(
+                c,
+                components,
+                next_id,
+                anim,
+                format!("{parent_path}/children/{j}"),
+            )
+        })
         .collect()
 }
 
@@ -453,7 +467,11 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 let extra = if c.overflow_count() > 0 { 1.0 } else { 0.0 };
                 let total = visible + extra;
                 let step = (c.size - c.overlap).max(0.0);
-                let w = if total <= 0.0 { 0.0 } else { c.size + (total - 1.0) * step };
+                let w = if total <= 0.0 {
+                    0.0
+                } else {
+                    c.size + (total - 1.0) * step
+                };
                 css.width = Some(CSize::Length(CLP::Px(w)));
             }
             if css.height.is_none() {
@@ -613,15 +631,16 @@ pub fn component_kind(c: &Component) -> &'static str {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustmotion_core::css::style::{CssStyle, Display, Edges, FlexDirection, Gap, Size as CSize};
+    use rustmotion_core::css::style::{
+        CssStyle, Display, Edges, FlexDirection, Gap, Size as CSize,
+    };
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::css::units::LengthPercentage;
     use rustmotion_core::css::units::LengthPercentage as CLP;
     use rustmotion_core::engine::layout_pass::run_layout;
-    use rustmotion_core::css::taffy_bridge::ConversionContext;
 
     fn make_card(children: Vec<ChildComponent>, style: CssStyle) -> Component {
         Component::Card(crate::card::Card {
@@ -725,8 +744,12 @@ mod tests {
         assert_eq!(card_layout.width, 300.0);
         assert_eq!(card_layout.height, 200.0);
 
-        let c1 = layout.get(card_box.children[0].id).expect("shape 1 laid out");
-        let c2 = layout.get(card_box.children[1].id).expect("shape 2 laid out");
+        let c1 = layout
+            .get(card_box.children[0].id)
+            .expect("shape 1 laid out");
+        let c2 = layout
+            .get(card_box.children[1].id)
+            .expect("shape 2 laid out");
         // Padding 20 from top, then first shape 50 high, gap 10 → 80.
         assert_eq!(c1.x, 20.0);
         assert_eq!(c1.y, 20.0);
@@ -903,7 +926,9 @@ mod tests {
         let scene = vec![arrow];
         let built = build_scene(&scene, (800.0, 600.0));
         let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
-        let l = layout.get(built.root.children[0].id).expect("arrow laid out");
+        let l = layout
+            .get(built.root.children[0].id)
+            .expect("arrow laid out");
         // bbox 100×60 + (16 padding + 12 arrow_size) = 128×88.
         assert_eq!(l.width, 128.0);
         assert_eq!(l.height, 88.0);
@@ -936,7 +961,9 @@ mod tests {
         let scene = vec![conn];
         let built = build_scene(&scene, (800.0, 600.0));
         let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
-        let l = layout.get(built.root.children[0].id).expect("connector laid out");
+        let l = layout
+            .get(built.root.children[0].id)
+            .expect("connector laid out");
         // bbox 100×50 + (16 + 10) = 126×76.
         assert_eq!(l.width, 126.0);
         assert_eq!(l.height, 76.0);
@@ -978,7 +1005,11 @@ mod tests {
         let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
         let id = built.root.children[0].id;
         let l = layout.get(id).expect("counter laid out");
-        assert!(l.width > 0.0, "counter width should be > 0, got {}", l.width);
+        assert!(
+            l.width > 0.0,
+            "counter width should be > 0, got {}",
+            l.width
+        );
         // line_height defaults to font_size × 1.3 = 83.2. Allow some slack.
         assert!(
             l.height >= 60.0,
@@ -1020,7 +1051,11 @@ mod tests {
         let id = built.root.children[0].id;
         let l = layout.get(id).expect("badge laid out");
         // h_pad×2 = 24 alone, plus the text width.
-        assert!(l.width > 24.0, "badge width should exceed padding alone, got {}", l.width);
+        assert!(
+            l.width > 24.0,
+            "badge width should exceed padding alone, got {}",
+            l.width
+        );
         assert!(
             (l.height - 30.2).abs() < 2.0,
             "badge height should be ~30.2, got {}",

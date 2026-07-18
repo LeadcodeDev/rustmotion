@@ -15,33 +15,55 @@ const TARGET_CHANNELS: u32 = 2;
 
 /// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
 fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
-    let file = File::open(path)
-        .map_err(|e| RustmotionError::AudioOpen { path: path.to_string(), reason: e.to_string() })?;
+    let file = File::open(path).map_err(|e| RustmotionError::AudioOpen {
+        path: path.to_string(),
+        reason: e.to_string(),
+    })?;
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| RustmotionError::AudioProbe { path: path.to_string(), reason: e.to_string() })?;
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| RustmotionError::AudioProbe {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })?;
 
     let mut format = probed.format;
 
     let track = format
         .default_track()
-        .ok_or_else(|| RustmotionError::AudioNoTrack { path: path.to_string() })?;
+        .ok_or_else(|| RustmotionError::AudioNoTrack {
+            path: path.to_string(),
+        })?;
 
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track.codec_params.channels.map(|c| c.count() as u32).unwrap_or(2);
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| c.count() as u32)
+        .unwrap_or(2);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| RustmotionError::AudioDecoder { path: path.to_string(), reason: e.to_string() })?;
+        .map_err(|e| RustmotionError::AudioDecoder {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })?;
 
     let mut all_samples: Vec<f32> = Vec::new();
 
@@ -103,7 +125,8 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
         };
 
         // Calculate start and end offsets in the mix buffer
-        let start_sample = (track.start * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize;
+        let start_sample =
+            (track.start * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize;
         let end_sample = track
             .end
             .map(|e| (e * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize)
@@ -214,7 +237,9 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         return samples.to_vec();
     }
 
-    use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
 
     let channels = 2usize;
     let src_frames = samples.len() / channels;

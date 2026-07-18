@@ -7,12 +7,12 @@ use rustmotion_core::engine::renderer::paint_from_hex;
 use rustmotion_core::schema::FontWeight;
 use rustmotion_core::traits::PaintCtx;
 
-use super::Codeblock;
 use super::chrome::draw_chrome;
 use super::diff::{determine_active_state, draw_diff_backgrounds, render_diff_transition};
 use super::dimensions::{compute_code_dimensions, lerp};
 use super::highlight::{get_theme, highlight_code, resolve_monospace_font};
 use super::reveal::{compute_reveal, draw_highlighted_lines, draw_highlights, draw_line_numbers};
+use super::Codeblock;
 
 pub(super) fn render_codeblock(
     canvas: &Canvas,
@@ -68,7 +68,11 @@ pub(super) fn render_codeblock(
     let natural_height = if let Some(ref trans) = transition {
         let dims_a = compute_code_dimensions(&trans.code_a, &font, padding, chrome_height, layer);
         let dims_b = compute_code_dimensions(&trans.code_b, &font, padding, chrome_height, layer);
-        lerp(dims_a.total_height, dims_b.total_height, trans.progress as f32)
+        lerp(
+            dims_a.total_height,
+            dims_b.total_height,
+            trans.progress as f32,
+        )
     } else {
         compute_code_dimensions(&current_code, &font, padding, chrome_height, layer).total_height
     };
@@ -115,7 +119,12 @@ pub(super) fn render_codeblock(
     };
     canvas.save();
     canvas.clip_rect(
-        Rect::from_xywh(x, y + chrome_height, total_width, total_height - chrome_height),
+        Rect::from_xywh(
+            x,
+            y + chrome_height,
+            total_width,
+            total_height - chrome_height,
+        ),
         skia_safe::ClipOp::Intersect,
         true,
     );

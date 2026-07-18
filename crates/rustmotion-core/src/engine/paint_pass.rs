@@ -18,13 +18,13 @@
 use std::cell::RefCell;
 
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, M44, Paint, PaintStyle,
-    Path, Point, RRect, Rect, V3,
+    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, Path, Point,
+    RRect, Rect, M44, V3,
 };
 
 use crate::css::style::{
-    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow,
-    Color, CssStyle, Edges, Overflow, TransformFn,
+    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, Color,
+    CssStyle, Edges, Overflow, TransformFn,
 };
 use crate::css::units::{LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
@@ -155,7 +155,9 @@ struct PaintContext<'a> {
 }
 
 fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
-    let Some(box_layout) = ctx.layout.get(node.id) else { return };
+    let Some(box_layout) = ctx.layout.get(node.id) else {
+        return;
+    };
     if box_layout.width <= 0.0 || box_layout.height <= 0.0 {
         return;
     }
@@ -177,7 +179,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
             box_layout.y + box_layout.height / 2.0,
         );
         let transform_list = node.css.transform.as_deref().unwrap_or(&[]);
-        let perspective_d = node.css.perspective.as_ref().map(|l| l.resolve(&length_ctx).max(1.0));
+        let perspective_d = node
+            .css
+            .perspective
+            .as_ref()
+            .map(|l| l.resolve(&length_ctx).max(1.0));
         apply_transform(canvas, transform_list, perspective_d, pivot, &length_ctx);
     }
 
@@ -217,7 +223,10 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
 
     // 4. clip overflow:hidden / clip
     let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
-    if matches!(overflow, Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto) {
+    if matches!(
+        overflow,
+        Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
+    ) {
         let radius = node
             .css
             .border_radius
@@ -250,13 +259,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
 
     // 8. component-specific content
     if let BoxKind::Component(payload) = &node.kind {
-        ctx.dispatcher.dispatch(
-            canvas,
-            payload.as_ref(),
-            &node.css,
-            box_layout,
-            ctx.frame,
-        );
+        ctx.dispatcher
+            .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
     }
 
     // 9. children (z-index ordered, then source order)
@@ -373,18 +377,28 @@ fn apply_transform(
 /// Maps (x, y, z, 1) → w' = 1 - z/d; perspective divide yields depth scaling.
 fn css_perspective_m44(d: f32) -> M44 {
     M44::row_major(&[
-        1.0, 0.0,       0.0, 0.0,
-        0.0, 1.0,       0.0, 0.0,
-        0.0, 0.0,       1.0, 0.0,
-        0.0, 0.0, -1.0 / d, 1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0 / d,
+        1.0,
     ])
 }
 
 fn transform_to_m44(tr: &TransformFn, ctx: &LengthContext) -> M44 {
     match tr {
-        TransformFn::Translate { x, y } => {
-            M44::translate(x.resolve(ctx), y.resolve(ctx), 0.0)
-        }
+        TransformFn::Translate { x, y } => M44::translate(x.resolve(ctx), y.resolve(ctx), 0.0),
         TransformFn::TranslateX { x } => M44::translate(x.resolve(ctx), 0.0, 0.0),
         TransformFn::TranslateY { y } => M44::translate(0.0, y.resolve(ctx), 0.0),
         TransformFn::TranslateZ { z } => M44::translate(0.0, 0.0, z.resolve(ctx)),
@@ -405,29 +419,62 @@ fn transform_to_m44(tr: &TransformFn, ctx: &LengthContext) -> M44 {
             M44::rotate(V3::new(*x, *y, *z), deg.to_radians())
         }
         TransformFn::Skew { x, y } => M44::row_major(&[
-            1.0, x.to_radians().tan(), 0.0, 0.0,
-            y.to_radians().tan(), 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0,
+            x.to_radians().tan(),
+            0.0,
+            0.0,
+            y.to_radians().tan(),
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
         ]),
         TransformFn::SkewX { x } => M44::row_major(&[
-            1.0, x.to_radians().tan(), 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0,
+            x.to_radians().tan(),
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
         ]),
         TransformFn::SkewY { y } => M44::row_major(&[
-            1.0, 0.0, 0.0, 0.0,
-            y.to_radians().tan(), 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            y.to_radians().tan(),
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
         ]),
         TransformFn::Perspective { length } => css_perspective_m44(length.resolve(ctx).max(1.0)),
         TransformFn::Matrix { values: v } => M44::row_major(&[
-            v[0], v[2], 0.0, v[4],
-            v[1], v[3], 0.0, v[5],
-            0.0,  0.0,  1.0, 0.0,
-            0.0,  0.0,  0.0, 1.0,
+            v[0], v[2], 0.0, v[4], v[1], v[3], 0.0, v[5], 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]),
         TransformFn::Matrix3d { values: v } => M44::col_major(v),
     }
@@ -584,7 +631,11 @@ fn paint_border(
 
     // Compute per-side widths (already resolved into BoxLayout.border by taffy).
     let widths = layout.border;
-    let max_w = widths.top.max(widths.right).max(widths.bottom).max(widths.left);
+    let max_w = widths
+        .top
+        .max(widths.right)
+        .max(widths.bottom)
+        .max(widths.left);
     if max_w <= 0.0 {
         return;
     }
@@ -676,8 +727,16 @@ fn paint_box_shadow(
     let dx = shadow.offset_x.resolve(ctx);
     let dy = shadow.offset_y.resolve(ctx);
     let blur = shadow.blur.as_ref().map(|b| b.resolve(ctx)).unwrap_or(0.0);
-    let spread = shadow.spread.as_ref().map(|b| b.resolve(ctx)).unwrap_or(0.0);
-    let color = shadow.color.as_ref().map(parse_color).unwrap_or(SColor::BLACK);
+    let spread = shadow
+        .spread
+        .as_ref()
+        .map(|b| b.resolve(ctx))
+        .unwrap_or(0.0);
+    let color = shadow
+        .color
+        .as_ref()
+        .map(parse_color)
+        .unwrap_or(SColor::BLACK);
 
     let radius = css
         .border_radius
@@ -689,11 +748,9 @@ fn paint_box_shadow(
     paint.set_anti_alias(true);
     paint.set_color(color);
     if blur > 0.0 {
-        if let Some(filter) = skia_safe::MaskFilter::blur(
-            skia_safe::BlurStyle::Normal,
-            blur / 2.0,
-            None,
-        ) {
+        if let Some(filter) =
+            skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur / 2.0, None)
+        {
             paint.set_mask_filter(filter);
         }
     }
@@ -725,11 +782,9 @@ fn paint_box_shadow(
         clear.set_color(color);
         clear.set_anti_alias(true);
         if blur > 0.0 {
-            if let Some(filter) = skia_safe::MaskFilter::blur(
-                skia_safe::BlurStyle::Normal,
-                blur / 2.0,
-                None,
-            ) {
+            if let Some(filter) =
+                skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur / 2.0, None)
+            {
                 clear.set_mask_filter(filter);
             }
         }
@@ -997,6 +1052,9 @@ mod tests {
     #[test]
     fn parse_named_colors() {
         assert_eq!(parse_color_string("red").unwrap(), SColor::RED);
-        assert_eq!(parse_color_string("transparent").unwrap(), SColor::TRANSPARENT);
+        assert_eq!(
+            parse_color_string("transparent").unwrap(),
+            SColor::TRANSPARENT
+        );
     }
 }

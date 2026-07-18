@@ -5,7 +5,9 @@ use skia_safe::{Canvas, Font, FontStyle, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter};
 
@@ -43,7 +45,10 @@ impl Caption {
             .or_else(|| fm.match_family_style("Helvetica", FontStyle::bold()))
             .or_else(|| fm.match_family_style("Arial", FontStyle::bold()))
             .or_else(|| fm.match_family_style("sans-serif", FontStyle::bold()))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, FontStyle::bold()).expect("No fallback font"));
+            .unwrap_or_else(|| {
+                fm.legacy_make_typeface(None, FontStyle::bold())
+                    .expect("No fallback font")
+            });
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
@@ -53,7 +58,8 @@ impl Caption {
                 for word in &self.words {
                     if time >= word.start && time < word.end {
                         let paint = paint_from_hex(&self.active_color);
-                        let text_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
+                        let text_width =
+                            measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
 
                         let cx = layout_width / 2.0;
 
@@ -71,7 +77,16 @@ impl Caption {
                         }
 
                         let x = cx - text_width / 2.0;
-                        draw_text_with_fallback(canvas, &word.text, &font, &emoji_font, 0.0, x, 0.0, &paint);
+                        draw_text_with_fallback(
+                            canvas,
+                            &word.text,
+                            &font,
+                            &emoji_font,
+                            0.0,
+                            x,
+                            0.0,
+                            &paint,
+                        );
                         break;
                     }
                 }
@@ -84,7 +99,8 @@ impl Caption {
                 let mut current_x = 0.0f32;
 
                 for (i, word) in self.words.iter().enumerate() {
-                    let word_width = measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
+                    let word_width =
+                        measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
                     if current_x + word_width > max_width && !lines.last().unwrap().is_empty() {
                         lines.push(vec![]);
                         current_x = 0.0;
@@ -99,9 +115,13 @@ impl Caption {
                 if let Some(bg_color) = self.style.background_color_str() {
                     let padding = font_size * 0.3;
                     let total_height = lines.len() as f32 * line_height;
-                    let max_line_width = lines.iter().map(|line| {
-                        line.iter().map(|(_, w)| w).sum::<f32>() + (line.len().saturating_sub(1)) as f32 * space_width
-                    }).fold(0.0f32, f32::max);
+                    let max_line_width = lines
+                        .iter()
+                        .map(|line| {
+                            line.iter().map(|(_, w)| w).sum::<f32>()
+                                + (line.len().saturating_sub(1)) as f32 * space_width
+                        })
+                        .fold(0.0f32, f32::max);
                     let bg_rect = Rect::from_xywh(
                         cx - max_line_width / 2.0 - padding,
                         -font_size - padding / 2.0,
@@ -125,7 +145,16 @@ impl Caption {
                         let word_color = if is_active { &self.active_color } else { color };
                         let paint = paint_from_hex(word_color);
 
-                        draw_text_with_fallback(canvas, &word.text, &font, &emoji_font, 0.0, x, y, &paint);
+                        draw_text_with_fallback(
+                            canvas,
+                            &word.text,
+                            &font,
+                            &emoji_font,
+                            0.0,
+                            x,
+                            y,
+                            &paint,
+                        );
                         x += word_width + space_width;
                     }
                 }
@@ -146,4 +175,6 @@ impl Painter for Caption {
     }
 }
 
-fn default_active_color() -> String { "#FFFF00".to_string() }
+fn default_active_color() -> String {
+    "#FFFF00".to_string()
+}

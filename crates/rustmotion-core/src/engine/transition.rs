@@ -1,8 +1,6 @@
 use crate::engine::animator::ease;
 use crate::schema::{EasingType, TransitionType};
-use skia_safe::{
-    surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect,
-};
+use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
 
 /// Composite two RGBA frames during a transition.
 /// `progress` goes from 0.0 (fully frame_a) to 1.0 (fully frame_b).
@@ -18,12 +16,20 @@ pub fn apply_transition(
 
     match transition_type {
         TransitionType::Fade => blend_fade(frame_a, frame_b, progress),
-        TransitionType::WipeLeft => wipe(frame_a, frame_b, width, height, progress, Direction::Left),
-        TransitionType::WipeRight => wipe(frame_a, frame_b, width, height, progress, Direction::Right),
+        TransitionType::WipeLeft => {
+            wipe(frame_a, frame_b, width, height, progress, Direction::Left)
+        }
+        TransitionType::WipeRight => {
+            wipe(frame_a, frame_b, width, height, progress, Direction::Right)
+        }
         TransitionType::WipeUp => wipe(frame_a, frame_b, width, height, progress, Direction::Up),
-        TransitionType::WipeDown => wipe(frame_a, frame_b, width, height, progress, Direction::Down),
+        TransitionType::WipeDown => {
+            wipe(frame_a, frame_b, width, height, progress, Direction::Down)
+        }
         TransitionType::ZoomIn => zoom_transition(frame_a, frame_b, width, height, progress, true),
-        TransitionType::ZoomOut => zoom_transition(frame_a, frame_b, width, height, progress, false),
+        TransitionType::ZoomOut => {
+            zoom_transition(frame_a, frame_b, width, height, progress, false)
+        }
         TransitionType::Flip => flip_transition(frame_a, frame_b, width, height, progress),
         TransitionType::ClockWipe => clock_wipe(frame_a, frame_b, width, height, progress),
         TransitionType::Iris => iris_transition(frame_a, frame_b, width, height, progress),
@@ -138,7 +144,14 @@ fn surface_to_pixels(mut surface: skia_safe::Surface, width: u32, height: u32) -
     pixels
 }
 
-fn zoom_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32, zoom_in: bool) -> Vec<u8> {
+fn zoom_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    zoom_in: bool,
+) -> Vec<u8> {
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
         None => return blend_fade(frame_a, frame_b, progress),
@@ -185,7 +198,13 @@ fn zoom_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, prog
     surface_to_pixels(surface, width, height)
 }
 
-fn flip_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32) -> Vec<u8> {
+fn flip_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+) -> Vec<u8> {
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
         None => return blend_fade(frame_a, frame_b, progress),
@@ -273,7 +292,13 @@ fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress:
     surface_to_pixels(surface, width, height)
 }
 
-fn iris_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32) -> Vec<u8> {
+fn iris_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+) -> Vec<u8> {
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
         None => return blend_fade(frame_a, frame_b, progress),
@@ -310,7 +335,13 @@ fn iris_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, prog
     surface_to_pixels(surface, width, height)
 }
 
-fn slide_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32) -> Vec<u8> {
+fn slide_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+) -> Vec<u8> {
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
         None => return blend_fade(frame_a, frame_b, progress),
@@ -335,7 +366,13 @@ fn slide_transition(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, pro
     surface_to_pixels(surface, width, height)
 }
 
-fn dissolve_transition(frame_a: &[u8], frame_b: &[u8], _width: u32, _height: u32, progress: f32) -> Vec<u8> {
+fn dissolve_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    _width: u32,
+    _height: u32,
+    progress: f32,
+) -> Vec<u8> {
     // Dissolve is a smooth cross-dissolve (same as fade in standard video editing)
     blend_fade(frame_a, frame_b, progress)
 }

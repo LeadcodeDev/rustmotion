@@ -164,7 +164,8 @@ impl Cursor {
         let t = match self.path_easing.as_str() {
             "linear" => raw_t,
             "ease_out" => 1.0 - (1.0 - raw_t).powi(3),
-            _ => { // ease_in_out
+            _ => {
+                // ease_in_out
                 if raw_t < 0.5 {
                     4.0 * raw_t * raw_t * raw_t
                 } else {
@@ -174,8 +175,16 @@ impl Cursor {
         } as f32;
 
         // Catmull-Rom interpolation for smooth curves
-        let p_prev = if seg_idx > 0 { &waypoints[seg_idx - 1] } else { wp0 };
-        let p_next = if seg_idx + 2 < waypoints.len() { &waypoints[seg_idx + 2] } else { wp1 };
+        let p_prev = if seg_idx > 0 {
+            &waypoints[seg_idx - 1]
+        } else {
+            wp0
+        };
+        let p_next = if seg_idx + 2 < waypoints.len() {
+            &waypoints[seg_idx + 2]
+        } else {
+            wp1
+        };
 
         let x = catmull_rom(t, p_prev.x, wp0.x, wp1.x, p_next.x);
         let y = catmull_rom(t, p_prev.y, wp0.y, wp1.y, p_next.y);
@@ -223,7 +232,8 @@ impl Painter for Cursor {
         };
 
         let click_scale = if in_click {
-            let closest_click = click_times.iter()
+            let closest_click = click_times
+                .iter()
                 .filter(|&&t| ctx.time >= t && ctx.time < t + self.click_duration as f64)
                 .copied()
                 .last()

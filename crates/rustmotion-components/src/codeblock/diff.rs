@@ -2,13 +2,13 @@ use similar::{ChangeTag, TextDiff};
 use skia_safe::{Canvas, Font, PaintStyle, Rect};
 use syntect::highlighting::Theme;
 
-use rustmotion_core::engine::animator::ease;
-use rustmotion_core::engine::renderer::paint_from_hex;
-use rustmotion_core::schema::EasingType;
-use super::Codeblock;
 use super::dimensions::lerp;
 use super::highlight::highlight_code;
 use super::reveal::{draw_line_number_at, draw_single_highlighted_line};
+use super::Codeblock;
+use rustmotion_core::engine::animator::ease;
+use rustmotion_core::engine::renderer::paint_from_hex;
+use rustmotion_core::schema::EasingType;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,10 @@ pub(super) struct FragmentEdit {
 
 // ─── State management ────────────────────────────────────────────────────────
 
-pub(super) fn determine_active_state(layer: &Codeblock, time: f64) -> (String, Option<TransitionInfo>) {
+pub(super) fn determine_active_state(
+    layer: &Codeblock,
+    time: f64,
+) -> (String, Option<TransitionInfo>) {
     if layer.states.is_empty() {
         return (layer.code.clone(), None);
     }

@@ -9,7 +9,13 @@ use super::axes::contrast_text_color;
 use super::Chart;
 
 impl Chart {
-    pub(super) fn render_funnel(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+    pub(super) fn render_funnel(
+        &self,
+        canvas: &Canvas,
+        w: f32,
+        h: f32,
+        progress: f32,
+    ) -> Result<()> {
         let horizontal = self
             .direction
             .as_deref()
@@ -79,7 +85,14 @@ impl Chart {
                     let lx = (w - label_w) / 2.0;
                     let ly = y_top + seg_h / 2.0 + ascent / 2.0;
                     draw_text_with_fallback(
-                        canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint,
+                        canvas,
+                        label,
+                        &font,
+                        &emoji_font,
+                        0.0,
+                        lx,
+                        ly,
+                        &label_paint,
                     );
                 }
             }
@@ -88,7 +101,13 @@ impl Chart {
         Ok(())
     }
 
-    fn render_funnel_horizontal(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+    fn render_funnel_horizontal(
+        &self,
+        canvas: &Canvas,
+        w: f32,
+        h: f32,
+        progress: f32,
+    ) -> Result<()> {
         let n = self.data.len();
         let max_val = self
             .data
@@ -144,7 +163,14 @@ impl Chart {
                     let lx = x_left + (seg_w - label_w) / 2.0;
                     let ly = h / 2.0 + ascent / 2.0;
                     draw_text_with_fallback(
-                        canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint,
+                        canvas,
+                        label,
+                        &font,
+                        &emoji_font,
+                        0.0,
+                        lx,
+                        ly,
+                        &label_paint,
                     );
                 }
             }

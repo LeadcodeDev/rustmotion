@@ -78,7 +78,8 @@ pub fn run_preview_root(
         initial_error,
         input_path.clone(),
     )));
-    let library: SharedLibrary = Arc::new(Mutex::new(LibraryState::new(workspace, start_in_editor)));
+    let library: SharedLibrary =
+        Arc::new(Mutex::new(LibraryState::new(workspace, start_in_editor)));
 
     if watch {
         let tx = spawn_watcher(shared.clone());

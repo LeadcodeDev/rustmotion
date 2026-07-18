@@ -76,11 +76,7 @@ struct NodeData {
 }
 
 /// Run taffy on a [`BoxNode`] tree and return the resolved layouts.
-pub fn run_layout(
-    root: &BoxNode,
-    viewport: (f32, f32),
-    ctx: &ConversionContext,
-) -> LayoutResult {
+pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext) -> LayoutResult {
     let mut tree: TaffyTree<NodeData> = TaffyTree::new();
     // Disable taffy's pixel rounding: it floors widths/heights to integers,
     // but our painters use sub-pixel Skia metrics. A width of 710.376 rounded
@@ -109,7 +105,10 @@ pub fn run_layout(
                 (known.width, known.height),
                 (available.width.into(), available.height.into()),
             );
-            tf::Size { width: w, height: h }
+            tf::Size {
+                width: w,
+                height: h,
+            }
         },
     );
 
@@ -133,9 +132,11 @@ fn build(
     };
     let tf_id = if node.intrinsic.is_some() {
         // Leaf with intrinsic measurement.
-        tree.new_leaf_with_context(style, data).expect("taffy new_leaf")
+        tree.new_leaf_with_context(style, data)
+            .expect("taffy new_leaf")
     } else if node.children.is_empty() {
-        tree.new_leaf_with_context(style, data).expect("taffy new_leaf")
+        tree.new_leaf_with_context(style, data)
+            .expect("taffy new_leaf")
     } else {
         let mut child_ids = Vec::with_capacity(node.children.len());
         for c in &node.children {
@@ -160,8 +161,12 @@ fn collect(
     parent_y: f32,
     out: &mut HashMap<NodeId, BoxLayout>,
 ) {
-    let Some(&tf_id) = map.get(&node.id) else { return };
-    let Ok(layout) = tree.layout(tf_id) else { return };
+    let Some(&tf_id) = map.get(&node.id) else {
+        return;
+    };
+    let Ok(layout) = tree.layout(tf_id) else {
+        return;
+    };
 
     let abs_x = parent_x + layout.location.x;
     let abs_y = parent_y + layout.location.y;

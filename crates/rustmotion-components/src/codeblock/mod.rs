@@ -12,7 +12,9 @@ use skia_safe::Canvas;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::schema::{CodeblockChrome, CodeblockHighlight, CodeblockReveal, CodeblockState, TimelineStep};
+use rustmotion_core::schema::{
+    CodeblockChrome, CodeblockHighlight, CodeblockReveal, CodeblockState, TimelineStep,
+};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -51,7 +53,9 @@ pub struct Codeblock {
     pub stagger: Option<f32>,
 }
 
-fn default_auto_scroll() -> bool { true }
+fn default_auto_scroll() -> bool {
+    true
+}
 
 rustmotion_core::impl_traits!(Codeblock {
     Animatable => animation,
@@ -71,5 +75,9 @@ impl Painter for Codeblock {
     }
 }
 
-fn default_language() -> String { "plain".to_string() }
-fn default_theme() -> String { "base16-ocean.dark".to_string() }
+fn default_language() -> String {
+    "plain".to_string()
+}
+fn default_theme() -> String {
+    "base16-ocean.dark".to_string()
+}

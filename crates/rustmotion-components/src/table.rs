@@ -5,7 +5,9 @@ use skia_safe::{Canvas, PaintStyle, Rect};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, emoji_typeface, draw_text_with_fallback, measure_text_with_fallback};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+};
 use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -90,11 +92,7 @@ impl Table {
             skia_safe::FontStyle::normal()
         };
 
-        let family = self
-            .style
-            .font_family
-            .as_deref()
-            .unwrap_or("Inter");
+        let family = self.style.font_family.as_deref().unwrap_or("Inter");
 
         let typeface = fm
             .match_family_style(family, font_style)
@@ -188,7 +186,16 @@ impl Table {
             let x = self.align_text_x(i, col_x, cw, text_w);
             let y = (row_h - self.font_size()) / 2.0 + header_ascent;
 
-            draw_text_with_fallback(canvas, header, &header_font, &emoji_font, 0.0, x, y, &header_text_paint);
+            draw_text_with_fallback(
+                canvas,
+                header,
+                &header_font,
+                &emoji_font,
+                0.0,
+                x,
+                y,
+                &header_text_paint,
+            );
             col_x += cw;
         }
 
@@ -221,7 +228,16 @@ impl Table {
                 let x = self.align_text_x(col_idx, cx, cw, text_w);
                 let y = y_base + (row_h - self.font_size()) / 2.0 + body_ascent;
 
-                draw_text_with_fallback(canvas, cell, &body_font, &emoji_font, 0.0, x, y, &text_paint);
+                draw_text_with_fallback(
+                    canvas,
+                    cell,
+                    &body_font,
+                    &emoji_font,
+                    0.0,
+                    x,
+                    y,
+                    &text_paint,
+                );
                 cx += cw;
             }
         }

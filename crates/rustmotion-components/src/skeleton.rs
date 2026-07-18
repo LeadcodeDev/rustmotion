@@ -89,13 +89,7 @@ rustmotion_core::impl_traits!(Skeleton {
 });
 
 impl Skeleton {
-    fn draw_shimmer_rect(
-        &self,
-        canvas: &Canvas,
-        rect: Rect,
-        radius: f32,
-        time: f64,
-    ) {
+    fn draw_shimmer_rect(&self, canvas: &Canvas, rect: Rect, radius: f32, time: f64) {
         let w = rect.width();
 
         // Base color
@@ -121,7 +115,9 @@ impl Skeleton {
                 Point::new(shimmer_x + shimmer_w, 0.0),
             ),
             skia_safe::gradient_shader::GradientShaderColors::Colors(&[
-                transparent, highlight, transparent,
+                transparent,
+                highlight,
+                transparent,
             ]),
             None,
             skia_safe::TileMode::Clamp,
@@ -161,11 +157,7 @@ impl Skeleton {
                 let total_lines = self.lines.max(1);
                 for i in 0..total_lines {
                     let y = i as f32 * (self.line_height + self.line_gap);
-                    let line_w = if i == total_lines - 1 {
-                        w * 0.6
-                    } else {
-                        w
-                    };
+                    let line_w = if i == total_lines - 1 { w * 0.6 } else { w };
                     let rect = Rect::from_xywh(0.0, y, line_w, self.line_height);
                     self.draw_shimmer_rect(canvas, rect, self.border_radius * 0.5, time);
                 }

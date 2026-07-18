@@ -123,7 +123,14 @@ impl Stat {
 
             let ly = y_cursor + (-metrics.ascent);
             draw_text_with_fallback(
-                canvas, label, &font, &emoji_font, 0.0, pad, ly, &label_paint,
+                canvas,
+                label,
+                &font,
+                &emoji_font,
+                0.0,
+                pad,
+                ly,
+                &label_paint,
             );
             y_cursor += self.label_font_size * 1.5;
         }
@@ -136,8 +143,8 @@ impl Stat {
                 .or_else(|| fm.match_family_style("Helvetica", font_style))
                 .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
             let font = skia_safe::Font::from_typeface(typeface, self.value_font_size);
-            let emoji_font = emoji_typeface()
-                .map(|tf| skia_safe::Font::from_typeface(tf, self.value_font_size));
+            let emoji_font =
+                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.value_font_size));
             let (_, metrics) = font.metrics();
 
             let mut val_paint = paint_from_hex(&self.value_color);
@@ -157,26 +164,29 @@ impl Stat {
 
             // Trend inline after value
             if let Some(trend) = &self.trend {
-                let val_w =
-                    measure_text_with_fallback(&self.value, &font, &emoji_font, 0.0);
+                let val_w = measure_text_with_fallback(&self.value, &font, &emoji_font, 0.0);
                 let trend_fs = self.value_font_size * 0.4;
                 let bold_style = skia_safe::FontStyle::bold();
                 let trend_typeface = fm
                     .match_family_style("Inter", bold_style)
                     .or_else(|| fm.match_family_style("Helvetica", bold_style))
                     .or_else(|| fm.match_family_style("Arial", bold_style))
-                    .unwrap_or_else(|| fm.legacy_make_typeface(None, bold_style).expect("no font available"));
+                    .unwrap_or_else(|| {
+                        fm.legacy_make_typeface(None, bold_style)
+                            .expect("no font available")
+                    });
                 let trend_font = skia_safe::Font::from_typeface(trend_typeface, trend_fs);
                 let trend_emoji =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, trend_fs));
 
-                let trend_color = trend.color.as_deref().unwrap_or_else(|| {
-                    match trend.direction {
+                let trend_color = trend
+                    .color
+                    .as_deref()
+                    .unwrap_or_else(|| match trend.direction {
                         TrendDirection::Up => "#22C55E",
                         TrendDirection::Down => "#EF4444",
                         TrendDirection::Neutral => "#94A3B8",
-                    }
-                });
+                    });
 
                 let mut trend_paint = paint_from_hex(trend_color);
                 trend_paint.set_anti_alias(true);
@@ -194,19 +204,28 @@ impl Stat {
 
                 if let Some(icon_id) = icon_id {
                     let icon_sz = (trend_fs * 1.0).round() as u32;
-                    let cache_key = format!("stat_icon:{}:{}:{}x{}", icon_id, trend_color, icon_sz, icon_sz);
+                    let cache_key = format!(
+                        "stat_icon:{}:{}:{}x{}",
+                        icon_id, trend_color, icon_sz, icon_sz
+                    );
                     let cache = asset_cache();
 
                     let icon_img = if let Some(cached) = cache.get(&cache_key) {
                         Some(cached.clone())
-                    } else if let Ok(svg_data) = fetch_icon_svg(icon_id, trend_color, icon_sz, icon_sz) {
+                    } else if let Ok(svg_data) =
+                        fetch_icon_svg(icon_id, trend_color, icon_sz, icon_sz)
+                    {
                         let opt = usvg::Options::default();
                         if let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) {
                             let svg_size = tree.size();
                             if let Some(mut pixmap) = tiny_skia::Pixmap::new(icon_sz, icon_sz) {
                                 let sx = icon_sz as f32 / svg_size.width();
                                 let sy = icon_sz as f32 / svg_size.height();
-                                resvg::render(&tree, tiny_skia::Transform::from_scale(sx, sy), &mut pixmap.as_mut());
+                                resvg::render(
+                                    &tree,
+                                    tiny_skia::Transform::from_scale(sx, sy),
+                                    &mut pixmap.as_mut(),
+                                );
                                 let img_data = skia_safe::Data::new_copy(pixmap.data());
                                 let info = ImageInfo::new(
                                     (icon_sz as i32, icon_sz as i32),
@@ -214,13 +233,25 @@ impl Stat {
                                     skia_safe::AlphaType::Premul,
                                     None,
                                 );
-                                if let Some(decoded) = skia_safe::images::raster_from_data(&info, img_data, icon_sz as usize * 4) {
+                                if let Some(decoded) = skia_safe::images::raster_from_data(
+                                    &info,
+                                    img_data,
+                                    icon_sz as usize * 4,
+                                ) {
                                     cache.insert(cache_key, decoded.clone());
                                     Some(decoded)
-                                } else { None }
-                            } else { None }
-                        } else { None }
-                    } else { None };
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
                     if let Some(img) = icon_img {
                         let icon_y = ty - trend_fs * 0.8;
@@ -256,10 +287,7 @@ impl Stat {
             let range = (max_v - min_v).max(0.001);
             let n = self.sparkline_data.len();
 
-            let spark_color = self
-                .sparkline_color
-                .as_deref()
-                .unwrap_or("#3B82F6");
+            let spark_color = self.sparkline_color.as_deref().unwrap_or("#3B82F6");
 
             let mut line_path = Path::new();
             let mut fill_path = Path::new();
@@ -285,10 +313,7 @@ impl Stat {
             let top_color = Color::from_argb(50, r, g, b);
             let bottom_color = Color::from_argb(0, r, g, b);
             let shader = skia_safe::shader::Shader::linear_gradient(
-                (
-                    Point::new(0.0, spark_y),
-                    Point::new(0.0, spark_y + spark_h),
-                ),
+                (Point::new(0.0, spark_y), Point::new(0.0, spark_y + spark_h)),
                 skia_safe::gradient_shader::GradientShaderColors::Colors(&[
                     top_color,
                     bottom_color,

@@ -69,11 +69,21 @@ pub enum RoutingMode {
     Elbow,
 }
 
-fn default_curvature() -> f32 { 0.4 }
-fn default_connector_width() -> f32 { 2.0 }
-fn default_connector_color() -> String { "#FFFFFF".to_string() }
-fn default_arrow_size() -> f32 { 10.0 }
-fn default_true() -> bool { true }
+fn default_curvature() -> f32 {
+    0.4
+}
+fn default_connector_width() -> f32 {
+    2.0
+}
+fn default_connector_color() -> String {
+    "#FFFFFF".to_string()
+}
+fn default_arrow_size() -> f32 {
+    10.0
+}
+fn default_true() -> bool {
+    true
+}
 
 rustmotion_core::impl_traits!(Connector {
     Animatable => animation,
@@ -117,10 +127,18 @@ impl Connector {
         path
     }
 
-    fn draw_arrowhead(canvas: &Canvas, path: &Path, at_end: bool, size: f32, paint: &skia_safe::Paint) {
+    fn draw_arrowhead(
+        canvas: &Canvas,
+        path: &Path,
+        at_end: bool,
+        size: f32,
+        paint: &skia_safe::Paint,
+    ) {
         let mut measure = PathMeasure::new(path, false, None);
         let total_len = measure.length();
-        if total_len < 1.0 { return; }
+        if total_len < 1.0 {
+            return;
+        }
 
         let (pos, tangent) = if at_end {
             match measure.pos_tan(total_len - 0.1) {

@@ -9,7 +9,11 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "rustmotion", version, about = "Render motion design videos from JSON scenarios")]
+#[command(
+    name = "rustmotion",
+    version,
+    about = "Render motion design videos from JSON scenarios"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -219,16 +223,24 @@ pub fn run() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Studio { file } => {
-            match load_input(&file) {
-                Ok(scenario) => rustmotion_studio::run_preview(scenario, Some(file), true),
-                Err(e) => rustmotion_studio::run_preview_with_error(format!("{}", e), Some(file), true),
-            }
-        }
+        Commands::Studio { file } => match load_input(&file) {
+            Ok(scenario) => rustmotion_studio::run_preview(scenario, Some(file), true),
+            Err(e) => rustmotion_studio::run_preview_with_error(format!("{}", e), Some(file), true),
+        },
         Commands::Render {
-            file, json, output, frame, output_format,
-            codec, crf, format, transparent, watch,
-            no_validate, lenient, strict_anim,
+            file,
+            json,
+            output,
+            frame,
+            output_format,
+            codec,
+            crf,
+            format,
+            transparent,
+            watch,
+            no_validate,
+            lenient,
+            strict_anim,
         } => {
             // Validate codec / CRF up-front so we never spawn an encoder with bad args.
             commands::validation::check_codec(codec.as_deref())?;
@@ -237,9 +249,18 @@ pub fn run() -> Result<()> {
             if watch {
                 let input_path = file.ok_or(RustmotionError::WatchRequiresFile)?;
                 commands::cmd_watch(
-                    &input_path, &output, frame, output_format.as_ref(),
-                    cli.quiet, codec, crf, format, transparent,
-                    no_validate, lenient, strict_anim,
+                    &input_path,
+                    &output,
+                    frame,
+                    output_format.as_ref(),
+                    cli.quiet,
+                    codec,
+                    crf,
+                    format,
+                    transparent,
+                    no_validate,
+                    lenient,
+                    strict_anim,
                 )
             } else {
                 let source = match (file.as_ref(), json.as_deref()) {
@@ -271,24 +292,44 @@ pub fn run() -> Result<()> {
                 }
 
                 commands::cmd_render(
-                    loaded.scenario, &output, frame, output_format.as_ref(),
-                    cli.quiet, codec, crf, format, transparent,
+                    loaded.scenario,
+                    &output,
+                    frame,
+                    output_format.as_ref(),
+                    cli.quiet,
+                    codec,
+                    crf,
+                    format,
+                    transparent,
                 )
             }
         }
-        Commands::Still { file, output, time, format, quality } => {
+        Commands::Still {
+            file,
+            output,
+            time,
+            format,
+            quality,
+        } => {
             let scenario = load_input(&file)?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
-        Commands::Validate { file, report, fix, strict_anim, lenient } => {
-            commands::cmd_validate(&file, report.as_deref(), fix, strict_anim, lenient)
-        }
+        Commands::Validate {
+            file,
+            report,
+            fix,
+            strict_anim,
+            lenient,
+        } => commands::cmd_validate(&file, report.as_deref(), fix, strict_anim, lenient),
         Commands::Schema { output } => commands::cmd_schema(output.as_deref()),
         Commands::Info { file } => commands::cmd_info(&file),
         Commands::Skills { action } => match action {
             SkillsAction::Install { global } => skills::install(global),
             SkillsAction::Uninstall { global } => skills::uninstall(global),
-            SkillsAction::List => { skills::list(); Ok(()) }
+            SkillsAction::List => {
+                skills::list();
+                Ok(())
+            }
             SkillsAction::Show { name } => skills::show(&name),
         },
         Commands::Completions { action } => match action {
@@ -309,7 +350,7 @@ pub fn run() -> Result<()> {
             }
             CompletionsAction::Install => install_completions(),
             CompletionsAction::Uninstall => uninstall_completions(),
-        }
+        },
     }
 }
 
@@ -328,15 +369,23 @@ fn detect_shell() -> Option<clap_complete::Shell> {
 
 fn install_completions() -> Result<()> {
     let shell = detect_shell().ok_or_else(|| {
-        RustmotionError::Generic("Could not detect shell. Use 'completions generate <shell>' instead.".into())
+        RustmotionError::Generic(
+            "Could not detect shell. Use 'completions generate <shell>' instead.".into(),
+        )
     })?;
 
     let mut buf = Vec::new();
     clap_complete::generate(shell, &mut Cli::command(), "rustmotion", &mut buf);
-    clap_complete::generate(shell, &mut rustmotion_studio::command(), "rustmotion-studio", &mut buf);
+    clap_complete::generate(
+        shell,
+        &mut rustmotion_studio::command(),
+        "rustmotion-studio",
+        &mut buf,
+    );
     let completions = String::from_utf8(buf).unwrap();
 
-    let home = dirs::home_dir().ok_or_else(|| RustmotionError::Generic("Could not find home directory".into()))?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| RustmotionError::Generic("Could not find home directory".into()))?;
 
     match shell {
         clap_complete::Shell::Zsh => {
@@ -350,7 +399,10 @@ fn install_completions() -> Result<()> {
             let zshrc = home.join(".zshrc");
             let zshrc_content = std::fs::read_to_string(&zshrc).unwrap_or_default();
             if !zshrc_content.contains(".zfunc") {
-                let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&zshrc)?;
+                let mut f = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&zshrc)?;
                 writeln!(f, "\n# rustmotion completions")?;
                 writeln!(f, "fpath=(~/.zfunc $fpath)")?;
                 writeln!(f, "autoload -Uz compinit && compinit")?;
@@ -375,7 +427,11 @@ fn install_completions() -> Result<()> {
             eprintln!("Installed completions to {}", path.display());
         }
         _ => {
-            return Err(RustmotionError::Generic(format!("Unsupported shell for install: {:?}. Use 'completions generate' instead.", shell)).into());
+            return Err(RustmotionError::Generic(format!(
+                "Unsupported shell for install: {:?}. Use 'completions generate' instead.",
+                shell
+            ))
+            .into());
         }
     }
 
@@ -383,11 +439,11 @@ fn install_completions() -> Result<()> {
 }
 
 fn uninstall_completions() -> Result<()> {
-    let shell = detect_shell().ok_or_else(|| {
-        RustmotionError::Generic("Could not detect shell.".into())
-    })?;
+    let shell =
+        detect_shell().ok_or_else(|| RustmotionError::Generic("Could not detect shell.".into()))?;
 
-    let home = dirs::home_dir().ok_or_else(|| RustmotionError::Generic("Could not find home directory".into()))?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| RustmotionError::Generic("Could not find home directory".into()))?;
 
     match shell {
         clap_complete::Shell::Zsh => {
@@ -401,12 +457,15 @@ fn uninstall_completions() -> Result<()> {
             let zshrc = home.join(".zshrc");
             if zshrc.exists() {
                 let content = std::fs::read_to_string(&zshrc)?;
-                let filtered: Vec<&str> = content.lines().filter(|line| {
-                    let trimmed = line.trim();
-                    trimmed != "# rustmotion completions"
-                        && !(trimmed.contains(".zfunc") && trimmed.starts_with("fpath="))
-                        && !(trimmed.contains("compinit") && trimmed.starts_with("autoload"))
-                }).collect();
+                let filtered: Vec<&str> = content
+                    .lines()
+                    .filter(|line| {
+                        let trimmed = line.trim();
+                        trimmed != "# rustmotion completions"
+                            && !(trimmed.contains(".zfunc") && trimmed.starts_with("fpath="))
+                            && !(trimmed.contains("compinit") && trimmed.starts_with("autoload"))
+                    })
+                    .collect();
                 std::fs::write(&zshrc, filtered.join("\n") + "\n")?;
                 eprintln!("Cleaned ~/.zshrc");
             }

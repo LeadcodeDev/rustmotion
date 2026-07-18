@@ -54,7 +54,9 @@ impl Painter for QrCode {
     ) {
         use qrcode::QrCode as QrCodeLib;
 
-        let Ok(code) = QrCodeLib::new(self.content.as_bytes()) else { return };
+        let Ok(code) = QrCodeLib::new(self.content.as_bytes()) else {
+            return;
+        };
 
         let modules = code.to_colors();
         let module_count = code.width() as f32;
@@ -62,10 +64,7 @@ impl Painter for QrCode {
 
         let mut bg_paint = skia_safe::Paint::new(color4f_from_hex(&self.background_color), None);
         bg_paint.set_style(PaintStyle::Fill);
-        canvas.draw_rect(
-            Rect::from_xywh(0.0, 0.0, self.size, self.size),
-            &bg_paint,
-        );
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, self.size, self.size), &bg_paint);
 
         let mut fg_paint = skia_safe::Paint::new(color4f_from_hex(&self.foreground_color), None);
         fg_paint.set_style(PaintStyle::Fill);

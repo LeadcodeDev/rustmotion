@@ -84,8 +84,7 @@ impl Rating {
         let mut path = Path::new();
 
         for i in 0..10 {
-            let angle =
-                -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
             let r = if i % 2 == 0 {
                 outer_radius
             } else {
@@ -131,8 +130,7 @@ impl Rating {
                 let fill_fraction = star_fill as f32;
                 let clip_x = cx - outer_radius;
                 let clip_w = self.size * fill_fraction;
-                let clip_rect =
-                    skia_safe::Rect::from_xywh(clip_x, 0.0, clip_w, self.size);
+                let clip_rect = skia_safe::Rect::from_xywh(clip_x, 0.0, clip_w, self.size);
 
                 canvas.save();
                 canvas.clip_rect(clip_rect, skia_safe::ClipOp::Intersect, true);

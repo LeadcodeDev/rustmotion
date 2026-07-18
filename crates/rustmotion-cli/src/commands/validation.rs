@@ -92,7 +92,11 @@ pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
             } else {
                 s
             };
-            (s, Some(path.to_path_buf()), IncludeSource::File(path.to_path_buf()))
+            (
+                s,
+                Some(path.to_path_buf()),
+                IncludeSource::File(path.to_path_buf()),
+            )
         }
         ValidationSource::Inline(json) => (json.to_string(), None, IncludeSource::Inline),
     };
@@ -204,7 +208,11 @@ mod misplaced_animation_tests {
             ]}]
         });
         let w = warn_misplaced_animation(&raw);
-        assert_eq!(w.len(), 1, "only the top-level animation should warn: {w:?}");
+        assert_eq!(
+            w.len(),
+            1,
+            "only the top-level animation should warn: {w:?}"
+        );
         assert!(w[0].contains("style.animation"));
     }
 }
@@ -214,7 +222,9 @@ pub fn check_codec(codec: Option<&str>) -> Result<()> {
     if let Some(c) = codec {
         let allowed = ["h264", "h265", "vp9", "prores"];
         if !allowed.contains(&c) {
-            return Err(RustmotionError::UnknownCodec { codec: c.to_string() });
+            return Err(RustmotionError::UnknownCodec {
+                codec: c.to_string(),
+            });
         }
     }
     Ok(())

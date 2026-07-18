@@ -108,9 +108,7 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
         match v.kind {
             ViolationKind::UnwrappableTextOverflow => {
                 if let Some(obj) = target.as_object_mut() {
-                    let style = obj
-                        .entry("style")
-                        .or_insert_with(|| serde_json::json!({}));
+                    let style = obj.entry("style").or_insert_with(|| serde_json::json!({}));
                     if let Some(style_obj) = style.as_object_mut() {
                         style_obj.insert("wrap".into(), serde_json::Value::Bool(true));
                         applied += 1;
@@ -134,10 +132,7 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
 
 /// Walk a path like `views[0].scenes[1].children[2].children[0]` against the
 /// raw JSON, transparently handling the legacy `scenes` and `composition` shapes.
-fn navigate<'a>(
-    root: &'a mut serde_json::Value,
-    path: &str,
-) -> Option<&'a mut serde_json::Value> {
+fn navigate<'a>(root: &'a mut serde_json::Value, path: &str) -> Option<&'a mut serde_json::Value> {
     let segments = parse_segments(path);
     let mut cursor: &mut serde_json::Value = root;
     let mut idx = 0;

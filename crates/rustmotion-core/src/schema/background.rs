@@ -139,13 +139,19 @@ impl Serialize for AnimatedBackground {
         match &self.preset {
             BackgroundPreset::GradientShift(cfg) => map.serialize_entry("gradient_shift", cfg)?,
             BackgroundPreset::GridDots(cfg) => map.serialize_entry("grid_dots", cfg)?,
-            BackgroundPreset::ConcentricCircles(cfg) => map.serialize_entry("concentric_circles", cfg)?,
+            BackgroundPreset::ConcentricCircles(cfg) => {
+                map.serialize_entry("concentric_circles", cfg)?
+            }
             BackgroundPreset::Halo(cfg) => map.serialize_entry("halo", cfg)?,
             BackgroundPreset::Heropattern(cfg) => map.serialize_entry("heropattern", cfg)?,
         }
         map.serialize_entry("speed", &self.speed)?;
-        if self.x != 0.0 { map.serialize_entry("x", &self.x)?; }
-        if self.y != 0.0 { map.serialize_entry("y", &self.y)?; }
+        if self.x != 0.0 {
+            map.serialize_entry("x", &self.x)?;
+        }
+        if self.y != 0.0 {
+            map.serialize_entry("y", &self.y)?;
+        }
         if let Some(ref dir) = self.direction {
             map.serialize_entry("direction", dir)?;
         }
@@ -165,13 +171,11 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             .get("direction")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-        let preset_str = map
-            .get("preset")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let preset_str = map.get("preset").and_then(|v| v.as_str()).unwrap_or("");
 
         // Detect new vs legacy format: new format has a sub-object keyed by preset name
-        let is_new_format = !preset_str.is_empty() && map.get(preset_str).map_or(false, |v| v.is_object());
+        let is_new_format =
+            !preset_str.is_empty() && map.get(preset_str).map_or(false, |v| v.is_object());
 
         let (preset, speed) = if is_new_format {
             // New format: config in sub-object
@@ -179,24 +183,29 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             let speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             let preset = match preset_str {
                 "grid_dots" => {
-                    let cfg: GridDotsConfig = serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
+                    let cfg: GridDotsConfig =
+                        serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
                     BackgroundPreset::GridDots(cfg)
                 }
                 "concentric_circles" => {
-                    let cfg: ConcentricCirclesConfig = serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
+                    let cfg: ConcentricCirclesConfig =
+                        serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
                     BackgroundPreset::ConcentricCircles(cfg)
                 }
                 "halo" => {
-                    let cfg: HaloConfig = serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
+                    let cfg: HaloConfig =
+                        serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
                     BackgroundPreset::Halo(cfg)
                 }
                 "heropattern" => {
-                    let cfg: HeropatternConfig = serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
+                    let cfg: HeropatternConfig =
+                        serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
                     BackgroundPreset::Heropattern(cfg)
                 }
                 _ => {
                     // gradient_shift or unknown → gradient_shift
-                    let cfg: GradientShiftConfig = serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
+                    let cfg: GradientShiftConfig =
+                        serde_json::from_value(sub).map_err(serde::de::Error::custom)?;
                     BackgroundPreset::GradientShift(cfg)
                 }
             };
@@ -206,43 +215,68 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             let legacy_speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
             let preset = match preset_str {
                 "grid_dots" => {
-                    let color = map.get("colors")
+                    let color = map
+                        .get("colors")
                         .and_then(|v| v.as_array())
                         .and_then(|a| a.first())
                         .and_then(|v| v.as_str())
                         .unwrap_or("#FFFFFF15")
                         .to_string();
-                    let element_size = map.get("element_size").and_then(|v| v.as_f64()).unwrap_or(4.0) as f32;
-                    let spacing = map.get("spacing").and_then(|v| v.as_f64()).unwrap_or(60.0) as f32;
-                    BackgroundPreset::GridDots(GridDotsConfig { color, element_size, spacing })
+                    let element_size = map
+                        .get("element_size")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(4.0) as f32;
+                    let spacing =
+                        map.get("spacing").and_then(|v| v.as_f64()).unwrap_or(60.0) as f32;
+                    BackgroundPreset::GridDots(GridDotsConfig {
+                        color,
+                        element_size,
+                        spacing,
+                    })
                 }
                 "concentric_circles" => {
-                    let color = map.get("colors")
+                    let color = map
+                        .get("colors")
                         .and_then(|v| v.as_array())
                         .and_then(|a| a.first())
                         .and_then(|v| v.as_str())
                         .unwrap_or("#FFFFFF20")
                         .to_string();
-                    let element_size = map.get("element_size").and_then(|v| v.as_f64()).unwrap_or(4.0) as f32;
-                    let spacing = map.get("spacing").and_then(|v| v.as_f64()).unwrap_or(60.0) as f32;
+                    let element_size = map
+                        .get("element_size")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(4.0) as f32;
+                    let spacing =
+                        map.get("spacing").and_then(|v| v.as_f64()).unwrap_or(60.0) as f32;
                     let count = map.get("count").and_then(|v| v.as_u64()).map(|n| n as u32);
-                    BackgroundPreset::ConcentricCircles(ConcentricCirclesConfig { color, element_size, spacing, count })
+                    BackgroundPreset::ConcentricCircles(ConcentricCirclesConfig {
+                        color,
+                        element_size,
+                        spacing,
+                        count,
+                    })
                 }
                 "halo" => {
-                    let zones: Vec<HaloZone> = map.get("zones")
+                    let zones: Vec<HaloZone> = map
+                        .get("zones")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_default();
                     BackgroundPreset::Halo(HaloConfig { zones })
                 }
                 _ => {
                     // Default: gradient_shift
-                    let colors: Vec<String> = map.get("colors")
+                    let colors: Vec<String> = map
+                        .get("colors")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_default();
-                    let gradient_type: GradientType = map.get("gradient_type")
+                    let gradient_type: GradientType = map
+                        .get("gradient_type")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_else(default_bg_type);
-                    BackgroundPreset::GradientShift(GradientShiftConfig { colors, gradient_type })
+                    BackgroundPreset::GradientShift(GradientShiftConfig {
+                        colors,
+                        gradient_type,
+                    })
                 }
             };
             (preset, legacy_speed)
@@ -261,7 +295,13 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             }
         });
 
-        Ok(AnimatedBackground { preset, x, y, speed, direction })
+        Ok(AnimatedBackground {
+            preset,
+            x,
+            y,
+            speed,
+            direction,
+        })
     }
 }
 
@@ -278,12 +318,30 @@ impl JsonSchema for AnimatedBackground {
         props.insert("x".to_string(), gen.subschema_for::<f32>());
         props.insert("y".to_string(), gen.subschema_for::<f32>());
         props.insert("speed".to_string(), gen.subschema_for::<f32>());
-        props.insert("direction".to_string(), gen.subschema_for::<Option<ScrollDirection>>());
-        props.insert("gradient_shift".to_string(), gen.subschema_for::<Option<GradientShiftConfig>>());
-        props.insert("grid_dots".to_string(), gen.subschema_for::<Option<GridDotsConfig>>());
-        props.insert("concentric_circles".to_string(), gen.subschema_for::<Option<ConcentricCirclesConfig>>());
-        props.insert("halo".to_string(), gen.subschema_for::<Option<HaloConfig>>());
-        props.insert("heropattern".to_string(), gen.subschema_for::<Option<HeropatternConfig>>());
+        props.insert(
+            "direction".to_string(),
+            gen.subschema_for::<Option<ScrollDirection>>(),
+        );
+        props.insert(
+            "gradient_shift".to_string(),
+            gen.subschema_for::<Option<GradientShiftConfig>>(),
+        );
+        props.insert(
+            "grid_dots".to_string(),
+            gen.subschema_for::<Option<GridDotsConfig>>(),
+        );
+        props.insert(
+            "concentric_circles".to_string(),
+            gen.subschema_for::<Option<ConcentricCirclesConfig>>(),
+        );
+        props.insert(
+            "halo".to_string(),
+            gen.subschema_for::<Option<HaloConfig>>(),
+        );
+        props.insert(
+            "heropattern".to_string(),
+            gen.subschema_for::<Option<HeropatternConfig>>(),
+        );
 
         SchemaObject {
             instance_type: Some(InstanceType::Object.into()),
@@ -343,7 +401,9 @@ pub enum BackgroundValue {
 
 impl Serialize for BackgroundValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         match self {
             BackgroundValue::Color(s) => serializer.serialize_str(s),
             BackgroundValue::Single(entry) => entry.serialize(serializer),
@@ -387,7 +447,9 @@ fn default_bg_type() -> GradientType {
 }
 
 /// Deserialize `animated-background` as either a single AnimatedBackground or a Vec.
-pub(crate) fn deserialize_animated_backgrounds<'de, D>(deserializer: D) -> Result<Vec<AnimatedBackground>, D::Error>
+pub(crate) fn deserialize_animated_backgrounds<'de, D>(
+    deserializer: D,
+) -> Result<Vec<AnimatedBackground>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -413,8 +475,7 @@ where
         where
             M: de::MapAccess<'de>,
         {
-            let bg =
-                AnimatedBackground::deserialize(de::value::MapAccessDeserializer::new(map))?;
+            let bg = AnimatedBackground::deserialize(de::value::MapAccessDeserializer::new(map))?;
             Ok(vec![bg])
         }
     }
@@ -423,7 +484,9 @@ where
 }
 
 /// Deserialize `background` as a color string, a single BackgroundEntry object, or an array.
-pub(crate) fn deserialize_background_value<'de, D>(deserializer: D) -> Result<Option<BackgroundValue>, D::Error>
+pub(crate) fn deserialize_background_value<'de, D>(
+    deserializer: D,
+) -> Result<Option<BackgroundValue>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -439,22 +502,30 @@ where
         }
 
         fn visit_none<E>(self) -> Result<Self::Value, E>
-        where E: de::Error {
+        where
+            E: de::Error,
+        {
             Ok(None)
         }
 
         fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where E: de::Error {
+        where
+            E: de::Error,
+        {
             Ok(None)
         }
 
         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where E: de::Error {
+        where
+            E: de::Error,
+        {
             Ok(Some(BackgroundValue::Color(v.to_string())))
         }
 
         fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-        where E: de::Error {
+        where
+            E: de::Error,
+        {
             Ok(Some(BackgroundValue::Color(v)))
         }
 
@@ -470,7 +541,8 @@ where
         where
             A: de::SeqAccess<'de>,
         {
-            let entries = Vec::<BackgroundEntry>::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            let entries =
+                Vec::<BackgroundEntry>::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
             Ok(Some(BackgroundValue::Multiple(entries)))
         }
     }

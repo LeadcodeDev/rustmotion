@@ -1,13 +1,13 @@
 use rustmotion_core::css::CssStyle;
-use rustmotion_core::error::{Result, RustmotionError};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::asset_cache;
+use rustmotion_core::error::{Result, RustmotionError};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect};
 
 /// A Lottie animation component that renders frame-by-frame from a .json Lottie file.
 ///
@@ -61,8 +61,10 @@ impl Lottie {
     /// Parse Lottie JSON metadata (fr, ip, op, w, h).
     fn parse_metadata(&self) -> Result<(f64, usize, f64, f32, f32)> {
         let json_str = if let Some(ref src) = self.src {
-            std::fs::read_to_string(src)
-                .map_err(|e| RustmotionError::LottieRead { path: src.clone(), reason: e.to_string() })?
+            std::fs::read_to_string(src).map_err(|e| RustmotionError::LottieRead {
+                path: src.clone(),
+                reason: e.to_string(),
+            })?
         } else if let Some(ref data) = self.data {
             data.clone()
         } else {
@@ -90,11 +92,16 @@ impl Lottie {
     /// Load a pre-rendered frame from frames_dir.
     fn load_frame_from_dir(&self, frames_dir: &str, frame: usize) -> Result<skia_safe::Image> {
         let frame_path = format!("{}/{:04}.png", frames_dir, frame);
-        let data = std::fs::read(&frame_path)
-            .map_err(|e| RustmotionError::LottieFrameRead { path: frame_path.clone(), reason: e.to_string() })?;
+        let data = std::fs::read(&frame_path).map_err(|e| RustmotionError::LottieFrameRead {
+            path: frame_path.clone(),
+            reason: e.to_string(),
+        })?;
 
-        let img = image::load_from_memory(&data)
-            .map_err(|e| RustmotionError::LottieFrameDecode { path: frame_path.clone(), reason: e.to_string() })?;
+        let img =
+            image::load_from_memory(&data).map_err(|e| RustmotionError::LottieFrameDecode {
+                path: frame_path.clone(),
+                reason: e.to_string(),
+            })?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
 
@@ -106,8 +113,11 @@ impl Lottie {
             None,
         );
 
-        skia_safe::images::raster_from_data(&img_info, img_data, w as usize * 4)
-            .ok_or(RustmotionError::SkiaImageCreation { target: "lottie frame".to_string() })
+        skia_safe::images::raster_from_data(&img_info, img_data, w as usize * 4).ok_or(
+            RustmotionError::SkiaImageCreation {
+                target: "lottie frame".to_string(),
+            },
+        )
     }
 }
 
@@ -119,7 +129,8 @@ impl Painter for Lottie {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let Ok((fr, total_frames, duration, _intrinsic_w, _intrinsic_h)) = self.parse_metadata() else {
+        let Ok((fr, total_frames, duration, _intrinsic_w, _intrinsic_h)) = self.parse_metadata()
+        else {
             return;
         };
 

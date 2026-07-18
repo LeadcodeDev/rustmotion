@@ -136,8 +136,11 @@ pub struct View {
     #[schemars(skip)]
     pub background: Option<BackgroundValue>,
     /// (world) Legacy shared animated backgrounds.
-    #[serde(default, rename = "animated-background",
-            deserialize_with = "deserialize_animated_backgrounds")]
+    #[serde(
+        default,
+        rename = "animated-background",
+        deserialize_with = "deserialize_animated_backgrounds"
+    )]
     pub animated_background: Vec<AnimatedBackground>,
     /// (world) Easing for camera pan between scenes.
     #[serde(default = "default_transition_easing")]
@@ -280,7 +283,11 @@ pub struct Scene {
     #[serde(default)]
     pub layout: Option<SceneLayout>,
     /// Legacy animated background (kept for backward compat)
-    #[serde(default, rename = "animated-background", deserialize_with = "deserialize_animated_backgrounds")]
+    #[serde(
+        default,
+        rename = "animated-background",
+        deserialize_with = "deserialize_animated_backgrounds"
+    )]
     pub animated_background: Vec<AnimatedBackground>,
     /// Virtual camera with animatable x, y, zoom, rotation.
     #[serde(default)]

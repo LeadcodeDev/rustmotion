@@ -6,7 +6,13 @@ use rustmotion_core::engine::renderer::paint_from_hex;
 use super::Chart;
 
 impl Chart {
-    pub(super) fn render_waterfall(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
+    pub(super) fn render_waterfall(
+        &self,
+        canvas: &Canvas,
+        w: f32,
+        h: f32,
+        progress: f32,
+    ) -> Result<()> {
         let (mt, mr, mb, ml) = self.chart_margins();
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
@@ -29,12 +35,10 @@ impl Chart {
         let max_val = all_vals.iter().fold(f64::MIN, |a, &b| a.max(b));
         let range = (max_val - min_val).max(0.001);
 
-        let x_labels: Vec<String> = self
-            .data
-            .iter()
-            .filter_map(|d| d.label.clone())
-            .collect();
-        self.draw_axes(canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, true);
+        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        self.draw_axes(
+            canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, true,
+        );
 
         let n = self.data.len();
         let gap = 6.0;
