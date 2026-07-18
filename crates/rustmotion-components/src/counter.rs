@@ -59,6 +59,7 @@ impl Counter {
         layout_width: f32,
         time: f64,
         scene_duration: f64,
+        ctx: &PaintCtx,
     ) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
@@ -166,8 +167,23 @@ impl Counter {
         let descent = metrics.descent;
         let y = (line_height + ascent - descent) / 2.0;
 
-        // Draw shadow
-        if let Some(ref shadow) = self.text_shadow {
+        // Draw shadows — component field wins, else the bridged CSS
+        // `style.text-shadow` list (reverse order: first shadow on top).
+        let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
+            vec![s.clone()]
+        } else if let Some(list) = &self.style.text_shadow {
+            let lctx = rustmotion_core::css::units::LengthContext {
+                viewport_width: ctx.video_width as f32,
+                viewport_height: ctx.video_height as f32,
+                parent_size: layout_width.max(0.0),
+                font_size,
+                root_font_size: 16.0,
+            };
+            list.iter().map(|s| s.to_schema(&lctx)).collect()
+        } else {
+            Vec::new()
+        };
+        for shadow in shadows.iter().rev() {
             let mut sp = paint_from_hex(&shadow.color);
             if shadow.blur > 0.01 {
                 if let Some(filter) = skia_safe::image_filters::blur(
@@ -231,6 +247,6 @@ impl Painter for Counter {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration);
+        let _ = self.paint(canvas, layout.width, ctx.time, ctx.scene_duration, ctx);
     }
 }

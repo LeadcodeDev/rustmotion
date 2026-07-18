@@ -60,6 +60,22 @@ fn validate_children(
     for (j, child) in children.iter().enumerate() {
         let p = format!("{}.children[{}]", path, j);
 
+        // Properties the CSS engine accepts but does not render yet — warn
+        // instead of staying silent so authors don't rely on a no-op.
+        let style = child.component.as_styled().style_config();
+        if style.overflow_wrap.is_some() {
+            warnings.push(format!(
+                "{}: style.overflow-wrap is accepted but not rendered yet (text wraps per style.wrap)",
+                p
+            ));
+        }
+        if style.text_overflow.is_some() {
+            warnings.push(format!(
+                "{}: style.text-overflow is accepted but not rendered yet (no ellipsis clipping)",
+                p
+            ));
+        }
+
         if let Some(timed) = child.component.as_timed() {
             let (start, end) = timed.timing();
             if let (Some(s), Some(e)) = (start, end) {
@@ -302,4 +318,33 @@ fn counter_display_len(
     let suffix_len = suffix.as_deref().map(str::len).unwrap_or(0);
 
     sign + integer_digits + separator_chars + decimal_chars + prefix_len + suffix_len
+}
+
+#[cfg(test)]
+mod style_warning_tests {
+    use super::*;
+
+    #[test]
+    fn warns_on_accepted_but_unrendered_css_properties() {
+        // overflow-wrap and text-overflow parse into CssStyle but are not
+        // rendered yet; validate must say so instead of staying silent.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": { "overflow-wrap": "break-word", "text-overflow": "ellipsis" }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("overflow-wrap")),
+            "missing overflow-wrap warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("text-overflow")),
+            "missing text-overflow warning: {warnings:?}"
+        );
+    }
 }
