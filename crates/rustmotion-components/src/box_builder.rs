@@ -306,6 +306,13 @@ fn component_intrinsic(
             c,
         ))),
         Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
+        Terminal(t) => Some(Arc::new(
+            crate::intrinsic::TerminalIntrinsic::from_terminal(t),
+        )),
+        Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
+        Codeblock(c) => Some(Arc::new(
+            crate::intrinsic::CodeblockIntrinsic::from_codeblock(c),
+        )),
         _ => None,
     }
 }

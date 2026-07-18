@@ -1,7 +1,7 @@
 mod chrome;
 mod diff;
-mod dimensions;
-mod highlight;
+pub(crate) mod dimensions;
+pub(crate) mod highlight;
 mod render;
 mod reveal;
 

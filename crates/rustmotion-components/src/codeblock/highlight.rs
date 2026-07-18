@@ -526,7 +526,7 @@ pub(super) fn highlight_code(code: &str, language: &str, theme: &Theme) -> Vec<H
     result
 }
 
-pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Option<Font> {
+pub(crate) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Option<Font> {
     let font_mgr = rustmotion_core::engine::renderer::font_mgr();
     let w: i32 = match weight {
         FontWeight::Normal => 400,

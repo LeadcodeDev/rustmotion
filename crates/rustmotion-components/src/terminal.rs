@@ -125,10 +125,10 @@ rustmotion_core::impl_traits!(Terminal {
 });
 
 pub const CORNER_RADIUS: f32 = 10.0;
-const CHROME_HEIGHT: f32 = 36.0;
-const FONT_SIZE: f32 = 14.0;
-const LINE_HEIGHT: f32 = 22.0;
-const PADDING: f32 = 16.0;
+pub(crate) const CHROME_HEIGHT: f32 = 36.0;
+pub(crate) const FONT_SIZE: f32 = 14.0;
+pub(crate) const LINE_HEIGHT: f32 = 22.0;
+pub(crate) const PADDING: f32 = 16.0;
 
 impl Terminal {
     fn make_font(&self) -> Option<skia_safe::Font> {

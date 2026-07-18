@@ -339,6 +339,260 @@ fn synthesize_text_style(src: &CssStyle, font_size: f32, default_family: &str) -
 #[allow(dead_code)]
 fn _line_height_unused(_: Option<&LineHeight>) {}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Terminal intrinsic measurer
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::terminal::{
+    Terminal, CHROME_HEIGHT, FONT_SIZE as TERM_FONT_SIZE, LINE_HEIGHT as TERM_LINE_HEIGHT,
+    PADDING as TERM_PADDING,
+};
+
+/// Intrinsic measurer for [`Terminal`].
+///
+/// Natural size formula (matches the painter exactly):
+/// - `line_height = ceil(font_size × TERM_LINE_HEIGHT / TERM_FONT_SIZE)`
+/// - `height = chrome_height + 2 × TERM_PADDING + n_lines × line_height`
+/// - `width` = widest line text (prefix + content) + 2 × TERM_PADDING
+///
+/// If the Skia font fails to load, returns (0, 0) so layout falls back to
+/// whatever container constraints supply.
+pub struct TerminalIntrinsic {
+    line_height: f32,
+    n_lines: usize,
+    chrome_height: f32,
+    padding: f32,
+    /// Maximum measured text width across all lines (including prefix).
+    max_line_width: f32,
+}
+
+impl TerminalIntrinsic {
+    pub fn from_terminal(t: &Terminal) -> Self {
+        let font_size = t.style.font_size_px_or(TERM_FONT_SIZE);
+        let line_height = (font_size * TERM_LINE_HEIGHT / TERM_FONT_SIZE).ceil();
+        let chrome_height = if t.show_chrome { CHROME_HEIGHT } else { 0.0 };
+
+        // Measure each line (prefix + text) with the same Skia font the painter uses.
+        let max_line_width = Self::measure_max_width(t, font_size);
+
+        Self {
+            line_height,
+            n_lines: t.lines.len(),
+            chrome_height,
+            padding: TERM_PADDING,
+            max_line_width,
+        }
+    }
+
+    fn measure_max_width(t: &Terminal, font_size: f32) -> f32 {
+        let font_style = skia_safe::FontStyle::normal();
+        let Ok(typeface) = typeface_with_fallback("SF Mono", font_style) else {
+            // Font unavailable (CI without fonts); return 0 — the layout will
+            // be width-unconstrained and the container drives the size.
+            return 0.0;
+        };
+        let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+
+        t.lines
+            .iter()
+            .map(|line| {
+                let prefix = match line.line_type {
+                    crate::terminal::TerminalLineType::Prompt => "$ ",
+                    _ => "",
+                };
+                let full = format!("{}{}", prefix, line.text);
+                measure_text_with_fallback(&full, &font, &emoji_font, 0.0)
+            })
+            .fold(0.0f32, f32::max)
+    }
+}
+
+impl IntrinsicMeasure for TerminalIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        _available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let w = known.0.unwrap_or(self.max_line_width + self.padding * 2.0);
+        let h = known.1.unwrap_or(
+            self.chrome_height + self.padding * 2.0 + self.n_lines as f32 * self.line_height,
+        );
+        (w, h)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Table intrinsic measurer
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::table::{
+    Table, DEFAULT_CELL_PADDING, DEFAULT_FONT_SIZE as TABLE_FONT_SIZE, DEFAULT_ROW_HEIGHT_RATIO,
+};
+
+/// Intrinsic measurer for [`Table`].
+///
+/// Natural size formula (matches the painter exactly):
+/// - `row_height = font_size × DEFAULT_ROW_HEIGHT_RATIO`
+/// - `height = (1 + row_count) × row_height`  (header + data rows)
+/// - `width`: if `column_widths` are provided, their sum; otherwise each
+///   column gets `max(header_text_width + 2 × cell_padding, min_col_width)`.
+pub struct TableIntrinsic {
+    row_height: f32,
+    row_count: usize, // data rows only; header adds 1
+    total_width: f32,
+}
+
+impl TableIntrinsic {
+    pub fn from_table(t: &Table) -> Self {
+        let font_size = t.style.font_size_px_or(TABLE_FONT_SIZE);
+        let row_height = font_size * DEFAULT_ROW_HEIGHT_RATIO;
+
+        let total_width = Self::compute_width(t, font_size);
+
+        Self {
+            row_height,
+            row_count: t.rows.len(),
+            total_width,
+        }
+    }
+
+    fn compute_width(t: &Table, font_size: f32) -> f32 {
+        // Explicit column widths provided → sum them.
+        if let Some(widths) = &t.column_widths {
+            if !widths.is_empty() {
+                return widths.iter().sum();
+            }
+        }
+
+        // Measure each header with the bold font; add 2× cell_padding per column.
+        let font_style = skia_safe::FontStyle::bold();
+        let family = t.style.font_family.as_deref().unwrap_or("Inter");
+        let Ok(typeface) = typeface_with_fallback(family, font_style) else {
+            // Font unavailable: fall back to col_count × a reasonable minimum.
+            let col_count = t.headers.len().max(1) as f32;
+            return col_count * (TABLE_FONT_SIZE * 8.0 + DEFAULT_CELL_PADDING * 2.0);
+        };
+        let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+        let cell_padding = t.cell_padding;
+
+        // Also consider data cell widths to size columns appropriately.
+        let col_count = t.headers.len().max(1);
+        let mut col_widths: Vec<f32> = vec![0.0; col_count];
+
+        for (i, header) in t.headers.iter().enumerate() {
+            let w = measure_text_with_fallback(header, &font, &emoji_font, 0.0);
+            col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
+        }
+        for row in &t.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let w = measure_text_with_fallback(cell, &font, &emoji_font, 0.0);
+                col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
+            }
+        }
+
+        col_widths.iter().sum()
+    }
+}
+
+impl IntrinsicMeasure for TableIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        _available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let w = known.0.unwrap_or(self.total_width);
+        let h = known
+            .1
+            .unwrap_or((1 + self.row_count) as f32 * self.row_height);
+        (w, h)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Codeblock intrinsic measurer
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::codeblock::dimensions::compute_code_dimensions;
+use crate::codeblock::highlight::resolve_monospace_font;
+use crate::codeblock::Codeblock;
+use rustmotion_core::css::style::{FontWeight as CssFontWeight2, FontWeightKw as CssFontWeightKw2};
+use rustmotion_core::schema::FontWeight;
+
+/// Intrinsic measurer for [`Codeblock`].
+///
+/// Reuses `compute_code_dimensions` (same function as the painter) to derive:
+/// - `width  = max_line_width + gutter_width + pad_left + pad_right`
+/// - `height = line_count × line_height + pad_top + pad_bottom + chrome_height`
+///
+/// Computed once at construction from the initial `code` string. If a state
+/// transition widens the content at paint time, `auto_scroll` handles vertical
+/// overflow without needing the intrinsic to re-run.
+pub struct CodeblockIntrinsic {
+    natural_width: f32,
+    natural_height: f32,
+}
+
+impl CodeblockIntrinsic {
+    pub fn from_codeblock(c: &Codeblock) -> Self {
+        let font_family = c.style.font_family_or("JetBrains Mono");
+        let font_size = c.style.font_size_px_or(14.0);
+        let font_weight = match &c.style.font_weight {
+            Some(CssFontWeight2::Keyword(CssFontWeightKw2::Bold | CssFontWeightKw2::Bolder)) => {
+                FontWeight::Bold
+            }
+            Some(CssFontWeight2::Number(n)) if *n >= 600 => FontWeight::Bold,
+            Some(CssFontWeight2::Number(n)) => FontWeight::Weight(*n),
+            _ => FontWeight::Normal,
+        };
+
+        let Some(font) = resolve_monospace_font(font_family, font_size, font_weight) else {
+            return Self {
+                natural_width: 0.0,
+                natural_height: 0.0,
+            };
+        };
+
+        let padding = {
+            let (t, r, b, l) = c.style.padding_px();
+            if t == 0.0 && r == 0.0 && b == 0.0 && l == 0.0 {
+                (16.0, 16.0, 16.0, 16.0)
+            } else {
+                (t, r, b, l)
+            }
+        };
+
+        let chrome_height = if c.chrome.as_ref().is_some_and(|ch| ch.enabled) {
+            36.0
+        } else {
+            0.0
+        };
+
+        let dims = compute_code_dimensions(&c.code, &font, padding, chrome_height, c);
+
+        Self {
+            natural_width: dims.total_width,
+            natural_height: dims.total_height,
+        }
+    }
+}
+
+impl IntrinsicMeasure for CodeblockIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        _available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let w = known.0.unwrap_or(self.natural_width);
+        let h = known.1.unwrap_or(self.natural_height);
+        (w, h)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

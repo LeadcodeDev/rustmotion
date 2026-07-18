@@ -836,4 +836,172 @@ mod component_smoke {
             "SlideInLeft centroid did not move right (early_cx={early_cx:.1}, late_cx={late_cx:.1}, dx={dx:.1})"
         );
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Intrinsic-measure tests for Terminal, Table, Codeblock
+    //
+    // Each test wraps the component in a flex card with NO explicit width/height,
+    // runs the full layout pass, and asserts that the component's BoxLayout has
+    // sensible non-zero dimensions derived from its content.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Helper: build a scene containing one flex card wrapping one child (the
+    /// component under test, no explicit size), run layout at 1920×1080, and
+    /// return the BoxLayout of the *first child of the card* (the component).
+    fn layout_for_unsized_component_in_flex_card(
+        component_json: serde_json::Value,
+    ) -> rustmotion_core::engine::layout_pass::BoxLayout {
+        use crate::components::{ChildComponent, PositionMode};
+        use rustmotion_components::box_builder::build_scene;
+        use rustmotion_components::card::Card;
+        use rustmotion_core::css::style::{CssStyle, FlexDirection};
+        use rustmotion_core::css::taffy_bridge::ConversionContext;
+        use rustmotion_core::engine::layout_pass::run_layout;
+
+        let component: Component = serde_json::from_value(component_json).expect("deserialize");
+        let inner = ChildComponent {
+            component,
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+        };
+
+        let card_style = CssStyle {
+            flex_direction: Some(FlexDirection::Column),
+            ..Default::default()
+        };
+        let card_child = ChildComponent {
+            component: Component::Card(Card {
+                children: vec![inner],
+                timing: Default::default(),
+                style: card_style,
+                timeline: Vec::new(),
+                stagger: None,
+            }),
+            position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let scene = vec![card_child];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+
+        // The scene root is node 0 (the implicit scene root), the card is node 1,
+        // and the component is node 2 (first child of the card).
+        // Walk the tree to find node 2.
+        let component_node_id = {
+            // root → card_child (id=1) → card's inner child (the component, id=2)
+            built
+                .root
+                .children
+                .first() // card_child box node
+                .and_then(|card_node| card_node.children.first()) // component box node
+                .map(|n| n.id)
+                .expect("component node id must exist")
+        };
+        layout
+            .get(component_node_id)
+            .copied()
+            .expect("component must have a layout entry")
+    }
+
+    #[test]
+    fn terminal_intrinsic_height_reflects_line_count() {
+        // Terminal with 3 lines, default font size (14px), line-height ratio
+        // 22/14 ≈ 1.57 → line_height = ceil(14 * 22/14) = 22.
+        // Expected minimum height: chrome (36) + padding_top (16) + 3 * 22 + padding_bottom (16) = 134.
+        // We assert ≥ 3 * line_height_min = 3 * 22 = 66 (conservative: chrome may be excluded
+        // in some configs, let the intrinsic beat 0).
+        let json = serde_json::json!({
+            "type": "terminal",
+            "lines": [
+                { "text": "echo hello", "line_type": "command" },
+                { "text": "hello", "line_type": "output" },
+                { "text": "echo world", "line_type": "command" }
+            ]
+        });
+        let layout = layout_for_unsized_component_in_flex_card(json);
+        assert!(
+            layout.height > 0.0,
+            "terminal height should be > 0, got {}",
+            layout.height
+        );
+        // With chrome (36) + 2*padding (32) + 3 lines * line_height (22) ≥ 134
+        let min_expected = 3.0 * 22.0; // conservative: at least 3 line-heights
+        assert!(
+            layout.height >= min_expected,
+            "terminal height {} should be ≥ {} (3 × line_height)",
+            layout.height,
+            min_expected
+        );
+        assert!(
+            layout.width > 0.0,
+            "terminal width should be > 0, got {}",
+            layout.width
+        );
+    }
+
+    #[test]
+    fn table_intrinsic_height_reflects_row_count() {
+        // Table with 1 header row + 2 data rows. Default font_size = 14, row_height = 14 * 2.5 = 35.
+        // Total height = 3 rows * 35 = 105.
+        let json = serde_json::json!({
+            "type": "table",
+            "headers": ["Name", "Value"],
+            "rows": [
+                ["Alice", "42"],
+                ["Bob", "99"]
+            ]
+        });
+        let layout = layout_for_unsized_component_in_flex_card(json);
+        assert!(
+            layout.height > 0.0,
+            "table height should be > 0, got {}",
+            layout.height
+        );
+        // 3 rows (1 header + 2 data) × row_height (35) = 105
+        let expected_min = 3.0 * 35.0;
+        assert!(
+            layout.height >= expected_min,
+            "table height {} should be ≥ {} (3 × row_height)",
+            layout.height,
+            expected_min
+        );
+        assert!(
+            layout.width > 0.0,
+            "table width should be > 0, got {}",
+            layout.width
+        );
+    }
+
+    #[test]
+    fn codeblock_intrinsic_height_reflects_line_count() {
+        // Codeblock with 3 lines of code, default font_size = 14.
+        // Default padding = 16px each side. line_height = style.line_height_for(14) ≈ 14 * 1.5 = 21.
+        // Expected: 3 lines * line_height + pad_top + pad_bottom ≥ 3 * 14 = 42.
+        let json = serde_json::json!({
+            "type": "codeblock",
+            "code": "fn main() {\n    println!(\"hello\");\n}"
+        });
+        let layout = layout_for_unsized_component_in_flex_card(json);
+        assert!(
+            layout.height > 0.0,
+            "codeblock height should be > 0, got {}",
+            layout.height
+        );
+        let min_expected = 3.0 * 14.0; // very conservative: at least 3 × font_size
+        assert!(
+            layout.height >= min_expected,
+            "codeblock height {} should be ≥ {} (3 × font_size)",
+            layout.height,
+            min_expected
+        );
+        assert!(
+            layout.width > 0.0,
+            "codeblock width should be > 0, got {}",
+            layout.width
+        );
+    }
 }

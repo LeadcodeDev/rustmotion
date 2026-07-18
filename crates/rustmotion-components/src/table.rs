@@ -23,8 +23,13 @@ pub enum ColumnAlign {
     Right,
 }
 
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// row_height = DEFAULT_FONT_SIZE * 2.5
+pub(crate) const DEFAULT_ROW_HEIGHT_RATIO: f32 = 2.5;
+pub(crate) const DEFAULT_CELL_PADDING: f32 = 12.0;
+
 fn default_cell_padding() -> f32 {
-    12.0
+    DEFAULT_CELL_PADDING
 }
 
 fn default_show_borders() -> bool {
