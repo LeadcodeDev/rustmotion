@@ -4920,6 +4920,7 @@ dependencies = [
  "rustmotion-components",
  "rustmotion-core",
  "rustmotion-html",
+ "schemars",
  "serde",
  "serde_json",
  "similar",
