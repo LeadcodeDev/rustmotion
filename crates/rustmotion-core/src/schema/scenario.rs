@@ -211,7 +211,7 @@ pub struct FontEntry {
     pub family: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AudioTrack {
     pub src: String,
     #[serde(default)]

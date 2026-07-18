@@ -15,8 +15,16 @@ pub(super) fn mux_h264_to_mp4(
     scenario: &Scenario,
     total_duration: f64,
 ) -> Result<()> {
-    let pcm_data = if !scenario.audio.is_empty() {
-        super::super::audio::mix_audio_tracks(&scenario.audio, total_duration)?
+    // Collect audio from embedded video components and merge with scenario.audio.
+    let video_tracks = super::super::video_audio::collect_video_audio_tracks(scenario);
+    let merged_audio: Vec<crate::schema::AudioTrack> = {
+        let mut all = scenario.audio.clone();
+        all.extend(video_tracks);
+        all
+    };
+
+    let pcm_data = if !merged_audio.is_empty() {
+        super::super::audio::mix_audio_tracks(&merged_audio, total_duration)?
     } else {
         None
     };

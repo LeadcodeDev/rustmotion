@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod video;
+pub mod video_audio;
 
 pub use video::build_frame_tasks;
 pub use video::encode_gif;
