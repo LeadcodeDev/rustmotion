@@ -1,0 +1,84 @@
+use std::sync::{Arc, Mutex};
+
+use rustmotion::encode::video::FrameTask;
+use rustmotion::schema::ResolvedScenario;
+
+/// Live studio state shared between the file watcher and the UI/asset handler.
+/// Wrapped in `Arc<Mutex<_>>` (`Shared`) so the watcher thread can swap in a
+/// reloaded scenario while the webview reads frames.
+pub struct StudioModel {
+    pub scenario: ResolvedScenario,
+    pub tasks: Vec<FrameTask>,
+    pub total_frames: u32,
+    pub error: Option<String>,
+    /// Bumped on every hot-reload so the UI can detect a change.
+    pub generation: u64,
+    /// Path to the scenario file (for inspector write-back).
+    pub path: Option<std::path::PathBuf>,
+    /// Raw parsed scenario JSON (for reading/editing element props by pointer).
+    pub raw: serde_json::Value,
+}
+
+pub type Shared = Arc<Mutex<StudioModel>>;
+
+impl StudioModel {
+    pub fn new(
+        scenario: ResolvedScenario,
+        error: Option<String>,
+        path: Option<std::path::PathBuf>,
+    ) -> Self {
+        // For HTML sources the raw JSON is the transpiled scenario, so the
+        // inspector can read/resolve element properties by pointer.
+        let raw = path
+            .as_ref()
+            .and_then(|p| {
+                let s = std::fs::read_to_string(p).ok()?;
+                if rustmotion::loader::is_html_path(p) {
+                    rustmotion::loader::html_to_scenario_json(&s).ok()
+                } else {
+                    serde_json::from_str(&s).ok()
+                }
+            })
+            .unwrap_or(serde_json::Value::Null);
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let total_frames = tasks.len() as u32;
+        Self {
+            scenario,
+            tasks,
+            total_frames,
+            error,
+            generation: 0,
+            path,
+            raw,
+        }
+    }
+}
+
+/// A minimal placeholder scenario (no scenes). Used as the initial model when
+/// the studio launches into the library with no file open, and for the
+/// error-display model. The editor isn't shown for it; thumbnail/frame
+/// rendering guards against the empty task list.
+pub fn empty_scenario() -> ResolvedScenario {
+    use rustmotion::schema::{EasingType, ResolvedView, VideoConfig, ViewType};
+    ResolvedScenario {
+        video: VideoConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            background: "#000000".to_string(),
+            codec: None,
+            crf: None,
+        },
+        audio: vec![],
+        fonts: vec![],
+        views: vec![ResolvedView {
+            view_type: ViewType::Slide,
+            scenes: vec![],
+            transition: None,
+            background: Default::default(),
+            camera_easing: EasingType::Linear,
+            camera_pan_duration: 0.0,
+        }],
+        included_paths: vec![],
+    }
+}

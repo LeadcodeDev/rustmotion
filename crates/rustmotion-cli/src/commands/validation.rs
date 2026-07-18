@@ -84,6 +84,14 @@ pub fn load(source: ValidationSource<'_>) -> Result<LoadedScenario> {
                 path: path.display().to_string(),
                 source: e,
             })?;
+            // HTML input is transpiled to the scenario JSON first, then validated
+            // through the identical JSON pipeline below.
+            let s = if rustmotion::loader::is_html_path(path) {
+                let value = rustmotion::loader::html_to_scenario_json(&s)?;
+                serde_json::to_string(&value).map_err(RustmotionError::from)?
+            } else {
+                s
+            };
             (s, Some(path.to_path_buf()), IncludeSource::File(path.to_path_buf()))
         }
         ValidationSource::Inline(json) => (json.to_string(), None, IncludeSource::Inline),
@@ -112,12 +120,52 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     if strict_anim {
         geom_violations.extend(validate_geometry_animated(&loaded.scenario));
     }
-    let (schema_errors, warnings) = validate_scenario(&loaded.scenario);
+    let (schema_errors, mut warnings) = validate_scenario(&loaded.scenario);
+    warnings.extend(warn_misplaced_animation(&loaded.raw));
     ValidationReport {
         schema_errors,
         geom_violations,
         unresolved_vars: variables::find_unresolved(&loaded.raw),
         warnings,
+    }
+}
+
+/// Detect `animation` placed at a component's top level (a sibling of `style`).
+/// The engine only reads `style.animation`, so a top-level `animation` is
+/// silently ignored — a common, hard-to-spot mistake. Returns one warning per
+/// offending component.
+pub fn warn_misplaced_animation(raw: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_misplaced_animation(raw, String::new(), &mut out);
+    out
+}
+
+fn walk_misplaced_animation(v: &serde_json::Value, path: String, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if map.contains_key("type") && map.contains_key("animation") {
+                let kind = map.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                let label = map
+                    .get("content")
+                    .or_else(|| map.get("text"))
+                    .and_then(|t| t.as_str())
+                    .map(|s| format!(" (\"{}\")", s.chars().take(24).collect::<String>()))
+                    .unwrap_or_default();
+                let where_ = if path.is_empty() { "<root>" } else { &path };
+                out.push(format!(
+                    "`animation` on `{kind}`{label} at {where_} is at the component top level and is IGNORED — move it inside `style` (style.animation)."
+                ));
+            }
+            for (k, child) in map {
+                walk_misplaced_animation(child, format!("{path}.{k}"), out);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for (i, child) in arr.iter().enumerate() {
+                walk_misplaced_animation(child, format!("{path}[{i}]"), out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -139,6 +187,25 @@ pub fn warn_on_silent_defaults(loaded: &LoadedScenario) {
         eprintln!(
             "Warning: top-level `scenes` is legacy. Migrate to `composition: [{{ type: \"slide\", scenes: [...] }}]` for clarity."
         );
+    }
+}
+
+#[cfg(test)]
+mod misplaced_animation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn flags_only_top_level_animation() {
+        let raw = json!({
+            "scenes": [{ "children": [
+                { "type": "text", "style": { "color": "#fff" }, "animation": [{ "name": "fade_in" }] },
+                { "type": "text", "style": { "color": "#fff", "animation": [{ "name": "fade_in" }] } }
+            ]}]
+        });
+        let w = warn_misplaced_animation(&raw);
+        assert_eq!(w.len(), 1, "only the top-level animation should warn: {w:?}");
+        assert!(w[0].contains("style.animation"));
     }
 }
 

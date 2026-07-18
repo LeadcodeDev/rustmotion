@@ -39,3 +39,75 @@ pub fn load_scenario_from_source(
         }
     }
 }
+
+/// Load a scenario authored in the HTML/CSS dialect: transpile to the scenario
+/// JSON value, deserialize into `Scenario`, then resolve includes — reusing the
+/// exact same pipeline as the JSON loader.
+pub fn load_scenario_from_html(input: &PathBuf) -> Result<ResolvedScenario> {
+    let html = std::fs::read_to_string(input)
+        .map_err(|e| RustmotionError::FileRead { path: input.display().to_string(), source: e })?;
+    let value = rustmotion_html::html_to_scenario_value(&html)
+        .map_err(|e| RustmotionError::HtmlParse(e.to_string()))?;
+    let scenario: Scenario = serde_json::from_value(value).map_err(RustmotionError::from)?;
+    include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
+}
+
+/// Dispatch by file extension: `.html`/`.htm` use the HTML transpiler, everything
+/// else uses the JSON loader. Single entry point for all CLI commands.
+pub fn load_input(input: &PathBuf) -> Result<ResolvedScenario> {
+    match input.extension().and_then(|e| e.to_str()) {
+        Some("html") | Some("htm") => load_scenario_from_html(input),
+        _ => load_scenario(input),
+    }
+}
+
+/// Transpile an HTML-dialect string into the scenario JSON value, for callers
+/// that need the raw value (e.g. the validation pipeline reads it by pointer).
+pub fn html_to_scenario_json(html: &str) -> Result<serde_json::Value> {
+    rustmotion_html::html_to_scenario_value(html)
+        .map_err(|e| RustmotionError::HtmlParse(e.to_string()))
+}
+
+/// True if the path uses the HTML dialect (`.html`/`.htm`).
+pub fn is_html_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("html") | Some("htm")
+    )
+}
+
+/// Apply an inline-style edit to an HTML-dialect source by JSON pointer (used by
+/// the studio inspector to persist a property change into the HTML).
+pub fn set_html_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> Option<String> {
+    rustmotion_html::set_inline_style(html, pointer, prop, value)
+}
+
+/// Replace an element's text content in an HTML-dialect source by JSON pointer
+/// (used by the studio inspector's content editor).
+pub fn set_html_text_content(html: &str, pointer: &str, text: &str) -> Option<String> {
+    rustmotion_html::set_text_content(html, pointer, text)
+}
+
+#[cfg(test)]
+mod html_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn loads_html_scenario_into_resolved() {
+        let html = r##"<rustmotion width="1920" height="1080" fps="30" background="#0f172a">
+            <scene duration="4"><h1 style="font-size:96; color:#ffffff">Hi</h1></scene>
+        </rustmotion>"##;
+        let dir = std::env::temp_dir();
+        let path = dir.join("rm_html_loader_test.html");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(html.as_bytes()).unwrap();
+
+        let resolved = load_input(&path).expect("html loads");
+        assert_eq!(resolved.video.width, 1920);
+        assert_eq!(resolved.views.len(), 1);
+        assert_eq!(resolved.views[0].scenes.len(), 1);
+        assert_eq!(resolved.views[0].scenes[0].duration, 4.0);
+        let _ = std::fs::remove_file(&path);
+    }
+}

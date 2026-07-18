@@ -9,6 +9,7 @@ pub use scene::{
     render_frame_v2, render_frame_v2_scaled,
     render_scene_frame, render_scene_frame_scaled,
     render_scene_frame_scaled_with_prev_bg,
+    render_scene_hits,
     render_world_frame_scaled,
     render_scene_bg_scaled, render_scene_fg_scaled,
     prepare_scene, deserialize_children, root_style,

@@ -106,8 +106,14 @@ where
     let mut next_id: NodeId = 1;
 
     let mut child_boxes = Vec::new();
-    for c in children {
-        child_boxes.push(build_child(c, &mut components, &mut next_id, anim));
+    for (i, c) in children.into_iter().enumerate() {
+        child_boxes.push(build_child(
+            c,
+            &mut components,
+            &mut next_id,
+            anim,
+            format!("/children/{i}"),
+        ));
     }
 
     // Force the root to viewport dimensions even if the caller didn't set them.
@@ -120,6 +126,7 @@ where
         css: root_css,
         children: child_boxes,
         intrinsic: None,
+        source_path: None,
     };
 
     BuiltScene { root, components }
@@ -141,6 +148,7 @@ fn build_child<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
+    path: String,
 ) -> BoxNode {
     let id = *next_id;
     *next_id += 1;
@@ -174,7 +182,7 @@ fn build_child<'a>(
         }
     }
 
-    let children_boxes = container_children(&child.component, components, next_id, anim);
+    let children_boxes = container_children(&child.component, components, next_id, anim, &path);
     let intrinsic = component_intrinsic(&child.component);
 
     BoxNode {
@@ -183,6 +191,7 @@ fn build_child<'a>(
         css,
         children: children_boxes,
         intrinsic,
+        source_path: Some(path),
     }
 }
 
@@ -230,6 +239,7 @@ fn container_children<'a>(
     components: &mut Vec<Option<&'a ChildComponent>>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
+    parent_path: &str,
 ) -> Vec<BoxNode> {
     let children: &[ChildComponent] = match component {
         Component::Card(c) => &c.children,
@@ -241,7 +251,8 @@ fn container_children<'a>(
     };
     children
         .iter()
-        .map(|c| build_child(c, components, next_id, anim))
+        .enumerate()
+        .map(|(j, c)| build_child(c, components, next_id, anim, format!("{parent_path}/children/{j}")))
         .collect()
 }
 
@@ -540,6 +551,68 @@ fn component_style(c: &Component) -> &CssStyle {
     }
 }
 
+/// Short kind label for a component (for studio selection / inspector display).
+pub fn component_kind(c: &Component) -> &'static str {
+    use Component::*;
+    match c {
+        Text(_) => "text",
+        Shape(_) => "shape",
+        Image(_) => "image",
+        Icon(_) => "icon",
+        Svg(_) => "svg",
+        Video(_) => "video",
+        Gif(_) => "gif",
+        Counter(_) => "counter",
+        Cursor(_) => "cursor",
+        Caption(_) => "caption",
+        Codeblock(_) => "codeblock",
+        Connector(_) => "connector",
+        Avatar(_) => "avatar",
+        AvatarGroup(_) => "avatar_group",
+        Arrow(_) => "arrow",
+        Badge(_) => "badge",
+        Callout(_) => "callout",
+        Chart(_) => "chart",
+        Comparison(_) => "comparison",
+        Countdown(_) => "countdown",
+        Divider(_) => "divider",
+        DotMap(_) => "dot_map",
+        Gauge(_) => "gauge",
+        GradientText(_) => "gradient_text",
+        Heatmap(_) => "heatmap",
+        Kbd(_) => "kbd",
+        Line(_) => "line",
+        List(_) => "list",
+        Lottie(_) => "lottie",
+        Marquee(_) => "marquee",
+        Mockup(_) => "mockup",
+        Notification(_) => "notification",
+        Particle(_) => "particle",
+        PillNav(_) => "pill_nav",
+        Progress(_) => "progress",
+        QrCode(_) => "qrcode",
+        Rating(_) => "rating",
+        Skeleton(_) => "skeleton",
+        Slider(_) => "slider",
+        Sparkline(_) => "sparkline",
+        Stat(_) => "stat",
+        Stepper(_) => "stepper",
+        Switch(_) => "switch",
+        RichText(_) => "rich_text",
+        Table(_) => "table",
+        TagCloud(_) => "tag_cloud",
+        Terminal(_) => "terminal",
+        Timeline(_) => "timeline",
+        Tooltip(_) => "tooltip",
+        Treemap(_) => "treemap",
+        Positioned(_) => "positioned",
+        Flex(_) => "flex",
+        Grid(_) => "grid",
+        Card(_) => "card",
+        Container(_) => "container",
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -588,6 +661,33 @@ mod tests {
         let built = build_scene(&[], (1920.0, 1080.0));
         assert_eq!(built.root.children.len(), 0);
         assert_eq!(built.components.len(), 1); // synthetic root slot
+    }
+
+    #[test]
+    fn component_kind_labels() {
+        assert_eq!(component_kind(&make_shape(100.0, 50.0).component), "shape");
+    }
+
+    #[test]
+    fn build_child_records_source_path() {
+        let card = make_card(
+            vec![make_shape(10.0, 10.0), make_shape(10.0, 10.0)],
+            CssStyle::default(),
+        );
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let card_box = &built.root.children[0];
+        assert_eq!(card_box.source_path.as_deref(), Some("/children/0"));
+        assert_eq!(
+            card_box.children[1].source_path.as_deref(),
+            Some("/children/0/children/1")
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use rustmotion::error::Result;
-use rustmotion::loader::load_scenario;
+use rustmotion::loader::load_input;
 use rustmotion::schema;
 use std::path::PathBuf;
 
 pub fn cmd_info(input: &PathBuf) -> Result<()> {
-    let scenario = load_scenario(input)?;
+    let scenario = load_input(input)?;
     let fps = scenario.video.fps;
     let all_scenes: Vec<_> = scenario.all_scenes().collect();
     let total_duration: f64 = all_scenes.iter().map(|s| s.duration).sum();

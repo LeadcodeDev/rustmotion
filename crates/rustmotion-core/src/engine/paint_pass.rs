@@ -15,6 +15,8 @@
 //! The dispatcher hook lets the higher-level crate plug component-specific
 //! paint without coupling `rustmotion-core` to all 51 component types.
 
+use std::cell::RefCell;
+
 use skia_safe::{
     canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, M44, Paint, PaintStyle,
     Path, Point, RRect, Rect, V3,
@@ -25,7 +27,7 @@ use crate::css::style::{
     Color, CssStyle, Edges, Overflow, TransformFn,
 };
 use crate::css::units::{LengthContext, LengthPercentage, ParsedLength};
-use crate::engine::box_tree::{BoxKind, BoxNode};
+use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
 /// Frame-level paint context (timing + viewport).
@@ -39,6 +41,37 @@ pub struct PaintFrame {
     /// Total duration of the scene in seconds — used by the dispatcher to
     /// compute animation progress (`time / scene_duration`).
     pub scene_duration: f64,
+}
+
+/// Axis-aligned bounding box of a painted node, in device (video-pixel) coords.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// One clickable node: its layout id and on-screen bounding box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitNode {
+    pub node_id: NodeId,
+    pub rect: HitRect,
+}
+
+/// Hit-test map for a single painted frame, in paint order (so later entries
+/// are visually on top).
+pub type HitMap = Vec<HitNode>;
+
+/// A hit enriched with a component kind label, ready for the studio overlay.
+/// `node_id` is stable within a single rendered frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrichedHit {
+    pub node_id: NodeId,
+    pub kind: String,
+    pub rect: HitRect,
+    /// JSON path relative to the scene's `children`, e.g. "/children/2".
+    pub pointer: Option<String>,
 }
 
 /// Hook to delegate component-specific painting. Implemented by the
@@ -86,8 +119,31 @@ pub fn paint_tree(
         frame,
         dispatcher,
         viewport_size: (frame.video_width as f32, frame.video_height as f32),
+        hits: None,
     };
     paint_node(canvas, root, &ctx);
+}
+
+/// Like [`paint_tree`] but also returns the per-frame hit-map: the on-screen
+/// bounding box of every component-backed node, in paint order. Used by the
+/// studio for click-to-select; the video render path uses [`paint_tree`].
+pub fn paint_tree_with_hits(
+    canvas: &Canvas,
+    root: &BoxNode,
+    layout: &LayoutResult,
+    frame: &PaintFrame,
+    dispatcher: &dyn PaintDispatcher,
+) -> HitMap {
+    let hits = RefCell::new(Vec::new());
+    let ctx = PaintContext {
+        layout,
+        frame,
+        dispatcher,
+        viewport_size: (frame.video_width as f32, frame.video_height as f32),
+        hits: Some(&hits),
+    };
+    paint_node(canvas, root, &ctx);
+    hits.into_inner()
 }
 
 struct PaintContext<'a> {
@@ -95,6 +151,7 @@ struct PaintContext<'a> {
     frame: &'a PaintFrame,
     dispatcher: &'a dyn PaintDispatcher,
     viewport_size: (f32, f32),
+    hits: Option<&'a RefCell<HitMap>>,
 }
 
 fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
@@ -122,6 +179,28 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         let transform_list = node.css.transform.as_deref().unwrap_or(&[]);
         let perspective_d = node.css.perspective.as_ref().map(|l| l.resolve(&length_ctx).max(1.0));
         apply_transform(canvas, transform_list, perspective_d, pivot, &length_ctx);
+    }
+
+    // Hit-map: record the on-screen bbox of component-backed nodes. The canvas
+    // matrix here already includes this node's and all ancestors' transforms,
+    // so mapping the (absolute) layout rect yields the device-space AABB.
+    if let (Some(hits), BoxKind::Component(_)) = (ctx.hits, &node.kind) {
+        let local = Rect::from_xywh(
+            box_layout.x,
+            box_layout.y,
+            box_layout.width,
+            box_layout.height,
+        );
+        let dev = canvas.local_to_device_as_3x3().map_rect(local).0;
+        hits.borrow_mut().push(HitNode {
+            node_id: node.id,
+            rect: HitRect {
+                x: dev.left,
+                y: dev.top,
+                w: dev.width(),
+                h: dev.height(),
+            },
+        });
     }
 
     // 3. opacity layer
@@ -748,6 +827,141 @@ fn parse_hex(hex: &str) -> Option<SColor> {
 // Suppress unused import warnings for items only used in trait-bound paths.
 #[allow(dead_code)]
 fn _unused_marker(_e: &Edges, _l: &LengthPercentage, _p: &ParsedLength, _f: Color4f) {}
+
+#[cfg(test)]
+mod hit_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::css::style::{CssStyle, Display, FlexDirection, Position, Size as CSize};
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+        }
+    }
+
+    #[test]
+    fn hitmap_reports_component_rect_for_untransformed_node() {
+        // A component leaf, absolutely positioned at (40, 30), sized 100x80,
+        // inside a flex-column root that fills a 400x400 viewport.
+        let leaf = BoxNode {
+            id: 0,
+            kind: BoxKind::Component(Arc::new(1u32)),
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(40.0)),
+                top: Some(CLP::Px(30.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(80.0))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(400.0))),
+                height: Some(CSize::Length(CLP::Px(400.0))),
+                ..Default::default()
+            },
+            children: vec![leaf],
+            intrinsic: None,
+            source_path: None,
+        };
+        root.assign_ids(0);
+
+        let layout = run_layout(&root, (400.0, 400.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).unwrap();
+        let hits = paint_tree_with_hits(
+            surface.canvas(),
+            &root,
+            &layout,
+            &test_frame(400, 400),
+            &NoopDispatcher,
+        );
+
+        // Only the component leaf is reported, not the synthetic container root.
+        assert_eq!(hits.len(), 1, "expected exactly one component hit");
+        let h = &hits[0];
+        assert_eq!(h.node_id, root.children[0].id);
+        assert!((h.rect.x - 40.0).abs() < 0.5, "x = {}", h.rect.x);
+        assert!((h.rect.y - 30.0).abs() < 0.5, "y = {}", h.rect.y);
+        assert!((h.rect.w - 100.0).abs() < 0.5, "w = {}", h.rect.w);
+        assert!((h.rect.h - 80.0).abs() < 0.5, "h = {}", h.rect.h);
+    }
+
+    #[test]
+    fn hitmap_reflects_node_transform() {
+        use crate::css::style::TransformFn;
+
+        // Same leaf as the untransformed test, but with transform: scale(2).
+        // The engine applies transforms around the node's center, so a 100x80
+        // box scaled 2x grows to 200x160 (centered on the same point).
+        let leaf = BoxNode {
+            id: 0,
+            kind: BoxKind::Component(Arc::new(1u32)),
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(40.0)),
+                top: Some(CLP::Px(30.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(80.0))),
+                transform: Some(vec![TransformFn::Scale { x: 2.0, y: 2.0 }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(400.0))),
+                height: Some(CSize::Length(CLP::Px(400.0))),
+                ..Default::default()
+            },
+            children: vec![leaf],
+            intrinsic: None,
+            source_path: None,
+        };
+        root.assign_ids(0);
+
+        let layout = run_layout(&root, (400.0, 400.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 400)).unwrap();
+        let hits = paint_tree_with_hits(
+            surface.canvas(),
+            &root,
+            &layout,
+            &test_frame(400, 400),
+            &NoopDispatcher,
+        );
+
+        assert_eq!(hits.len(), 1);
+        let h = &hits[0];
+        // Scaled 2x: width 100->200, height 80->160. Assert the dimensions
+        // (these prove the canvas transform is reflected in the hit rect).
+        assert!((h.rect.w - 200.0).abs() < 1.0, "w = {}", h.rect.w);
+        assert!((h.rect.h - 160.0).abs() < 1.0, "h = {}", h.rect.h);
+    }
+}
 
 #[cfg(test)]
 mod tests {

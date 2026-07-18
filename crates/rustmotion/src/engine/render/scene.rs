@@ -453,6 +453,82 @@ pub fn render_scene_frame_scaled_with_prev_bg(
     render_frame_v2_scaled(config, scene, frame_in_scene, scene_total_frames, &children, scale_factor, prev_bg)
 }
 
+/// Compute the per-frame enriched hit-map for a scene at video resolution.
+/// Mirrors the geometry setup of `render_frame_v2_scaled` (same time, scene
+/// duration, camera transform, build + layout) but paints to a throwaway
+/// surface purely to collect the on-screen bounding box of each component.
+/// Used by the studio overlay; not part of the video encode path.
+pub fn render_scene_hits(
+    config: &VideoConfig,
+    scene: &Scene,
+    frame_in_scene: u32,
+) -> Vec<rustmotion_core::engine::paint_pass::EnrichedHit> {
+    use rustmotion_components::box_builder::{build_scene_from_refs, component_kind, BuildAnimationCtx};
+    use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::{paint_tree_with_hits, EnrichedHit, PaintFrame};
+
+    let children = prepare_scene(scene, config);
+
+    let mut time = frame_in_scene as f64 / config.fps as f64;
+    if let Some(freeze_at) = scene.freeze_at {
+        if time > freeze_at {
+            time = freeze_at;
+        }
+    }
+    let vw = config.width as f32;
+    let vh = config.height as f32;
+
+    let info = ImageInfo::new(
+        (config.width as i32, config.height as i32),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let Some(mut surface) = surfaces::raster(&info, None, None) else {
+        return Vec::new();
+    };
+    let canvas = surface.canvas();
+
+    // Match the camera transform so hit rects line up with the rendered frame.
+    let _camera_guard = if let Some(ref camera) = scene.camera {
+        let g = super::CanvasGuard::new(canvas);
+        apply_camera_transform(canvas, camera, time as f32, vw, vh);
+        Some(g)
+    } else {
+        None
+    };
+
+    let root_css = root_style(scene.layout.as_ref());
+    let anim = Some(BuildAnimationCtx { time, scene_duration: scene.duration });
+    let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
+    let layout = run_layout(&built.root, (vw, vh), &ConversionContext::default());
+    let dispatcher = LegacyPaintDispatcher::new(&built.components);
+    let frame = PaintFrame {
+        time,
+        frame_index: frame_in_scene,
+        fps: config.fps,
+        video_width: config.width,
+        video_height: config.height,
+        scene_duration: scene.duration,
+    };
+    let hits = paint_tree_with_hits(canvas, &built.root, &layout, &frame, &dispatcher);
+
+    hits.into_iter()
+        .filter_map(|h| {
+            let child = built.components.get(h.node_id as usize).copied().flatten()?;
+            let pointer = built.root.find(h.node_id).and_then(|n| n.source_path.clone());
+            Some(EnrichedHit {
+                node_id: h.node_id,
+                kind: component_kind(&child.component).to_string(),
+                rect: h.rect,
+                pointer,
+            })
+        })
+        .collect()
+}
+
 /// Render a single frame of a world view: shared background, camera translation, visible scenes.
 pub fn render_world_frame_scaled(
     config: &VideoConfig,

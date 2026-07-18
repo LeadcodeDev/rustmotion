@@ -4,7 +4,7 @@ pub mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
-use rustmotion::loader::load_scenario;
+use rustmotion::loader::load_input;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -220,7 +220,7 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Commands::Studio { file } => {
-            match load_scenario(&file) {
+            match load_input(&file) {
                 Ok(scenario) => rustmotion_studio::run_preview(scenario, Some(file), true),
                 Err(e) => rustmotion_studio::run_preview_with_error(format!("{}", e), Some(file), true),
             }
@@ -277,7 +277,7 @@ pub fn run() -> Result<()> {
             }
         }
         Commands::Still { file, output, time, format, quality } => {
-            let scenario = load_scenario(&file)?;
+            let scenario = load_input(&file)?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
         Commands::Validate { file, report, fix, strict_anim, lenient } => {

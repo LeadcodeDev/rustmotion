@@ -35,68 +35,75 @@
                     "height": 96
                   },
                   "style": {
-                    "color": "#6366f1"
-                  },
-                  "animation": [
-                    {
-                      "name": "scale_in",
-                      "duration": 0.6
-                    }
-                  ]
+                    "color": "#6366f1",
+                    "animation": [
+                      {
+                        "name": "scale_in",
+                        "duration": 0.6
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "text",
                   "content": "Rustmotion Components",
                   "style": {
-                    "font-size": 72,
+                    "font-size": "96",
                     "font-weight": "bold",
-                    "color": "#f8fafc",
-                    "text-align": "center"
-                  },
-                  "animation": [
-                    {
-                      "name": "fade_in_up",
-                      "delay": 0.3,
-                      "duration": 0.6
-                    }
-                  ]
+                    "color": "#ff0000",
+                    "text-align": "center",
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.3,
+                        "duration": 0.6
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "text",
                   "content": "51 components · Skia rendering · CSS layout via taffy",
                   "style": {
-                    "font-size": 30,
+                    "font-size": "30",
                     "color": "#94a3b8",
-                    "text-align": "center"
-                  },
-                  "animation": [
-                    {
-                      "name": "fade_in_up",
-                      "delay": 0.5,
-                      "duration": 0.5
-                    }
-                  ]
+                    "text-align": "center",
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.45,
+                        "duration": 0.5
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "flex",
                   "style": {
                     "flex-direction": "row",
                     "gap": 12,
-                    "justify-content": "center"
+                    "justify-content": "center",
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 0.8,
+                        "duration": 0.5
+                      }
+                    ]
                   },
-                  "animation": [
-                    {
-                      "name": "fade_in",
-                      "delay": 0.8,
-                      "duration": 0.5
-                    }
-                  ],
                   "children": [
                     {
                       "type": "badge",
                       "text": "Text & Rich Text",
                       "style": {
-                        "background": "#6366f1"
+                        "background": "#6366f1",
+                        "animation": [
+                          {
+                            "name": "fade_in",
+                            "delay": 0.6,
+                            "duration": 0.5
+                          }
+                        ]
                       }
                     },
                     {
@@ -110,7 +117,8 @@
                       "type": "badge",
                       "text": "Code & Terminal",
                       "style": {
-                        "background": "#f59e0b"
+                        "background": "#f59e0b",
+                        "font-size": "20"
                       }
                     },
                     {
@@ -154,16 +162,16 @@
                   "type": "text",
                   "content": "Data Visualization",
                   "style": {
-                    "font-size": 48,
+                    "font-size": "20",
                     "font-weight": "bold",
-                    "color": "#f8fafc"
-                  },
-                  "animation": [
-                    {
-                      "name": "fade_in_up",
-                      "duration": 0.5
-                    }
-                  ]
+                    "color": "#f8fafc",
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "duration": 0.5
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "flex",
@@ -327,7 +335,15 @@
                                 "value": "+12.5%",
                                 "direction": "up"
                               },
-                              "sparkline_data": [20, 35, 28, 45, 38, 52, 48],
+                              "sparkline_data": [
+                                20,
+                                35,
+                                28,
+                                45,
+                                38,
+                                52,
+                                48
+                              ],
                               "sparkline_color": "#10b981",
                               "size": {
                                 "width": 248,
@@ -349,7 +365,15 @@
                                 "value": "+8.3%",
                                 "direction": "up"
                               },
-                              "sparkline_data": [10, 18, 14, 25, 22, 30, 28],
+                              "sparkline_data": [
+                                10,
+                                18,
+                                14,
+                                25,
+                                22,
+                                30,
+                                28
+                              ],
                               "sparkline_color": "#6366f1",
                               "size": {
                                 "width": 248,
@@ -368,7 +392,13 @@
                               "value": "99.9%",
                               "label": "Uptime",
                               "sparkline_data": [
-                                100, 100, 99, 100, 100, 100, 100
+                                100,
+                                100,
+                                99,
+                                100,
+                                100,
+                                100,
+                                100
                               ],
                               "sparkline_color": "#f59e0b",
                               "size": {
@@ -392,7 +422,13 @@
                                 "direction": "down"
                               },
                               "sparkline_data": [
-                                5.0, 4.8, 4.5, 3.8, 4.0, 3.5, 4.2
+                                5.0,
+                                4.8,
+                                4.5,
+                                3.8,
+                                4.0,
+                                3.5,
+                                4.2
                               ],
                               "sparkline_color": "#ef4444",
                               "size": {
@@ -431,37 +467,43 @@
                               "type": "progress",
                               "progress": 0.85,
                               "fill_color": "#10b981",
-                              "animation": [
-                                {
-                                  "name": "fade_in",
-                                  "delay": 0.5,
-                                  "duration": 0.5
-                                }
-                              ]
+                              "style": {
+                                "animation": [
+                                  {
+                                    "name": "fade_in",
+                                    "delay": 0.5,
+                                    "duration": 0.5
+                                  }
+                                ]
+                              }
                             },
                             {
                               "type": "progress",
                               "progress": 0.62,
                               "fill_color": "#6366f1",
-                              "animation": [
-                                {
-                                  "name": "fade_in",
-                                  "delay": 0.7,
-                                  "duration": 0.5
-                                }
-                              ]
+                              "style": {
+                                "animation": [
+                                  {
+                                    "name": "fade_in",
+                                    "delay": 0.7,
+                                    "duration": 0.5
+                                  }
+                                ]
+                              }
                             },
                             {
                               "type": "progress",
                               "progress": 0.44,
                               "fill_color": "#f59e0b",
-                              "animation": [
-                                {
-                                  "name": "fade_in",
-                                  "delay": 0.9,
-                                  "duration": 0.5
-                                }
-                              ]
+                              "style": {
+                                "animation": [
+                                  {
+                                    "name": "fade_in",
+                                    "delay": 0.9,
+                                    "duration": 0.5
+                                  }
+                                ]
+                              }
                             }
                           ]
                         }
@@ -496,14 +538,14 @@
                   "style": {
                     "font-size": 48,
                     "font-weight": "bold",
-                    "color": "#f8fafc"
-                  },
-                  "animation": [
-                    {
-                      "name": "fade_in_up",
-                      "duration": 0.5
-                    }
-                  ]
+                    "color": "#f8fafc",
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "duration": 0.5
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "flex",
@@ -534,13 +576,15 @@
                         "mode": "line_by_line",
                         "duration": 4.0
                       },
-                      "animation": [
-                        {
-                          "name": "fade_in_up",
-                          "delay": 0.3,
-                          "duration": 0.5
-                        }
-                      ]
+                      "style": {
+                        "animation": [
+                          {
+                            "name": "fade_in_up",
+                            "delay": 0.3,
+                            "duration": 0.5
+                          }
+                        ]
+                      }
                     },
                     {
                       "type": "terminal",
@@ -592,13 +636,15 @@
                         "mode": "typewriter",
                         "duration": 4.5
                       },
-                      "animation": [
-                        {
-                          "name": "fade_in_up",
-                          "delay": 0.5,
-                          "duration": 0.5
-                        }
-                      ]
+                      "style": {
+                        "animation": [
+                          {
+                            "name": "fade_in_up",
+                            "delay": 0.5,
+                            "duration": 0.5
+                          }
+                        ]
+                      }
                     }
                   ]
                 }
@@ -629,14 +675,14 @@
                   "style": {
                     "font-size": 48,
                     "font-weight": "bold",
-                    "color": "#f8fafc"
-                  },
-                  "animation": [
-                    {
-                      "name": "fade_in_up",
-                      "duration": 0.5
-                    }
-                  ]
+                    "color": "#f8fafc",
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "duration": 0.5
+                      }
+                    ]
+                  }
                 },
                 {
                   "type": "flex",
@@ -680,13 +726,15 @@
                           "width": 64,
                           "height": 34,
                           "track_color_on": "#6366f1",
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.3,
-                              "duration": 0.4
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.3,
+                                "duration": 0.4
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "slider",
@@ -697,13 +745,15 @@
                           "width": 800,
                           "fill_color": "#6366f1",
                           "show_value": true,
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.4,
-                              "duration": 0.4
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.4,
+                                "duration": 0.4
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "rating",
@@ -711,26 +761,30 @@
                           "max": 5,
                           "size": 44,
                           "filled_color": "#f59e0b",
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.5,
-                              "duration": 0.4
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.5,
+                                "duration": 0.4
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "progress",
                           "progress": 0.72,
                           "width": 800,
                           "fill_color": "#10b981",
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.6,
-                              "duration": 0.4
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.6,
+                                "duration": 0.4
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "flex",
@@ -763,13 +817,15 @@
                           "seconds": 90,
                           "show_hours": false,
                           "digit_size": 52,
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.8,
-                              "duration": 0.4
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.8,
+                                "duration": 0.4
+                              }
+                            ]
+                          }
                         }
                       ]
                     },
@@ -814,15 +870,15 @@
                           ],
                           "style": {
                             "font-size": 26,
-                            "color": "#e2e8f0"
-                          },
-                          "animation": [
-                            {
-                              "name": "fade_in_up",
-                              "delay": 0.3,
-                              "duration": 0.6
-                            }
-                          ]
+                            "color": "#e2e8f0",
+                            "animation": [
+                              {
+                                "name": "fade_in_up",
+                                "delay": 0.3,
+                                "duration": 0.6
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "timeline",
@@ -850,13 +906,15 @@
                               "color": "#334155"
                             }
                           ],
-                          "animation": [
-                            {
-                              "name": "fade_in",
-                              "delay": 0.5,
-                              "duration": 0.5
-                            }
-                          ]
+                          "style": {
+                            "animation": [
+                              {
+                                "name": "fade_in",
+                                "delay": 0.5,
+                                "duration": 0.5
+                              }
+                            ]
+                          }
                         },
                         {
                           "type": "notification",
@@ -878,5 +936,6 @@
         }
       ]
     }
-  ]
+  ],
+  "annotations": []
 }
