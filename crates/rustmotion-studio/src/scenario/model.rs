@@ -38,16 +38,20 @@ impl StudioModel {
             .as_ref()
             .and_then(|p| {
                 let s = std::fs::read_to_string(p).ok()?;
-                if rustmotion::loader::is_html_path(p) {
+                let raw = if rustmotion::loader::is_html_path(p) {
                     let raw = rustmotion::loader::html_to_scenario_json(&s).ok()?;
                     // A corrupt sidecar already failed the scenario load in the
                     // loader (error banner); a read failure here can only be a
                     // race, so fall back to the bare transpile.
                     let annotations = super::sidecar::read_sidecar(p).unwrap_or_default();
-                    Some(super::sidecar::merge_annotations(raw, annotations))
+                    super::sidecar::merge_annotations(raw, annotations)
                 } else {
-                    serde_json::from_str(&s).ok()
-                }
+                    serde_json::from_str(&s).ok()?
+                };
+                // First-open snapshot for the diff/review mode. Insert-if-absent,
+                // so watcher reloads of an edited file keep the original baseline.
+                super::baseline::ensure_baseline(&super::baseline::baseline_slot(), p, &s, &raw);
+                Some(raw)
             })
             .unwrap_or(serde_json::Value::Null);
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);

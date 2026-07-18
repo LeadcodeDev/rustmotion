@@ -54,11 +54,23 @@ pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
 }
 
 /// The bottom transport bar: play/pause, step, scrub, and a frame counter.
+/// In diff mode an A|B segmented control flips the canvas between the baseline
+/// (A) and the current state (B) at the same frame — the classic motion-review
+/// gesture.
 #[component]
-pub fn PlaybackBar(current: Signal<u32>, playing: Signal<bool>, total: u32) -> Element {
+pub fn PlaybackBar(
+    current: Signal<u32>,
+    playing: Signal<bool>,
+    total: u32,
+    diff_active: Signal<bool>,
+    mut diff_side: Signal<super::diff_panel::DiffSide>,
+) -> Element {
+    use super::diff_panel::DiffSide;
+
     let max = total.saturating_sub(1);
     let cur = current().min(max);
     let is_playing = playing();
+    let side = diff_side();
 
     rsx! {
         div { style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--rm-border); background:var(--rm-surface-2);",
@@ -67,6 +79,24 @@ pub fn PlaybackBar(current: Signal<u32>, playing: Signal<bool>, total: u32) -> E
                 size: ButtonSize::Sm,
                 onclick: move |_| playing.set(!playing()),
                 if is_playing { "Pause" } else { "Play" }
+            }
+            if diff_active() {
+                div { class: "rm-seg", style: "width:auto; flex:none;",
+                    Button {
+                        variant: if side == DiffSide::A { ButtonVariant::Primary } else { ButtonVariant::Ghost },
+                        size: ButtonSize::Sm,
+                        title: "Baseline",
+                        onclick: move |_| diff_side.set(DiffSide::A),
+                        "A"
+                    }
+                    Button {
+                        variant: if side == DiffSide::B { ButtonVariant::Primary } else { ButtonVariant::Ghost },
+                        size: ButtonSize::Sm,
+                        title: "Current",
+                        onclick: move |_| diff_side.set(DiffSide::B),
+                        "B"
+                    }
+                }
             }
             Button {
                 variant: ButtonVariant::Ghost,
