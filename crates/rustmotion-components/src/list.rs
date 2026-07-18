@@ -7,7 +7,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, font_mgr, paint_from_hex,
+    asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -83,15 +84,14 @@ impl List {
         self.style.font_size_px_or(16.0)
     }
 
-    fn make_font(&self) -> skia_safe::Font {
-        let fm = font_mgr();
+    fn make_font(&self) -> Option<skia_safe::Font> {
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, self.resolved_font_size())
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(
+            typeface,
+            self.resolved_font_size(),
+        ))
     }
 
     fn render_icon_svg(
@@ -154,7 +154,9 @@ impl List {
 
 impl List {
     fn paint(&self, canvas: &Canvas) -> Result<()> {
-        let font = self.make_font();
+        let Some(font) = self.make_font() else {
+            return Ok(());
+        };
         let font_size = self.resolved_font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let text_color = self.style.color_str_or("#FFFFFF");

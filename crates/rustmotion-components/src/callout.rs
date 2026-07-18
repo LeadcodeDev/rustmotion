@@ -6,8 +6,7 @@ use skia_safe::{Canvas, PaintStyle, Path, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{font_mgr, paint_from_hex, wrap_text};
-use rustmotion_core::error::RustmotionError;
+use rustmotion_core::engine::renderer::{paint_from_hex, typeface_with_fallback, wrap_text};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -147,14 +146,9 @@ impl Callout {
         canvas.draw_path(&arrow, &bg_paint);
 
         // Draw text
-        let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .ok_or(RustmotionError::FontNotFound)?;
+        let typeface = typeface_with_fallback(family, font_style)?;
 
         let font = skia_safe::Font::from_typeface(typeface, font_size);
         let (_, metrics) = font.metrics();

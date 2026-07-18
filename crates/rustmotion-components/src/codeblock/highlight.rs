@@ -526,7 +526,7 @@ pub(super) fn highlight_code(code: &str, language: &str, theme: &Theme) -> Vec<H
     result
 }
 
-pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Font {
+pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight) -> Option<Font> {
     let font_mgr = rustmotion_core::engine::renderer::font_mgr();
     let w: i32 = match weight {
         FontWeight::Normal => 400,
@@ -551,14 +551,8 @@ pub(super) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight
         .iter()
         .filter_map(|name| font_mgr.match_family_style(name, style))
         .next()
-        .unwrap_or_else(|| {
-            if font_mgr.count_families() > 0 {
-                font_mgr
-                    .match_family_style(font_mgr.family_name(0), style)
-                    .unwrap()
-            } else {
-                panic!("No fonts available on this system");
-            }
-        });
-    Font::from_typeface(typeface, size)
+        .or_else(|| {
+            rustmotion_core::engine::renderer::typeface_with_fallback(family, style).ok()
+        })?;
+    Some(Font::from_typeface(typeface, size))
 }

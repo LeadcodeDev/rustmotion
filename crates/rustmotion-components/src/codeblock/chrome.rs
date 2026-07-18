@@ -2,7 +2,8 @@ use skia_safe::{Canvas, Font, FontStyle, Rect};
 
 use super::Codeblock;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 
 pub(super) fn draw_chrome(
@@ -39,15 +40,9 @@ pub(super) fn draw_chrome(
     }
 
     if let Some(ref title) = chrome.title {
-        let fm = font_mgr();
-        let typeface = fm
-            .match_family_style("Inter", FontStyle::normal())
-            .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
-            .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
-            .unwrap_or_else(|| {
-                fm.match_family_style("sans-serif", FontStyle::normal())
-                    .unwrap()
-            });
+        let Ok(typeface) = typeface_with_fallback("Inter", FontStyle::normal()) else {
+            return;
+        };
         let title_font = Font::from_typeface(typeface, 13.0);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, 13.0));
         let title_width = measure_text_with_fallback(title, &title_font, &emoji_font, 0.0);

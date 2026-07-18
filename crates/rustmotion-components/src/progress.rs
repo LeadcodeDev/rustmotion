@@ -7,8 +7,8 @@ use skia_safe::{Canvas, PaintStyle, RRect, Rect};
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    color4f_from_hex, draw_text_with_fallback, emoji_typeface, font_mgr,
-    measure_text_with_fallback, paint_from_hex,
+    color4f_from_hex, draw_text_with_fallback, emoji_typeface, measure_text_with_fallback,
+    paint_from_hex, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -162,13 +162,10 @@ impl Progress {
         if self.show_value {
             let text = format!("{}%", (progress * 100.0).round() as i32);
             let font_size = (radius * 0.5).max(10.0);
-            let fm = font_mgr();
             let font_style = skia_safe::FontStyle::bold();
-            let typeface = fm
-                .match_family_style("Inter", font_style)
-                .or_else(|| fm.match_family_style("Helvetica", font_style))
-                .or_else(|| fm.match_family_style("Arial", font_style))
-                .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+            let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                return Ok(());
+            };
             let font = skia_safe::Font::from_typeface(typeface, font_size);
             let emoji_font =
                 emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));

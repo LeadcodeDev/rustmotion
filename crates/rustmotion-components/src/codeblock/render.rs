@@ -31,7 +31,9 @@ pub(super) fn render_codeblock(
         _ => FontWeight::Normal,
     };
     let actual_line_height = layer.style.line_height_for(font_size);
-    let font = resolve_monospace_font(font_family, font_size, font_weight);
+    let Some(font) = resolve_monospace_font(font_family, font_size, font_weight) else {
+        return;
+    };
     let padding = {
         let (t, r, b, l) = layer.style.padding_px();
         if t == 0.0 && r == 0.0 && b == 0.0 && l == 0.0 {

@@ -78,7 +78,9 @@ impl Chart {
         let gap = 8.0;
         let bar_h = (chart_h - gap * (n + 1) as f32) / n as f32;
 
-        let font = self.make_label_font();
+        let Some(font) = self.make_label_font() else {
+            return Ok(());
+        };
         let emoji_font =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
         let (_, metrics) = font.metrics();

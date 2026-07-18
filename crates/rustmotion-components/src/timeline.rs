@@ -6,7 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep as AnimTimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -123,16 +124,9 @@ impl Timeline {
             return;
         }
 
-        let fm = font_mgr();
-        let typeface = fm
-            .match_family_style("Inter", FontStyle::normal())
-            .or_else(|| fm.match_family_style("Helvetica", FontStyle::normal()))
-            .or_else(|| fm.match_family_style("Arial", FontStyle::normal()))
-            .or_else(|| fm.match_family_style("sans-serif", FontStyle::normal()))
-            .unwrap_or_else(|| {
-                fm.legacy_make_typeface(None, FontStyle::normal())
-                    .expect("No fallback font")
-            });
+        let Ok(typeface) = typeface_with_fallback("Inter", FontStyle::normal()) else {
+            return;
+        };
         let font = Font::from_typeface(&typeface, self.font_size);
         let icon_font = Font::from_typeface(&typeface, self.node_radius * 0.8);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.node_radius * 0.8));

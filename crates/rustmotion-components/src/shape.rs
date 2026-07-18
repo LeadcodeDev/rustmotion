@@ -8,9 +8,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     build_shape_path, color4f_from_hex, draw_shape_path, draw_text_with_fallback, emoji_typeface,
-    font_mgr, measure_text_with_fallback, paint_from_hex, wrap_text_with_fallback,
+    measure_text_with_fallback, paint_from_hex, typeface_with_fallback, wrap_text_with_fallback,
 };
-use rustmotion_core::error::RustmotionError;
 use rustmotion_core::schema::{
     Fill, FontWeight, GradientType, ShapeText, ShapeType, Stroke, TextAlign, TimelineStep,
 };
@@ -165,7 +164,6 @@ fn render_shape_text(
     let area_w = shape_w - 2.0 * pad;
     let area_h = shape_h - 2.0 * pad;
 
-    let fm = font_mgr();
     let font_style = match text.font_weight {
         FontWeight::Bold => skia_safe::FontStyle::bold(),
         FontWeight::Normal => skia_safe::FontStyle::normal(),
@@ -176,19 +174,7 @@ fn render_shape_text(
         ),
     };
 
-    let typeface = fm
-        .match_family_style(&text.font_family, font_style)
-        .or_else(|| fm.match_family_style("Helvetica", font_style))
-        .or_else(|| fm.match_family_style("Arial", font_style))
-        .or_else(|| fm.match_family_style("sans-serif", font_style))
-        .or_else(|| {
-            if fm.count_families() > 0 {
-                fm.match_family_style(fm.family_name(0), font_style)
-            } else {
-                None
-            }
-        })
-        .ok_or(RustmotionError::FontNotFound)?;
+    let typeface = typeface_with_fallback(&text.font_family, font_style)?;
 
     let font = skia_safe::Font::from_typeface(typeface, text.font_size);
     let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, text.font_size));

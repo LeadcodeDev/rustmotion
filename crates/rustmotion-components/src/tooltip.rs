@@ -6,7 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -72,17 +73,12 @@ rustmotion_core::impl_traits!(Tooltip {
 });
 
 impl Tooltip {
-    fn make_font(&self) -> skia_safe::Font {
+    fn make_font(&self) -> Option<skia_safe::Font> {
         let fs = self.style.font_size_px_or(self.font_size);
-        let fm = font_mgr();
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family_or("Inter");
-        let typeface = fm
-            .match_family_style(family, font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, fs)
+        let typeface = typeface_with_fallback(family, font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(typeface, fs))
     }
 }
 
@@ -166,7 +162,9 @@ impl Tooltip {
         }
 
         // Text centered in body
-        let font = self.make_font();
+        let Some(font) = self.make_font() else {
+            return;
+        };
         let fs = self.style.font_size_px_or(self.font_size);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
 

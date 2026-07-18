@@ -6,7 +6,7 @@ use skia_safe::Canvas;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::font_mgr;
+use rustmotion_core::engine::renderer::typeface_with_fallback;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -286,16 +286,13 @@ impl Chart {
         (8.0, 8.0, bottom + 8.0, left + 8.0)
     }
 
-    pub(super) fn make_label_font(&self) -> skia_safe::Font {
-        let fm = font_mgr();
+    pub(super) fn make_label_font(&self) -> Option<skia_safe::Font> {
         let font_style = skia_safe::FontStyle::normal();
-        let typeface = fm
-            .match_family_style("Inter", font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .or_else(|| fm.match_family_style("Arial", font_style))
-            .or_else(|| fm.match_family_style("sans-serif", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
-        skia_safe::Font::from_typeface(typeface, self.label_font_size)
+        let typeface = typeface_with_fallback("Inter", font_style).ok()?;
+        Some(skia_safe::Font::from_typeface(
+            typeface,
+            self.label_font_size,
+        ))
     }
 }
 

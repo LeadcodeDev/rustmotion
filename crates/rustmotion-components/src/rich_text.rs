@@ -9,7 +9,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::{FontStyleType, FontWeight, TextAlign, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -60,8 +61,7 @@ fn make_font(
     weight: &FontWeight,
     font_style_type: &FontStyleType,
     size: f32,
-) -> Font {
-    let fm = font_mgr();
+) -> Option<Font> {
     let slant = match font_style_type {
         FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
         FontStyleType::Italic => skia_safe::font_style::Slant::Italic,
@@ -73,16 +73,8 @@ fn make_font(
         FontWeight::Weight(w) => skia_safe::font_style::Weight::from(*w as i32),
     };
     let skia_style = FontStyle::new(weight_val, skia_safe::font_style::Width::NORMAL, slant);
-    let typeface = fm
-        .match_family_style(family, skia_style)
-        .or_else(|| fm.match_family_style("Helvetica", skia_style))
-        .or_else(|| fm.match_family_style("Arial", skia_style))
-        .or_else(|| fm.match_family_style("sans-serif", skia_style))
-        .unwrap_or_else(|| {
-            fm.legacy_make_typeface(None, skia_style)
-                .expect("No fallback font")
-        });
-    Font::from_typeface(typeface, size)
+    let typeface = typeface_with_fallback(family, skia_style).ok()?;
+    Some(Font::from_typeface(typeface, size))
 }
 
 /// A prepared span ready for rendering (with resolved font, paint, measurements).
@@ -125,27 +117,27 @@ impl RichText {
         let mut prepared: Vec<PreparedSpan> = self
             .spans
             .iter()
-            .map(|span| {
+            .filter_map(|span| {
                 let size = span.font_size.unwrap_or(default_size);
                 let family = span.font_family.as_deref().unwrap_or(default_family);
                 let weight = span.font_weight.as_ref().unwrap_or(&default_weight);
                 let fstyle = span.font_style.as_ref().unwrap_or(&default_font_style);
                 let color = span.color.as_deref().unwrap_or(default_color).to_string();
                 let letter_spacing = span.letter_spacing.unwrap_or(0.0);
-                let font = make_font(family, weight, fstyle, size);
+                let font = make_font(family, weight, fstyle, size)?;
                 let emoji_font = emoji_tf
                     .as_ref()
                     .map(|tf| Font::from_typeface(tf.clone(), size));
                 let width =
                     measure_text_with_fallback(&span.text, &font, &emoji_font, letter_spacing);
 
-                PreparedSpan {
+                Some(PreparedSpan {
                     text: span.text.clone(),
                     font,
                     color,
                     letter_spacing,
                     width,
-                }
+                })
             })
             .collect();
 

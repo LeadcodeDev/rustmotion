@@ -6,8 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, font_mgr, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    parse_hex_color, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -127,12 +127,12 @@ impl Comparison {
         canvas.draw_rect(right_rect, &right_paint);
 
         let font_size = (h * 0.08).clamp(16.0, 36.0);
-        let fm = font_mgr();
         let font_style = skia_safe::FontStyle::bold();
-        let typeface = fm
-            .match_family_style("Inter", font_style)
-            .or_else(|| fm.match_family_style("Helvetica", font_style))
-            .unwrap_or_else(|| fm.legacy_make_typeface(None, font_style).unwrap());
+        let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+            // Balance the canvas.save() above before bailing out.
+            canvas.restore();
+            return;
+        };
         let font = skia_safe::Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
 
