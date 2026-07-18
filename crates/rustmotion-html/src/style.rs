@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+use crate::HtmlError;
+
 /// Coerce a CSS value string into JSON. A bare number or `<n>px` becomes a JSON
 /// number (integral → integer, so it deserializes into `u32`/`f32` fields);
 /// everything else (`%`, `auto`, `fr`, colors, keywords) stays a string.
@@ -41,6 +43,91 @@ pub fn parse_inline_style(decls: &str) -> Map<String, Value> {
         }
     }
     map
+}
+
+/// Parse an `anim` attribute into the `style.animation` JSON array.
+///
+/// Two forms:
+/// - JSON: `[{"name":"fade_in_up","delay":0.3}]` (array, inserted as-is) or
+///   `{"name":"pulse"}` (single object, wrapped in an array);
+/// - compact DSL: `fade-in-up delay:0.3 duration:0.8; pulse loop:true` —
+///   effects separated by `;`, each effect is a preset name (kebab-case is
+///   converted to snake_case) followed by space-separated `key:value` pairs.
+///
+/// Unknown preset names are not validated here (no schema dependency); the
+/// typed deserialization of `style.animation` rejects them at validation time.
+pub fn parse_anim_attr(raw: &str) -> Result<Value, HtmlError> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err(HtmlError::InvalidAnimDsl("empty anim attribute".into()));
+    }
+    if t.starts_with('[') {
+        return serde_json::from_str(t).map_err(|e| HtmlError::InvalidAnimJson(e.to_string()));
+    }
+    if t.starts_with('{') {
+        let v: Value =
+            serde_json::from_str(t).map_err(|e| HtmlError::InvalidAnimJson(e.to_string()))?;
+        return Ok(Value::Array(vec![v]));
+    }
+
+    let mut effects = Vec::new();
+    for effect in t.split(';') {
+        let effect = effect.trim();
+        if effect.is_empty() {
+            return Err(HtmlError::InvalidAnimDsl(format!(
+                "empty effect in anim attribute '{raw}'"
+            )));
+        }
+        let mut tokens = effect.split_whitespace();
+        let name = tokens.next().expect("effect is non-empty");
+        if name.contains(':') {
+            return Err(HtmlError::InvalidAnimDsl(format!(
+                "effect '{effect}' must start with a preset name, got '{name}'"
+            )));
+        }
+        let mut obj = Map::new();
+        obj.insert("name".into(), Value::from(kebab_to_snake(name)));
+        for pair in tokens {
+            let Some((k, v)) = pair.split_once(':') else {
+                return Err(HtmlError::InvalidAnimDsl(format!(
+                    "'{pair}' is not a key:value pair (in effect '{effect}')"
+                )));
+            };
+            if k.is_empty() || v.is_empty() {
+                return Err(HtmlError::InvalidAnimDsl(format!(
+                    "'{pair}' has an empty key or value (in effect '{effect}')"
+                )));
+            }
+            obj.insert(kebab_to_snake(k), coerce_dsl_value(v));
+        }
+        effects.push(Value::Object(obj));
+    }
+    Ok(Value::Array(effects))
+}
+
+/// `fade-in-up` → `fade_in_up` (snake_case passes through unchanged).
+fn kebab_to_snake(s: &str) -> String {
+    s.replace('-', "_")
+}
+
+/// Coerce a DSL value: `true`/`false` → bool, number → JSON number
+/// (integral → integer), anything else → string (e.g. easing names).
+fn coerce_dsl_value(raw: &str) -> Value {
+    match raw {
+        "true" => Value::Bool(true),
+        "false" => Value::Bool(false),
+        _ => {
+            if let Ok(f) = raw.parse::<f64>() {
+                if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+                    Value::from(f as i64)
+                } else {
+                    Value::from(f)
+                }
+            } else {
+                Value::from(raw.to_string())
+            }
+        }
+    }
 }
 
 #[cfg(test)]

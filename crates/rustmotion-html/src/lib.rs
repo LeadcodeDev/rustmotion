@@ -24,6 +24,10 @@ pub enum HtmlError {
     MissingDuration,
     #[error("background attribute contains invalid JSON: {0}")]
     InvalidBackgroundJson(String),
+    #[error("anim attribute contains invalid JSON: {0}")]
+    InvalidAnimJson(String),
+    #[error("invalid anim DSL: {0}")]
+    InvalidAnimDsl(String),
     #[error("transition-duration and transition-easing require a transition attribute")]
     TransitionParamsWithoutTransition,
     #[error("<font> requires both family and path (or src) attributes")]
@@ -375,6 +379,36 @@ mod lib_tests {
     #[test]
     fn missing_root_is_an_error() {
         assert!(crate::html_to_scenario_value("<div>no root</div>").is_err());
+    }
+
+    // --- anim round-trip (studio) ---
+
+    #[test]
+    fn set_inline_style_preserves_anim_attribute() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 anim="fade-in-up delay:0.3" style="font-size:96">Hi</h1></scene></rustmotion>"##;
+        let out =
+            crate::set_inline_style(html, "/scenes/0/children/0", "font-size", "120").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        let child = &v["scenes"][0]["children"][0];
+        assert_eq!(child["style"]["font-size"], json!(120));
+        assert_eq!(
+            child["style"]["animation"],
+            json!([{ "name": "fade_in_up", "delay": 0.3 }]),
+            "anim attribute must survive serialize_element"
+        );
+    }
+
+    #[test]
+    fn set_text_content_preserves_anim_attribute() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 anim="pulse loop:true">Hi</h1></scene></rustmotion>"##;
+        let out = crate::set_text_content(html, "/scenes/0/children/0", "Bonjour").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        let child = &v["scenes"][0]["children"][0];
+        assert_eq!(child["content"], json!("Bonjour"));
+        assert_eq!(
+            child["style"]["animation"],
+            json!([{ "name": "pulse", "loop": true }])
+        );
     }
 
     // --- font tests ---

@@ -280,6 +280,28 @@ mod html_css_error_tests {
         );
         assert!(report.is_blocking(false), "must block rendering");
     }
+
+    #[test]
+    fn unknown_animation_preset_from_html_is_a_blocking_error() {
+        // Unknown preset names are not validated in the transpiler (no schema
+        // dependency there); the typed deserialization of `style.animation`
+        // (tagged AnimationEffect enum) must reject them here, as a blocking
+        // and readable error.
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 anim="not-a-preset">Hi</h1></scene></rustmotion>"##;
+        let value = rustmotion::loader::html_to_scenario_json(html).expect("transpiles");
+        let json = serde_json::to_string(&value).unwrap();
+        let loaded = load(ValidationSource::Inline(&json)).expect("loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report
+                .schema_errors
+                .iter()
+                .any(|e| e.contains("not_a_preset")),
+            "expected a schema error naming the unknown preset: {:?}",
+            report.schema_errors
+        );
+        assert!(report.is_blocking(false), "must block rendering");
+    }
 }
 
 #[cfg(test)]
