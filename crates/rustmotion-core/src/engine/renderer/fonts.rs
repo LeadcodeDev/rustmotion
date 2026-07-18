@@ -3,6 +3,8 @@ use skia_safe::{FontMgr, FontStyle, Typeface};
 use crate::error::{Result, RustmotionError};
 use crate::schema::FontEntry;
 
+use super::google_fonts::{font_cache_dir, resolve_google_font};
+
 // Thread-local FontMgr instance, created once per thread and reused
 thread_local! {
     static THREAD_FONT_MGR: FontMgr = FontMgr::default();
@@ -12,35 +14,89 @@ pub fn font_mgr() -> FontMgr {
     THREAD_FONT_MGR.with(|mgr| mgr.clone())
 }
 
+/// Validate a `FontEntry` and resolve it to a list of TTF file paths.
+///
+/// - Local entry (`path` set, `source` absent): returns `[path]` as-is.
+/// - Google Fonts entry (`source = "google"`, `path` absent): downloads
+///   (or reads from cache) and returns one path per requested weight.
+/// - Conflict (`source` and `path` both set): returns an error.
+/// - Neither (`path` absent and `source` absent): returns an error.
+pub fn resolve_font_entry(entry: &FontEntry) -> Result<Vec<std::path::PathBuf>> {
+    match (&entry.source, &entry.path) {
+        // Conflict: both path and source set.
+        (Some(_), Some(_)) => Err(RustmotionError::FontSourceAndPathConflict {
+            family: entry.family.clone(),
+        }),
+        // Google Fonts.
+        (Some(source), None) if source == "google" => {
+            let weights = entry
+                .weights
+                .as_deref()
+                .filter(|w| !w.is_empty())
+                .unwrap_or(&[400]);
+            let cache_dir = font_cache_dir();
+            resolve_google_font(&entry.family, weights, &cache_dir)
+        }
+        // Unknown source value — treat as a user error.
+        (Some(other), None) => Err(RustmotionError::Generic(format!(
+            "FontEntry for '{}': unknown source value '{}' (only \"google\" is supported)",
+            entry.family, other
+        ))),
+        // Local file.
+        (None, Some(path)) => Ok(vec![std::path::PathBuf::from(path)]),
+        // Neither path nor source.
+        (None, None) => Err(RustmotionError::FontMissingPath {
+            family: entry.family.clone(),
+        }),
+    }
+}
+
 /// Load custom fonts from FontEntry definitions. Emits a single warning per
 /// missing or unreadable file so the user notices broken paths up-front.
 pub fn load_custom_fonts(fonts: &[FontEntry]) {
     let font_mgr = font_mgr();
     for entry in fonts {
-        let path = std::path::Path::new(&entry.path);
-        if !path.exists() {
-            eprintln!(
-                "Warning: custom font '{}' not found at '{}' — falling back to system fonts",
-                entry.family, entry.path
-            );
-            continue;
-        }
-        match std::fs::read(path) {
-            Ok(data) => {
-                let sk_data = skia_safe::Data::new_copy(&data);
-                if font_mgr.new_from_data(&sk_data, None).is_none() {
-                    eprintln!(
-                        "Warning: failed to register custom font '{}' from '{}'",
-                        entry.family, entry.path
-                    );
+        match resolve_font_entry(entry) {
+            Err(e) => {
+                eprintln!("Warning: {e}");
+            }
+            Ok(paths) => {
+                for path in paths {
+                    register_font_file(&font_mgr, &entry.family, &path);
                 }
             }
-            Err(e) => {
+        }
+    }
+}
+
+/// Register a single TTF/OTF file into the given FontMgr.
+fn register_font_file(font_mgr: &FontMgr, family: &str, path: &std::path::Path) {
+    if !path.exists() {
+        eprintln!(
+            "Warning: custom font '{}' not found at '{}' — falling back to system fonts",
+            family,
+            path.display()
+        );
+        return;
+    }
+    match std::fs::read(path) {
+        Ok(data) => {
+            let sk_data = skia_safe::Data::new_copy(&data);
+            if font_mgr.new_from_data(&sk_data, None).is_none() {
                 eprintln!(
-                    "Warning: failed to read custom font '{}' from '{}': {}",
-                    entry.family, entry.path, e
+                    "Warning: failed to register custom font '{}' from '{}'",
+                    family,
+                    path.display()
                 );
             }
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to read custom font '{}' from '{}': {}",
+                family,
+                path.display(),
+                e
+            );
         }
     }
 }
@@ -79,4 +135,96 @@ pub fn emoji_typeface() -> Option<Typeface> {
         };
     }
     EMOJI_TF.with(|tf| tf.clone())
+}
+
+// ─── Unit tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn local_entry(path: &str) -> FontEntry {
+        FontEntry {
+            path: Some(path.to_string()),
+            family: "TestFamily".to_string(),
+            source: None,
+            weights: None,
+        }
+    }
+
+    fn google_entry(family: &str, weights: Option<Vec<u16>>) -> FontEntry {
+        FontEntry {
+            path: None,
+            family: family.to_string(),
+            source: Some("google".to_string()),
+            weights,
+        }
+    }
+
+    fn neither_entry() -> FontEntry {
+        FontEntry {
+            path: None,
+            family: "Broken".to_string(),
+            source: None,
+            weights: None,
+        }
+    }
+
+    fn conflict_entry() -> FontEntry {
+        FontEntry {
+            path: Some("fonts/Inter.ttf".to_string()),
+            family: "Inter".to_string(),
+            source: Some("google".to_string()),
+            weights: None,
+        }
+    }
+
+    #[test]
+    fn local_entry_resolves_to_path() {
+        let entry = local_entry("fonts/Inter.ttf");
+        let paths = resolve_font_entry(&entry).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].to_str().unwrap(), "fonts/Inter.ttf");
+    }
+
+    #[test]
+    fn neither_path_nor_source_is_error() {
+        let entry = neither_entry();
+        let err = resolve_font_entry(&entry).unwrap_err();
+        assert!(
+            matches!(err, RustmotionError::FontMissingPath { .. }),
+            "expected FontMissingPath, got: {err}"
+        );
+    }
+
+    #[test]
+    fn path_and_source_conflict_is_error() {
+        let entry = conflict_entry();
+        let err = resolve_font_entry(&entry).unwrap_err();
+        assert!(
+            matches!(err, RustmotionError::FontSourceAndPathConflict { .. }),
+            "expected FontSourceAndPathConflict, got: {err}"
+        );
+    }
+
+    #[test]
+    fn google_entry_with_cached_file_resolves() {
+        // Build a pre-warmed cache dir and inject it via resolve_google_font directly.
+        let cache_dir = std::env::temp_dir()
+            .join("rustmotion-test-fonts")
+            .join("fonts-rs-google-cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("inter-400.ttf"), b"fake ttf").unwrap();
+
+        let entry = google_entry("Inter", None);
+        // We call resolve_google_font directly with the injected dir to avoid
+        // any real network in unit tests.
+        let paths = crate::engine::renderer::google_fonts::resolve_google_font(
+            &entry.family,
+            &[400],
+            &cache_dir,
+        )
+        .unwrap();
+        assert_eq!(paths.len(), 1);
+    }
 }

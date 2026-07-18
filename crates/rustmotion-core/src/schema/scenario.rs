@@ -204,11 +204,28 @@ pub struct IncludeDirective {
     pub config: Option<HashMap<String, serde_json::Value>>,
 }
 
-/// Font file to load at startup
+/// Font file to load at startup.
+///
+/// Two mutually exclusive modes:
+/// - **Local**: `path` (required) + `family`. Loads a `.ttf`/`.otf` file directly.
+/// - **Google Fonts**: `source = "google"` + `family` + optional `weights` (default [400]).
+///   The font is downloaded from the Google Fonts CSS2 API and cached in
+///   `~/.cache/rustmotion/fonts` (or `%LOCALAPPDATA%\rustmotion\fonts` on Windows).
+///   Subsequent renders with a warm cache make zero network calls.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FontEntry {
-    pub path: String,
+    /// Local file path (.ttf/.otf). Required when `source` is absent.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Font family name (e.g. "Inter", "JetBrains Mono").
     pub family: String,
+    /// Font source. Currently the only recognised value is `"google"`.
+    /// When set, `path` must be absent.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Font weights to download (Google Fonts only). Defaults to `[400]`.
+    #[serde(default)]
+    pub weights: Option<Vec<u16>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

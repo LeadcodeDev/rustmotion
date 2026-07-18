@@ -1,6 +1,7 @@
 mod assets;
 mod colors;
 mod fonts;
+pub mod google_fonts;
 mod shapes;
 mod text;
 mod yuv;
