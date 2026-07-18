@@ -15,25 +15,19 @@
           "children": [
             {
               "type": "card",
-              "size": {
-                "width": 1920,
-                "height": 1080
-              },
               "style": {
                 "flex-direction": "column",
                 "align-items": "center",
                 "justify-content": "center",
                 "gap": 32,
-                "background": "#0f172a"
+                "background": "#0f172a",
+                "width": 1920,
+                "height": 1080
               },
               "children": [
                 {
                   "type": "icon",
                   "icon": "lucide:layers",
-                  "size": {
-                    "width": 96,
-                    "height": 96
-                  },
                   "style": {
                     "color": "#6366f1",
                     "animation": [
@@ -41,7 +35,9 @@
                         "name": "scale_in",
                         "duration": 0.6
                       }
-                    ]
+                    ],
+                    "width": 96,
+                    "height": 96
                   }
                 },
                 {
@@ -146,16 +142,14 @@
           "children": [
             {
               "type": "card",
-              "size": {
-                "width": 1920,
-                "height": 1080
-              },
               "style": {
                 "flex-direction": "column",
                 "padding": 48,
                 "gap": 24,
                 "background": "#0f172a",
-                "overflow": "hidden"
+                "overflow": "hidden",
+                "width": 1920,
+                "height": 1080
               },
               "children": [
                 {
@@ -175,27 +169,23 @@
                 },
                 {
                   "type": "flex",
-                  "size": {
-                    "width": 1824,
-                    "height": 880
-                  },
                   "style": {
                     "flex-direction": "row",
-                    "gap": 24
+                    "gap": 24,
+                    "width": 1824,
+                    "height": 880
                   },
                   "children": [
                     {
                       "type": "card",
-                      "size": {
-                        "width": 760,
-                        "height": 880
-                      },
                       "style": {
                         "flex-direction": "column",
                         "padding": 24,
                         "gap": 16,
                         "background": "#1e293b",
-                        "border-radius": 16
+                        "border-radius": 16,
+                        "width": 760,
+                        "height": 880
                       },
                       "children": [
                         {
@@ -209,10 +199,6 @@
                         {
                           "type": "chart",
                           "chart_type": "bar",
-                          "size": {
-                            "width": 712,
-                            "height": 800
-                          },
                           "data": [
                             {
                               "value": 42,
@@ -251,19 +237,21 @@
                           "show_y_labels": true,
                           "show_grid": true,
                           "label_color": "#94a3b8",
-                          "label_font_size": 16
+                          "label_font_size": 16,
+                          "style": {
+                            "width": 712,
+                            "height": 800
+                          }
                         }
                       ]
                     },
                     {
                       "type": "flex",
-                      "size": {
-                        "width": 1040,
-                        "height": 880
-                      },
                       "style": {
                         "flex-direction": "column",
-                        "gap": 24
+                        "gap": 24,
+                        "width": 1040,
+                        "height": 880
                       },
                       "children": [
                         {
@@ -278,24 +266,18 @@
                               "value": 78,
                               "max": 100,
                               "label": "Performance",
-                              "size": {
-                                "width": 508,
-                                "height": 260
-                              },
                               "fill_color": "#10b981",
                               "track_color": "#334155",
                               "style": {
                                 "background": "#1e293b",
-                                "border-radius": 16
+                                "border-radius": 16,
+                                "width": 508,
+                                "height": 260
                               }
                             },
                             {
                               "type": "chart",
                               "chart_type": "donut",
-                              "size": {
-                                "width": 508,
-                                "height": 260
-                              },
                               "data": [
                                 {
                                   "value": 45,
@@ -315,7 +297,9 @@
                               ],
                               "style": {
                                 "background": "#1e293b",
-                                "border-radius": 16
+                                "border-radius": 16,
+                                "width": 508,
+                                "height": 260
                               }
                             }
                           ]
@@ -345,16 +329,14 @@
                                 48
                               ],
                               "sparkline_color": "#10b981",
-                              "size": {
-                                "width": 248,
-                                "height": 160
-                              },
                               "value_font_size": 28,
                               "label_font_size": 14,
                               "style": {
                                 "background": "#1e293b",
                                 "border-radius": 12,
-                                "padding": 16
+                                "padding": 16,
+                                "width": 248,
+                                "height": 160
                               }
                             },
                             {
@@ -375,16 +357,14 @@
                                 28
                               ],
                               "sparkline_color": "#6366f1",
-                              "size": {
-                                "width": 248,
-                                "height": 160
-                              },
                               "value_font_size": 28,
                               "label_font_size": 14,
                               "style": {
                                 "background": "#1e293b",
                                 "border-radius": 12,
-                                "padding": 16
+                                "padding": 16,
+                                "width": 248,
+                                "height": 160
                               }
                             },
                             {
@@ -401,16 +381,14 @@
                                 100
                               ],
                               "sparkline_color": "#f59e0b",
-                              "size": {
-                                "width": 248,
-                                "height": 160
-                              },
                               "value_font_size": 28,
                               "label_font_size": 14,
                               "style": {
                                 "background": "#1e293b",
                                 "border-radius": 12,
-                                "padding": 16
+                                "padding": 16,
+                                "width": 248,
+                                "height": 160
                               }
                             },
                             {
@@ -431,16 +409,14 @@
                                 4.2
                               ],
                               "sparkline_color": "#ef4444",
-                              "size": {
-                                "width": 248,
-                                "height": 160
-                              },
                               "value_font_size": 28,
                               "label_font_size": 14,
                               "style": {
                                 "background": "#1e293b",
                                 "border-radius": 12,
-                                "padding": 16
+                                "padding": 16,
+                                "width": 248,
+                                "height": 160
                               }
                             }
                           ]
@@ -520,16 +496,14 @@
           "children": [
             {
               "type": "card",
-              "size": {
-                "width": 1920,
-                "height": 1080
-              },
               "style": {
                 "flex-direction": "column",
                 "padding": 48,
                 "gap": 24,
                 "background": "#0f172a",
-                "overflow": "hidden"
+                "overflow": "hidden",
+                "width": 1920,
+                "height": 1080
               },
               "children": [
                 {
@@ -549,13 +523,11 @@
                 },
                 {
                   "type": "flex",
-                  "size": {
-                    "width": 1824,
-                    "height": 888
-                  },
                   "style": {
                     "flex-direction": "row",
-                    "gap": 24
+                    "gap": 24,
+                    "width": 1824,
+                    "height": 888
                   },
                   "children": [
                     {
@@ -563,10 +535,6 @@
                       "code": "use skia_safe::Canvas;\n\npub trait Painter {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    );\n}\n\nimpl Painter for Text {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        _props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    ) {\n        draw_runs(canvas, &self.runs, layout, ctx);\n    }\n}",
                       "language": "rust",
                       "theme": "tokyo-night",
-                      "size": {
-                        "width": 900,
-                        "height": 888
-                      },
                       "show_line_numbers": true,
                       "chrome": {
                         "enabled": true,
@@ -583,15 +551,13 @@
                             "delay": 0.3,
                             "duration": 0.5
                           }
-                        ]
+                        ],
+                        "width": 900,
+                        "height": 888
                       }
                     },
                     {
                       "type": "terminal",
-                      "size": {
-                        "width": 900,
-                        "height": 888
-                      },
                       "title": "rustmotion",
                       "show_chrome": true,
                       "lines": [
@@ -643,7 +609,9 @@
                             "delay": 0.5,
                             "duration": 0.5
                           }
-                        ]
+                        ],
+                        "width": 900,
+                        "height": 888
                       }
                     }
                   ]
@@ -657,16 +625,14 @@
           "children": [
             {
               "type": "card",
-              "size": {
-                "width": 1920,
-                "height": 1080
-              },
               "style": {
                 "flex-direction": "column",
                 "padding": 48,
                 "gap": 24,
                 "background": "#0f172a",
-                "overflow": "hidden"
+                "overflow": "hidden",
+                "width": 1920,
+                "height": 1080
               },
               "children": [
                 {
@@ -686,27 +652,23 @@
                 },
                 {
                   "type": "flex",
-                  "size": {
-                    "width": 1824,
-                    "height": 888
-                  },
                   "style": {
                     "flex-direction": "row",
-                    "gap": 24
+                    "gap": 24,
+                    "width": 1824,
+                    "height": 888
                   },
                   "children": [
                     {
                       "type": "card",
-                      "size": {
-                        "width": 880,
-                        "height": 888
-                      },
                       "style": {
                         "flex-direction": "column",
                         "gap": 28,
                         "padding": 40,
                         "background": "#1e293b",
-                        "border-radius": 16
+                        "border-radius": 16,
+                        "width": 880,
+                        "height": 888
                       },
                       "children": [
                         {
@@ -831,13 +793,11 @@
                     },
                     {
                       "type": "flex",
-                      "size": {
-                        "width": 920,
-                        "height": 888
-                      },
                       "style": {
                         "flex-direction": "column",
-                        "gap": 28
+                        "gap": 28,
+                        "width": 920,
+                        "height": 888
                       },
                       "children": [
                         {
