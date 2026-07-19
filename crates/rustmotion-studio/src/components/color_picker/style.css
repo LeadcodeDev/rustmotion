@@ -176,7 +176,10 @@
     position: absolute;
     z-index: 1000;
     top: 100%;
-    left: 0;
+    /* The inspector docks against the right window edge: anchor the popover's
+       right edge to the swatch so it opens LEFTWARD instead of clipping. */
+    right: 0;
+    left: auto;
     display: block;
     border-radius: 0.5rem;
     margin-top: 4px;
@@ -239,4 +242,13 @@
 .dx-color-picker [data-disabled="true"] {
     cursor: not-allowed;
     opacity: 0.5;
+}
+
+/* Near the bottom of the window the popover flips above the swatch
+   (measured at open time by ColorPickerPopover). */
+.dx-color-picker-popover.flip-up {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 4px;
 }

@@ -13,8 +13,11 @@ use crate::components::select::{Select, SelectOption};
 use crate::components::slider::Slider;
 use crate::components::switch::Switch;
 use crate::scenario::{
-    scene_duration_for_pointer, set_field, set_field_value, set_style, set_style_value, Shared,
+    apply_optimistic, scene_duration_for_pointer, set_field, set_field_value, set_style,
+    set_style_value, Mutation, Shared,
 };
+
+use super::view::RevSignal;
 
 use super::annotations::AnnotationBox;
 use super::properties::{
@@ -422,6 +425,13 @@ fn family(kind: &str) -> Family {
     }
 }
 
+/// Text-family elements edit their content first: the CONTENT section renders
+/// ABOVE Properties. Other families keep Properties on top (and have no
+/// content editor).
+fn content_before_properties(kind: &str) -> bool {
+    family(kind) == Family::Text
+}
+
 const TEXT_SECTIONS: &[Section] = &[
     Section {
         title: "Typography",
@@ -618,10 +628,10 @@ pub fn InspectorPanel(
                     "✕"
                 }
             }
-            RootPropsSection { pointer: pointer.clone(), kind: kind.clone(), element }
-            if fam == Family::Text {
+            if content_before_properties(&kind) {
                 ContentEditor { pointer: pointer.clone(), content: content.clone().unwrap_or_default() }
             }
+            RootPropsSection { pointer: pointer.clone(), kind: kind.clone(), element }
             for section in sections(fam) {
                 SectionView {
                     key: "{section.title}",
@@ -1812,6 +1822,14 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
     *debounce.0.borrow_mut() = Some(task);
 }
 
+/// Write scenario-file content and record it in the self-write ledger so the
+/// watcher skips the resulting event (the in-memory model is already ahead).
+fn write_and_note(path: &std::path::Path, content: &str) -> Result<(), String> {
+    std::fs::write(path, content).map_err(|e| format!("write: {e}"))?;
+    crate::scenario::note_self_write(&crate::scenario::self_write_slot(), path, content);
+    Ok(())
+}
+
 /// Execute the actual file write. Returns `Ok(true)` when the file was
 /// written, `Ok(false)` when the edit was a no-op (nothing to record in the
 /// undo history), or an error message.
@@ -1829,13 +1847,13 @@ fn perform_write(payload: &WritePayload) -> Result<bool, String> {
                 if let Some(updated) =
                     rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
                 {
-                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    write_and_note(path, &updated)?;
                     return Ok(true);
                 }
             } else if let Some(updated) = set_style(raw.clone(), pointer, prop, value) {
                 let text =
                     serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                std::fs::write(path, text).map_err(|e| format!("write: {e}"))?;
+                write_and_note(path, &text)?;
                 return Ok(true);
             }
             Ok(false)
@@ -1851,12 +1869,12 @@ fn perform_write(payload: &WritePayload) -> Result<bool, String> {
                 if let Some(updated) =
                     rustmotion::loader::set_html_text_content(&html, pointer, text)
                 {
-                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    write_and_note(path, &updated)?;
                     return Ok(true);
                 }
             } else if let Some(updated) = set_field(raw.clone(), pointer, "content", text) {
                 let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                write_and_note(path, &s)?;
                 return Ok(true);
             }
             Ok(false)
@@ -1874,14 +1892,14 @@ fn perform_write(payload: &WritePayload) -> Result<bool, String> {
                 if let Some(updated) =
                     rustmotion::loader::set_html_attribute(&html, pointer, field, &attr)
                 {
-                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    write_and_note(path, &updated)?;
                     return Ok(true);
                 }
             } else if let Some(updated) =
                 set_field_value(raw.clone(), pointer, field, value.clone())
             {
                 let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                write_and_note(path, &s)?;
                 return Ok(true);
             }
             Ok(false)
@@ -1897,17 +1915,30 @@ fn perform_write(payload: &WritePayload) -> Result<bool, String> {
                 if let Some(updated) =
                     rustmotion::loader::remove_html_inline_style(&html, pointer, prop)
                 {
-                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    write_and_note(path, &updated)?;
                     return Ok(true);
                 }
             } else if let Some(updated) =
                 set_style_value(raw.clone(), pointer, prop, serde_json::Value::Null)
             {
                 let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                write_and_note(path, &s)?;
                 return Ok(true);
             }
             Ok(false)
+        }
+    }
+}
+
+/// Apply an edit to the in-memory model immediately (canvas refreshes in ~one
+/// render) and nudge the hot-reload signal. Rebuild failures are transient
+/// (mid-typing) and silently keep the previous model — the disk write path
+/// has its own guards.
+fn optimistic(shared: &Shared, mutation: Mutation) {
+    if apply_optimistic(shared, &mutation).is_ok() {
+        if let Some(rev) = try_consume_context::<RevSignal>() {
+            let mut r = rev.0;
+            r.set(r() + 1);
         }
     }
 }
@@ -1921,6 +1952,14 @@ fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
     if value.trim().is_empty() {
         return;
     }
+    optimistic(
+        shared,
+        Mutation::Style {
+            pointer: pointer.to_string(),
+            prop: prop.to_string(),
+            value: serde_json::Value::String(value.to_string()),
+        },
+    );
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
@@ -1946,6 +1985,14 @@ fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
 /// `Value::Null` removes the field (JSON) / the attribute (HTML). Debounced
 /// with the same guarantees as [`write_prop`].
 fn write_root_field(shared: &Shared, pointer: &str, field: &str, value: serde_json::Value) {
+    optimistic(
+        shared,
+        Mutation::Field {
+            pointer: pointer.to_string(),
+            field: field.to_string(),
+            value: value.clone(),
+        },
+    );
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
@@ -1970,6 +2017,14 @@ fn write_root_field(shared: &Shared, pointer: &str, field: &str, value: serde_js
 /// Remove one style property (an emptied generic control unsets the key /
 /// declaration rather than writing an empty string). Debounced.
 fn write_style_removal(shared: &Shared, pointer: &str, prop: &str) {
+    optimistic(
+        shared,
+        Mutation::Style {
+            pointer: pointer.to_string(),
+            prop: prop.to_string(),
+            value: serde_json::Value::Null,
+        },
+    );
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
@@ -1994,6 +2049,14 @@ fn write_style_removal(shared: &Shared, pointer: &str, prop: &str) {
 /// [`write_prop`], an empty value is allowed (clearing the text is valid).
 /// Schedules a debounced write (~250 ms); errors are surfaced in the topbar.
 fn write_content(shared: &Shared, pointer: &str, text: &str) {
+    optimistic(
+        shared,
+        Mutation::Field {
+            pointer: pointer.to_string(),
+            field: "content".to_string(),
+            value: serde_json::Value::String(text.to_string()),
+        },
+    );
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         (m.path.clone(), m.raw.clone())
@@ -2012,4 +2075,18 @@ fn write_content(shared: &Shared, pointer: &str, text: &str) {
             text: text.to_string(),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_family_shows_content_before_properties() {
+        assert!(content_before_properties("text"));
+        assert!(content_before_properties("caption"));
+        // Non-text components keep the current order (no content editor).
+        assert!(!content_before_properties("gauge"));
+        assert!(!content_before_properties("card"));
+    }
 }

@@ -26,6 +26,9 @@ pub struct StudioModel {
     pub path: Option<std::path::PathBuf>,
     /// Raw parsed scenario JSON (for reading/editing element props by pointer).
     pub raw: serde_json::Value,
+    /// In-memory HTML source for `.html` scenarios (kept in sync by the
+    /// optimistic edit path; `None` for JSON sources).
+    pub html_source: Option<String>,
 }
 
 pub type Shared = Arc<Mutex<StudioModel>>;
@@ -39,6 +42,7 @@ impl StudioModel {
         // For HTML sources the raw JSON is the transpiled scenario, plus the
         // annotations sidecar merged in so `list_annotations` and the comments
         // panel work unchanged; the inspector reads element props by pointer.
+        let mut html_source = None;
         let raw = path
             .as_ref()
             .and_then(|p| {
@@ -49,6 +53,7 @@ impl StudioModel {
                     // loader (error banner); a read failure here can only be a
                     // race, so fall back to the bare transpile.
                     let annotations = super::sidecar::read_sidecar(p).unwrap_or_default();
+                    html_source = Some(s.clone());
                     super::sidecar::merge_annotations(raw, annotations)
                 } else {
                     serde_json::from_str(&s).ok()?
@@ -70,6 +75,7 @@ impl StudioModel {
             generation: 0,
             path,
             raw,
+            html_source,
         }
     }
 }

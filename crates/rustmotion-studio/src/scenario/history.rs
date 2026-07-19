@@ -145,7 +145,19 @@ fn step(shared: &Shared, slot: &SharedHistory, is_undo: bool) {
                 return Ok(false);
             };
             match std::fs::write(&path, &target) {
-                Ok(()) => Ok(true),
+                Ok(()) => {
+                    // Record the self-write so the watcher skips the reload,
+                    // and adopt the restored state in memory ourselves. If
+                    // adoption fails (shouldn't: disk states were valid when
+                    // captured), clear the note so the watcher reloads
+                    // normally instead of leaving stale memory.
+                    super::optimistic::note_self_write(
+                        &super::optimistic::self_write_slot(),
+                        &path,
+                        &target,
+                    );
+                    Ok(true)
+                }
                 Err(e) => {
                     // Roll the stacks back so the failed step isn't lost: the
                     // inverse operation with `target` restores both stacks
@@ -164,7 +176,12 @@ fn step(shared: &Shared, slot: &SharedHistory, is_undo: bool) {
 
     match outcome {
         Ok(true) => {
-            // The watcher picks up the write and reloads the model.
+            // Adopt the restored state in memory (the watcher will skip the
+            // self-write). Failure → clear the note so the watcher reloads.
+            let disk = std::fs::read_to_string(&path).unwrap_or_default();
+            if super::optimistic::adopt_source(shared, &path, &disk).is_err() {
+                super::optimistic::clear_self_write(&super::optimistic::self_write_slot(), &path);
+            }
             let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
             m.write_error = None;
         }

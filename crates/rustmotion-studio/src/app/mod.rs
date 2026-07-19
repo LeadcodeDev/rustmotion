@@ -130,6 +130,21 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                 }
                 WatchMsg::Changed => {
                     if let Some(p) = current.clone() {
+                        // Self-write skip: if the disk content is exactly what
+                        // this process last wrote (debounced write, undo), the
+                        // in-memory model is already up to date — and possibly
+                        // NEWER under continuous typing. Reloading would
+                        // clobber it, so skip. External edits hash differently
+                        // and reload normally.
+                        if let Ok(content) = std::fs::read_to_string(&p) {
+                            if crate::scenario::is_self_write(
+                                &crate::scenario::self_write_slot(),
+                                &p,
+                                &content,
+                            ) {
+                                continue;
+                            }
+                        }
                         let (scenario, error) = match rustmotion::loader::load_input(&p) {
                             Ok(s) => (s, None),
                             Err(e) => (crate::scenario::empty_scenario(), Some(e.to_string())),

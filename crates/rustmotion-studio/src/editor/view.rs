@@ -18,6 +18,12 @@ use super::playback::{
 use super::prefetch::{frame_cache, use_prefetch_publisher, FrameKey};
 use super::topbar::TopBar;
 
+/// The hot-reload revision signal, exposed via context so the optimistic edit
+/// path can nudge the canvas immediately instead of waiting for the 250 ms
+/// generation poll.
+#[derive(Clone, Copy)]
+pub struct RevSignal(pub Signal<u64>);
+
 /// Overlay element boxes: invisible by default. Only the single hovered element
 /// (`.hov`) gets a dashed outline, and the selected element (`.sel`) a solid
 /// blue box. "Hovered" is tracked explicitly (one node at a time) rather than
@@ -131,6 +137,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
 
     use_playback_clock(shared.clone(), current, playing);
     use_hot_reload(shared.clone(), rev);
+    use_context_provider(|| RevSignal(rev));
     // Publish the playhead/side/model snapshot for the background prefetcher.
     use_prefetch_publisher(
         shared.clone(),
