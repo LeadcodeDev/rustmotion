@@ -1,0 +1,785 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "backgrounds": {
+    "circles": {
+      "preset": "concentric_circles",
+      "colors": [
+        "#0f172a",
+        "#1e1b4b",
+        "#0f172a"
+      ],
+      "speed": 12,
+      "element_size": 1.5,
+      "count": 5,
+      "gradient_type": "radial"
+    },
+    "dots": {
+      "preset": "grid_dots",
+      "colors": [
+        "#0f172a",
+        "#1e293b"
+      ],
+      "spacing": 70,
+      "element_size": 3,
+      "speed": 8
+    }
+  },
+  "scenes": [
+    {
+      "duration": 3.5,
+      "background": {
+        "$ref": "circles"
+      },
+      "effects": [
+        {
+          "type": "grain",
+          "intensity": 0.06
+        },
+        {
+          "type": "vignette",
+          "intensity": 0.4,
+          "radius": 0.7
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.06
+              },
+              {
+                "time": 3.4,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_out"
+          }
+        ]
+      },
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 28
+      },
+      "children": [
+        {
+          "type": "particle",
+          "particle_type": "halo",
+          "count": 10,
+          "colors": [
+            "#6366F1",
+            "#8B5CF6"
+          ],
+          "size_range": {
+            "min": 40,
+            "max": 90
+          },
+          "seed": 42,
+          "position": "absolute",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "type": "gradient_text",
+          "content": "Rustmotion",
+          "colors": [
+            "#6366F1",
+            "#8B5CF6",
+            "#EC4899"
+          ],
+          "angle": 100,
+          "style": {
+            "font-size": 132,
+            "font-weight": "bold",
+            "animation": [
+              {
+                "name": "scale_in",
+                "duration": 0.7,
+                "overshoot": 0.06
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Motion design videos. Pure Rust. No browser.",
+          "style": {
+            "font-size": 40,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "char_fade_in",
+                "delay": 0.5,
+                "stagger": 0.12,
+                "duration": 0.4,
+                "granularity": "word"
+              }
+            ]
+          }
+        },
+        {
+          "type": "badge",
+          "text": "Open source · Single binary",
+          "icon": "lucide:package",
+          "variant": "solid",
+          "badge_size": "lg",
+          "style": {
+            "background": "#6366F1",
+            "font-size": 26,
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 1.4,
+                "duration": 0.6
+              },
+              {
+                "name": "wiggle",
+                "property": "translate_y",
+                "amplitude": 4,
+                "frequency": 0.6,
+                "seed": 7
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 6.0,
+      "transition": {
+        "type": "slide",
+        "duration": 0.6
+      },
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 36
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Write HTML. Ship video.",
+          "style": {
+            "font-size": 72,
+            "color": "#F8FAFC",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "codeblock",
+          "language": "html",
+          "theme": "tokyo-night",
+          "show_line_numbers": true,
+          "chrome": {
+            "enabled": true,
+            "title": "promo.html"
+          },
+          "reveal": {
+            "mode": "typewriter",
+            "start": 0.6,
+            "duration": 3.4
+          },
+          "code": "<rustmotion width=\"1920\" height=\"1080\" fps=\"30\">\n  <scene duration=\"4\" background=\"#0f172a\">\n    <h1 anim=\"fade-in-up\">Ship Faster</h1>\n    <p anim=\"fade-in-up delay:0.3\">Built in Rust. No browser.</p>\n    <rm-counter from=\"0\" to=\"1250\" suffix=\"+\"></rm-counter>\n  </scene>\n</rustmotion>",
+          "style": {
+            "width": 1280,
+            "height": 420,
+            "font-size": 26,
+            "padding": 28,
+            "border-radius": 16
+          }
+        },
+        {
+          "type": "text",
+          "content": "…or JSON. Same engine, same validation, same single binary.",
+          "style": {
+            "font-size": 32,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 4.2,
+                "duration": 0.6
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 6.0,
+      "transition": {
+        "type": "wipe_left",
+        "duration": 0.5
+      },
+      "background": {
+        "$ref": "dots"
+      },
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 20
+      },
+      "children": [
+        {
+          "type": "counter",
+          "from": 0,
+          "to": 51,
+          "easing": "ease_out",
+          "start_at": 0.2,
+          "style": {
+            "font-size": 120,
+            "color": "#38BDF8",
+            "font-weight": "bold",
+            "text-align": "center"
+          }
+        },
+        {
+          "type": "text",
+          "content": "components, one engine",
+          "style": {
+            "font-size": 40,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 0.4,
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "div",
+          "stagger": 0.15,
+          "style": {
+            "flex-direction": "row",
+            "gap": 40,
+            "margin": {
+              "top": 24
+            }
+          },
+          "children": [
+            {
+              "type": "card",
+              "style": {
+                "width": 320,
+                "height": 250,
+                "background": "#1E293B",
+                "border-radius": 20,
+                "padding": 22,
+                "gap": 14,
+                "align-items": "center",
+                "justify-content": "center",
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.6
+                  }
+                ],
+                "flex-direction": "column"
+              },
+              "children": [
+                {
+                  "type": "chart",
+                  "chart_type": "area",
+                  "smooth": true,
+                  "fill_opacity": 0.3,
+                  "animation_duration": 1.2,
+                  "data": [
+                    {
+                      "value": 8
+                    },
+                    {
+                      "value": 22
+                    },
+                    {
+                      "value": 14
+                    },
+                    {
+                      "value": 34
+                    },
+                    {
+                      "value": 27
+                    },
+                    {
+                      "value": 48
+                    }
+                  ],
+                  "style": {
+                    "width": 270,
+                    "height": 140
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "12 chart types",
+                  "style": {
+                    "font-size": 26,
+                    "color": "#E2E8F0",
+                    "text-align": "center"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "style": {
+                "width": 320,
+                "height": 250,
+                "background": "#1E293B",
+                "border-radius": 20,
+                "padding": 22,
+                "gap": 14,
+                "align-items": "center",
+                "justify-content": "center",
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.6
+                  }
+                ],
+                "flex-direction": "column"
+              },
+              "children": [
+                {
+                  "type": "gauge",
+                  "value": 72,
+                  "label": "",
+                  "fill_color": "#8B5CF6",
+                  "track_color": "#0f172a",
+                  "animation_duration": 1.4,
+                  "style": {
+                    "width": 220,
+                    "height": 140
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "Gauges & KPIs",
+                  "style": {
+                    "font-size": 26,
+                    "color": "#E2E8F0",
+                    "text-align": "center"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "stat",
+              "value": "45.2K",
+              "label": "renders / day",
+              "trend": {
+                "value": "+340%",
+                "direction": "up"
+              },
+              "sparkline_data": [
+                20,
+                25,
+                22,
+                30,
+                28,
+                35,
+                32,
+                40,
+                45
+              ],
+              "sparkline_color": "#22C55E",
+              "value_font_size": 52,
+              "label_font_size": 22,
+              "style": {
+                "width": 320,
+                "height": 250,
+                "background": "#1E293B",
+                "border-radius": 20,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.6
+                  }
+                ]
+              }
+            },
+            {
+              "type": "card",
+              "style": {
+                "width": 320,
+                "height": 250,
+                "background": "#1E293B",
+                "border-radius": 20,
+                "padding": 22,
+                "gap": 18,
+                "align-items": "center",
+                "justify-content": "center",
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.6
+                  }
+                ],
+                "flex-direction": "column"
+              },
+              "children": [
+                {
+                  "type": "badge",
+                  "text": "shipped",
+                  "icon": "lucide:check",
+                  "badge_size": "lg",
+                  "style": {
+                    "background": "#22C55E",
+                    "font-size": 24
+                  }
+                },
+                {
+                  "type": "rating",
+                  "value": 4.5,
+                  "size": 36,
+                  "animation_duration": 1.4
+                },
+                {
+                  "type": "text",
+                  "content": "UI widgets",
+                  "style": {
+                    "font-size": 26,
+                    "color": "#E2E8F0",
+                    "text-align": "center"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "transition": {
+        "type": "zoom_in",
+        "duration": 0.6
+      },
+      "background": {
+        "$ref": "circles",
+        "transition": {
+          "duration": 1.0,
+          "easing": "ease_in_out"
+        }
+      },
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "A real animation engine",
+          "style": {
+            "font-size": 72,
+            "color": "#F8FAFC",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Springs · Stagger · Motion blur · Draw-on SVG · Time remapping",
+          "style": {
+            "font-size": 34,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 0.2,
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "shape",
+          "shape": "rounded_rect",
+          "fill": {
+            "type": "linear",
+            "colors": [
+              "#6366F1",
+              "#EC4899"
+            ],
+            "angle": 135
+          },
+          "style": {
+            "width": 140,
+            "height": 140,
+            "border-radius": 28,
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 0.4,
+                "duration": 0.3
+              },
+              {
+                "name": "keyframes",
+                "keyframes": [
+                  {
+                    "property": "translate_x",
+                    "keyframes": [
+                      {
+                        "time": 0.7,
+                        "value": -480
+                      },
+                      {
+                        "time": 2.0,
+                        "value": 480
+                      },
+                      {
+                        "time": 3.3,
+                        "value": 0
+                      }
+                    ],
+                    "easing": "ease_in_out"
+                  }
+                ]
+              },
+              {
+                "name": "motion_blur",
+                "samples": 8,
+                "shutter": 0.6
+              }
+            ]
+          },
+          "position": "absolute",
+          "x": 890,
+          "y": 610
+        },
+        {
+          "type": "svg",
+          "data": "<svg width=\"760\" height=\"90\" viewBox=\"0 0 760 90\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M10 45 C 110 5, 210 85, 310 45 S 510 5, 610 45 S 730 70, 750 40\" stroke=\"#6366F1\" stroke-width=\"5\" fill=\"none\" stroke-linecap=\"round\"/></svg>",
+          "draw_stroke_width": 5,
+          "style": {
+            "width": 760,
+            "height": 90,
+            "margin": {
+              "top": 300
+            },
+            "animation": [
+              {
+                "name": "draw_in",
+                "delay": 1.0,
+                "duration": 1.6
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 6.0,
+      "transition": {
+        "type": "fade",
+        "duration": 0.5
+      },
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 36
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Built for AI agents",
+          "style": {
+            "font-size": 72,
+            "color": "#F8FAFC",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "duration": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "type": "terminal",
+          "title": "rustmotion",
+          "theme": "dark",
+          "reveal": {
+            "mode": "line_by_line",
+            "start": 0.6,
+            "duration": 2.6
+          },
+          "lines": [
+            {
+              "text": "rustmotion validate -f promo.json",
+              "line_type": "prompt"
+            },
+            {
+              "text": "Warning: unknown attribute 'sufix' on 'counter'",
+              "line_type": "output"
+            },
+            {
+              "text": "  hint: did you mean 'suffix'?",
+              "line_type": "output"
+            },
+            {
+              "text": "",
+              "line_type": "output"
+            },
+            {
+              "text": "Valid scenario: 6 scene(s) · schema + geometry safe",
+              "line_type": "command"
+            }
+          ],
+          "style": {
+            "width": 1160,
+            "height": 360,
+            "font-size": 24
+          }
+        },
+        {
+          "type": "text",
+          "content": "Schema + geometry validation · did-you-mean · studio annotations for review loops",
+          "style": {
+            "font-size": 32,
+            "color": "#94A3B8",
+            "text-align": "center",
+            "animation": [
+              {
+                "name": "fade_in",
+                "delay": 3.4,
+                "duration": 0.6
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "duration": 4.0,
+      "transition": {
+        "type": "dissolve",
+        "duration": 0.6
+      },
+      "background": {
+        "$ref": "circles"
+      },
+      "effects": [
+        {
+          "type": "grain",
+          "intensity": 0.06
+        },
+        {
+          "type": "vignette",
+          "intensity": 0.4,
+          "radius": 0.7
+        }
+      ],
+      "layout": {
+        "align_items": "center",
+        "justify_content": "center",
+        "gap": 32
+      },
+      "children": [
+        {
+          "type": "particle",
+          "particle_type": "stars",
+          "count": 40,
+          "seed": 9,
+          "position": "absolute",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "type": "gradient_text",
+          "content": "Rustmotion",
+          "colors": [
+            "#6366F1",
+            "#8B5CF6",
+            "#EC4899"
+          ],
+          "angle": 100,
+          "style": {
+            "font-size": 108,
+            "font-weight": "bold",
+            "animation": [
+              {
+                "name": "scale_in",
+                "duration": 0.6,
+                "overshoot": 0.05
+              }
+            ],
+            "text-align": "left"
+          }
+        },
+        {
+          "type": "terminal",
+          "title": "sh",
+          "theme": "dark",
+          "reveal": {
+            "mode": "typewriter",
+            "start": 0.5,
+            "duration": 1.4
+          },
+          "lines": [
+            {
+              "text": "cargo install rustmotion",
+              "line_type": "prompt"
+            }
+          ],
+          "style": {
+            "width": 720,
+            "height": 130,
+            "font-size": 28
+          }
+        },
+        {
+          "type": "badge",
+          "text": "github.com/LeadcodeDev/rustmotion",
+          "icon": "lucide:github",
+          "variant": "solid",
+          "badge_size": "lg",
+          "style": {
+            "background": "#8B5CF6",
+            "font-size": 26,
+            "animation": [
+              {
+                "name": "fade_in_up",
+                "delay": 2.2,
+                "duration": 0.6
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
