@@ -1,9 +1,38 @@
 use std::time::Duration;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Pause, Play};
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::scenario::Shared;
+
+/// What a playback keyboard shortcut does (see [`playback_action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackAction {
+    TogglePlay,
+    /// Step the playhead by N frames (pausing first).
+    Step(i64),
+    SeekStart,
+    SeekEnd,
+}
+
+/// Map a key press to a playback action: Space → toggle, arrows → ±1 frame
+/// (±10 with Shift), Home/End → first/last frame. `None` for anything else or
+/// when command modifiers are held (those belong to other shortcuts).
+pub fn playback_action(key: &Key, mods: Modifiers) -> Option<PlaybackAction> {
+    if mods.meta() || mods.ctrl() || mods.alt() {
+        return None;
+    }
+    let step = if mods.shift() { 10 } else { 1 };
+    match key {
+        Key::Character(c) if c == " " && !mods.shift() => Some(PlaybackAction::TogglePlay),
+        Key::ArrowLeft => Some(PlaybackAction::Step(-step)),
+        Key::ArrowRight => Some(PlaybackAction::Step(step)),
+        Key::Home => Some(PlaybackAction::SeekStart),
+        Key::End => Some(PlaybackAction::SeekEnd),
+        _ => None,
+    }
+}
 
 /// Advance the playhead at the scenario fps while `playing` is true. A custom
 /// hook so the editor view stays focused on layout.
@@ -73,12 +102,23 @@ pub fn PlaybackBar(
     let side = diff_side();
 
     rsx! {
-        div { style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--rm-border); background:var(--rm-surface-2);",
+        div {
+            style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--rm-border); background:var(--rm-surface-2);",
+            // Focused transport controls behave natively (arrows on the range
+            // slider step the frame, Space re-activates the focused button —
+            // both ARE playback actions); stopping propagation prevents the
+            // root shortcut handler from double-applying them.
+            onkeydown: move |evt: KeyboardEvent| evt.stop_propagation(),
             Button {
                 variant: ButtonVariant::Secondary,
-                size: ButtonSize::Sm,
+                size: ButtonSize::IconSm,
+                title: if is_playing { "Pause (Space)" } else { "Play (Space)" },
                 onclick: move |_| playing.set(!playing()),
-                if is_playing { "Pause" } else { "Play" }
+                if is_playing {
+                    Pause { size: 15 }
+                } else {
+                    Play { size: 15 }
+                }
             }
             if diff_active() {
                 div { class: "rm-seg", style: "width:auto; flex:none;",
@@ -126,5 +166,63 @@ pub fn PlaybackBar(
                 "{cur} / {max}"
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch(s: &str) -> Key {
+        Key::Character(s.to_string())
+    }
+
+    #[test]
+    fn space_toggles_play() {
+        assert_eq!(
+            playback_action(&ch(" "), Modifiers::empty()),
+            Some(PlaybackAction::TogglePlay)
+        );
+    }
+
+    #[test]
+    fn arrows_step_one_or_ten() {
+        assert_eq!(
+            playback_action(&Key::ArrowLeft, Modifiers::empty()),
+            Some(PlaybackAction::Step(-1))
+        );
+        assert_eq!(
+            playback_action(&Key::ArrowRight, Modifiers::empty()),
+            Some(PlaybackAction::Step(1))
+        );
+        assert_eq!(
+            playback_action(&Key::ArrowRight, Modifiers::SHIFT),
+            Some(PlaybackAction::Step(10))
+        );
+        assert_eq!(
+            playback_action(&Key::ArrowLeft, Modifiers::SHIFT),
+            Some(PlaybackAction::Step(-10))
+        );
+    }
+
+    #[test]
+    fn home_end_seek() {
+        assert_eq!(
+            playback_action(&Key::Home, Modifiers::empty()),
+            Some(PlaybackAction::SeekStart)
+        );
+        assert_eq!(
+            playback_action(&Key::End, Modifiers::empty()),
+            Some(PlaybackAction::SeekEnd)
+        );
+    }
+
+    #[test]
+    fn unhandled_or_modified_keys_are_none() {
+        assert_eq!(playback_action(&ch("z"), Modifiers::empty()), None);
+        assert_eq!(playback_action(&ch(" "), Modifiers::META), None);
+        assert_eq!(playback_action(&ch(" "), Modifiers::SHIFT), None);
+        assert_eq!(playback_action(&Key::ArrowRight, Modifiers::CONTROL), None);
+        assert_eq!(playback_action(&Key::Enter, Modifiers::empty()), None);
     }
 }

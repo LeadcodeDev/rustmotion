@@ -104,6 +104,27 @@ pub fn StudioRoot() -> Element {
     let theme = use_signal(|| Theme::System);
     use_context_provider(|| theme);
 
+    // Open at 75% of the current monitor, centered. Runtime one-shot: tao
+    // monitors are only queryable once the window exists, so a pre-display
+    // Config sizing isn't possible — the first-frame resize flash is accepted.
+    // No detectable monitor → silent no-op.
+    use_effect(|| {
+        let window = dioxus::desktop::window();
+        if let Some(monitor) = window.current_monitor() {
+            let size = monitor.size();
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
+            let w = (size.width as f64 * 0.75) as u32;
+            let h = (size.height as f64 * 0.75) as u32;
+            let pos = monitor.position();
+            let x = pos.x + ((size.width - w) / 2) as i32;
+            let y = pos.y + ((size.height - h) / 2) as i32;
+            window.set_inner_size(dioxus::desktop::tao::dpi::PhysicalSize::new(w, h));
+            window.set_outer_position(dioxus::desktop::tao::dpi::PhysicalPosition::new(x, y));
+        }
+    });
+
     // /thumb/{i} -> scenario at flat index i, frame-0 JPEG (cached; rendered
     // off-lock to avoid blocking other asset requests).
     let thumb_lib = library.clone();
