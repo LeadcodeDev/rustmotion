@@ -12,11 +12,14 @@ use crate::components::color_picker::ColorPicker;
 use crate::components::select::{Select, SelectOption};
 use crate::components::slider::Slider;
 use crate::components::switch::Switch;
-use crate::scenario::{set_field, set_field_value, set_style, set_style_value, Shared};
+use crate::scenario::{
+    scene_duration_for_pointer, set_field, set_field_value, set_style, set_style_value, Shared,
+};
 
 use super::annotations::AnnotationBox;
 use super::properties::{
-    component_props, css_family, css_section_props, slider_range, visible_sections, PropKind,
+    component_props, css_family, css_section_props, effective_element, engine_placeholder,
+    fill_to_value, is_multiline, parse_fill, slider_range, visible_sections, FillMode, PropKind,
 };
 
 // ── Debounce context ─────────────────────────────────────────────────────────
@@ -536,8 +539,9 @@ fn seg_icon(active: bool) -> &'static str {
 fn prop_str(style: &serde_json::Value, name: &str) -> String {
     match style.get(name) {
         Some(serde_json::Value::String(s)) => s.clone(),
+        // Null = unset (effective documents serialize unset Options as null).
+        Some(serde_json::Value::Null) | None => String::new(),
         Some(other) => other.to_string(),
-        None => String::new(),
     }
 }
 
@@ -648,31 +652,124 @@ fn curated_names(fam: Family) -> std::collections::BTreeSet<&'static str> {
 
 /// Schema-driven "Properties" section: the component's editable root fields
 /// (counter `from`/`to`/`decimals`…, badge `label`…), typed writes. `content`
-/// is skipped for the text family (the Content editor owns it).
+/// is skipped for the text family (the Content editor owns it); start_at /
+/// end_at move to the dedicated Timing section below.
+///
+/// Controls read the EFFECTIVE element (typed round-trip fills serde
+/// defaults), so a gauge without `show_value` shows the switch ON like the
+/// engine renders it; fields absent from the raw get a dimmed "default"
+/// marker. Writes keep targeting the raw document.
 #[component]
 fn RootPropsSection(pointer: String, kind: String, element: serde_json::Value) -> Element {
     let Some(props) = component_props(&kind) else {
         return rsx! {};
     };
+    let effective = effective_element(&element);
     let skip_content = family(&kind) == Family::Text;
+    let has_timing = props
+        .iter()
+        .any(|p| p.name == "start_at" || p.name == "end_at");
     let rows: Vec<_> = props
         .iter()
         .filter(|p| !(skip_content && p.name == "content"))
+        .filter(|p| p.name != "start_at" && p.name != "end_at")
         .collect();
-    if rows.is_empty() {
+    if rows.is_empty() && !has_timing {
         return rsx! {};
     }
     rsx! {
-        CollapsibleSection { title: "Properties".to_string(), start_open: true,
-            for spec in rows {
-                GenericRow {
-                    key: "{pointer}-root-{spec.name}",
-                    pointer: pointer.clone(),
-                    name: spec.name.clone(),
-                    prop_kind: spec.kind.clone(),
-                    value: prop_str(&element, &spec.name),
-                    is_style: false,
+        if !rows.is_empty() {
+            CollapsibleSection { title: "Properties".to_string(), start_open: true,
+                for spec in rows {
+                    GenericRow {
+                        key: "{pointer}-root-{spec.name}",
+                        pointer: pointer.clone(),
+                        name: spec.name.clone(),
+                        prop_kind: spec.kind.clone(),
+                        value: prop_str(&effective, &spec.name),
+                        is_style: false,
+                        is_default: element.get(&spec.name).is_none()
+                            && effective.get(&spec.name).map(|v| !v.is_null()).unwrap_or(false),
+                    }
                 }
+            }
+        }
+        if has_timing {
+            TimingSection { pointer: pointer.clone(), effective: effective.clone() }
+        }
+    }
+}
+
+/// Dedicated visibility-window editor (start_at / end_at), bounded by the
+/// containing scene's duration.
+#[component]
+fn TimingSection(pointer: String, effective: serde_json::Value) -> Element {
+    let shared = use_context::<Shared>();
+    let max = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        scene_duration_for_pointer(&m.raw, &pointer)
+    };
+    rsx! {
+        CollapsibleSection { title: "Timing".to_string(), start_open: true,
+            TimingRow {
+                pointer: pointer.clone(),
+                field: "start_at".to_string(),
+                label: "Visible from (s)".to_string(),
+                placeholder: "scene start".to_string(),
+                value: prop_str(&effective, "start_at"),
+                max,
+            }
+            TimingRow {
+                pointer: pointer.clone(),
+                field: "end_at".to_string(),
+                label: "Visible until (s)".to_string(),
+                placeholder: "end of scene".to_string(),
+                value: prop_str(&effective, "end_at"),
+                max,
+            }
+            div { style: "color:var(--rm-text-muted); font-size:10px;",
+                "Visibility window — the element keeps its layout slot outside it."
+            }
+        }
+    }
+}
+
+/// One Timing row: numeric input (step 0.1) writing the typed field; empty
+/// unsets it.
+#[component]
+fn TimingRow(
+    pointer: String,
+    field: String,
+    label: String,
+    placeholder: String,
+    value: String,
+    max: Option<f64>,
+) -> Element {
+    let shared = use_context::<Shared>();
+    // An empty max attribute is ignored by the browser (no constraint).
+    let max_attr = max.map(|m| m.to_string()).unwrap_or_default();
+    rsx! {
+        div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
+            span { style: "width:96px; flex:none; color:var(--rm-text-muted); font-size:11px;", "{label}" }
+            input {
+                r#type: "number",
+                style: "{INPUT_STYLE}",
+                step: "0.1",
+                min: "0",
+                max: "{max_attr}",
+                value: "{value}",
+                placeholder: "{placeholder}",
+                title: "Visibility window — the element keeps its layout slot outside it.",
+                oninput: {
+                    let shared = shared.clone();
+                    let p = pointer.clone();
+                    let f = field.clone();
+                    move |e: FormEvent| {
+                        if let Ok(v) = parse_root_value(&PropKind::Number, &e.value()) {
+                            write_root_field(&shared, &p, &f, v);
+                        }
+                    }
+                },
             }
         }
     }
@@ -769,6 +866,7 @@ fn GenericRow(
     prop_kind: PropKind,
     value: String,
     is_style: bool,
+    #[props(default = false)] is_default: bool,
 ) -> Element {
     let shared = use_context::<Shared>();
 
@@ -903,15 +1001,43 @@ fn GenericRow(
                 }
             }
         }
+        PropKind::String if is_multiline(&name, &value) => {
+            // Long-form text (codeblock `code`, notification `message`, …).
+            let commit = commit.clone();
+            let font = if name == "code" {
+                "font-family:monospace; font-size:11px;"
+            } else {
+                "font:inherit;"
+            };
+            rsx! {
+                textarea {
+                    style: "width:100%; box-sizing:border-box; min-height:88px; resize:vertical; padding:7px 9px; background:var(--rm-bg); color:var(--rm-text); border:1px solid var(--rm-border-2); border-radius:7px; {font}",
+                    value: "{value}",
+                    oninput: move |e: FormEvent| commit(&e.value()),
+                }
+            }
+        }
         PropKind::Unit | PropKind::String => {
             let commit = commit.clone();
+            let placeholder = engine_placeholder(&name).unwrap_or_default();
             rsx! {
                 input {
                     r#type: "text",
                     style: "{INPUT_STYLE}",
                     value: "{value}",
+                    placeholder: "{placeholder}",
                     oninput: move |e: FormEvent| commit(&e.value()),
                 }
+            }
+        }
+        PropKind::ColorList => {
+            rsx! {
+                ColorListControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
+            }
+        }
+        PropKind::Fill => {
+            rsx! {
+                FillControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
             }
         }
         PropKind::Complex => {
@@ -929,8 +1055,13 @@ fn GenericRow(
         div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
             span {
                 style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
-                title: "{name}",
+                title: if is_default { "{name} — engine default (not set in the source)" } else { "{name}" },
                 "{name}"
+                if is_default {
+                    span { style: "margin-left:4px; color:var(--rm-text-muted); opacity:0.55; font-size:9px; text-transform:uppercase; letter-spacing:0.04em;",
+                        "default"
+                    }
+                }
             }
             div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }
         }
@@ -1149,7 +1280,9 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
             rsx! {
                 Select::<String> {
                     width: "100%",
-                    default_value: if value.is_empty() { None } else { Some(value.clone()) },
+                    // Unset → show the engine's cascade default (Regular · 400)
+                    // instead of an empty "Select an option" placeholder.
+                    default_value: Some(if value.is_empty() { "400".to_string() } else { value.clone() }),
                     on_value_change: {
                         let shared = shared.clone();
                         let p = pointer.clone();
@@ -1285,6 +1418,229 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
         div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
             span { style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px;", "{field.label}" }
             div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }
+        }
+    }
+}
+
+// ── Color-list & fill editors ────────────────────────────────────────────────
+
+/// Editable list of color rows (swatch + hex + delete, plus "+ Add color").
+/// Operates on a shared signal so add/remove render immediately (the panel
+/// itself is memoized per selection). Reordering: v1 = none.
+#[component]
+fn ColorRows(colors: Signal<Vec<String>>, on_change: EventHandler<()>) -> Element {
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
+            for (i, c) in colors().iter().cloned().enumerate() {
+                div { key: "{i}", style: "display:flex; align-items:center; gap:6px;",
+                    ColorPicker {
+                        color: parse_hsv(&c),
+                        on_color_change: {
+                            let mut colors = colors;
+                            move |hsv: Hsv<encoding::Srgb, f64>| {
+                                if let Some(slot) = colors.write().get_mut(i) {
+                                    *slot = hsv_to_hex(hsv);
+                                }
+                                on_change.call(());
+                            }
+                        },
+                    }
+                    input {
+                        r#type: "text",
+                        style: "{HEX_STYLE}",
+                        value: "{c}",
+                        oninput: {
+                            let mut colors = colors;
+                            move |e: FormEvent| {
+                                if let Some(slot) = colors.write().get_mut(i) {
+                                    *slot = e.value();
+                                }
+                                on_change.call(());
+                            }
+                        },
+                    }
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::IconSm,
+                        title: "Remove color",
+                        onclick: {
+                            let mut colors = colors;
+                            move |_| {
+                                if colors.read().len() > i {
+                                    colors.write().remove(i);
+                                }
+                                on_change.call(());
+                            }
+                        },
+                        X { size: 13, stroke: "var(--rm-text-muted)" }
+                    }
+                }
+            }
+            Button {
+                variant: ButtonVariant::Outline,
+                size: ButtonSize::Xs,
+                onclick: {
+                    let mut colors = colors;
+                    move |_| {
+                        colors.write().push("#ffffff".to_string());
+                        on_change.call(());
+                    }
+                },
+                "+ Add color"
+            }
+        }
+    }
+}
+
+/// Control for [`PropKind::ColorList`] fields (gradient_text `colors`):
+/// per-entry pickers writing the whole array (typed).
+#[component]
+fn ColorListControl(pointer: String, name: String, value: String) -> Element {
+    let shared = use_context::<Shared>();
+    let colors = use_signal(|| serde_json::from_str::<Vec<String>>(&value).unwrap_or_default());
+    let write = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        move |_| {
+            let list: Vec<serde_json::Value> = colors
+                .read()
+                .iter()
+                .cloned()
+                .map(serde_json::Value::String)
+                .collect();
+            write_root_field(&shared, &p, &n, serde_json::Value::Array(list));
+        }
+    };
+    rsx! {
+        ColorRows { colors, on_change: write }
+    }
+}
+
+/// Control for [`PropKind::Fill`] fields (shape `fill`): segmented
+/// Single | Linear | Radial, a single picker or a stop list + angle, writing
+/// the hex string or the gradient object.
+#[component]
+fn FillControl(pointer: String, name: String, value: String) -> Element {
+    let shared = use_context::<Shared>();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value.clone()));
+    let (m0, c0, a0) = parse_fill(&parsed);
+    let mode = use_signal(|| m0);
+    let colors = use_signal(|| {
+        if c0.is_empty() {
+            vec!["#ffffff".to_string()]
+        } else {
+            c0
+        }
+    });
+    let angle = use_signal(|| a0);
+
+    let write = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        Rc::new(move || {
+            write_root_field(
+                &shared,
+                &p,
+                &n,
+                fill_to_value(mode(), &colors.read(), angle()),
+            );
+        })
+    };
+
+    let seg = |m: FillMode, label: &'static str| {
+        let mut mode = mode;
+        let write = write.clone();
+        rsx! {
+            Button {
+                variant: if mode() == m { ButtonVariant::Primary } else { ButtonVariant::Ghost },
+                size: ButtonSize::Xs,
+                style: "flex:1;",
+                onclick: move |_| {
+                    mode.set(m);
+                    write();
+                },
+                "{label}"
+            }
+        }
+    };
+
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:8px; width:100%;",
+            div { class: "rm-seg",
+                {seg(FillMode::Single, "Single")}
+                {seg(FillMode::Linear, "Linear")}
+                {seg(FillMode::Radial, "Radial")}
+            }
+            if mode() == FillMode::Single {
+                div { style: "display:flex; align-items:center; gap:6px;",
+                    ColorPicker {
+                        color: parse_hsv(colors.read().first().map(String::as_str).unwrap_or("#ffffff")),
+                        on_color_change: {
+                            let mut colors = colors;
+                            let write = write.clone();
+                            move |hsv: Hsv<encoding::Srgb, f64>| {
+                                let hex = hsv_to_hex(hsv);
+                                if colors.read().is_empty() {
+                                    colors.write().push(hex);
+                                } else {
+                                    colors.write()[0] = hex;
+                                }
+                                write();
+                            }
+                        },
+                    }
+                    input {
+                        r#type: "text",
+                        style: "{HEX_STYLE}",
+                        value: "{colors.read().first().cloned().unwrap_or_default()}",
+                        oninput: {
+                            let mut colors = colors;
+                            let write = write.clone();
+                            move |e: FormEvent| {
+                                let v = e.value();
+                                if colors.read().is_empty() {
+                                    colors.write().push(v);
+                                } else {
+                                    colors.write()[0] = v;
+                                }
+                                write();
+                            }
+                        },
+                    }
+                }
+            } else {
+                ColorRows {
+                    colors,
+                    on_change: {
+                        let write = write.clone();
+                        move |_| write()
+                    },
+                }
+                if mode() == FillMode::Linear {
+                    div { style: "display:flex; align-items:center; gap:8px;",
+                        span { style: "color:var(--rm-text-muted); font-size:11px;", "Angle" }
+                        input {
+                            r#type: "number",
+                            style: "{NUM_STYLE}",
+                            value: "{angle}",
+                            oninput: {
+                                let mut angle = angle;
+                                let write = write.clone();
+                                move |e: FormEvent| {
+                                    if let Ok(v) = e.value().parse::<f64>() {
+                                        angle.set(v);
+                                        write();
+                                    }
+                                }
+                            },
+                        }
+                        span { style: "color:var(--rm-text-muted); font-size:10px;", "°" }
+                    }
+                }
+            }
         }
     }
 }
