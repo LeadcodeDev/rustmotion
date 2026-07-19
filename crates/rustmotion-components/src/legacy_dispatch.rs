@@ -215,6 +215,7 @@ mod tests {
             video_width: 200,
             video_height: 200,
             scene_duration: 1.0,
+            camera: None,
         };
         rustmotion_core::engine::paint_pass::paint_tree(
             canvas,
@@ -313,6 +314,7 @@ mod tests {
             video_width: 200,
             video_height: 200,
             scene_duration: 1.0,
+            camera: None,
         };
         rustmotion_core::engine::paint_pass::paint_tree(
             canvas,
@@ -419,6 +421,7 @@ mod tests {
                 video_width: 200,
                 video_height: 200,
                 scene_duration: 1.0,
+                camera: None,
             };
             rustmotion_core::engine::paint_pass::paint_tree(
                 canvas,
@@ -486,6 +489,7 @@ mod tests {
             video_width: 10,
             video_height: 10,
             scene_duration: 1.0,
+            camera: None,
         };
         // Wrong payload type — must not panic.
         let bogus: Arc<dyn std::any::Any + Send + Sync> = Arc::new(42i64);

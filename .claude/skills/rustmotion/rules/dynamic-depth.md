@@ -2,13 +2,55 @@
 
 Static depth (see [depth-layering.md](depth-layering.md)) places elements at different perceived distances. Dynamic depth *animates* each plane independently so the scene breathes and the spatial composition is felt over time, not just read visually.
 
-Three independent mechanisms combine freely:
+Four independent mechanisms combine freely:
 
 | Mechanism | Scope | Best for |
 |---|---|---|
 | **A. Per-element wiggle seeds** | One element | Uncorrelated floating per card/icon |
 | **B. `float_3d` preset** | One element | Hero card with gentle 3D tilt loop |
 | **C. Camera keyframes** | Whole scene | Cinematic zoom-in / slow pan |
+| **D. `style.depth` (vraie parallaxe)** | Plans top-level | Parallaxe multi-plans pilotée par la caméra |
+
+---
+
+## Mechanism D — Vraie parallaxe caméra : `style.depth`
+
+Quand la scène a une `camera`, chaque **enfant direct** de la scène est un plan. `style.depth` met à l'échelle l'effet caméra sur ce plan (pan × depth, zoom' = 1 + (zoom−1)×depth, rotation × depth, autour de `camera.origin`) :
+
+| `depth` | Effet |
+|---|---|
+| `0` | Plan verrouillé — la caméra ne le bouge jamais (HUD, watermark, fond fixe) |
+| `0.2–0.5` | Arrière-plan lointain — bouge peu (blobs, textures) |
+| `1.0` | Plan normal (défaut — comportement identique sans depth) |
+| `1.5–2.5` | Avant-plan amplifié — bouge plus que la caméra (profondeur dramatique) |
+
+```json
+{
+  "duration": 6.0,
+  "camera": {
+    "keyframes": [
+      { "property": "x", "values": [ { "time": 0, "value": 0 }, { "time": 5, "value": 200 } ], "easing": "ease_in_out" }
+    ]
+  },
+  "children": [
+    { "type": "shape", "shape": "circle", "position": "absolute", "x": 100, "y": 200,
+      "fill": { "type": "radial", "colors": ["#6366F160", "#6366F100"] },
+      "style": { "width": 600, "height": 600, "depth": 0.3 } },
+    { "type": "card", "style": { "depth": 1.0, "width": 800, "height": 400 } },
+    { "type": "badge", "text": "LIVE", "position": "absolute", "x": 80, "y": 100,
+      "style": { "depth": 1.8 } }
+  ]
+}
+```
+
+Le fond (0.3) glisse lentement, la card suit la caméra, le badge file en avant-plan — parallaxe cinéma réelle, sans wiggle.
+
+**Règles :**
+- `depth` n'agit que sur les **enfants directs** de la scène (v1) ; il gouverne tout le sous-arbre du plan. Un `depth` sur un nœud imbriqué est sans effet caméra.
+- Sans `camera` sur la scène, `depth` est inerte.
+- `depth: 1.0` partout == aucun depth (byte-identique).
+- Le point focal se règle avec `camera.origin` (`{ "x": px, "y": px }`, keyframable via `"origin.x"` / `"origin.y"`) — zoom vers un élément précis puis pan vers un autre.
+- Combine avec le mécanisme A (wiggle) librement — la parallaxe caméra est déterministe, le wiggle ajoute la vie.
 
 ---
 

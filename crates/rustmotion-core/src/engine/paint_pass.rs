@@ -41,6 +41,51 @@ pub struct PaintFrame {
     /// Total duration of the scene in seconds — used by the dispatcher to
     /// compute animation progress (`time / scene_duration`).
     pub scene_duration: f64,
+    /// Resolved scene camera for per-plane parallax (issue #90). `Some` only
+    /// when the scene declares a camera AND at least one top-level child has
+    /// an explicit `style.depth` — the paint pass then applies the camera per
+    /// plane (each direct child of the root, scaled by its depth) and the
+    /// caller must NOT apply the global camera transform.
+    pub camera: Option<PlaneCamera>,
+}
+
+/// Scene camera resolved at a fixed time, ready for per-plane application.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneCamera {
+    pub pan_x: f32,
+    pub pan_y: f32,
+    pub zoom: f32,
+    pub rotation: f32,
+    /// Focal point in frame pixels (already resolved; default = frame centre).
+    pub origin_x: f32,
+    pub origin_y: f32,
+}
+
+/// Apply the scene camera scaled by a plane `depth` (issue #90):
+/// pan' = pan·d, zoom' = 1 + (zoom−1)·d, rotation' = rotation·d, around the
+/// camera origin. `depth == 1` reproduces the global camera matrix exactly;
+/// `depth == 0` is the identity (locked plane). The content-space viewport
+/// clip mirrors the global path's clip-after-camera so plane content is cut
+/// at the scene rectangle exactly like the single-transform path.
+fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: (f32, f32)) {
+    let zoom = 1.0 + (cam.zoom - 1.0) * depth;
+    let rotation = cam.rotation * depth;
+    let pan_x = cam.pan_x * depth;
+    let pan_y = cam.pan_y * depth;
+
+    canvas.translate(Point::new(cam.origin_x, cam.origin_y));
+    if rotation.abs() > 0.001 {
+        canvas.rotate(rotation, None);
+    }
+    if (zoom - 1.0).abs() > 0.001 {
+        canvas.scale((zoom, zoom));
+    }
+    canvas.translate(Point::new(-cam.origin_x - pan_x, -cam.origin_y - pan_y));
+    canvas.clip_rect(
+        Rect::from_wh(viewport.0, viewport.1),
+        ClipOp::Intersect,
+        true,
+    );
 }
 
 /// Axis-aligned bounding box of a painted node, in device (video-pixel) coords.
@@ -121,7 +166,7 @@ pub fn paint_tree(
         viewport_size: (frame.video_width as f32, frame.video_height as f32),
         hits: None,
     };
-    paint_node(canvas, root, &ctx);
+    paint_node(canvas, root, &ctx, 0);
 }
 
 /// Like [`paint_tree`] but also returns the per-frame hit-map: the on-screen
@@ -142,7 +187,7 @@ pub fn paint_tree_with_hits(
         viewport_size: (frame.video_width as f32, frame.video_height as f32),
         hits: Some(&hits),
     };
-    paint_node(canvas, root, &ctx);
+    paint_node(canvas, root, &ctx, 0);
     hits.into_inner()
 }
 
@@ -154,7 +199,9 @@ struct PaintContext<'a> {
     hits: Option<&'a RefCell<HitMap>>,
 }
 
-fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
+/// `tree_depth` counts levels below the synthetic scene root (root = 0,
+/// direct children = 1). Per-plane parallax cameras apply at level 1 only.
+fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: usize) {
     // Visibility window (start_at/end_at): the node keeps its layout space
     // but paints nothing — subtree included — outside the window.
     if let Some(window) = &node.window {
@@ -178,6 +225,16 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
     };
 
     canvas.save();
+
+    // 1.5 per-plane scene camera (issue #90): every direct child of the scene
+    // root is a plane; its explicit `depth` (default 1.0) scales the camera.
+    // Deeper nodes inherit their plane's transform via the canvas matrix.
+    if tree_depth == 1 {
+        if let Some(cam) = &ctx.frame.camera {
+            let depth = node.css.depth.unwrap_or(1.0);
+            apply_plane_camera(canvas, cam, depth, ctx.viewport_size);
+        }
+    }
 
     // 2. transform
     if node.css.transform.is_some() || node.css.perspective.is_some() {
@@ -333,7 +390,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
     let mut indices: Vec<usize> = (0..node.children.len()).collect();
     indices.sort_by_key(|&i| node.children[i].css.z_index.unwrap_or(0));
     for &i in &indices {
-        paint_node(canvas, &node.children[i], ctx);
+        paint_node(canvas, &node.children[i], ctx, tree_depth + 1);
     }
 
     // inset shadows (after children so they overlay content)
@@ -1343,6 +1400,7 @@ mod hit_tests {
             video_width: w,
             video_height: h,
             scene_duration: 1.0,
+            camera: None,
         }
     }
 
@@ -1586,6 +1644,7 @@ mod transform_origin_tests {
             video_width: w,
             video_height: h,
             scene_duration: 1.0,
+            camera: None,
         }
     }
 
@@ -1977,6 +2036,7 @@ mod glassmorphism_tests {
             video_width: w,
             video_height: h,
             scene_duration: 1.0,
+            camera: None,
         }
     }
 

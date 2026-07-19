@@ -104,6 +104,14 @@ pub struct CssStyle {
     pub perspective: Option<Length>,
     pub perspective_origin: Option<TransformOrigin>,
 
+    // ---- Scene-camera parallax ----
+    /// Parallax plane depth for the scene camera (issue #90). 0 = locked
+    /// plane (the camera does not affect it), 1 = normal plane (default),
+    /// above 1 = amplified foreground. v1: effective on direct children of
+    /// the scene root only (each top-level child is one plane whose depth
+    /// governs its whole subtree). Not inherited via cascade.
+    pub depth: Option<f32>,
+
     // ---- Overflow / stacking ----
     pub overflow: Option<Overflow>,
     pub overflow_x: Option<Overflow>,

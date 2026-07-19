@@ -303,6 +303,7 @@ mod component_smoke {
             video_width: 400,
             video_height: 300,
             scene_duration: 1.0,
+            camera: None,
         };
 
         let mut failures = Vec::new();
@@ -365,6 +366,7 @@ mod component_smoke {
             video_width: 400,
             video_height: 300,
             scene_duration: 1.0,
+            camera: None,
         };
 
         let mut failures = Vec::new();
@@ -471,6 +473,7 @@ mod component_smoke {
             video_width: w,
             video_height: h,
             scene_duration,
+            camera: None,
         };
         paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 
@@ -1494,6 +1497,7 @@ mod svg_draw_on_tests {
             video_width: w,
             video_height: h,
             scene_duration,
+            camera: None,
         };
         paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 
@@ -1811,6 +1815,7 @@ mod audio_tests {
                 video_width: w as u32,
                 video_height: h as u32,
                 scene_duration: 10.0,
+                camera: None,
             },
             &dispatcher,
         );
@@ -2117,6 +2122,7 @@ mod motion_blur_trail {
             video_width: w,
             video_height: h,
             scene_duration,
+            camera: None,
         };
         paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
         let row_bytes = w as usize * 4;
@@ -2486,6 +2492,364 @@ mod post_effects_pipeline {
         assert!(
             result.is_err(),
             "unknown effect type must fail to deserialize"
+        );
+    }
+}
+
+#[cfg(test)]
+mod camera_focal_tests {
+    //! Issue #89: camera focal point (`camera.origin`) — the zoom/rotation
+    //! pivot becomes configurable and keyframable instead of the hard-coded
+    //! frame centre.
+
+    use crate::engine::render::render_frame_v2;
+    use crate::schema::{Scene, VideoConfig};
+
+    fn config(w: u32, h: u32) -> VideoConfig {
+        serde_json::from_value(serde_json::json!({ "width": w, "height": h, "fps": 30 }))
+            .expect("config")
+    }
+
+    /// Render one frame of a scene described as JSON; returns RGBA bytes.
+    pub(super) fn render_scene_json(
+        scene_json: serde_json::Value,
+        w: u32,
+        h: u32,
+        frame: u32,
+    ) -> Vec<u8> {
+        let scene: Scene = serde_json::from_value(scene_json).expect("scene json");
+        let children = crate::engine::render::deserialize_children(&scene);
+        render_frame_v2(&config(w, h), &scene, frame, 120, &children).expect("render")
+    }
+
+    /// Centroid (x, y) of pixels dominated by the given channel (0=r, 2=b).
+    pub(super) fn channel_centroid(buf: &[u8], w: u32, h: u32, channel: usize) -> (f32, f32) {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = buf[i + channel];
+                let others: u16 = (0..3)
+                    .filter(|c| *c != channel)
+                    .map(|c| buf[i + c] as u16)
+                    .sum();
+                if v > 180 && others < 160 {
+                    sx += x as f64;
+                    sy += y as f64;
+                    n += 1.0;
+                }
+            }
+        }
+        if n == 0.0 {
+            (-1.0, -1.0)
+        } else {
+            ((sx / n) as f32, (sy / n) as f32)
+        }
+    }
+
+    fn red_rect_scene_with_camera(camera: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "duration": 4.0,
+            "camera": camera,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "position": "absolute",
+                "x": 60, "y": 40,
+                "style": { "width": "100px", "height": "80px" }
+            }]
+        })
+    }
+
+    #[test]
+    fn zoom_origin_top_left_differs_predictably_from_center() {
+        // Rect at (60..160, 40..120) in a 400x300 frame, zoom 2x.
+        // Origin (0,0): every point p maps to 2p → rect at (120..320, 80..240),
+        // centroid ~(220, 160).
+        // Center origin (200,150): p → 2p - (200,150) → rect at
+        // (-80..120, -70..90), visible part (0..120, 0..90), centroid ~(60, 45).
+        let buf_center = render_scene_json(
+            red_rect_scene_with_camera(serde_json::json!({ "zoom": 2.0 })),
+            400,
+            300,
+            0,
+        );
+        let buf_tl = render_scene_json(
+            red_rect_scene_with_camera(
+                serde_json::json!({ "zoom": 2.0, "origin": { "x": 0, "y": 0 } }),
+            ),
+            400,
+            300,
+            0,
+        );
+
+        let (cx_c, cy_c) = channel_centroid(&buf_center, 400, 300, 0);
+        let (cx_tl, cy_tl) = channel_centroid(&buf_tl, 400, 300, 0);
+
+        assert!(
+            (cx_tl - 219.5).abs() < 4.0 && (cy_tl - 159.5).abs() < 4.0,
+            "top-left origin zoom: expected centroid ~(220,160), got ({cx_tl},{cy_tl})"
+        );
+        assert!(
+            (cx_c - 59.5).abs() < 4.0 && (cy_c - 44.5).abs() < 4.0,
+            "center origin zoom: expected centroid ~(60,45), got ({cx_c},{cy_c})"
+        );
+    }
+
+    #[test]
+    fn origin_at_center_is_byte_identical_to_absent() {
+        let buf_absent = render_scene_json(
+            red_rect_scene_with_camera(serde_json::json!({ "zoom": 2.0, "rotation": 17.0 })),
+            400,
+            300,
+            0,
+        );
+        let buf_center = render_scene_json(
+            red_rect_scene_with_camera(serde_json::json!({
+                "zoom": 2.0, "rotation": 17.0, "origin": { "x": 200, "y": 150 }
+            })),
+            400,
+            300,
+            0,
+        );
+        assert_eq!(
+            buf_absent, buf_center,
+            "origin at frame centre must be byte-identical to absent origin"
+        );
+    }
+
+    #[test]
+    fn keyframed_origin_moves_visible_content_at_fixed_zoom() {
+        // Zoom fixed at 2; origin animates (0,0) → frame centre (200,150)
+        // over 2s. The pivot change alone must move the rendered content
+        // between frames while keeping the rect visible in both.
+        let scene = red_rect_scene_with_camera(serde_json::json!({
+            "zoom": 2.0,
+            "keyframes": [
+                { "property": "origin.x", "values": [ { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 200.0 } ] },
+                { "property": "origin.y", "values": [ { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 150.0 } ] }
+            ]
+        }));
+        let buf_t0 = render_scene_json(scene.clone(), 400, 300, 0);
+        let buf_t2 = render_scene_json(scene, 400, 300, 60); // 60 / 30fps = 2s
+
+        let (x0, y0) = channel_centroid(&buf_t0, 400, 300, 0);
+        let (x2, y2) = channel_centroid(&buf_t2, 400, 300, 0);
+        assert!(x0 >= 0.0 && x2 >= 0.0, "red must be visible in both frames");
+        let dist = ((x2 - x0).powi(2) + (y2 - y0).powi(2)).sqrt();
+        assert!(
+            dist > 50.0,
+            "keyframed origin must move content: t0=({x0},{y0}) t2=({x2},{y2}) dist={dist}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parallax_tests {
+    //! Issue #90: multi-plane parallax — `style.depth` scales the scene
+    //! camera per top-level plane (0 = locked, 1 = normal, >1 = amplified).
+
+    use super::camera_focal_tests::{channel_centroid, render_scene_json};
+
+    fn rect(color: &str, x: f32, y: f32, depth: Option<f64>) -> serde_json::Value {
+        let mut style = serde_json::json!({ "width": "80px", "height": "60px" });
+        if let Some(d) = depth {
+            style["depth"] = serde_json::json!(d);
+        }
+        serde_json::json!({
+            "type": "shape", "shape": "rect", "fill": color,
+            "position": "absolute", "x": x, "y": y,
+            "style": style
+        })
+    }
+
+    fn scene(camera: serde_json::Value, children: Vec<serde_json::Value>) -> serde_json::Value {
+        serde_json::json!({ "duration": 4.0, "camera": camera, "children": children })
+    }
+
+    #[test]
+    fn depth_zero_locks_plane_while_depth_one_pans() {
+        // Camera pans x 0 → 100 over 2s. Blue rect depth 0 must not move;
+        // red rect (depth 1, activated by the blue's explicit depth) moves
+        // left by 100.
+        let cam = serde_json::json!({
+            "keyframes": [
+                { "property": "x", "values": [ { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 100.0 } ] }
+            ]
+        });
+        let children = vec![
+            rect("#0000ff", 40.0, 40.0, Some(0.0)),
+            rect("#ff0000", 240.0, 150.0, Some(1.0)),
+        ];
+        let s = scene(cam, children);
+        let t0 = render_scene_json(s.clone(), 400, 300, 0);
+        let t2 = render_scene_json(s, 400, 300, 60);
+
+        let (bx0, by0) = channel_centroid(&t0, 400, 300, 2);
+        let (bx2, by2) = channel_centroid(&t2, 400, 300, 2);
+        let (rx0, _) = channel_centroid(&t0, 400, 300, 0);
+        let (rx2, _) = channel_centroid(&t2, 400, 300, 0);
+
+        assert!(
+            (bx0 - bx2).abs() < 0.5 && (by0 - by2).abs() < 0.5,
+            "depth-0 plane must not move: ({bx0},{by0}) vs ({bx2},{by2})"
+        );
+        assert!(
+            (rx0 - rx2 - 100.0).abs() < 2.0,
+            "depth-1 plane must pan by -100: {rx0} -> {rx2}"
+        );
+    }
+
+    #[test]
+    fn depth_two_moves_twice_as_much() {
+        // Camera pans x 0 → 50: depth-1 red moves 50, depth-2 green moves 100.
+        let cam = serde_json::json!({
+            "keyframes": [
+                { "property": "x", "values": [ { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 50.0 } ] }
+            ]
+        });
+        let children = vec![
+            rect("#ff0000", 200.0, 60.0, Some(1.0)),
+            rect("#00ff00", 200.0, 180.0, Some(2.0)),
+        ];
+        let s = scene(cam, children);
+        let t0 = render_scene_json(s.clone(), 400, 300, 0);
+        let t2 = render_scene_json(s, 400, 300, 60);
+
+        let (rx0, _) = channel_centroid(&t0, 400, 300, 0);
+        let (rx2, _) = channel_centroid(&t2, 400, 300, 0);
+        let (gx0, _) = channel_centroid(&t0, 400, 300, 1);
+        let (gx2, _) = channel_centroid(&t2, 400, 300, 1);
+
+        let red_shift = rx0 - rx2;
+        let green_shift = gx0 - gx2;
+        assert!(
+            (red_shift - 50.0).abs() < 2.0,
+            "depth 1 must shift by 50, got {red_shift}"
+        );
+        assert!(
+            (green_shift - 100.0).abs() < 2.0,
+            "depth 2 must shift by 100 (2x), got {green_shift}"
+        );
+    }
+
+    #[test]
+    fn depth_one_everywhere_is_byte_identical_to_no_depth() {
+        // Explicit depth 1.0 on every child (per-plane camera path) must
+        // produce the same bytes as no depth at all (global camera path).
+        let cam = serde_json::json!({ "x": 30.0, "y": 10.0, "zoom": 1.5, "rotation": 8.0 });
+        let plain = scene(
+            cam.clone(),
+            vec![
+                rect("#ff0000", 100.0, 60.0, None),
+                rect("#0000ff", 220.0, 150.0, None),
+            ],
+        );
+        let with_depth = scene(
+            cam,
+            vec![
+                rect("#ff0000", 100.0, 60.0, Some(1.0)),
+                rect("#0000ff", 220.0, 150.0, Some(1.0)),
+            ],
+        );
+        let a = render_scene_json(plain, 400, 300, 0);
+        let b = render_scene_json(with_depth, 400, 300, 0);
+        assert_eq!(
+            a, b,
+            "depth 1.0 everywhere must be byte-identical to the global camera path"
+        );
+    }
+
+    #[test]
+    fn zoom_does_not_scale_locked_plane() {
+        // Camera zoom 2: the depth-0 blue rect keeps its exact size/position
+        // (identical pixels to a no-camera render), the depth-1 red grows.
+        let with_cam = scene(
+            serde_json::json!({ "zoom": 2.0 }),
+            vec![
+                rect("#0000ff", 20.0, 20.0, Some(0.0)),
+                rect("#ff0000", 250.0, 160.0, Some(1.0)),
+            ],
+        );
+        let no_cam = serde_json::json!({
+            "duration": 4.0,
+            "children": [ rect("#0000ff", 20.0, 20.0, Some(0.0)) ]
+        });
+        let buf_cam = render_scene_json(with_cam, 400, 300, 0);
+        let buf_ref = render_scene_json(no_cam, 400, 300, 0);
+
+        // Blue region (locked plane) identical to the camera-less reference.
+        let blue = |buf: &[u8]| -> Vec<u8> {
+            let mut out = Vec::new();
+            for y in 10..100u32 {
+                for x in 10..120u32 {
+                    let i = ((y * 400 + x) * 4) as usize;
+                    out.extend_from_slice(&buf[i..i + 4]);
+                }
+            }
+            out
+        };
+        assert_eq!(
+            blue(&buf_cam),
+            blue(&buf_ref),
+            "depth-0 plane must be unaffected by camera zoom"
+        );
+
+        // The red rect (depth 1) must be zoomed: with center-origin zoom 2 a
+        // rect at (250..330, 160..220) maps to (300..460, 170..290) clipped —
+        // its centroid moves right and its visible area differs from 80x60.
+        let (rx, _) = channel_centroid(&buf_cam, 400, 300, 0);
+        assert!(
+            rx > 330.0,
+            "depth-1 plane must be zoomed toward bottom-right, centroid x = {rx}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parallax_hitmap_tests {
+    //! Studio hit-map under per-plane parallax: rects must follow their
+    //! plane's (depth-scaled) camera transform via the canvas matrix.
+
+    use crate::engine::render::render_scene_hits;
+    use crate::schema::{Scene, VideoConfig};
+
+    #[test]
+    fn hit_rects_follow_their_plane_depth() {
+        let config: VideoConfig =
+            serde_json::from_value(serde_json::json!({ "width": 400, "height": 300, "fps": 30 }))
+                .expect("config");
+        // Static camera pan x=100; blue locked (depth 0), red normal (depth 1).
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 4.0,
+            "camera": { "x": 100.0 },
+            "children": [
+                { "type": "shape", "shape": "rect", "fill": "#0000ff",
+                  "position": "absolute", "x": 40, "y": 40,
+                  "style": { "width": "80px", "height": "60px", "depth": 0.0 } },
+                { "type": "shape", "shape": "rect", "fill": "#ff0000",
+                  "position": "absolute", "x": 240, "y": 150,
+                  "style": { "width": "80px", "height": "60px", "depth": 1.0 } }
+            ]
+        }))
+        .expect("scene");
+
+        let hits = render_scene_hits(&config, &scene, 0);
+        assert_eq!(hits.len(), 2, "expected two component hits");
+
+        // Paint order matches child order: [0] = blue (depth 0), [1] = red.
+        let blue = &hits[0].rect;
+        let red = &hits[1].rect;
+        assert!(
+            (blue.x - 40.0).abs() < 0.5,
+            "depth-0 hit rect must ignore the camera pan, x = {}",
+            blue.x
+        );
+        assert!(
+            (red.x - 140.0).abs() < 0.5,
+            "depth-1 hit rect must follow the pan (240 - 100), x = {}",
+            red.x
         );
     }
 }

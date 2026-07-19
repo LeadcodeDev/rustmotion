@@ -12,6 +12,7 @@ use rustmotion_core::css::style::{
 };
 use rustmotion_core::css::units::LengthPercentage;
 use rustmotion_core::engine::animator::safe_div;
+use rustmotion_core::engine::paint_pass::PlaneCamera;
 use rustmotion_core::engine::renderer::color4f_from_hex;
 
 /// Internal render-time context — bundles per-scene timing/dimension info that
@@ -27,6 +28,48 @@ struct RenderContext {
     video_height: u32,
     #[allow(dead_code)]
     stagger_offset: f64,
+    /// Resolved scene camera for per-plane parallax (issue #90). `Some` only
+    /// when the scene has a camera AND at least one top-level child declares
+    /// `style.depth` — the paint pass then applies the camera per plane and
+    /// the global `apply_camera_transform` must be skipped.
+    camera: Option<PlaneCamera>,
+}
+
+/// True when any direct child of the scene declares an explicit `style.depth`
+/// — the v1 parallax plane rule (planes = top-level children only).
+fn scene_uses_depth(children: &[ChildComponent]) -> bool {
+    children
+        .iter()
+        .any(|c| c.component.as_styled().style_config().depth.is_some())
+}
+
+/// Resolve the scene camera at `time` into the flat state consumed by the
+/// per-plane paint path.
+fn resolve_plane_camera(camera: &Camera, time: f32, vw: f32, vh: f32) -> PlaneCamera {
+    let (origin_x, origin_y) = resolve_camera_origin(camera, time, vw, vh);
+    PlaneCamera {
+        pan_x: interpolate_camera_property(camera, "x", time),
+        pan_y: interpolate_camera_property(camera, "y", time),
+        zoom: interpolate_camera_property(camera, "zoom", time),
+        rotation: interpolate_camera_property(camera, "rotation", time),
+        origin_x,
+        origin_y,
+    }
+}
+
+/// Decide the camera mode for a slide-scene render: per-plane (`Some`) when
+/// depth is in play, otherwise `None` (caller applies the global transform).
+fn per_plane_camera(
+    scene: &Scene,
+    children: &[ChildComponent],
+    time: f32,
+    vw: f32,
+    vh: f32,
+) -> Option<PlaneCamera> {
+    match &scene.camera {
+        Some(cam) if scene_uses_depth(children) => Some(resolve_plane_camera(cam, time, vw, vh)),
+        _ => None,
+    }
 }
 
 /// Render a complete frame using the v2 component pipeline.
@@ -202,6 +245,15 @@ pub fn render_frame_v2_scaled(
         }
     }
 
+    // Camera mode: per-plane when depth is declared, global otherwise.
+    let plane_cam = per_plane_camera(
+        scene,
+        root_children,
+        time as f32,
+        config.width as f32,
+        config.height as f32,
+    );
+
     // Build render context
     let ctx = RenderContext {
         time,
@@ -211,21 +263,24 @@ pub fn render_frame_v2_scaled(
         video_width: config.width,
         video_height: config.height,
         stagger_offset: 0.0,
+        camera: plane_cam,
     };
 
-    // Apply virtual camera transform
-    let camera_guard = if let Some(ref camera) = scene.camera {
-        let g = super::CanvasGuard::new(canvas);
-        apply_camera_transform(
-            canvas,
-            camera,
-            time as f32,
-            config.width as f32,
-            config.height as f32,
-        );
-        Some(g)
-    } else {
-        None
+    // Apply the global virtual camera transform (skipped in per-plane mode —
+    // the paint pass applies it per top-level plane, scaled by depth).
+    let camera_guard = match &scene.camera {
+        Some(camera) if plane_cam.is_none() => {
+            let g = super::CanvasGuard::new(canvas);
+            apply_camera_transform(
+                canvas,
+                camera,
+                time as f32,
+                config.width as f32,
+                config.height as f32,
+            );
+            Some(g)
+        }
+        _ => None,
     };
 
     // Clip scene content to viewport dimensions so scaled elements don't overflow.
@@ -377,6 +432,7 @@ fn render_with_new_pipeline_iter<'a, I>(
         video_width: ctx.video_width,
         video_height: ctx.video_height,
         scene_duration: ctx.scene_duration,
+        camera: ctx.camera,
     };
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 }
@@ -567,13 +623,18 @@ pub fn render_scene_hits(
     };
     let canvas = surface.canvas();
 
-    // Match the camera transform so hit rects line up with the rendered frame.
-    let _camera_guard = if let Some(ref camera) = scene.camera {
-        let g = super::CanvasGuard::new(canvas);
-        apply_camera_transform(canvas, camera, time as f32, vw, vh);
-        Some(g)
-    } else {
-        None
+    // Match the camera transform so hit rects line up with the rendered
+    // frame. In per-plane mode the paint pass applies the (depth-scaled)
+    // camera per top-level plane; the canvas matrix at each node then feeds
+    // `local_to_device` so hit rects follow their plane automatically.
+    let plane_cam = per_plane_camera(scene, &children, time as f32, vw, vh);
+    let _camera_guard = match &scene.camera {
+        Some(camera) if plane_cam.is_none() => {
+            let g = super::CanvasGuard::new(canvas);
+            apply_camera_transform(canvas, camera, time as f32, vw, vh);
+            Some(g)
+        }
+        _ => None,
     };
 
     let root_css = root_style(scene.layout.as_ref());
@@ -592,6 +653,7 @@ pub fn render_scene_hits(
         video_width: config.width,
         video_height: config.height,
         scene_duration: scene.duration,
+        camera: plane_cam,
     };
     let hits = paint_tree_with_hits(canvas, &built.root, &layout, &frame, &dispatcher);
 
@@ -794,6 +856,8 @@ pub fn render_world_frame_scaled(
 
         // Use local_time for animations (clamped to 0 if pan hasn't finished)
         let anim_time = vis.local_time.max(0.0);
+        // World views keep the global per-scene camera (depth planes are a
+        // slide-view feature; the world pan is a separate transform).
         let ctx = RenderContext {
             time: anim_time,
             scene_duration: scene.duration,
@@ -802,6 +866,7 @@ pub fn render_world_frame_scaled(
             video_width: config.width,
             video_height: config.height,
             stagger_offset: 0.0,
+            camera: None,
         };
 
         // Apply per-scene camera if present
@@ -962,6 +1027,13 @@ pub fn render_scene_fg_scaled(
     // Transparent background
     canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
 
+    let plane_cam = per_plane_camera(
+        scene,
+        &children,
+        time as f32,
+        config.width as f32,
+        config.height as f32,
+    );
     let ctx = RenderContext {
         time,
         scene_duration: scene.duration,
@@ -970,10 +1042,11 @@ pub fn render_scene_fg_scaled(
         video_width: config.width,
         video_height: config.height,
         stagger_offset: 0.0,
+        camera: plane_cam,
     };
 
-    let has_camera = scene.camera.is_some();
-    if let Some(ref camera) = scene.camera {
+    let has_camera = scene.camera.is_some() && plane_cam.is_none();
+    if let (Some(camera), None) = (&scene.camera, plane_cam) {
         apply_camera_transform(
             canvas,
             camera,
@@ -1034,6 +1107,8 @@ pub(super) fn interpolate_camera_property(camera: &Camera, property: &str, time:
                 "y" => camera.y,
                 "zoom" => camera.zoom,
                 "rotation" => camera.rotation,
+                "origin.x" => camera.origin.as_ref().map(|o| o.x).unwrap_or(0.0),
+                "origin.y" => camera.origin.as_ref().map(|o| o.y).unwrap_or(0.0),
                 _ => 0.0,
             };
         }
@@ -1070,7 +1145,39 @@ pub(super) fn interpolate_camera_property(camera: &Camera, property: &str, time:
     points[points.len() - 1].value
 }
 
-/// Apply camera transform to the canvas: translate, zoom, rotate around scene center.
+/// Resolve the camera focal point at `time`, in frame pixels (issue #89).
+///
+/// Priority per axis: keyframe track (`"origin.x"` / `"origin.y"`, dotted
+/// like component compound properties) > static `camera.origin` > frame
+/// centre (the historical hard-coded pivot — byte-identical when no origin
+/// is declared).
+pub(super) fn resolve_camera_origin(
+    camera: &Camera,
+    time: f32,
+    width: f32,
+    height: f32,
+) -> (f32, f32) {
+    let has_track = |p: &str| {
+        camera
+            .keyframes
+            .iter()
+            .any(|k| k.property == p && !k.values.is_empty())
+    };
+    let ox = if camera.origin.is_some() || has_track("origin.x") {
+        interpolate_camera_property(camera, "origin.x", time)
+    } else {
+        width / 2.0
+    };
+    let oy = if camera.origin.is_some() || has_track("origin.y") {
+        interpolate_camera_property(camera, "origin.y", time)
+    } else {
+        height / 2.0
+    };
+    (ox, oy)
+}
+
+/// Apply camera transform to the canvas: translate, zoom, rotate around the
+/// camera origin (default: scene centre).
 pub(super) fn apply_camera_transform(
     canvas: &Canvas,
     camera: &Camera,
@@ -1082,13 +1189,11 @@ pub(super) fn apply_camera_transform(
     let y = interpolate_camera_property(camera, "y", time);
     let zoom = interpolate_camera_property(camera, "zoom", time);
     let rotation = interpolate_camera_property(camera, "rotation", time);
-
-    let cx = width / 2.0;
-    let cy = height / 2.0;
+    let (cx, cy) = resolve_camera_origin(camera, time, width, height);
 
     canvas.save();
 
-    // 1. Translate to center
+    // 1. Translate to the focal point
     canvas.translate((cx, cy));
     // 2. Apply rotation
     if rotation.abs() > 0.001 {
@@ -1098,6 +1203,6 @@ pub(super) fn apply_camera_transform(
     if (zoom - 1.0).abs() > 0.001 {
         canvas.scale((zoom, zoom));
     }
-    // 4. Translate back from center + apply camera pan offset
+    // 4. Translate back from the focal point + apply camera pan offset
     canvas.translate((-cx - x, -cy - y));
 }

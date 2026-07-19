@@ -56,6 +56,7 @@ fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
         video_width: W,
         video_height: H,
         scene_duration: 2.0,
+        camera: None,
     };
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 
