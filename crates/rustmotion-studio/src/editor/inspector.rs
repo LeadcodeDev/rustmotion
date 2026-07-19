@@ -897,6 +897,11 @@ fn GenericRow(
     value: String,
     is_style: bool,
     #[props(default = false)] is_default: bool,
+    /// When set (object sub-rows), the parsed TYPED value is handed to this
+    /// callback instead of being written as a root field — the parent object
+    /// control folds it into the whole-object write.
+    #[props(default)]
+    custom_commit: Option<Callback<serde_json::Value>>,
 ) -> Element {
     let shared = use_context::<Shared>();
 
@@ -907,7 +912,11 @@ fn GenericRow(
         let n = name.clone();
         let k = prop_kind.clone();
         Rc::new(move |text: &str| {
-            if is_style {
+            if let Some(cb) = &custom_commit {
+                if let Ok(v) = parse_root_value(&k, text) {
+                    cb.call(v);
+                }
+            } else if is_style {
                 if text.trim().is_empty() {
                     write_style_removal(&shared, &p, &n);
                 } else {
@@ -1083,7 +1092,25 @@ fn GenericRow(
                 FillControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
             }
         }
-        PropKind::Complex => {
+        // Object/number-list editors are root-field only: style writes are
+        // string-based, so object-shaped style props keep the JSON area.
+        PropKind::Object(specs) if !is_style => {
+            rsx! {
+                ObjectControl {
+                    pointer: pointer.clone(),
+                    name: name.clone(),
+                    specs,
+                    value: value.clone(),
+                    custom_commit,
+                }
+            }
+        }
+        PropKind::NumberList if !is_style => {
+            rsx! {
+                NumberListControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
+            }
+        }
+        PropKind::Complex | PropKind::Object(_) | PropKind::NumberList => {
             let commit = commit.clone();
             rsx! {
                 JsonArea {
@@ -1460,6 +1487,169 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
         div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
             span { style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px;", "{field.label}" }
             div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }
+        }
+    }
+}
+
+// ── Object & number-list editors ─────────────────────────────────────────────
+
+/// Structured editor for object fields with known schema properties (stat
+/// `trend`, `stroke`, …): one indented sub-row per property through the same
+/// control factory. Sub-edits fold into the WHOLE object (typed) via the
+/// existing root-field write — optimistic + debounce for free. A pruned last
+/// key collapses to `Null` (field removed). Nested objects thread their
+/// writes through `custom_commit` (registry depth cap: 2).
+#[component]
+fn ObjectControl(
+    pointer: String,
+    name: String,
+    specs: Vec<crate::editor::properties::PropSpec>,
+    value: String,
+    #[props(default)] custom_commit: Option<Callback<serde_json::Value>>,
+) -> Element {
+    let shared = use_context::<Shared>();
+    // Local object state so successive sub-edits accumulate (the panel is
+    // memoized per selection and won't re-render between keystrokes).
+    let obj = use_signal(|| {
+        serde_json::from_str::<serde_json::Value>(&value).unwrap_or(serde_json::Value::Null)
+    });
+
+    let commit_whole = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        move |whole: serde_json::Value| {
+            if let Some(cb) = &custom_commit {
+                cb.call(whole);
+            } else {
+                write_root_field(&shared, &p, &n, whole);
+            }
+        }
+    };
+
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:6px; width:100%; padding-left:10px; border-left:2px solid var(--rm-border-2);",
+            for spec in specs {
+                GenericRow {
+                    key: "{pointer}-{name}-{spec.name}",
+                    pointer: pointer.clone(),
+                    name: spec.name.clone(),
+                    prop_kind: spec.kind.clone(),
+                    value: prop_str(&obj(), &spec.name),
+                    is_style: false,
+                    custom_commit: {
+                        let commit_whole = commit_whole.clone();
+                        let key = spec.name.clone();
+                        let mut obj = obj;
+                        Callback::new(move |sub: serde_json::Value| {
+                            let next = crate::editor::properties::mutate_object_field(
+                                &obj(),
+                                &key,
+                                sub,
+                            );
+                            obj.set(next.clone());
+                            commit_whole(next);
+                        })
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Per-entry editor for arrays of numbers (`sparkline_data`, dash patterns…):
+/// number input + remove per entry, "+ Add". Writes the whole array (typed)
+/// once every entry parses; an emptied list removes the field. Kept separate
+/// from `ColorRows` — the item controls share almost nothing.
+#[component]
+fn NumberListControl(pointer: String, name: String, value: String) -> Element {
+    let shared = use_context::<Shared>();
+    let entries = use_signal(|| {
+        serde_json::from_str::<Vec<serde_json::Value>>(&value)
+            .map(|v| {
+                v.into_iter()
+                    .map(|n| display_number(&n.to_string()))
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default()
+    });
+
+    let write = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        move |_| {
+            let parsed: Option<Vec<serde_json::Value>> = entries
+                .read()
+                .iter()
+                .map(|e| {
+                    parse_root_value(&PropKind::Float, e)
+                        .ok()
+                        .filter(|v| !v.is_null())
+                })
+                .collect();
+            if let Some(nums) = parsed {
+                let value = if nums.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::Array(nums)
+                };
+                write_root_field(&shared, &p, &n, value);
+            }
+        }
+    };
+
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
+            for (i, e) in entries().iter().cloned().enumerate() {
+                div { key: "{i}", style: "display:flex; align-items:center; gap:6px;",
+                    input {
+                        r#type: "number",
+                        step: "0.1",
+                        style: "{INPUT_STYLE}",
+                        value: "{e}",
+                        oninput: {
+                            let mut entries = entries;
+                            let write = write.clone();
+                            move |ev: FormEvent| {
+                                if let Some(slot) = entries.write().get_mut(i) {
+                                    *slot = ev.value();
+                                }
+                                write(());
+                            }
+                        },
+                    }
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::IconSm,
+                        title: "Remove entry",
+                        onclick: {
+                            let mut entries = entries;
+                            let write = write.clone();
+                            move |_| {
+                                if entries.read().len() > i {
+                                    entries.write().remove(i);
+                                }
+                                write(());
+                            }
+                        },
+                        X { size: 13, stroke: "var(--rm-text-muted)" }
+                    }
+                }
+            }
+            Button {
+                variant: ButtonVariant::Outline,
+                size: ButtonSize::Xs,
+                onclick: {
+                    let mut entries = entries;
+                    let write = write.clone();
+                    move |_| {
+                        entries.write().push("0".to_string());
+                        write(());
+                    }
+                },
+                "+ Add"
+            }
         }
     }
 }

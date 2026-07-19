@@ -12,11 +12,44 @@ fn format_color_hex(color: Color) -> String {
     format!("#{color:X}")
 }
 
+/// Compute the popover's fixed position from the anchor (trigger swatch)
+/// rect, the popover size and the window viewport, all in logical pixels.
+/// Preference: below the anchor, right edges aligned (opens leftward — the
+/// inspector hugs the right window edge); flips above when the bottom would
+/// clip; then a HARD clamp of both axes into `[margin, viewport - size -
+/// margin]` — the clamp always wins, even after the flip.
+pub fn popover_position(
+    anchor: (f64, f64, f64, f64), // x, y, w, h
+    popover: (f64, f64),          // w, h
+    viewport: (f64, f64),         // w, h
+    margin: f64,
+) -> (f64, f64) {
+    const GAP: f64 = 4.0;
+    let (ax, ay, aw, ah) = anchor;
+    let (pw, ph) = popover;
+    let (vw, vh) = viewport;
+
+    // Right-aligned under the anchor.
+    let x = ax + aw - pw;
+    let mut y = ay + ah + GAP;
+    // Flip above when the bottom clips.
+    if y + ph > vh - margin {
+        y = ay - ph - GAP;
+    }
+    // Hard clamp (min first so the margin wins on tiny viewports).
+    let cx = x.min(vw - pw - margin).max(margin);
+    let cy = y.min(vh - ph - margin).max(margin);
+    (cx, cy)
+}
+
 #[derive(Clone, Copy)]
 struct ColorPickerRootContext {
     open: Memo<bool>,
     disabled: ReadSignal<bool>,
     color: ReadSignal<Hsv<encoding::Srgb, f64>>,
+    /// The trigger's mounted node — the popover anchors its fixed position on
+    /// this rect at open time.
+    trigger: Signal<Option<std::rc::Rc<MountedData>>>,
 }
 
 /// The props for the [`ColorPickerRoot`] component.
@@ -75,10 +108,12 @@ pub fn ColorPickerRoot(props: ColorPickerRootProps) -> Element {
         forward.call(c);
     };
 
+    let trigger = use_signal(|| None);
     use_context_provider(|| ColorPickerRootContext {
         open,
         disabled: props.disabled,
         color: local.into(),
+        trigger,
     });
 
     rsx! {
@@ -181,16 +216,21 @@ pub fn ColorPickerTrigger(props: ColorPickerTriggerProps) -> Element {
         format_color_hex(rgb)
     });
 
+    let mut trigger = ctx.trigger;
     rsx! {
-        popover::PopoverTrigger {
-            class: "dx-color-picker-button",
-            disabled: if (ctx.disabled)() { true },
-            aria_label: format!("Color picker {aria_hex}"),
-            aria_expanded: (ctx.open)(),
-            attributes: props.attributes,
-            ColorSwatch { color: ctx.color }
-            if let Some(label) = props.label { span { {label} } }
-            {props.children}
+        div {
+            style: "display:inline-flex;",
+            onmounted: move |e| trigger.set(Some(e.data())),
+            popover::PopoverTrigger {
+                class: "dx-color-picker-button",
+                disabled: if (ctx.disabled)() { true },
+                aria_label: format!("Color picker {aria_hex}"),
+                aria_expanded: (ctx.open)(),
+                attributes: props.attributes,
+                ColorSwatch { color: ctx.color }
+                if let Some(label) = props.label { span { {label} } }
+                {props.children}
+            }
         }
     }
 }
@@ -209,37 +249,53 @@ pub struct ColorPickerPopoverProps {
 #[component]
 pub fn ColorPickerPopover(props: ColorPickerPopoverProps) -> Element {
     let ctx = use_context::<ColorPickerRootContext>();
-    // The inspector docks the picker against the right window edge, so the
-    // popover opens LEFT of the swatch (CSS `right:0`). Vertically it flips
-    // above the swatch when its bottom would clip the window: measured when
-    // the popover opens.
+    // Fixed positioning computed at open time by [`popover_position`]: below
+    // the swatch opening leftward, flipped above near the window bottom, and
+    // hard-clamped into the viewport on both axes. `position:fixed` escapes
+    // every scrollable/clipping container of the panel.
     let mut node = use_signal(|| None::<std::rc::Rc<MountedData>>);
-    let mut flip_up = use_signal(|| false);
+    let mut pos = use_signal(|| None::<(f64, f64)>);
     use_effect(move || {
         if (ctx.open)() {
-            if let Some(n) = node() {
+            if let (Some(t), Some(n)) = ((ctx.trigger)(), node()) {
                 spawn(async move {
-                    if let Ok(rect) = n.get_client_rect().await {
-                        let win = dioxus::desktop::window();
-                        let vh = win
-                            .inner_size()
-                            .to_logical::<f64>(win.scale_factor())
-                            .height;
-                        flip_up.set(rect.origin.y + rect.size.height > vh - 8.0);
-                    }
+                    let (Ok(anchor), Ok(content)) =
+                        (t.get_client_rect().await, n.get_client_rect().await)
+                    else {
+                        return;
+                    };
+                    let win = dioxus::desktop::window();
+                    let vs = win.inner_size().to_logical::<f64>(win.scale_factor());
+                    // The measured node is the inner content: compensate for
+                    // the popover's own padding (12px each side).
+                    const PAD: f64 = 24.0;
+                    pos.set(Some(popover_position(
+                        (
+                            anchor.origin.x,
+                            anchor.origin.y,
+                            anchor.size.width,
+                            anchor.size.height,
+                        ),
+                        (content.size.width + PAD, content.size.height + PAD),
+                        (vs.width, vs.height),
+                        8.0,
+                    )));
                 });
             }
         }
     });
-    let class = if flip_up() {
-        "dx-color-picker-popover flip-up"
-    } else {
-        "dx-color-picker-popover"
+    let style = match pos() {
+        Some((x, y)) => {
+            format!("position:fixed; left:{x}px; top:{y}px; right:auto; bottom:auto; margin:0;")
+        }
+        // Not measured yet (first open): keep it invisible for one frame.
+        None => "visibility:hidden;".to_string(),
     };
 
     rsx! {
         popover::PopoverContent {
-            class: class.to_string(),
+            class: "dx-color-picker-popover".to_string(),
+            style: "{style}",
             attributes: props.attributes,
             div {
                 onmounted: move |e| node.set(Some(e.data())),
@@ -519,5 +575,65 @@ pub fn ColorPickerSelect(props: ColorPickerSelectProps) -> Element {
                 ColorSwatch { color: ctx.color() }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::popover_position;
+
+    #[test]
+    fn anchor_top_right_opens_below_clamped_into_viewport() {
+        // Swatch near the top-right corner of a 1200x800 window.
+        let (x, y) = popover_position(
+            (1150.0, 60.0, 24.0, 24.0),
+            (260.0, 320.0),
+            (1200.0, 800.0),
+            8.0,
+        );
+        // Below the anchor…
+        assert_eq!(y, 60.0 + 24.0 + 4.0);
+        // …right-aligned would be 1174-260=914, fits; but never past the right margin.
+        assert_eq!(x, 914.0);
+        assert!(x + 260.0 <= 1200.0 - 8.0);
+    }
+
+    #[test]
+    fn anchor_near_bottom_flips_above() {
+        let (x, y) = popover_position(
+            (900.0, 700.0, 24.0, 24.0),
+            (260.0, 320.0),
+            (1200.0, 800.0),
+            8.0,
+        );
+        // 700+24+4+320 > 792 → flip above: 700-320-4 = 376.
+        assert_eq!(y, 376.0);
+        assert_eq!(x, 900.0 + 24.0 - 260.0);
+    }
+
+    #[test]
+    fn anchor_top_left_never_clips_left_or_top() {
+        // Right-aligned x would be negative → clamped to the margin.
+        let (x, y) = popover_position(
+            (10.0, 10.0, 24.0, 24.0),
+            (260.0, 320.0),
+            (1200.0, 800.0),
+            8.0,
+        );
+        assert_eq!(x, 8.0);
+        assert_eq!(y, 10.0 + 24.0 + 4.0);
+    }
+
+    #[test]
+    fn tiny_viewport_clamps_to_margins() {
+        // Popover larger than the window: both axes pinned at the margin
+        // (the clamp always wins, even after the flip).
+        let (x, y) = popover_position(
+            (50.0, 90.0, 24.0, 24.0),
+            (260.0, 320.0),
+            (200.0, 150.0),
+            8.0,
+        );
+        assert_eq!((x, y), (8.0, 8.0));
     }
 }

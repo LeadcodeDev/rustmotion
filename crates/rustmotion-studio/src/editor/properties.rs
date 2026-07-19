@@ -82,7 +82,12 @@ pub enum PropKind {
     Fill,
     /// Untagged number|string (Length, LengthPercentage, Size, …) → unit input.
     Unit,
-    /// Objects/arrays (border, box-shadow, …) → JSON textarea.
+    /// Object with known schema properties (stat `trend`, `stroke`, …) →
+    /// indented sub-rows through the same control factory (depth ≤ 2).
+    Object(Vec<PropSpec>),
+    /// Array of numbers (stat `sparkline_data`, …) → per-entry number rows.
+    NumberList,
+    /// Objects/arrays without a known shape → JSON textarea.
     Complex,
 }
 
@@ -100,6 +105,22 @@ pub fn display_number(raw: &str) -> String {
 pub struct PropSpec {
     pub name: String,
     pub kind: PropKind,
+}
+
+/// Mutate one sub-key of an object value: `Null` prunes the key; an object
+/// left empty collapses to `Null` (the whole field gets removed).
+pub fn mutate_object_field(current: &Value, key: &str, new: Value) -> Value {
+    let mut map = current.as_object().cloned().unwrap_or_default();
+    if new.is_null() {
+        map.remove(key);
+    } else {
+        map.insert(key.to_string(), new);
+    }
+    if map.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(map)
+    }
 }
 
 /// Display mode of a [`PropKind::Fill`] value.
@@ -227,6 +248,18 @@ fn component_registry() -> &'static BTreeMap<String, Vec<PropSpec>> {
 /// definitions, single-arm `allOf` wrappers, nullable `anyOf [T, null]`, and
 /// untagged unions (`anyOf` of several arms).
 fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKind {
+    kind_of_schema_inner(name, schema, defs, depth, 0)
+}
+
+/// `obj_level` counts object nesting for [`PropKind::Object`] (capped at 2 —
+/// deeper structures fall back to the JSON textarea).
+fn kind_of_schema_inner(
+    name: &str,
+    schema: &Value,
+    defs: &Value,
+    depth: u8,
+    obj_level: u8,
+) -> PropKind {
     if depth > 8 {
         return PropKind::Complex;
     }
@@ -234,14 +267,14 @@ fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKi
     if let Some(r) = schema.get("$ref").and_then(|r| r.as_str()) {
         let key = r.rsplit('/').next().unwrap_or_default();
         return match defs.get(key) {
-            Some(target) => kind_of_schema(name, target, defs, depth + 1),
+            Some(target) => kind_of_schema_inner(name, target, defs, depth + 1, obj_level),
             None => PropKind::Complex,
         };
     }
     // allOf: [X] wrapper (schemars uses it to attach descriptions to refs).
     if let Some(all) = schema.get("allOf").and_then(|a| a.as_array()) {
         if all.len() == 1 {
-            return kind_of_schema(name, &all[0], defs, depth + 1);
+            return kind_of_schema_inner(name, &all[0], defs, depth + 1, obj_level);
         }
     }
     // Direct string enum.
@@ -255,7 +288,7 @@ fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKi
         if let Some(arms) = schema.get(key).and_then(|a| a.as_array()) {
             let non_null: Vec<&Value> = arms.iter().filter(|a| !is_null_schema(a)).collect();
             if non_null.len() == 1 {
-                return kind_of_schema(name, non_null[0], defs, depth + 1);
+                return kind_of_schema_inner(name, non_null[0], defs, depth + 1, obj_level);
             }
             let mut info = UnionInfo::default();
             for arm in &non_null {
@@ -283,12 +316,49 @@ fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKi
     match primary_type(schema) {
         Some("integer") => PropKind::Integer,
         Some("number") => PropKind::Float,
+        Some("object") if obj_level < 2 => match object_specs(schema, defs, depth, obj_level) {
+            Some(specs) => PropKind::Object(specs),
+            None => PropKind::Complex,
+        },
         Some("boolean") => PropKind::Bool,
         Some("string") if name.contains("color") || name.contains("colour") => PropKind::Color,
         Some("string") => PropKind::String,
         Some("array") if is_color_string_array(name, schema, defs, depth) => PropKind::ColorList,
+        Some("array") if is_number_array(schema, defs, depth) => PropKind::NumberList,
         _ => PropKind::Complex,
     }
+}
+
+/// Sub-specs of an object schema with KNOWN properties (None for map-like /
+/// empty objects → JSON textarea fallback).
+fn object_specs(schema: &Value, defs: &Value, depth: u8, obj_level: u8) -> Option<Vec<PropSpec>> {
+    let props = schema.get("properties")?.as_object()?;
+    if props.is_empty() {
+        return None;
+    }
+    Some(
+        props
+            .iter()
+            .map(|(n, ps)| PropSpec {
+                name: n.clone(),
+                kind: kind_of_schema_inner(n, ps, defs, depth + 1, obj_level + 1),
+            })
+            .collect(),
+    )
+}
+
+/// Array whose items resolve to numbers (`Vec<f64>`, dash patterns, …).
+fn is_number_array(schema: &Value, defs: &Value, depth: u8) -> bool {
+    let Some(items) = schema.get("items") else {
+        return false;
+    };
+    let resolved = resolve_arm(items, defs, depth + 1);
+    if matches!(primary_type(&resolved), Some("number") | Some("integer")) {
+        return true;
+    }
+    let mut info = UnionInfo::default();
+    collect_union(items, defs, depth + 1, &mut info);
+    info.has_number && !info.has_string && info.variants.is_empty()
 }
 
 /// Array-of-color-strings detection: the items resolve to strings (or a
@@ -733,6 +803,97 @@ mod tests {
         ] {
             assert!(v.contains(&s), "{s:?} missing from common trunk");
         }
+    }
+
+    // ── Round 5: object / number-list editors ───────────────────────────
+
+    #[test]
+    fn stat_trend_is_an_object_with_known_sub_kinds() {
+        let props = component_props("stat").expect("stat in schema");
+        match kind_of(props, "trend") {
+            Some(PropKind::Object(specs)) => {
+                let sub = |n: &str| specs.iter().find(|p| p.name == n).map(|p| &p.kind);
+                assert_eq!(sub("value"), Some(&PropKind::String));
+                match sub("direction") {
+                    Some(PropKind::Enum(v)) => {
+                        assert!(v.contains(&"up".to_string()), "{v:?}");
+                        assert!(v.contains(&"down".to_string()), "{v:?}");
+                        assert!(v.contains(&"neutral".to_string()), "{v:?}");
+                    }
+                    other => panic!("direction should be Enum, got {other:?}"),
+                }
+                assert_eq!(sub("color"), Some(&PropKind::Color));
+            }
+            other => panic!("trend should be Object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shapeless_objects_stay_json_areas() {
+        // An object without known properties (map-like) must NOT become an
+        // Object control.
+        let map_schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+        });
+        assert_eq!(
+            kind_of_schema("anything", &map_schema, &Value::Null, 0),
+            PropKind::Complex
+        );
+    }
+
+    #[test]
+    fn number_arrays_become_number_lists() {
+        let props = component_props("stat").expect("stat in schema");
+        assert_eq!(
+            kind_of(props, "sparkline_data"),
+            Some(&PropKind::NumberList)
+        );
+        // Color arrays keep their dedicated editor.
+        let gt = component_props("gradient_text").unwrap();
+        assert_eq!(kind_of(gt, "colors"), Some(&PropKind::ColorList));
+        // String arrays are neither.
+        let strings = serde_json::json!({"type": "array", "items": {"type": "string"}});
+        assert_eq!(
+            kind_of_schema("labels", &strings, &Value::Null, 0),
+            PropKind::Complex
+        );
+    }
+
+    #[test]
+    fn mutate_object_field_sets_prunes_and_collapses() {
+        let trend = serde_json::json!({"value": "+340%", "direction": "up"});
+        // Set a sub-key → whole object with the new value.
+        let out = mutate_object_field(&trend, "direction", serde_json::json!("down"));
+        assert_eq!(
+            out,
+            serde_json::json!({"value": "+340%", "direction": "down"})
+        );
+        // Null prunes the key.
+        let out = mutate_object_field(&out, "direction", Value::Null);
+        assert_eq!(out, serde_json::json!({"value": "+340%"}));
+        // Last key removed → the whole field collapses to Null.
+        let out = mutate_object_field(&out, "value", Value::Null);
+        assert!(out.is_null());
+        // Mutating a null/absent object starts a fresh one.
+        let out = mutate_object_field(&Value::Null, "value", serde_json::json!("+1%"));
+        assert_eq!(out, serde_json::json!({"value": "+1%"}));
+    }
+
+    #[test]
+    fn mutated_trend_round_trips_through_the_typed_parse() {
+        let raw = serde_json::json!({
+            "type": "stat", "value": "8.4M",
+            "trend": {"value": "+340%", "direction": "up"}
+        });
+        let mutated_trend =
+            mutate_object_field(&raw["trend"], "direction", serde_json::json!("down"));
+        let mut updated = raw.clone();
+        updated["trend"] = mutated_trend;
+        assert!(
+            serde_json::from_value::<Component>(updated).is_ok(),
+            "mutated stat parses"
+        );
     }
 
     // ── Round 3: Integer/Float split + display ──────────────────────────
