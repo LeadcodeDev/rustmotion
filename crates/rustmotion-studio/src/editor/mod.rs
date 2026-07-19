@@ -7,6 +7,7 @@ mod export;
 pub mod frames;
 mod inspector;
 mod playback;
+mod prefetch;
 mod topbar;
 mod view;
 

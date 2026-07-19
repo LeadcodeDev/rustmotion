@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rustmotion::encode::video::FrameTask;
 use rustmotion::schema::ResolvedScenario;
@@ -38,12 +38,13 @@ pub fn render_frame(
 
 /// Cached baseline scenario for the diff mode's A-side render, keyed by
 /// (path, source hash) so it is rebuilt only when the baseline itself changes
-/// (Set baseline) — never per frame.
+/// (Set baseline) — never per frame. Arc snapshots so callers render OUTSIDE
+/// this cache's lock.
 struct BaselineCache {
     path: PathBuf,
     source_hash: u64,
-    scenario: ResolvedScenario,
-    tasks: Vec<FrameTask>,
+    scenario: Arc<ResolvedScenario>,
+    tasks: Arc<Vec<FrameTask>>,
 }
 
 fn baseline_cache() -> &'static Mutex<Option<BaselineCache>> {
@@ -51,17 +52,23 @@ fn baseline_cache() -> &'static Mutex<Option<BaselineCache>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-fn source_hash(source: &str) -> u64 {
+/// Stable hash of a baseline source string (also used as the side-A cache
+/// generation in the prefetch frame cache).
+pub(crate) fn source_hash(source: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut h);
     h.finish()
 }
 
-/// Render a frame of the BASELINE scenario (diff mode, A side) from its source
-/// string: JSON is loaded directly, HTML is re-transpiled — both entirely from
-/// the string, never from the (already edited) file on disk. The resolved
-/// scenario + frame tasks are cached; only the JPEG encode runs per frame.
-pub fn render_baseline_frame(path: &Path, source: &str, frame: u32) -> Result<Vec<u8>, String> {
+/// Arc snapshot of the BASELINE scenario built from its source string: JSON is
+/// loaded directly, HTML is re-transpiled — both entirely from the string,
+/// never from the (already edited) file on disk. Cached by (path, source
+/// hash); returns `(source_hash, scenario, tasks)` so the caller renders
+/// without holding any lock.
+pub fn baseline_arcs(
+    path: &Path,
+    source: &str,
+) -> Result<(u64, Arc<ResolvedScenario>, Arc<Vec<FrameTask>>), String> {
     let hash = source_hash(source);
     let mut guard = baseline_cache().lock().unwrap_or_else(|e| e.into_inner());
 
@@ -81,18 +88,13 @@ pub fn render_baseline_frame(path: &Path, source: &str, frame: u32) -> Result<Ve
         *guard = Some(BaselineCache {
             path: path.to_path_buf(),
             source_hash: hash,
-            scenario,
-            tasks,
+            scenario: Arc::new(scenario),
+            tasks: Arc::new(tasks),
         });
     }
 
     let cache = guard.as_ref().expect("baseline cache just filled");
-    // Same panic fence as the live-frame handler: a Skia panic must not poison
-    // the cache mutex.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        render_frame(&cache.scenario, &cache.tasks, frame, 1.0)
-    }))
-    .map_err(|_| "baseline render panicked".to_string())
+    Ok((hash, cache.scenario.clone(), cache.tasks.clone()))
 }
 
 /// A clickable element box in percentage-of-frame coords, with its kind.
