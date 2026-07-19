@@ -27,6 +27,10 @@ pub struct LegacyPaintDispatcher<'a> {
     /// Per-node container-stagger delay (indexed like `components`); empty
     /// when the caller doesn't carry stagger information.
     stagger_delays: &'a [f64],
+    /// Per-node accumulated affine time remap `(scale, shift)` from ancestor
+    /// containers' `time_scale`/`time_offset` (indexed like `components`);
+    /// `t_local = scale * t_global + shift`. Empty → identity everywhere.
+    time_params: &'a [(f64, f64)],
 }
 
 impl<'a> LegacyPaintDispatcher<'a> {
@@ -34,15 +38,19 @@ impl<'a> LegacyPaintDispatcher<'a> {
         Self {
             components,
             stagger_delays: &[],
+            time_params: &[],
         }
     }
 
     /// Build from a [`BuiltScene`], carrying its stagger delays so internal
-    /// animations shift by the same amount as the CSS overrides.
+    /// animations shift by the same amount as the CSS overrides, and its
+    /// per-node time remaps so internal animations (counter, draw_in,
+    /// typewriter…) advance at the same local time as the CSS overrides.
     pub fn for_scene(built: &'a crate::box_builder::BuiltScene<'a>) -> Self {
         Self {
             components: &built.components,
             stagger_delays: &built.stagger_delays,
+            time_params: &built.time_params,
         }
     }
 
@@ -87,8 +95,20 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             .get(*node_id as usize)
             .copied()
             .unwrap_or(0.0);
+        // Ancestor `time_scale`/`time_offset` remap the time seen by this
+        // node's whole animation surface: internal effect resolution below
+        // AND `PaintCtx.time` (a counter or a typewriter inside a slowed
+        // container must advance at local time). `scene_duration` stays
+        // GLOBAL — it describes the physical scene window, not the remapped
+        // timeline, so duration-relative effects keep their real-time span.
+        let (t_scale, t_shift) = self
+            .time_params
+            .get(*node_id as usize)
+            .copied()
+            .unwrap_or((1.0, 0.0));
+        let local_time = frame.time * t_scale + t_shift;
         let props = match crate::box_builder::effective_effects(&child.component, stagger_delay) {
-            Some(effects) => resolve_props_for_effects(&effects, frame.time, frame.scene_duration),
+            Some(effects) => resolve_props_for_effects(&effects, local_time, frame.scene_duration),
             None => AnimatedProperties::default(),
         };
         if props.opacity <= 0.0 {
@@ -103,7 +123,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         canvas.translate((layout.x, layout.y));
 
         let paint_ctx = PaintCtx {
-            time: frame.time,
+            time: local_time,
             scene_duration: frame.scene_duration,
             frame_index: frame.frame_index,
             fps: frame.fps,
@@ -269,6 +289,8 @@ mod tests {
                 },
                 timeline: Vec::new(),
                 stagger: None,
+                time_scale: None,
+                time_offset: None,
             }),
             position: Some(PositionMode::Absolute { x: 40.0, y: 30.0 }),
             x: None,

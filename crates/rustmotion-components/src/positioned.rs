@@ -21,6 +21,10 @@ pub struct Positioned {
     pub timing: TimingConfig,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
+    #[serde(default)]
+    pub time_scale: Option<f64>,
+    #[serde(default)]
+    pub time_offset: Option<f64>,
 }
 
 rustmotion_core::impl_traits!(Positioned {
