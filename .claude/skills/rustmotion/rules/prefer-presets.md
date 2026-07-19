@@ -35,3 +35,5 @@ Presets are simpler, less error-prone, and produce consistent motion design. Onl
 | Char (text only) | `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` |
 
 `scale_in` and `scale_out` support `overshoot` (default 0.08 = 8%). Char presets support `stagger`, `granularity`, `easing`, and `overshoot`.
+
+**Tout preset standard accepte `spring`** — un objet `{ "damping", "stiffness", "mass" }` qui remplace la courbe de mouvement du preset (translate/scale/rotate) par une physique de ressort ; l'opacity garde son ease. Exemple : `{ "name": "slide_in_left", "spring": { "damping": 10 } }`. Détails dans easing-guidelines.md. (Char presets et `tilt_in` : hors scope v1.)

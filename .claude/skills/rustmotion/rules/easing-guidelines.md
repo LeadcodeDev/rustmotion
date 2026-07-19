@@ -25,3 +25,15 @@ When easing is `spring`, configure with:
   "spring": { "damping": 15, "stiffness": 100, "mass": 1 }
 }
 ```
+
+**Tout preset accepte `spring`.** Ajouter un objet `spring` à n'importe quel preset applique la physique de ressort à ses keyframes de mouvement (translate/scale/rotate) — l'opacity garde son ease (pas de flash d'alpha en overshoot) :
+
+```json
+{ "name": "fade_in_up", "duration": 0.8, "spring": { "damping": 8, "stiffness": 120 } }
+```
+
+- `bounce_in` / `elastic_in` : leurs springs intégrés sont les défauts ; un `spring` utilisateur les remplace.
+- `scale_in` + spring : l'overshoot manuel est remplacé par celui du ressort.
+- Oscillateurs continus (`pulse`, `shake`, `float`) : non affectés (leur forme est leur raison d'être).
+- La `duration` reste la fenêtre de l'animation : le ressort est résolu en secondes réelles dans cette fenêtre et la valeur se cale sur la cible à la fin — choisir une duration suffisante (≥ 0.6s avec les défauts) pour laisser le ressort converger.
+- Dialecte HTML : la DSL compacte accepte `spring:true` (défauts damping 15 / stiffness 100 / mass 1) ; la config fine passe par la forme JSON de `anim`.

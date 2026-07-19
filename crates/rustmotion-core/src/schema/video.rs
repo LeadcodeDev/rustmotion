@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig};
+use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig, SpringConfig};
 use super::style::{FontWeight, TextAlign, VerticalAlign};
 
 // --- Animation effects (nested inside LayerStyle as typed array) ---
@@ -171,6 +171,12 @@ pub struct AnimationTiming {
     /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
     #[serde(default)]
     pub overshoot: Option<f64>,
+    /// Spring physics for the preset's motion keyframes (translate/scale/
+    /// rotate — opacity keeps its ease to avoid alpha overshoot flashes).
+    /// `bounce_in` / `elastic_in` use their built-in springs as defaults;
+    /// this overrides them.
+    #[serde(default)]
+    pub spring: Option<SpringConfig>,
 }
 
 fn default_animation_duration() -> f64 {
@@ -207,6 +213,7 @@ impl Default for AnimationTiming {
             duration: 0.8,
             repeat: false,
             overshoot: None,
+            spring: None,
         }
     }
 }
@@ -316,6 +323,7 @@ impl AnimationTiming {
             duration: self.duration,
             repeat: self.repeat,
             overshoot: self.overshoot,
+            spring: self.spring.clone(),
         }
     }
 }

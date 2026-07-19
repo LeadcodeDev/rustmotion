@@ -98,7 +98,28 @@ pub fn parse_anim_attr(raw: &str) -> Result<Value, HtmlError> {
                     "'{pair}' has an empty key or value (in effect '{effect}')"
                 )));
             }
-            obj.insert(kebab_to_snake(k), coerce_dsl_value(v));
+            let key = kebab_to_snake(k);
+            // `spring` is an object in the schema; the compact DSL cannot
+            // express one, so `spring:true` coerces to `{}` (all SpringConfig
+            // defaults) and `spring:false` is simply absent. Fine-grained
+            // damping/stiffness/mass requires the JSON `anim` form.
+            if key == "spring" {
+                match v {
+                    "true" => {
+                        obj.insert(key, Value::Object(Map::new()));
+                    }
+                    "false" => {}
+                    other => {
+                        return Err(HtmlError::InvalidAnimDsl(format!(
+                            "spring only accepts true/false in the compact DSL \
+                             (got 'spring:{other}'); use the JSON anim form for \
+                             a full spring config"
+                        )));
+                    }
+                }
+                continue;
+            }
+            obj.insert(key, coerce_dsl_value(v));
         }
         effects.push(Value::Object(obj));
     }
@@ -158,5 +179,40 @@ mod tests {
     fn grid_template_becomes_string_array() {
         let m = parse_inline_style("grid-template-columns: 1fr 1fr");
         assert_eq!(m.get("grid-template-columns"), Some(&json!(["1fr", "1fr"])));
+    }
+
+    #[test]
+    fn anim_dsl_spring_true_coerces_to_default_object() {
+        let v = parse_anim_attr("bounce-in spring:true duration:0.8").unwrap();
+        assert_eq!(
+            v,
+            json!([{ "name": "bounce_in", "spring": {}, "duration": 0.8 }])
+        );
+    }
+
+    #[test]
+    fn anim_dsl_spring_false_is_absent() {
+        let v = parse_anim_attr("bounce-in spring:false").unwrap();
+        assert_eq!(v, json!([{ "name": "bounce_in" }]));
+    }
+
+    #[test]
+    fn anim_dsl_spring_non_bool_is_an_error() {
+        let err = parse_anim_attr("fade-in-up spring:8").unwrap_err();
+        assert!(
+            err.to_string().contains("spring"),
+            "error should mention spring: {err}"
+        );
+    }
+
+    #[test]
+    fn anim_json_form_with_spring_object_passes_intact() {
+        let v =
+            parse_anim_attr(r#"[{"name":"fade_in_up","spring":{"damping":8,"stiffness":120}}]"#)
+                .unwrap();
+        assert_eq!(
+            v,
+            json!([{ "name": "fade_in_up", "spring": { "damping": 8, "stiffness": 120 } }])
+        );
     }
 }

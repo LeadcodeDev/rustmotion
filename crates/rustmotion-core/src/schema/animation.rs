@@ -166,6 +166,10 @@ pub struct PresetConfig {
     /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
     #[serde(default)]
     pub overshoot: Option<f64>,
+    /// Spring physics applied to the preset's motion keyframes (see
+    /// `AnimationTiming::spring`).
+    #[serde(default)]
+    pub spring: Option<SpringConfig>,
 }
 
 impl Default for PresetConfig {
@@ -175,6 +179,7 @@ impl Default for PresetConfig {
             duration: 0.8,
             repeat: false,
             overshoot: None,
+            spring: None,
         }
     }
 }
