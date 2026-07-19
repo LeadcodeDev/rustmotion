@@ -370,15 +370,11 @@ fn default_camera_zoom() -> f32 {
 /// Direction for progressive blur.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BlurDirection {
     Top,
+    #[default]
     Bottom,
-}
-
-impl Default for BlurDirection {
-    fn default() -> Self {
-        BlurDirection::Bottom
-    }
 }
 
 /// A post-processing effect applied to the full frame buffer after Skia renders.
