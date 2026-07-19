@@ -63,7 +63,13 @@ pub const EXCLUDED_FIELDS: &[&str] = &[
 /// How a schema field is edited by the generic control factory.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropKind {
-    Number,
+    /// Schema `"type": "integer"` (u8/u32/i64… — schemars adds a
+    /// `format: uint8/uint32/…` hint). Writes REAL JSON integers: a `12.0`
+    /// written into a `u32` field fails the typed parse ("invalid type:
+    /// floating point") and would drop the element at render.
+    Integer,
+    /// Schema `"type": "number"` (f32/f64 — `format: float/double`).
+    Float,
     Bool,
     String,
     /// String enum with the exact variants from the schema.
@@ -78,6 +84,16 @@ pub enum PropKind {
     Unit,
     /// Objects/arrays (border, box-shadow, …) → JSON textarea.
     Complex,
+}
+
+/// Shortest display form of a numeric raw string: `"405.0"` → `"405"`,
+/// `"1.40"` → `"1.4"`, `"100"` → `"100"` (Rust's f64 Display is
+/// shortest-round-trip). Non-numeric input passes through unchanged.
+pub fn display_number(raw: &str) -> String {
+    raw.trim()
+        .parse::<f64>()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| raw.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,7 +281,8 @@ fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKi
         }
     }
     match primary_type(schema) {
-        Some("number") | Some("integer") => PropKind::Number,
+        Some("integer") => PropKind::Integer,
+        Some("number") => PropKind::Float,
         Some("boolean") => PropKind::Bool,
         Some("string") if name.contains("color") || name.contains("colour") => PropKind::Color,
         Some("string") => PropKind::String,
@@ -565,9 +582,9 @@ mod tests {
     #[test]
     fn counter_exposes_its_root_fields_with_kinds() {
         let props = component_props("counter").expect("counter in schema");
-        assert_eq!(kind_of(props, "from"), Some(&PropKind::Number));
-        assert_eq!(kind_of(props, "to"), Some(&PropKind::Number));
-        assert_eq!(kind_of(props, "decimals"), Some(&PropKind::Number));
+        assert_eq!(kind_of(props, "from"), Some(&PropKind::Float));
+        assert_eq!(kind_of(props, "to"), Some(&PropKind::Float));
+        assert_eq!(kind_of(props, "decimals"), Some(&PropKind::Integer));
         assert_eq!(kind_of(props, "separator"), Some(&PropKind::String));
         assert_eq!(kind_of(props, "prefix"), Some(&PropKind::String));
         assert_eq!(kind_of(props, "suffix"), Some(&PropKind::String));
@@ -671,7 +688,7 @@ mod tests {
         // color is a Color control, opacity a Number, display an Enum,
         // width a Unit (untagged number|string), box-shadow Complex.
         assert_eq!(kind_of(all, "color"), Some(&PropKind::Color));
-        assert_eq!(kind_of(all, "opacity"), Some(&PropKind::Number));
+        assert_eq!(kind_of(all, "opacity"), Some(&PropKind::Float));
         assert!(matches!(kind_of(all, "display"), Some(PropKind::Enum(_))));
         assert!(matches!(
             kind_of(all, "width"),
@@ -716,6 +733,49 @@ mod tests {
         ] {
             assert!(v.contains(&s), "{s:?} missing from common trunk");
         }
+    }
+
+    // ── Round 3: Integer/Float split + display ──────────────────────────
+
+    #[test]
+    fn integer_and_float_split_follows_the_schema() {
+        // f64 → "type": "number" → Float.
+        let gauge = component_props("gauge").expect("gauge in schema");
+        assert_eq!(kind_of(gauge, "value"), Some(&PropKind::Float));
+        // Option<u32> → "type": "integer" (format uint32) → Integer.
+        let badge = component_props("badge").expect("badge in schema");
+        assert_eq!(kind_of(badge, "count"), Some(&PropKind::Integer));
+        // u8 → "type": "integer" (format uint8) → Integer.
+        let counter = component_props("counter").expect("counter in schema");
+        assert_eq!(kind_of(counter, "decimals"), Some(&PropKind::Integer));
+    }
+
+    #[test]
+    fn display_number_trims_trailing_zeros() {
+        assert_eq!(display_number("100"), "100");
+        assert_eq!(display_number("405.0"), "405");
+        assert_eq!(display_number("1.40"), "1.4");
+        assert_eq!(display_number("0.5"), "0.5");
+        assert_eq!(display_number("72.0"), "72");
+        assert_eq!(display_number("not-a-number"), "not-a-number");
+        assert_eq!(display_number(""), "");
+    }
+
+    #[test]
+    fn integer_write_round_trips_through_the_typed_parse() {
+        // Writing 12 into badge.count must produce a REAL JSON integer: a
+        // 12.0 float makes from_value::<Component> fail ("invalid type:
+        // floating point") and the element would be dropped at render.
+        let raw = serde_json::json!({"type": "badge", "text": "New", "count": 12});
+        assert!(
+            serde_json::from_value::<Component>(raw).is_ok(),
+            "integer count parses"
+        );
+        let bad = serde_json::json!({"type": "badge", "text": "New", "count": 12.0});
+        assert!(
+            serde_json::from_value::<Component>(bad).is_err(),
+            "float in u32 field must fail — this is why Integer never writes floats"
+        );
     }
 
     // ── Round 2: color editors / effective view / multiline ─────────────

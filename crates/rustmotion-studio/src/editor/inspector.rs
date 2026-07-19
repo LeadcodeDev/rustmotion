@@ -18,8 +18,9 @@ use crate::scenario::{
 
 use super::annotations::AnnotationBox;
 use super::properties::{
-    component_props, css_family, css_section_props, effective_element, engine_placeholder,
-    fill_to_value, is_multiline, parse_fill, slider_range, visible_sections, FillMode, PropKind,
+    component_props, css_family, css_section_props, display_number, effective_element,
+    engine_placeholder, fill_to_value, is_multiline, parse_fill, slider_range, visible_sections,
+    FillMode, PropKind,
 };
 
 // ── Debounce context ─────────────────────────────────────────────────────────
@@ -559,7 +560,8 @@ fn fmt_num(v: f64, step: f64) -> String {
     if step >= 1.0 {
         format!("{}", v.round() as i64)
     } else {
-        format!("{v:.2}")
+        // Round to 2 decimals, then shortest display: 1.40 → "1.4", 405.0 → "405".
+        ((v * 100.0).round() / 100.0).to_string()
     }
 }
 
@@ -765,7 +767,7 @@ fn TimingRow(
                     let p = pointer.clone();
                     let f = field.clone();
                     move |e: FormEvent| {
-                        if let Ok(v) = parse_root_value(&PropKind::Number, &e.value()) {
+                        if let Ok(v) = parse_root_value(&PropKind::Float, &e.value()) {
                             write_root_field(&shared, &p, &f, v);
                         }
                     }
@@ -841,8 +843,26 @@ fn parse_root_value(kind: &PropKind, text: &str) -> Result<serde_json::Value, ()
         return Ok(serde_json::Value::Null);
     }
     Ok(match kind {
-        PropKind::Number => {
+        PropKind::Integer => {
+            // NEVER write a float into an integer field: `12.0` fails the
+            // typed parse ("invalid type: floating point") and would drop the
+            // element at render.
+            match t.parse::<i64>() {
+                Ok(i) => serde_json::Value::from(i),
+                Err(_) => {
+                    let f: f64 = t.parse().map_err(|_| ())?;
+                    if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+                        serde_json::Value::from(f as i64)
+                    } else {
+                        return Err(());
+                    }
+                }
+            }
+        }
+        PropKind::Float => {
             let f: f64 = t.parse().map_err(|_| ())?;
+            // Integral floats are written as JSON integers (clean source; f64
+            // fields deserialize integers fine).
             if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
                 serde_json::Value::from(f as i64)
             } else {
@@ -953,7 +973,7 @@ fn GenericRow(
                 }
             }
         }
-        PropKind::Number => {
+        PropKind::Float => {
             if let Some((min, max, step)) = slider_range(&name) {
                 let mut num = use_signal(|| parse_num(&value).unwrap_or(min));
                 let mut txt = use_signal(|| num_display(&value, step));
@@ -993,11 +1013,24 @@ fn GenericRow(
                 let commit = commit.clone();
                 rsx! {
                     input {
-                        r#type: "text",
+                        r#type: "number",
+                        step: "0.1",
                         style: "{INPUT_STYLE}",
-                        value: "{value}",
+                        value: "{display_number(&value)}",
                         oninput: move |e: FormEvent| commit(&e.value()),
                     }
+                }
+            }
+        }
+        PropKind::Integer => {
+            let commit = commit.clone();
+            rsx! {
+                input {
+                    r#type: "number",
+                    step: "1",
+                    style: "{INPUT_STYLE}",
+                    value: "{display_number(&value)}",
+                    oninput: move |e: FormEvent| commit(&e.value()),
                 }
             }
         }
@@ -1058,9 +1091,8 @@ fn GenericRow(
                 title: if is_default { "{name} — engine default (not set in the source)" } else { "{name}" },
                 "{name}"
                 if is_default {
-                    span { style: "margin-left:4px; color:var(--rm-text-muted); opacity:0.55; font-size:9px; text-transform:uppercase; letter-spacing:0.04em;",
-                        "default"
-                    }
+                    // Discreet default marker; the row title explains it.
+                    span { style: "margin-left:4px; color:var(--rm-text-muted); opacity:0.6;", "•" }
                 }
             }
             div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }

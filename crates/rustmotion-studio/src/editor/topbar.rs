@@ -125,7 +125,11 @@ pub fn TopBar(
     let can_diff = diff_available();
 
     rsx! {
-        div { style: "position:relative; display:flex; align-items:center; justify-content:space-between; height:40px; padding:0 12px; border-bottom:1px solid var(--rm-border); background:var(--rm-surface-2); flex:none;",
+        div {
+            style: "position:relative; display:flex; align-items:center; justify-content:space-between; height:40px; padding:0 12px; border-bottom:1px solid var(--rm-border); background:var(--rm-surface-2); flex:none;",
+            // A focused topbar button owns its keys (Space activates IT, not
+            // play/pause) — same isolation pattern as the inspector panel.
+            onkeydown: move |evt: KeyboardEvent| evt.stop_propagation(),
             div { style: "display:flex; align-items:center; gap:8px; z-index:1;",
                 Button {
                     variant: ButtonVariant::Outline,

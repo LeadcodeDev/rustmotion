@@ -12,7 +12,9 @@ use super::annotations::AnnotationsPanel;
 use super::diff_panel::{DiffPanel, DiffSide};
 use super::frames::{baseline_arcs, frame_hits, render_frame, scene_prefix, HitPct};
 use super::inspector::InspectorPanel;
-use super::playback::{use_hot_reload, use_playback_clock, PlaybackBar};
+use super::playback::{
+    playback_action, use_hot_reload, use_playback_clock, PlaybackAction, PlaybackBar,
+};
 use super::prefetch::{frame_cache, use_prefetch_publisher, FrameKey};
 use super::topbar::TopBar;
 
@@ -243,20 +245,42 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let on_shortcut = {
         let shared = shared.clone();
         let history = history.clone();
+        let mut playing = playing;
+        let mut current = current;
         move |evt: KeyboardEvent| {
             let mods = evt.modifiers();
-            if !(mods.meta() || mods.ctrl()) {
+            let key = evt.key();
+            // Undo / redo (Cmd/Ctrl+Z, Shift for redo).
+            if (mods.meta() || mods.ctrl())
+                && matches!(key, Key::Character(ref c) if c.eq_ignore_ascii_case("z"))
+            {
+                evt.prevent_default();
+                if mods.shift() {
+                    redo(&shared, &history);
+                } else {
+                    undo(&shared, &history);
+                }
                 return;
             }
-            let is_z = matches!(evt.key(), Key::Character(ref c) if c.eq_ignore_ascii_case("z"));
-            if !is_z {
-                return;
-            }
-            evt.prevent_default();
-            if mods.shift() {
-                redo(&shared, &history);
-            } else {
-                undo(&shared, &history);
+            // Transport: Space toggles, arrows step (Shift = ×10), Home/End
+            // seek. prevent_default keeps Space from scrolling/activating and
+            // arrows from scrolling the page.
+            if let Some(action) = playback_action(&key, mods) {
+                evt.prevent_default();
+                let max = {
+                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    m.total_frames.saturating_sub(1)
+                };
+                match action {
+                    PlaybackAction::TogglePlay => playing.set(!playing()),
+                    PlaybackAction::Step(d) => {
+                        playing.set(false);
+                        let next = (current() as i64 + d).clamp(0, max as i64) as u32;
+                        current.set(next);
+                    }
+                    PlaybackAction::SeekStart => current.set(0),
+                    PlaybackAction::SeekEnd => current.set(max),
+                }
             }
         }
     };
