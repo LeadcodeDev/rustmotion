@@ -22,8 +22,8 @@ use super::view::RevSignal;
 use super::annotations::AnnotationBox;
 use super::properties::{
     component_props, css_family, css_section_props, display_number, effective_element,
-    engine_placeholder, fill_to_value, is_multiline, palette_prefill, parse_fill, slider_range,
-    visible_sections, FillMode, PropKind,
+    engine_placeholder, fill_to_value, is_multiline, next_entries_on_add, palette_prefill,
+    parse_fill, slider_range, visible_sections, FillMode, PropKind,
 };
 
 // ── Debounce context ─────────────────────────────────────────────────────────
@@ -1588,7 +1588,8 @@ fn ObjectControl(
 /// Generic per-entry list editor — the shared shell of ColorRows /
 /// NumberListControl / StringListControl (rule of three): one row per entry
 /// rendered by `render_item`, a remove button per row and an add button.
-/// `on_add` overrides the default push (palette prefill). Reordering: none.
+/// The add decision is the pure `next_entries_on_add` (an empty list with a
+/// `prefill` gets seeded with it). Reordering: none.
 #[component]
 fn ListRows(
     entries: Signal<Vec<String>>,
@@ -1596,7 +1597,7 @@ fn ListRows(
     add_label: String,
     add_value: String,
     render_item: Callback<(usize, String), Element>,
-    #[props(default)] on_add: Option<Callback<()>>,
+    #[props(default)] prefill: Option<&'static [&'static str]>,
 ) -> Element {
     rsx! {
         div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
@@ -1627,12 +1628,9 @@ fn ListRows(
                     let mut entries = entries;
                     let add_value = add_value.clone();
                     move |_| {
-                        if let Some(cb) = &on_add {
-                            cb.call(());
-                        } else {
-                            entries.write().push(add_value.clone());
-                            on_change.call(());
-                        }
+                        let next = next_entries_on_add(&entries.read(), &add_value, prefill);
+                        entries.set(next);
+                        on_change.call(());
                     }
                 },
                 "{add_label}"
@@ -1781,7 +1779,7 @@ fn StringListControl(pointer: String, name: String, value: String) -> Element {
 fn ColorRows(
     colors: Signal<Vec<String>>,
     on_change: EventHandler<()>,
-    #[props(default)] on_add: Option<Callback<()>>,
+    #[props(default)] prefill: Option<&'static [&'static str]>,
 ) -> Element {
     rsx! {
         ListRows {
@@ -1789,7 +1787,7 @@ fn ColorRows(
             on_change,
             add_label: "+ Add color".to_string(),
             add_value: "#ffffff".to_string(),
-            on_add,
+            prefill,
             render_item: Callback::new(move |(i, c): (usize, String)| {
                 let mut colors = colors;
                 rsx! {
@@ -1847,24 +1845,18 @@ fn ColorListControl(
         }
     };
 
+    // Palette lookup is static per (tag, field); the pure add decision in
+    // ListRows gates on CURRENT emptiness at click time.
+    let prefill = palette_prefill(&host_tag, &name, true);
     let is_empty = colors.read().is_empty();
-    let prefill = palette_prefill(&host_tag, &name, is_empty);
-    let on_add = prefill.map(|palette| {
-        let write = write.clone();
-        Callback::new(move |_: ()| {
-            let mut colors = colors;
-            colors.set(palette.iter().map(|c| c.to_string()).collect());
-            write(());
-        })
-    });
 
     rsx! {
         if is_empty && prefill.is_some() {
             div { style: "color:var(--rm-text-muted); font-size:10px; opacity:0.7;",
-                "engine palette"
+                "engine palette — click + to edit"
             }
         }
-        ColorRows { colors, on_change: write.clone(), on_add }
+        ColorRows { colors, on_change: write.clone(), prefill }
     }
 }
 

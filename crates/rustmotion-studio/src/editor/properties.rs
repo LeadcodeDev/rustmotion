@@ -129,6 +129,25 @@ pub fn palette_prefill(
     }
 }
 
+/// Next entries after a "+ Add" click (pure, single decision point for every
+/// list editor): an EMPTY list with a prefill (chart palette) is seeded with
+/// it — the user gets all 8 editable rows at once; otherwise one default
+/// entry is appended.
+pub fn next_entries_on_add(
+    current: &[String],
+    add_value: &str,
+    prefill: Option<&'static [&'static str]>,
+) -> Vec<String> {
+    match prefill {
+        Some(palette) if current.is_empty() => palette.iter().map(|c| c.to_string()).collect(),
+        _ => {
+            let mut v = current.to_vec();
+            v.push(add_value.to_string());
+            v
+        }
+    }
+}
+
 /// Mutate one sub-key of an object value: `Null` prunes the key; an object
 /// left empty collapses to `Null` (the whole field gets removed).
 pub fn mutate_object_field(current: &Value, key: &str, new: Value) -> Value {
@@ -895,6 +914,25 @@ mod tests {
             }
             other => panic!("direction should be Enum, got {other:?}"),
         }
+    }
+
+    // ── Chart-colors bug fix: unified add decision ──────────────────────
+
+    #[test]
+    fn add_click_seeds_palette_or_appends() {
+        let palette = palette_prefill("chart", "colors", true).unwrap();
+        // Empty chart colors + prefill → all 8 editable rows at once.
+        let seeded = next_entries_on_add(&[], "#ffffff", Some(palette));
+        assert_eq!(seeded.len(), 8);
+        assert_eq!(seeded[0], "#3B82F6");
+        // Non-empty list → plain append even with a prefill available.
+        let appended = next_entries_on_add(&seeded, "#ffffff", Some(palette));
+        assert_eq!(appended.len(), 9);
+        assert_eq!(appended[8], "#ffffff");
+        // NumberList / StringList (no prefill): empty list appends ONE default
+        // entry — no palette-style seeding, no lost click.
+        assert_eq!(next_entries_on_add(&[], "0", None), vec!["0".to_string()]);
+        assert_eq!(next_entries_on_add(&[], "", None), vec![String::new()]);
     }
 
     // ── Round 5: object / number-list editors ───────────────────────────
