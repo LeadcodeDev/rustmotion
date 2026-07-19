@@ -154,8 +154,8 @@ pub fn apply_pixelate(buf: &mut [u8], w: u32, h: u32, size: u32) {
         return;
     }
 
-    let bx_count = (w + size - 1) / size;
-    let by_count = (h + size - 1) / size;
+    let bx_count = w.div_ceil(size);
+    let by_count = h.div_ceil(size);
 
     for by in 0..by_count {
         for bx in 0..bx_count {
@@ -273,7 +273,7 @@ pub fn apply_progressive_blur(
         for x in 0..w {
             let x0 = x.saturating_sub(r);
             let x1 = (x + r).min(w - 1);
-            let count = (x1 - x0 + 1) as u32;
+            let count = x1 - x0 + 1;
             let mut sum = [0u32; 4];
             for sx in x0..=x1 {
                 let base = ((y * w + sx) * 4) as usize;
@@ -303,7 +303,7 @@ pub fn apply_progressive_blur(
         for x in 0..w {
             let y0 = y.saturating_sub(r);
             let y1 = (y + r).min(h - 1);
-            let count = (y1 - y0 + 1) as u32;
+            let count = y1 - y0 + 1;
             let mut sum = [0u32; 4];
             for sy in y0..=y1 {
                 let base = ((sy * w + x) * 4) as usize;
