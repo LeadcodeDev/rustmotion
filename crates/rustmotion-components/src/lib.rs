@@ -3,6 +3,7 @@ pub mod intrinsic;
 pub mod legacy_dispatch;
 
 pub mod arrow;
+pub mod audio_spectrum;
 pub mod avatar;
 pub mod avatar_group;
 pub mod badge;
@@ -57,6 +58,7 @@ pub mod timeline;
 pub mod tooltip;
 pub mod treemap;
 pub mod video;
+pub mod waveform;
 pub mod world_bitmap;
 
 use schemars::JsonSchema;
@@ -65,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use rustmotion_core::traits::{Animatable, Painter, Styled, Timed};
 
 pub use arrow::Arrow;
+pub use audio_spectrum::AudioSpectrum;
 pub use avatar::Avatar;
 pub use avatar_group::AvatarGroup;
 pub use badge::Badge;
@@ -119,6 +122,7 @@ pub use timeline::Timeline;
 pub use tooltip::Tooltip;
 pub use treemap::Treemap;
 pub use video::Video;
+pub use waveform::Waveform;
 
 // --- Position mode ---
 
@@ -176,6 +180,7 @@ impl ChildComponent {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Component {
+    AudioSpectrum(AudioSpectrum),
     Text(Text),
     Shape(Shape),
     Image(Image),
@@ -233,6 +238,7 @@ pub enum Component {
     Card(Card),
     #[serde(rename = "div", alias = "container")]
     Container(ContainerComponent),
+    Waveform(Waveform),
 }
 
 // --- Dispatch helpers ---
@@ -240,6 +246,8 @@ pub enum Component {
 impl Component {
     pub fn as_animatable(&self) -> Option<&dyn Animatable> {
         match self {
+            Component::AudioSpectrum(c) => Some(c),
+            Component::Waveform(c) => Some(c),
             Component::Text(c) => Some(c),
             Component::Shape(c) => Some(c),
             Component::Image(c) => Some(c),
@@ -300,6 +308,8 @@ impl Component {
 
     pub fn as_timed(&self) -> Option<&dyn Timed> {
         match self {
+            Component::AudioSpectrum(c) => Some(c),
+            Component::Waveform(c) => Some(c),
             Component::Text(c) => Some(c),
             Component::Shape(c) => Some(c),
             Component::Image(c) => Some(c),
@@ -360,6 +370,8 @@ impl Component {
 
     pub fn as_styled(&self) -> &dyn Styled {
         match self {
+            Component::AudioSpectrum(c) => c,
+            Component::Waveform(c) => c,
             Component::Text(c) => c,
             Component::Shape(c) => c,
             Component::Image(c) => c,
@@ -422,6 +434,8 @@ impl Component {
     /// pipeline; the dispatcher always uses Painter::paint_content.
     pub fn as_painter(&self) -> Option<&dyn Painter> {
         match self {
+            Component::AudioSpectrum(c) => Some(c),
+            Component::Waveform(c) => Some(c),
             Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
             Component::Flex(c) => Some(c),

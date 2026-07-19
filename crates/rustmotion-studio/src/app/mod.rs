@@ -69,6 +69,7 @@ pub fn run_preview_root(
         engine::prefetch_icons(&view.scenes);
         engine::preextract_video_frames(&view.scenes, scenario.video.fps);
     }
+    rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }

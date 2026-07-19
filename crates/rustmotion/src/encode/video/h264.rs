@@ -4,6 +4,7 @@ use openh264::OpenH264API;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::encode::audio_analysis::analyze_scenario_audio;
 use crate::engine::{preextract_video_frames, prefetch_icons, rgba_to_yuv420};
 use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
@@ -38,6 +39,7 @@ pub fn encode_video(
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
+    analyze_scenario_audio(scenario);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
@@ -128,6 +130,7 @@ pub fn encode_video_incremental(
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
+    analyze_scenario_audio(scenario);
 
     let num_slots = slots.len();
     let scene_hashes: Vec<u64> = slots

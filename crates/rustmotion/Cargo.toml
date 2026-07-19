@@ -30,6 +30,7 @@ resvg = "0.44"
 usvg = "0.44"
 tiny-skia = "0.11"
 ureq = "3"
+rustfft = "6"
 
 [features]
 # Opt-in: integration tests that shell out to a real ffmpeg binary.

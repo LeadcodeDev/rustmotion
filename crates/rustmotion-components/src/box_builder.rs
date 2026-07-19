@@ -215,6 +215,61 @@ fn build_child<'a>(
         }
     }
 
+    // ── Audio-reactive binding ────────────────────────────────────────────────
+    // Reads the audio analysis cache and lerps the target CSS property between
+    // min and max. Cache-miss → value = min (deterministic fallback).
+    if let Some(ar) = css.audio_reactive.take() {
+        use rustmotion_core::css::style::{AudioReactiveProperty, AudioSource, AudioSourceTag};
+        use rustmotion_core::engine::renderer::audio_analysis::audio_analysis_cache;
+
+        if let Some(actx) = anim {
+            let cache = audio_analysis_cache();
+            let analysis_opt = if let Some(ref src) = ar.track {
+                cache.get(src).map(|r| r.clone())
+            } else {
+                cache.iter().next().map(|r| r.value().clone())
+            };
+
+            let raw = if let Some(analysis) = analysis_opt {
+                match &ar.source {
+                    AudioSource::Amplitude(AudioSourceTag::Amplitude) => {
+                        analysis.amplitude_smoothed(actx.time, ar.smoothing_frames)
+                    }
+                    AudioSource::Band { band } => {
+                        analysis.band_smoothed(actx.time, *band, ar.smoothing_frames)
+                    }
+                }
+            } else {
+                0.0 // cache empty → use min
+            };
+
+            let lerped = ar.min as f32 + raw * (ar.max - ar.min) as f32;
+
+            match ar.property {
+                AudioReactiveProperty::Opacity => {
+                    let base = css.opacity.unwrap_or(1.0);
+                    css.opacity = Some(base * lerped.clamp(0.0, 1.0));
+                }
+                AudioReactiveProperty::Scale => {
+                    let s = lerped.max(0.0);
+                    let tx = css.transform.get_or_insert_with(Vec::new);
+                    tx.push(rustmotion_core::css::style::TransformFn::Scale { x: s, y: s });
+                }
+                AudioReactiveProperty::TranslateY => {
+                    use rustmotion_core::css::units::LengthPercentage;
+                    let tx = css.transform.get_or_insert_with(Vec::new);
+                    tx.push(rustmotion_core::css::style::TransformFn::TranslateY {
+                        y: LengthPercentage::Px(lerped),
+                    });
+                }
+                AudioReactiveProperty::Rotation => {
+                    let tx = css.transform.get_or_insert_with(Vec::new);
+                    tx.push(rustmotion_core::css::style::TransformFn::Rotate { deg: lerped });
+                }
+            }
+        }
+    }
+
     // Visibility window (start_at/end_at) — enforced by the paint pass.
     // The stagger delay shifts the window too, so a hard-cut child appears
     // in step with its staggered siblings.
@@ -768,6 +823,22 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::Px(box_h)));
             }
         }
+        AudioSpectrum(_) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(400.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(120.0)));
+            }
+        }
+        Waveform(_) => {
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(400.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(80.0)));
+            }
+        }
         _ => {}
     }
 }
@@ -831,6 +902,8 @@ fn component_style(c: &Component) -> &CssStyle {
         Grid(c) => &c.style,
         Card(c) => &c.style,
         Container(c) => &c.style,
+        AudioSpectrum(c) => &c.style,
+        Waveform(c) => &c.style,
     }
 }
 
@@ -893,6 +966,8 @@ pub fn component_kind(c: &Component) -> &'static str {
         Grid(_) => "grid",
         Card(_) => "card",
         Container(_) => "container",
+        AudioSpectrum(_) => "audio_spectrum",
+        Waveform(_) => "waveform",
     }
 }
 

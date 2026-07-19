@@ -4917,6 +4917,7 @@ dependencies = [
  "rayon",
  "resvg",
  "rubato",
+ "rustfft",
  "rustmotion-components",
  "rustmotion-core",
  "rustmotion-html",

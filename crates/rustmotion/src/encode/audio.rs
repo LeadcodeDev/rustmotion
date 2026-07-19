@@ -14,7 +14,7 @@ const TARGET_SAMPLE_RATE: u32 = 48000;
 const TARGET_CHANNELS: u32 = 2;
 
 /// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
-fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
+pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
     let file = File::open(path).map_err(|e| RustmotionError::AudioOpen {
         path: path.to_string(),
         reason: e.to_string(),

@@ -428,6 +428,8 @@ fn component_kind(c: &Component) -> &'static str {
         Component::Grid(_) => "grid",
         Component::Card(_) => "card",
         Component::Container(_) => "container",
+        Component::AudioSpectrum(_) => "audio_spectrum",
+        Component::Waveform(_) => "waveform",
     }
 }
 

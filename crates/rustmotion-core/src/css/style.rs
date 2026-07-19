@@ -105,6 +105,10 @@ pub struct CssStyle {
     /// `opacity`, and `color` on text/counter; everything else snaps at the
     /// step's `at`.
     pub transition: Option<StyleTransition>,
+
+    // ---- Audio reactive binding ----
+    #[serde(default)]
+    pub audio_reactive: Option<AudioReactive>,
 }
 
 /// `transition` config: bare number = duration in seconds with the default
@@ -122,6 +126,55 @@ pub enum StyleTransition {
 
 fn default_transition_easing() -> crate::schema::EasingType {
     crate::schema::EasingType::EaseInOut
+}
+
+// ---- Audio reactive binding ----
+
+/// Bind a CSS property to audio analysis data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AudioReactive {
+    /// Audio track src key. If None, uses the first entry in the cache.
+    #[serde(default)]
+    pub track: Option<String>,
+    /// Which audio data source to use.
+    pub source: AudioSource,
+    /// Which CSS property to modulate.
+    pub property: AudioReactiveProperty,
+    /// Value when audio is at 0.
+    pub min: f64,
+    /// Value when audio is at 1.
+    pub max: f64,
+    /// Number of previous frames to average (0 = no smoothing).
+    #[serde(default)]
+    pub smoothing_frames: u32,
+}
+
+/// The audio data source for an AudioReactive binding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AudioSource {
+    /// Overall amplitude (RMS). JSON: `"amplitude"`.
+    Amplitude(AudioSourceTag),
+    /// A specific frequency band (0..15). JSON: `{"band": 3}`.
+    Band { band: u8 },
+}
+
+/// Tag-only variant for the amplitude source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSourceTag {
+    Amplitude,
+}
+
+/// Which CSS property to modulate with audio.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioReactiveProperty {
+    Opacity,
+    Scale,
+    TranslateY,
+    Rotation,
 }
 
 impl StyleTransition {
