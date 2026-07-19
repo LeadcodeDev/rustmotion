@@ -129,6 +129,9 @@ mod component_smoke {
         ("notification", r#"{"type":"notification","title":"Hi"}"#),
         ("pill_nav", r#"{"type":"pill_nav","items":["A","B"]}"#),
         ("tooltip", r#"{"type":"tooltip","text":"hi"}"#),
+        // Audio reactive components
+        ("audio_spectrum", r#"{"type":"audio_spectrum"}"#),
+        ("waveform", r#"{"type":"waveform"}"#),
     ];
 
     #[test]
@@ -1112,6 +1115,366 @@ mod component_smoke {
             layout.width > 0.0,
             "codeblock width should be > 0, got {}",
             layout.width
+        );
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use std::sync::Arc;
+
+    use rustmotion_core::engine::renderer::audio_analysis::{audio_analysis_cache, AudioAnalysis};
+
+    /// Build a minimal PCM WAV file in memory: mono i16, 44100 Hz.
+    /// The first `sine_samples` samples are a 440 Hz sine wave;
+    /// the rest are silence up to `total_samples`.
+    fn make_sine_wav(
+        total_samples: u32,
+        sine_samples: u32,
+        freq: f32,
+        sample_rate: u32,
+    ) -> Vec<u8> {
+        let data_size = total_samples * 2; // i16 mono
+        let mut wav = Vec::<u8>::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..total_samples {
+            let s = if i < sine_samples {
+                let t = i as f32 / sample_rate as f32;
+                (2.0 * std::f32::consts::PI * freq * t).sin()
+            } else {
+                0.0
+            };
+            let pcm = (s * 32767.0) as i16;
+            wav.extend_from_slice(&pcm.to_le_bytes());
+        }
+        wav
+    }
+    fn nanos() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    /// Wrap a component JSON into a `ChildComponent` absolutely positioned at
+    /// the canvas origin.
+    fn child_at_origin(json: serde_json::Value) -> crate::components::ChildComponent {
+        let component: crate::components::Component =
+            serde_json::from_value(json).expect("component json");
+        crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }
+    }
+
+    /// Paint a single child through the full box_tree → layout → paint
+    /// pipeline at `time` and return the RGBA8888 pixels.
+    fn paint_scene(
+        child: crate::components::ChildComponent,
+        w: i32,
+        h: i32,
+        time: f64,
+        fps: u32,
+    ) -> Vec<u8> {
+        use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
+        use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+        use rustmotion_core::css::taffy_bridge::ConversionContext;
+        use rustmotion_core::engine::layout_pass::run_layout;
+        use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+        let scene = vec![child];
+        let built = build_scene_with_anim(
+            &scene,
+            (w as f32, h as f32),
+            BuildAnimationCtx {
+                time,
+                scene_duration: 10.0,
+            },
+        );
+        let layout = run_layout(
+            &built.root,
+            (w as f32, h as f32),
+            &ConversionContext::default(),
+        );
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
+        paint_tree(
+            canvas,
+            &built.root,
+            &layout,
+            &PaintFrame {
+                time,
+                frame_index: (time * fps as f64) as u32,
+                fps,
+                video_width: w as u32,
+                video_height: h as u32,
+                scene_duration: 10.0,
+            },
+            &dispatcher,
+        );
+        let row_bytes = (w * 4) as usize;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    /// Count non-transparent pixels in the column range `[x0, x1)`.
+    fn lit_in_columns(pixels: &[u8], width: usize, x0: usize, x1: usize) -> usize {
+        let height = pixels.len() / (width * 4);
+        let mut count = 0;
+        for y in 0..height {
+            for x in x0..x1 {
+                if pixels[(y * width + x) * 4 + 3] > 0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn analyze_scenario_audio_computes_amplitude_and_440hz_band() {
+        let sample_rate = 44100u32;
+        // 1.0 s total: 0.5 s of 440 Hz sine, then 0.5 s of silence.
+        let total_samples = sample_rate;
+        let sine_samples = sample_rate / 2;
+        let wav = make_sine_wav(total_samples, sine_samples, 440.0, sample_rate);
+
+        let wav_path =
+            std::env::temp_dir().join(format!("rustmotion_test_analysis_{}.wav", nanos()));
+        std::fs::write(&wav_path, &wav).expect("write wav fixture");
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        let json = serde_json::json!({
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "audio": [{"src": wav_str}],
+            "scenes": [{"duration": 1.0, "children": []}]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+        crate::encode::audio_analysis::analyze_scenario_audio(&scenario);
+
+        let analysis = audio_analysis_cache()
+            .get(&wav_str)
+            .expect("analysis must be cached under the track src")
+            .clone();
+        std::fs::remove_file(&wav_path).ok();
+
+        assert_eq!(analysis.frame_rate, 30);
+        assert!(
+            analysis.amplitude.len() >= 29,
+            "1 s at 30 fps should give ~30 frames, got {}",
+            analysis.amplitude.len()
+        );
+
+        // Amplitude: ~1.0 during the sine (frames 0..14), ~0 during silence.
+        let sine_max = analysis.amplitude[..14]
+            .iter()
+            .cloned()
+            .fold(0.0f32, f32::max);
+        let silence_max = analysis.amplitude[16..]
+            .iter()
+            .cloned()
+            .fold(0.0f32, f32::max);
+        assert!(
+            sine_max > 0.9,
+            "normalized amplitude during the sine should be ~1.0, got {sine_max}"
+        );
+        assert!(
+            silence_max < 0.05,
+            "amplitude during silence should be ~0, got {silence_max}"
+        );
+
+        // Band energy concentrated in the log band containing 440 Hz.
+        let lo = 20.0f32.log2();
+        let hi = 16000.0f32.log2();
+        let expected_band = (((440.0f32.log2() - lo) / ((hi - lo) / 16.0)) as usize).min(15);
+        let frame = &analysis.bands[5]; // mid-sine frame
+        let (argmax, max_v) =
+            frame.iter().enumerate().fold(
+                (0usize, 0.0f32),
+                |acc, (i, &v)| if v > acc.1 { (i, v) } else { acc },
+            );
+        assert_eq!(
+            argmax, expected_band,
+            "band {expected_band} should carry the 440 Hz energy (argmax was {argmax}: {frame:?})"
+        );
+        assert!(max_v > 0.5, "440 Hz band should be hot, got {max_v}");
+        let second = frame
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != expected_band)
+            .map(|(_, &v)| v)
+            .fold(0.0f32, f32::max);
+        assert!(
+            frame[expected_band] > second * 3.0,
+            "440 Hz band ({}) should dominate the runner-up ({second})",
+            frame[expected_band]
+        );
+    }
+
+    #[test]
+    fn audio_spectrum_hot_band_renders_taller_bar() {
+        let key = format!("test-spectrum-hot-{}", nanos());
+        let mut bands = vec![[0.0f32; 16]; 30];
+        for fr in &mut bands {
+            fr[15] = 1.0; // hottest band = highest frequencies → right-most bar
+        }
+        audio_analysis_cache().insert(
+            key.clone(),
+            Arc::new(AudioAnalysis {
+                frame_rate: 30,
+                amplitude: vec![1.0; 30],
+                bands,
+            }),
+        );
+
+        let child = child_at_origin(serde_json::json!({
+            "type": "audio_spectrum",
+            "track": key,
+            "bars": 16
+        }));
+        // Default intrinsic size 400x120; bar_w = (400 - 15*2)/16 ≈ 23.1,
+        // bar 15 spans x ≈ 377..400.
+        let pixels = paint_scene(child, 400, 200, 0.5, 30);
+        let hot_bar = lit_in_columns(&pixels, 400, 378, 400);
+        let cold_bar = lit_in_columns(&pixels, 400, 0, 23);
+        assert!(
+            hot_bar > cold_bar * 10,
+            "hot band bar ({hot_bar} lit px) should tower over a cold bar ({cold_bar} lit px)"
+        );
+
+        // Missing track → graceful degradation: min_height bars only, glued
+        // to the bottom edge of the 120px box.
+        let missing = child_at_origin(serde_json::json!({
+            "type": "audio_spectrum",
+            "track": format!("test-spectrum-missing-{}", nanos()),
+            "bars": 16
+        }));
+        let pixels = paint_scene(missing, 400, 200, 0.5, 30);
+        let mut lit_total = 0usize;
+        let mut lit_above_baseline = 0usize;
+        for y in 0..200usize {
+            for x in 0..400usize {
+                if pixels[(y * 400 + x) * 4 + 3] > 0 {
+                    lit_total += 1;
+                    if y < 115 {
+                        lit_above_baseline += 1;
+                    }
+                }
+            }
+        }
+        assert!(lit_total > 0, "min_height bars should still render");
+        assert_eq!(
+            lit_above_baseline, 0,
+            "empty cache must render nothing above the min-height baseline"
+        );
+    }
+
+    #[test]
+    fn waveform_ramp_renders_increasing_pixels_along_x() {
+        let key = format!("test-waveform-ramp-{}", nanos());
+        let n = 60usize; // 2 s at 30 fps
+        let amplitude: Vec<f32> = (0..n).map(|i| i as f32 / (n - 1) as f32).collect();
+        audio_analysis_cache().insert(
+            key.clone(),
+            Arc::new(AudioAnalysis {
+                frame_rate: 30,
+                amplitude,
+                bands: vec![[0.0f32; 16]; 60],
+            }),
+        );
+
+        let child = child_at_origin(serde_json::json!({
+            "type": "waveform",
+            "track": key,
+            "draw_style": "filled",
+            "window": 2.0
+        }));
+        // At t=1.0 the 2 s window covers the whole ramp: amplitude (and the
+        // filled area under the curve) grows from left to right.
+        let pixels = paint_scene(child, 400, 200, 1.0, 30);
+        let left = lit_in_columns(&pixels, 400, 0, 133);
+        let right = lit_in_columns(&pixels, 400, 267, 400);
+        assert!(
+            left > 0,
+            "left third should have some lit pixels (outline at minimum)"
+        );
+        assert!(
+            right > left * 2,
+            "ramping amplitude: right third ({right} lit px) should clearly exceed left third ({left} lit px)"
+        );
+    }
+
+    #[test]
+    fn audio_reactive_opacity_binding_differs_between_loud_and_quiet() {
+        let key = format!("test-ar-binding-{}", nanos());
+        // Loud at t=0 (frame 0), silent afterwards.
+        let mut amplitude = vec![0.0f32; 90];
+        amplitude[0] = 1.0;
+        audio_analysis_cache().insert(
+            key.clone(),
+            Arc::new(AudioAnalysis {
+                frame_rate: 30,
+                amplitude,
+                bands: vec![[0.0f32; 16]; 90],
+            }),
+        );
+
+        let make_child = || {
+            child_at_origin(serde_json::json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "audio-reactive": {
+                        "track": key,
+                        "source": "amplitude",
+                        "property": "opacity",
+                        "min": 0.0,
+                        "max": 1.0
+                    }
+                }
+            }))
+        };
+        let red_sum = |pixels: &[u8]| pixels.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
+
+        let loud = paint_scene(make_child(), 200, 200, 0.0, 30);
+        let quiet = paint_scene(make_child(), 200, 200, 0.5, 30);
+        let (loud_red, quiet_red) = (red_sum(&loud), red_sum(&quiet));
+        assert!(
+            loud_red > 100_000,
+            "loud frame should render the red rect (red_sum={loud_red})"
+        );
+        assert!(
+            loud_red > quiet_red.saturating_mul(10).max(1),
+            "red_sum must differ sharply between loud ({loud_red}) and quiet ({quiet_red}) frames"
         );
     }
 }

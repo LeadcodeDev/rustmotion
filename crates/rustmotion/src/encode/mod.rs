@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod audio_analysis;
 pub mod video;
 pub mod video_audio;
 

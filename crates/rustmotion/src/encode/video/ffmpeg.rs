@@ -2,6 +2,7 @@ use rayon::prelude::*;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::encode::audio_analysis::analyze_scenario_audio;
 use crate::engine::prefetch_icons;
 use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
@@ -27,6 +28,7 @@ pub fn encode_with_ffmpeg(
     for view in &scenario.views {
         prefetch_icons(&view.scenes);
     }
+    analyze_scenario_audio(scenario);
 
     let tasks = build_frame_tasks(scenario);
     let total_frames = tasks.len() as u32;
