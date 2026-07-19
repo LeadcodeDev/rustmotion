@@ -312,6 +312,10 @@ pub struct Scene {
     /// (world) Keep this scene visible after its time window ends.
     #[serde(default)]
     pub persist: bool,
+    /// Post-processing effects applied to the full frame buffer after Skia renders.
+    /// Effects are additive and applied in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<PostEffect>,
     /// Post-resolution background (populated by include.rs, ignored by serde).
     #[serde(skip)]
     #[schemars(skip)]
@@ -361,6 +365,91 @@ pub struct CameraKeyframePoint {
 
 fn default_camera_zoom() -> f32 {
     1.0
+}
+
+/// Direction for progressive blur.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BlurDirection {
+    Top,
+    Bottom,
+}
+
+impl Default for BlurDirection {
+    fn default() -> Self {
+        BlurDirection::Bottom
+    }
+}
+
+/// A post-processing effect applied to the full frame buffer after Skia renders.
+/// Effects are pure Rust, deterministic, and applied in declaration order.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PostEffect {
+    /// Film grain noise overlaid on every pixel.
+    Grain {
+        /// Noise strength clamped to 0..1. Default: 0.15.
+        #[serde(default = "default_grain_intensity")]
+        intensity: f32,
+        /// Base seed for the noise hash. Default: 42.
+        #[serde(default = "default_grain_seed")]
+        seed: u64,
+        /// When true, the pattern changes per frame (`seed ^ frame_index`). Default: true.
+        #[serde(default = "default_true")]
+        animated: bool,
+    },
+    /// Darken the frame edges towards the corners.
+    Vignette {
+        /// Darkness strength clamped to 0..1. Default: 0.5.
+        #[serde(default = "default_vignette_intensity")]
+        intensity: f32,
+        /// Fraction of the half-diagonal where darkening starts. Default: 0.75.
+        #[serde(default = "default_vignette_radius")]
+        radius: f32,
+    },
+    /// Reduce spatial resolution by averaging square pixel blocks.
+    Pixelate {
+        /// Block size in pixels, clamped to 1..=256. Default: 8.
+        #[serde(default = "default_pixelate_size")]
+        size: u32,
+    },
+    /// Blur that grows from zero at `start` to `max_radius` at the frame edge.
+    ProgressiveBlur {
+        /// Which edge gets the maximum blur. Default: bottom.
+        #[serde(default)]
+        direction: BlurDirection,
+        /// Fraction of the frame height where blur begins (0.0..1.0). Default: 0.5.
+        #[serde(default = "default_blur_start")]
+        start: f32,
+        /// Maximum box-blur radius in pixels at the far edge. Default: 12.0.
+        #[serde(default = "default_blur_max_radius")]
+        max_radius: f32,
+    },
+}
+
+fn default_grain_intensity() -> f32 {
+    0.15
+}
+fn default_grain_seed() -> u64 {
+    42
+}
+fn default_true() -> bool {
+    true
+}
+fn default_vignette_intensity() -> f32 {
+    0.5
+}
+fn default_vignette_radius() -> f32 {
+    0.75
+}
+fn default_pixelate_size() -> u32 {
+    8
+}
+fn default_blur_start() -> f32 {
+    0.5
+}
+fn default_blur_max_radius() -> f32 {
+    12.0
 }
 
 /// Scene-level flex layout configuration

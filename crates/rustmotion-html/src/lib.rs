@@ -53,6 +53,8 @@ pub enum HtmlError {
     MissingDuration,
     #[error("background attribute contains invalid JSON: {0}")]
     InvalidBackgroundJson(String),
+    #[error("effects attribute contains invalid JSON: {0}")]
+    InvalidEffectsJson(String),
     #[error("anim attribute contains invalid JSON: {0}")]
     InvalidAnimJson(String),
     #[error("invalid anim DSL: {0}")]

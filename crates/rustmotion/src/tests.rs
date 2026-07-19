@@ -2096,3 +2096,111 @@ mod motion_blur_trail {
         );
     }
 }
+
+// ─── Post-effects pipeline tests ──────────────────────────────────────────────
+
+#[cfg(test)]
+mod post_effects_pipeline {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+
+    /// Render frame 0 of the first scene in a scenario JSON string.
+    fn render_first_frame(json: &str) -> Vec<u8> {
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::Normal { .. }))
+            .expect("normal task");
+        render_frame_task(&scenario.video, &scenario, task).expect("render")
+    }
+
+    #[test]
+    fn vignette_makes_corners_darker_than_center() {
+        // A scene with strong vignette on a light background — corners must be darker.
+        // Using JSON string concatenation to avoid raw string + hex conflicts.
+        let bg = "#ffffff";
+        let with_vignette = format!(
+            r#"{{"video":{{"width":100,"height":100,"background":"{bg}"}},"scenes":[{{"duration":1.0,"effects":[{{"type":"vignette","intensity":0.9,"radius":0.3}}],"children":[]}}]}}"#
+        );
+        let without_vignette = format!(
+            r#"{{"video":{{"width":100,"height":100,"background":"{bg}"}},"scenes":[{{"duration":1.0,"children":[]}}]}}"#
+        );
+
+        let buf_v = render_first_frame(&with_vignette);
+        let buf_plain = render_first_frame(&without_vignette);
+
+        // Top-left corner pixel (0, 0) — RGBA at byte 0
+        let corner_r_vignette = buf_v[0] as u16;
+        let corner_r_plain = buf_plain[0] as u16;
+        assert!(
+            corner_r_vignette < corner_r_plain,
+            "vignette corner must be darker: vignette={corner_r_vignette} plain={corner_r_plain}"
+        );
+
+        // Centre pixel (50, 50) in a 100×100 image
+        let center_base = (50 * 100 + 50) * 4;
+        let center_r_vignette = buf_v[center_base] as u16;
+        let center_r_plain = buf_plain[center_base] as u16;
+        assert!(
+            center_r_vignette >= center_r_plain.saturating_sub(5),
+            "vignette center should be approximately unchanged: vignette={center_r_vignette} plain={center_r_plain}"
+        );
+    }
+
+    #[test]
+    fn scene_effects_field_defaults_to_empty() {
+        // A scene without an effects key must parse without error and render cleanly.
+        let json =
+            r#"{"video":{"width":32,"height":32},"scenes":[{"duration":1.0,"children":[]}]}"#;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let scene = &scenario.views[0].scenes[0];
+        assert!(
+            scene.effects.is_empty(),
+            "effects must default to empty Vec"
+        );
+    }
+
+    #[test]
+    fn grain_effect_changes_buffer_vs_no_effect() {
+        // Grain at high intensity should change pixels on a plain background.
+        let bg = "#808080";
+        let with_grain = format!(
+            r#"{{"video":{{"width":32,"height":32,"background":"{bg}"}},"scenes":[{{"duration":1.0,"effects":[{{"type":"grain","intensity":0.5,"seed":42,"animated":false}}],"children":[]}}]}}"#
+        );
+        let without = format!(
+            r#"{{"video":{{"width":32,"height":32,"background":"{bg}"}},"scenes":[{{"duration":1.0,"children":[]}}]}}"#
+        );
+        let a = render_first_frame(&with_grain);
+        let b = render_first_frame(&without);
+        assert_ne!(a, b, "grain effect must change the buffer");
+    }
+
+    #[test]
+    fn post_effect_schema_deserializes_all_variants() {
+        use rustmotion_core::schema::scenario::PostEffect;
+        let cases = [
+            r#"{"type":"grain","intensity":0.2,"seed":10,"animated":true}"#,
+            r#"{"type":"vignette","intensity":0.6,"radius":0.8}"#,
+            r#"{"type":"pixelate","size":8}"#,
+            r#"{"type":"progressive_blur","direction":"bottom","start":0.5,"max_radius":12.0}"#,
+            r#"{"type":"progressive_blur","direction":"top","start":0.3,"max_radius":8.0}"#,
+        ];
+        for case in &cases {
+            serde_json::from_str::<PostEffect>(case)
+                .unwrap_or_else(|e| panic!("failed: {e}\nJSON: {case}"));
+        }
+    }
+
+    #[test]
+    fn post_effect_unknown_type_fails() {
+        // Unknown type tags must produce a deserialization error.
+        use rustmotion_core::schema::scenario::PostEffect;
+        let bad = r#"{"type":"unknown_effect"}"#;
+        let result = serde_json::from_str::<PostEffect>(bad);
+        assert!(
+            result.is_err(),
+            "unknown effect type must fail to deserialize"
+        );
+    }
+}

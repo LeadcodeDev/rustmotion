@@ -7,6 +7,12 @@ use crate::parse_background_attr;
 use crate::style::coerce_value;
 use crate::HtmlError;
 
+/// Parse an `effects` attribute value: must be a JSON array.
+fn parse_effects_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidEffectsJson(e.to_string()))
+}
+
 /// Map a `<scene>` element to a scene JSON object. Defaults to a centered flex
 /// layout (overridable via `align`/`justify`/`direction`/`gap`/`padding` attrs).
 pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
@@ -40,6 +46,18 @@ pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     // background: string or inline JSON object/array
     if let Some(bg) = get("background") {
         obj.insert("background".into(), parse_background_attr(&bg)?);
+    }
+
+    // effects: JSON array of PostEffect objects
+    if let Some(fx) = get("effects") {
+        let parsed = parse_effects_attr(&fx)?;
+        // Validate that it is an array (not just any JSON value)
+        if !parsed.is_array() {
+            return Err(HtmlError::InvalidEffectsJson(
+                "effects must be a JSON array".into(),
+            ));
+        }
+        obj.insert("effects".into(), parsed);
     }
 
     // transition: type is required; duration and easing are optional extras
@@ -125,6 +143,67 @@ mod tests {
             matches!(err, crate::HtmlError::InvalidBackgroundJson(_)),
             "expected InvalidBackgroundJson, got: {err:?}"
         );
+    }
+
+    // --- effects ---
+
+    #[test]
+    fn scene_effects_json_array_transpiled() {
+        let dom = crate::parse_fragment_dom(
+            r##"<scene duration="2" effects='[{"type":"grain","intensity":0.2}]'></scene>"##,
+        );
+        let el = crate::find_element(&dom.document, "scene").unwrap();
+        let v = scene_to_value(&el).unwrap();
+        assert_eq!(v["effects"][0]["type"], json!("grain"));
+        assert_eq!(v["effects"][0]["intensity"], json!(0.2));
+    }
+
+    #[test]
+    fn scene_effects_invalid_json_is_error() {
+        let dom =
+            crate::parse_fragment_dom(r#"<scene duration="2" effects="{not valid json}"></scene>"#);
+        let el = crate::find_element(&dom.document, "scene").unwrap();
+        let err = scene_to_value(&el).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::InvalidEffectsJson(_)),
+            "expected InvalidEffectsJson, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn scene_effects_non_array_is_error() {
+        let dom = crate::parse_fragment_dom(
+            r##"<scene duration="2" effects='{"type":"grain"}'></scene>"##,
+        );
+        let el = crate::find_element(&dom.document, "scene").unwrap();
+        let err = scene_to_value(&el).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::InvalidEffectsJson(_)),
+            "expected InvalidEffectsJson (non-array), got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn scene_without_effects_has_no_effects_key() {
+        let dom = crate::parse_fragment_dom(r#"<scene duration="2"></scene>"#);
+        let el = crate::find_element(&dom.document, "scene").unwrap();
+        let v = scene_to_value(&el).unwrap();
+        assert!(
+            v.get("effects").is_none(),
+            "effects key must be absent when not declared"
+        );
+    }
+
+    #[test]
+    fn scene_effects_multiple_entries() {
+        let dom = crate::parse_fragment_dom(
+            r##"<scene duration="2" effects='[{"type":"vignette","intensity":0.6},{"type":"pixelate","size":4}]'></scene>"##,
+        );
+        let el = crate::find_element(&dom.document, "scene").unwrap();
+        let v = scene_to_value(&el).unwrap();
+        assert_eq!(v["effects"].as_array().unwrap().len(), 2);
+        assert_eq!(v["effects"][0]["type"], json!("vignette"));
+        assert_eq!(v["effects"][1]["type"], json!("pixelate"));
     }
 
     // --- transition with duration and easing ---
