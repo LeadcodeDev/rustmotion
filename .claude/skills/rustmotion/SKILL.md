@@ -2247,12 +2247,23 @@ New style fields available on all components:
 
 | Style field       | Type   | Default | Description                                              |
 | ----------------- | ------ | ------- | -------------------------------------------------------- |
-| `backdrop-blur`   | f32    | `null`  | Glassmorphism blur effect (pixels)                       |
-| `gradient-border` | object | `null`  | `{ "colors": [...], "width": 2, "angle": 0 }` — gradient-colored border |
-| `inner-shadow`    | object | `null`  | `{ "color": "#000", "offset_x": 0, "offset_y": 0, "blur": 10 }` — inset shadow |
+| `gradient-border` | object | `null`  | `{ "colors": ["#f00", "#00f"], "width": 2, "angle": 0 }` — gradient-colored border ring, border-radius aware, painted instead of `border` when both are set |
 | `motion-path`     | string | `null`  | SVG path string that the element follows during animation |
 | `stagger`         | f32    | `null`  | Auto-delay offset per child in a container (seconds)     |
 | `timeline`        | array  | `[]`    | Intra-scene timeline steps — sequential animation phases |
+
+**Deprecated (accepted but never rendered — the validator warns):**
+
+| Legacy field    | Use instead                                                  |
+| --------------- | ------------------------------------------------------------ |
+| `backdrop-blur` | `backdrop-filter: [{ "fn": "blur", "radius": N }]`            |
+| `inner-shadow`  | `box-shadow: [{ ..., "inset": true }]`                        |
+
+**Film grain (`noise` filter):** works in both `filter` and `backdrop-filter` chains. Deterministic — same `seed` produces identical grain on every frame.
+
+```json
+{ "backdrop-filter": [{ "fn": "blur", "radius": 24 }, { "fn": "noise", "intensity": 0.15, "seed": 42 }] }
+```
 
 ---
 
@@ -2269,7 +2280,7 @@ Any component can be rendered with true 3D perspective using keyframe animations
     "height": 400,
     "background": "#FFFFFF08",
     "border-radius": 24,
-    "backdrop-blur": 15,
+    "backdrop-filter": [{ "fn": "blur", "radius": 15 }],
     "border": { "color": "#FFFFFF14", "width": 1 },
     "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
     "animation": [{

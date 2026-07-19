@@ -75,6 +75,20 @@ fn validate_children(
                 p
             ));
         }
+        if style.backdrop_blur.is_some() {
+            warnings.push(format!(
+                "{}: style.backdrop-blur is accepted but not rendered — use \
+                 backdrop-filter: [{{\"fn\": \"blur\", \"radius\": N}}]",
+                p
+            ));
+        }
+        if style.inner_shadow.is_some() {
+            warnings.push(format!(
+                "{}: style.inner-shadow is accepted but not rendered — use \
+                 box-shadow with \"inset\": true",
+                p
+            ));
+        }
 
         if let Some(timed) = child.component.as_timed() {
             let (start, end) = timed.timing();
@@ -372,6 +386,36 @@ mod style_warning_tests {
         assert!(
             warnings.iter().any(|w| w.contains("text-overflow")),
             "missing text-overflow warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_legacy_backdrop_blur_and_inner_shadow() {
+        // Legacy glassmorphism fields are accepted for compat but never
+        // rendered; validate must point at the working CSS equivalents.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "card",
+            "style": {
+                "backdrop-blur": 20,
+                "inner-shadow": { "color": "#000000", "offset_y": 2, "blur": 8 }
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("backdrop-blur") && w.contains("backdrop-filter")),
+            "missing backdrop-blur warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("inner-shadow") && w.contains("inset")),
+            "missing inner-shadow warning: {warnings:?}"
         );
     }
 

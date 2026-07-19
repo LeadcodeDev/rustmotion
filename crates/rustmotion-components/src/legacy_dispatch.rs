@@ -375,9 +375,7 @@ mod tests {
                         height: Some(CSize::Length(CLP::Px(100.0))),
                         animation: vec![AnimationEffect::FadeIn(AnimationTiming {
                             duration: 0.5,
-                            delay: 0.0,
-                            repeat: false,
-                            overshoot: None,
+                            ..Default::default()
                         })],
                         ..Default::default()
                     },

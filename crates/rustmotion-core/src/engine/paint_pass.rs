@@ -24,9 +24,9 @@ use skia_safe::{
 
 use crate::css::style::{
     Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, Color,
-    CssStyle, Edges, Overflow, TransformFn,
+    CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
 };
-use crate::css::units::{LengthContext, LengthPercentage, ParsedLength};
+use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
@@ -181,17 +181,35 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
 
     // 2. transform
     if node.css.transform.is_some() || node.css.perspective.is_some() {
-        let pivot = (
-            box_layout.x + box_layout.width / 2.0,
-            box_layout.y + box_layout.height / 2.0,
-        );
+        let (tx, ty, _tz) =
+            resolve_origin(node.css.transform_origin.as_ref(), box_layout, &length_ctx);
+        let transform_pivot = (tx, ty);
+
+        let perspective_pivot = if node.css.perspective_origin.is_some() {
+            let (px, py, _pz) = resolve_origin(
+                node.css.perspective_origin.as_ref(),
+                box_layout,
+                &length_ctx,
+            );
+            (px, py)
+        } else {
+            transform_pivot
+        };
+
         let transform_list = node.css.transform.as_deref().unwrap_or(&[]);
         let perspective_d = node
             .css
             .perspective
             .as_ref()
             .map(|l| l.resolve(&length_ctx).max(1.0));
-        apply_transform(canvas, transform_list, perspective_d, pivot, &length_ctx);
+        apply_transform(
+            canvas,
+            transform_list,
+            perspective_d,
+            transform_pivot,
+            perspective_pivot,
+            &length_ctx,
+        );
     }
 
     // Hit-map: record the on-screen bbox of component-backed nodes. The canvas
@@ -292,8 +310,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
     }
 
-    // 7. border
-    if let Some(border) = node.css.border.as_ref() {
+    // 7. border — `gradient-border` replaces the standard border when present
+    // (a box has one border, not two stacked ones).
+    if let Some(gb) = node.css.gradient_border.as_ref() {
+        paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
+    } else if let Some(border) = node.css.border.as_ref() {
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
@@ -371,12 +392,59 @@ fn filters_to_image_filter(
                     None,
                 )
             }
+            FilterFn::Noise { intensity, seed } => {
+                match noise_image_filter(*intensity, *seed) {
+                    // Sequential CSS composition: the chain so far is the
+                    // background, the grain layer blends on top of it.
+                    Some(noise) => image_filters::blend(
+                        skia_safe::BlendMode::Overlay,
+                        chain,
+                        Some(noise),
+                        None,
+                    ),
+                    None => chain,
+                }
+            }
             other => color_matrix_for(other)
                 .map(|m| skia_safe::color_filters::matrix_row_major(&m, None))
                 .and_then(|cf| image_filters::color_filter(cf, chain, None)),
         };
     }
     chain
+}
+
+/// Build the film-grain layer for `FilterFn::Noise` as an `ImageFilter`.
+///
+/// Composition formula:
+///   1. `fractal_noise(base_frequency = (0.9, 0.9), octaves = 2, seed)` —
+///      high frequency ⇒ fine per-pixel grain; the Skia Perlin shader is a
+///      pure function of (x, y, seed): no implicit time, so the grain is
+///      byte-identical across frames/renders for a given seed.
+///   2. A 4×5 color matrix collapses RGB to luminance (0.213/0.715/0.072) for
+///      monochrome grain and scales alpha by `intensity` (0..1).
+///   3. The caller blends the result over the chain input with
+///      `BlendMode::Overlay` — grain brightens/darkens the underlying pixels
+///      proportionally to the noise-layer alpha (`intensity`).
+fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilter> {
+    use skia_safe::image_filters;
+
+    let intensity = intensity.clamp(0.0, 1.0);
+    if intensity <= 0.0 {
+        return None;
+    }
+    let noise = skia_safe::shaders::fractal_noise((0.9, 0.9), 2, seed as f32, None)?;
+    // Luminance conversion + alpha scaling in one matrix.
+    let (r, g, b) = (0.213, 0.715, 0.072);
+    #[rustfmt::skip]
+    let m = [
+        r,   g,   b,   0.0,       0.0,
+        r,   g,   b,   0.0,       0.0,
+        r,   g,   b,   0.0,       0.0,
+        0.0, 0.0, 0.0, intensity, 0.0,
+    ];
+    let cf = skia_safe::color_filters::matrix_row_major(&m, None);
+    let mono = noise.with_color_filter(cf);
+    image_filters::shader(mono, None)
 }
 
 /// 4x5 row-major color matrix for a CSS color filter function (translation
@@ -468,11 +536,80 @@ fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
             ];
             Some(m)
         }
-        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } => None,
+        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } | FilterFn::Noise { .. } => None,
     }
 }
 
 // ---- Transform ----
+
+/// Resolve a `transform-origin` / `perspective-origin` value to absolute
+/// viewport coordinates `(x, y)`.
+///
+/// # Resolution rules
+///
+/// - Absent `origin` → centre of the box (the pre-existing hard-coded behaviour,
+///   preserved byte-identically).
+/// - `x` / `y` values follow the CSS spec: percentages are relative to the box
+///   **width** (for x) and **height** (for y); px values are relative to the
+///   box top-left corner. The result is in absolute viewport coordinates.
+/// - Keywords (`left`, `center`, `right`, `top`, `bottom`) are handled by
+///   `parse_origin_component` which maps them to 0%/50%/100%.
+/// - An absent component (`None`) defaults to 50% on that axis.
+/// - The `z` component is returned as `f32` for use in the 3-D path (defaults
+///   to 0.0 when absent).
+fn resolve_origin(
+    origin: Option<&TransformOrigin>,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> (f32, f32, f32) {
+    let Some(o) = origin else {
+        // Default: 50% 50% 0 — dead-centre of the box.
+        return (
+            layout.x + layout.width / 2.0,
+            layout.y + layout.height / 2.0,
+            0.0,
+        );
+    };
+
+    // Resolve x against box width.
+    let ox = if let Some(lp) = &o.x {
+        let parsed = match lp {
+            LengthPercentage::String(s) => {
+                parse_origin_component(s).unwrap_or(crate::css::units::ParsedLength::Percent(50.0))
+            }
+            LengthPercentage::Px(v) => crate::css::units::ParsedLength::Px(*v),
+        };
+        let local_ctx = LengthContext {
+            parent_size: layout.width,
+            ..*ctx
+        };
+        layout.x + parsed.resolve(&local_ctx).unwrap_or(layout.width / 2.0)
+    } else {
+        layout.x + layout.width / 2.0
+    };
+
+    // Resolve y against box height.
+    let oy = if let Some(lp) = &o.y {
+        let parsed = match lp {
+            LengthPercentage::String(s) => {
+                parse_origin_component(s).unwrap_or(crate::css::units::ParsedLength::Percent(50.0))
+            }
+            LengthPercentage::Px(v) => crate::css::units::ParsedLength::Px(*v),
+        };
+        let local_ctx = LengthContext {
+            parent_size: layout.height,
+            ..*ctx
+        };
+        layout.y + parsed.resolve(&local_ctx).unwrap_or(layout.height / 2.0)
+    } else {
+        layout.y + layout.height / 2.0
+    };
+
+    // Resolve z (optional; only used in 3D path).
+    let oz = o.z.as_ref().map(|l| l.resolve(ctx)).unwrap_or(0.0);
+
+    (ox, oy, oz)
+}
 
 fn has_3d_transform(list: &[TransformFn]) -> bool {
     list.iter().any(|t| {
@@ -490,15 +627,31 @@ fn has_3d_transform(list: &[TransformFn]) -> bool {
     })
 }
 
+/// Apply CSS transform + perspective to the canvas.
+///
+/// # Parameters
+///
+/// - `transform_pivot`: the origin for the `transform` property (resolved from
+///   `transform-origin`, defaults to box centre).
+/// - `perspective_pivot`: the origin for the perspective projection (resolved
+///   from `perspective-origin`). When `perspective-origin` is absent this equals
+///   `transform_pivot` and we use the cheaper single-translate path. When they
+///   differ we bracket the perspective matrix with its own translate pair.
 fn apply_transform(
     canvas: &Canvas,
     list: &[TransformFn],
     perspective_d: Option<f32>,
-    pivot: (f32, f32),
+    transform_pivot: (f32, f32),
+    perspective_pivot: (f32, f32),
     ctx: &LengthContext,
 ) {
+    // Detect whether perspective and transform pivots differ.
+    let pivots_equal = (transform_pivot.0 - perspective_pivot.0).abs() < 0.001
+        && (transform_pivot.1 - perspective_pivot.1).abs() < 0.001;
+
     if perspective_d.is_none() && !has_3d_transform(list) {
         // Fast path: 2D-only, use the native Skia 2D canvas API.
+        let pivot = transform_pivot;
         canvas.translate(Point::new(pivot.0, pivot.1));
         for tr in list {
             match tr {
@@ -545,8 +698,10 @@ fn apply_transform(
             }
         }
         canvas.translate(Point::new(-pivot.0, -pivot.1));
-    } else {
-        // 3D path: compose a single M44 and apply via concat_44 for true perspective.
+    } else if pivots_equal {
+        // 3D path, single-pivot (fast): perspective + transforms share the same pivot.
+        // Structure: T(pivot) · Persp · Transforms · T(-pivot)
+        let pivot = transform_pivot;
         let mut m = M44::new_identity();
         m.pre_concat(&M44::translate(pivot.0, pivot.1, 0.0));
         if let Some(d) = perspective_d {
@@ -556,6 +711,31 @@ fn apply_transform(
             m.pre_concat(&transform_to_m44(tr, ctx));
         }
         m.pre_concat(&M44::translate(-pivot.0, -pivot.1, 0.0));
+        canvas.concat_44(&m);
+    } else {
+        // 3D path, dual-pivot: perspective-origin ≠ transform-origin.
+        // Structure: T(pp) · Persp · T(-pp) · T(tp) · Transforms · T(-tp)
+        //
+        // This matches the CSS spec where `perspective-origin` shifts the
+        // vanishing point while `transform-origin` sets the local pivot.
+        let tp = transform_pivot;
+        let pp = perspective_pivot;
+        let mut m = M44::new_identity();
+
+        // Outer perspective bracket (perspective-origin).
+        m.pre_concat(&M44::translate(pp.0, pp.1, 0.0));
+        if let Some(d) = perspective_d {
+            m.pre_concat(&css_perspective_m44(d));
+        }
+        m.pre_concat(&M44::translate(-pp.0, -pp.1, 0.0));
+
+        // Inner transform bracket (transform-origin).
+        m.pre_concat(&M44::translate(tp.0, tp.1, 0.0));
+        for tr in list {
+            m.pre_concat(&transform_to_m44(tr, ctx));
+        }
+        m.pre_concat(&M44::translate(-tp.0, -tp.1, 0.0));
+
         canvas.concat_44(&m);
     }
 }
@@ -843,6 +1023,80 @@ fn paint_border(
     paint.set_color(color);
 
     // Use DRRect = outer minus inner for an accurate stroked border with radius.
+    canvas.draw_drrect(outer, inner, &paint);
+}
+
+/// Paint a gradient-colored border ring (issue #87).
+///
+/// Painted **instead of** the standard `border` when both are set. Unlike
+/// `border`, `gradient-border` is a pure paint decoration: it does not consume
+/// layout space (taffy never sees it), the ring is inset from the border-box
+/// edge by `gb.width`.
+///
+/// The gradient is linear along `gb.angle` with the **same angle convention as
+/// `background` linear gradients** (see [`gradient_endpoints`]) so the two
+/// stay visually consistent within one style block. Colors are evenly spaced.
+fn paint_gradient_border(
+    canvas: &Canvas,
+    layout: &BoxLayout,
+    css: &CssStyle,
+    gb: &crate::schema::GradientBorder,
+    ctx: &LengthContext,
+) {
+    if gb.colors.len() < 2 || gb.width <= 0.0 {
+        return;
+    }
+    let width = gb.width.min(layout.width / 2.0).min(layout.height / 2.0);
+
+    let radius = css
+        .border_radius
+        .as_ref()
+        .map(|r| resolve_border_radius(r, layout, ctx))
+        .unwrap_or([0.0; 4]);
+
+    // Outer ring edge = border box; inner edge = inset by the border width.
+    let outer = border_rrect(layout, radius);
+    let inner_rect = Rect::from_xywh(
+        layout.x + width,
+        layout.y + width,
+        (layout.width - width * 2.0).max(0.0),
+        (layout.height - width * 2.0).max(0.0),
+    );
+    let inner_radius = [
+        (radius[0] - width).max(0.0),
+        (radius[1] - width).max(0.0),
+        (radius[2] - width).max(0.0),
+        (radius[3] - width).max(0.0),
+    ];
+    let inner = rrect_from_corners(inner_rect, inner_radius);
+
+    let colors: Vec<SColor> = gb
+        .colors
+        .iter()
+        .map(|c| parse_color_string(c).unwrap_or(SColor::BLACK))
+        .collect();
+    let n = colors.len();
+    let positions: Vec<f32> = (0..n)
+        .map(|i| i as f32 / (n.saturating_sub(1).max(1) as f32))
+        .collect();
+
+    let bounds = outer.bounds();
+    let (p0, p1) = gradient_endpoints(*bounds, gb.angle);
+    let Some(shader) = skia_safe::gradient_shader::linear(
+        (p0, p1),
+        colors.as_slice(),
+        positions.as_slice(),
+        skia_safe::TileMode::Clamp,
+        None,
+        None,
+    ) else {
+        return;
+    };
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_shader(shader);
     canvas.draw_drrect(outer, inner, &paint);
 }
 
@@ -1303,6 +1557,820 @@ mod hit_tests {
         // (these prove the canvas transform is reflected in the hit rect).
         assert!((h.rect.w - 200.0).abs() < 1.0, "w = {}", h.rect.w);
         assert!((h.rect.h - 160.0).abs() < 1.0, "h = {}", h.rect.h);
+    }
+}
+
+#[cfg(test)]
+mod transform_origin_tests {
+    //! TDD tests for `resolve_origin` and the pivot integration in `paint_node`.
+    //!
+    //! Strategy: paint a coloured rect, read back pixel centroids / columns, and
+    //! verify that the transformed position matches the expected pivot behaviour.
+
+    use super::*;
+
+    use crate::css::style::{
+        Background, Color as CssColor, CssStyle, Display, FlexDirection, Position, Size as CSize,
+        TransformFn, TransformOrigin,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+        }
+    }
+
+    /// Render a tree and return the pixel buffer (RGBA8888).
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    /// Red channel at pixel (x, y) in a w-wide buffer.
+    fn r(buf: &[u8], w: u32, x: u32, y: u32) -> u8 {
+        buf[((y * w + x) * 4) as usize]
+    }
+
+    /// Count pixels in `buf` where red > 200 (i.e., predominantly red).
+    fn count_red(buf: &[u8]) -> usize {
+        buf.chunks(4)
+            .filter(|px| px[0] > 200 && px[1] < 50 && px[2] < 50)
+            .count()
+    }
+
+    /// Compute column centroid (weighted x) of pixels where red > 200.
+    fn red_centroid_x(buf: &[u8], w: u32, h: u32) -> f32 {
+        let mut sum_x = 0.0f64;
+        let mut count = 0.0f64;
+        for y in 0..h {
+            for x in 0..w {
+                if r(buf, w, x, y) > 200
+                    && buf[((y * w + x) * 4 + 1) as usize] < 50
+                    && buf[((y * w + x) * 4 + 2) as usize] < 50
+                {
+                    sum_x += x as f64;
+                    count += 1.0;
+                }
+            }
+        }
+        if count == 0.0 {
+            0.0
+        } else {
+            (sum_x / count) as f32
+        }
+    }
+
+    /// Compute row centroid (weighted y) of pixels where red > 200.
+    fn red_centroid_y(buf: &[u8], w: u32, h: u32) -> f32 {
+        let mut sum_y = 0.0f64;
+        let mut count = 0.0f64;
+        for y in 0..h {
+            for x in 0..w {
+                if r(buf, w, x, y) > 200
+                    && buf[((y * w + x) * 4 + 1) as usize] < 50
+                    && buf[((y * w + x) * 4 + 2) as usize] < 50
+                {
+                    sum_y += y as f64;
+                    count += 1.0;
+                }
+            }
+        }
+        if count == 0.0 {
+            0.0
+        } else {
+            (sum_y / count) as f32
+        }
+    }
+
+    fn red_box(position: Position, x: f32, y: f32, w: f32, h: f32) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(position),
+                left: Some(CLP::Px(x)),
+                top: Some(CLP::Px(y)),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn root_node(w: f32, h: f32, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    // ---- Test 1: no transform — pixel-identical to reference baseline ----
+
+    #[test]
+    fn no_transform_origin_unchanged_non_regression() {
+        // A red 100x100 box at (50, 50) with no transform: pixels must appear
+        // exactly at (50..150, 50..150) — no origin logic involved.
+        let mut root = root_node(
+            300.0,
+            300.0,
+            vec![{
+                let mut n = red_box(Position::Absolute, 50.0, 50.0, 100.0, 100.0);
+                n.css.transform = Some(vec![TransformFn::Scale { x: 1.0, y: 1.0 }]);
+                // transform-origin absent → should default to center (no change)
+                n
+            }],
+        );
+        let buf = render_pixels(&mut root, 300, 300);
+
+        // Centroid must be ~100, ~100 (center of the 50..150 range).
+        let cx = red_centroid_x(&buf, 300, 300);
+        let cy = red_centroid_y(&buf, 300, 300);
+        assert!((cx - 99.5).abs() < 2.0, "cx={cx}");
+        assert!((cy - 99.5).abs() < 2.0, "cy={cy}");
+    }
+
+    // ---- Test 2: 50% 50% == absent (byte-identical behavior) ----
+
+    #[test]
+    fn transform_origin_50pct_is_center_identity() {
+        let make_root = |with_origin: bool| -> Vec<u8> {
+            let mut n = red_box(Position::Absolute, 50.0, 50.0, 100.0, 100.0);
+            n.css.transform = Some(vec![TransformFn::Rotate { deg: 45.0 }]);
+            if with_origin {
+                n.css.transform_origin = Some(TransformOrigin {
+                    x: Some(CLP::String("50%".into())),
+                    y: Some(CLP::String("50%".into())),
+                    z: None,
+                });
+            }
+            let mut root = root_node(300.0, 300.0, vec![n]);
+            render_pixels(&mut root, 300, 300)
+        };
+
+        let without = make_root(false);
+        let with_50 = make_root(true);
+        assert_eq!(
+            without, with_50,
+            "transform-origin: 50% 50% must be byte-identical to absent origin"
+        );
+    }
+
+    // ---- Test 3: rotate 90° around left-top vs center — different quadrants ----
+
+    #[test]
+    fn rotate_90_left_top_vs_center_occupy_different_quadrants() {
+        // A red 100x100 box at (100, 100) rotated 90° around:
+        //   - center (150, 150): box stays centered on itself, centroid ~(150, 150)
+        //   - left-top (100, 100): the box pivots around top-left; centroid moves
+        let make_root_with_origin = |ox: Option<CLP>, oy: Option<CLP>| -> Vec<u8> {
+            let mut n = red_box(Position::Absolute, 100.0, 100.0, 100.0, 100.0);
+            n.css.transform = Some(vec![TransformFn::Rotate { deg: 90.0 }]);
+            if ox.is_some() || oy.is_some() {
+                n.css.transform_origin = Some(TransformOrigin {
+                    x: ox,
+                    y: oy,
+                    z: None,
+                });
+            }
+            let mut root = root_node(400.0, 400.0, vec![n]);
+            render_pixels(&mut root, 400, 400)
+        };
+
+        // Center pivot (default).
+        let buf_center = make_root_with_origin(None, None);
+        // Left-top pivot: x=0px (relative to box left), y=0px.
+        let buf_left_top = make_root_with_origin(
+            Some(CLP::String("0%".into())),
+            Some(CLP::String("0%".into())),
+        );
+
+        let cx_center = red_centroid_x(&buf_center, 400, 400);
+        let cy_center = red_centroid_y(&buf_center, 400, 400);
+        let cx_lt = red_centroid_x(&buf_left_top, 400, 400);
+        let cy_lt = red_centroid_y(&buf_left_top, 400, 400);
+
+        // With center pivot (150, 150), rotate 90° CW → box centroid stays at ~(150, 150).
+        assert!(
+            (cx_center - 150.0).abs() < 5.0,
+            "center-pivot cx should be ~150, got {cx_center}"
+        );
+        assert!(
+            (cy_center - 150.0).abs() < 5.0,
+            "center-pivot cy should be ~150, got {cy_center}"
+        );
+
+        // With left-top pivot (100, 100), rotating 90° CW around that point:
+        //   box center (150,150) maps to (50, 150) — centroid moves left.
+        //   cx_lt ≈ 50, while cx_center ≈ 150. The x-shift is the distinguishing axis.
+        assert!(
+            cx_lt < cx_center - 50.0,
+            "left-top pivot cx ({cx_lt}) should be well left of center-pivot cx ({cx_center})"
+        );
+        // The overall pixel-centroid distance should be large.
+        let dist = ((cx_lt - cx_center).powi(2) + (cy_lt - cy_center).powi(2)).sqrt();
+        assert!(
+            dist > 50.0,
+            "pivots should produce clearly distinct positions (dist={dist})"
+        );
+    }
+
+    // ---- Test 4: keyword "left top" == "0% 0%" ----
+
+    #[test]
+    fn keyword_left_top_equals_zero_percent() {
+        let make_root = |origin_x: CLP, origin_y: CLP| -> Vec<u8> {
+            let mut n = red_box(Position::Absolute, 100.0, 100.0, 100.0, 100.0);
+            n.css.transform = Some(vec![TransformFn::Rotate { deg: 45.0 }]);
+            n.css.transform_origin = Some(TransformOrigin {
+                x: Some(origin_x),
+                y: Some(origin_y),
+                z: None,
+            });
+            let mut root = root_node(400.0, 400.0, vec![n]);
+            render_pixels(&mut root, 400, 400)
+        };
+
+        let buf_kw = make_root(CLP::String("left".into()), CLP::String("top".into()));
+        let buf_pct = make_root(CLP::String("0%".into()), CLP::String("0%".into()));
+        assert_eq!(
+            buf_kw, buf_pct,
+            "keyword 'left top' must produce same pixels as '0% 0%'"
+        );
+    }
+
+    // ---- Test 5: keyword "right bottom" == "100% 100%" ----
+
+    #[test]
+    fn keyword_right_bottom_equals_100_percent() {
+        let make_root = |origin_x: CLP, origin_y: CLP| -> Vec<u8> {
+            let mut n = red_box(Position::Absolute, 50.0, 50.0, 100.0, 100.0);
+            n.css.transform = Some(vec![TransformFn::Scale { x: 1.5, y: 1.5 }]);
+            n.css.transform_origin = Some(TransformOrigin {
+                x: Some(origin_x),
+                y: Some(origin_y),
+                z: None,
+            });
+            let mut root = root_node(400.0, 400.0, vec![n]);
+            render_pixels(&mut root, 400, 400)
+        };
+
+        let buf_kw = make_root(CLP::String("right".into()), CLP::String("bottom".into()));
+        let buf_pct = make_root(CLP::String("100%".into()), CLP::String("100%".into()));
+        assert_eq!(
+            buf_kw, buf_pct,
+            "keyword 'right bottom' must produce same pixels as '100% 100%'"
+        );
+    }
+
+    // ---- Test 6: 3D rotate_y with left-center origin — left edge stays fixed ----
+
+    #[test]
+    fn rotate_y_left_origin_left_edge_is_stable() {
+        // A 200x200 red box at (100, 100). RotateY with origin "left center"
+        // means the left edge (x=100) is the pivot — so the leftmost painted
+        // column should always be near x=100 regardless of angle.
+        // With center origin, the center (x=200) is the pivot and the left edge moves.
+        let make_root = |origin_x: Option<CLP>| -> Vec<u8> {
+            let mut n = red_box(Position::Absolute, 100.0, 100.0, 200.0, 200.0);
+            n.css.transform = Some(vec![TransformFn::RotateY { deg: 45.0 }]);
+            if let Some(ox) = origin_x {
+                n.css.transform_origin = Some(TransformOrigin {
+                    x: Some(ox),
+                    y: Some(CLP::String("50%".into())),
+                    z: None,
+                });
+            }
+            let mut root = root_node(500.0, 500.0, vec![n]);
+            render_pixels(&mut root, 500, 500)
+        };
+
+        let buf_left = make_root(Some(CLP::String("0%".into())));
+        let buf_center = make_root(None);
+
+        // Find the leftmost red pixel x for each render.
+        fn leftmost_red(buf: &[u8], w: u32, h: u32) -> Option<u32> {
+            for x in 0..w {
+                for y in 0..h {
+                    if buf[((y * w + x) * 4) as usize] > 200
+                        && buf[((y * w + x) * 4 + 1) as usize] < 50
+                        && buf[((y * w + x) * 4 + 2) as usize] < 50
+                    {
+                        return Some(x);
+                    }
+                }
+            }
+            None
+        }
+
+        let left_edge_left =
+            leftmost_red(&buf_left, 500, 500).expect("no red pixels in left-origin render") as f32;
+        let left_edge_center = leftmost_red(&buf_center, 500, 500)
+            .expect("no red pixels in center-origin render") as f32;
+
+        // Left-origin: left edge stays near x=100 (pivot is exactly there).
+        assert!(
+            left_edge_left > 90.0 && left_edge_left < 115.0,
+            "left-origin left edge should be near 100, got {left_edge_left}"
+        );
+
+        // Center-origin: left edge moves away from 100.
+        assert!(
+            left_edge_center > left_edge_left + 20.0,
+            "center-origin left edge ({left_edge_center}) should be further right than left-origin ({left_edge_left})"
+        );
+    }
+
+    // ---- Test 7: perspective_origin ≠ transform_origin — must not panic ----
+
+    #[test]
+    fn different_perspective_and_transform_origins_no_panic() {
+        use crate::css::units::Length;
+        let mut n = red_box(Position::Absolute, 100.0, 100.0, 200.0, 200.0);
+        n.css.transform = Some(vec![TransformFn::RotateY { deg: 30.0 }]);
+        n.css.perspective = Some(Length::Px(800.0));
+        // perspective-origin at top-left, transform-origin at bottom-right
+        n.css.transform_origin = Some(TransformOrigin {
+            x: Some(CLP::String("100%".into())),
+            y: Some(CLP::String("100%".into())),
+            z: None,
+        });
+        n.css.perspective_origin = Some(TransformOrigin {
+            x: Some(CLP::String("0%".into())),
+            y: Some(CLP::String("0%".into())),
+            z: None,
+        });
+        let mut root = root_node(500.0, 500.0, vec![n]);
+        // Must not panic and must produce at least some red pixels.
+        let buf = render_pixels(&mut root, 500, 500);
+        let red_count = count_red(&buf);
+        assert!(
+            red_count > 0,
+            "expected some red pixels with distinct origins"
+        );
+    }
+}
+
+#[cfg(test)]
+mod glassmorphism_tests {
+    //! TDD tests for issue #87: gradient-border painting and the `noise`
+    //! filter function (film grain, deterministic per seed).
+
+    use super::*;
+
+    use crate::css::style::{
+        Background, Color as CssColor, CssStyle, Display, FilterFn, FlexDirection, Position,
+        Size as CSize,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+    use crate::schema::GradientBorder;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn px(buf: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+    }
+
+    /// Unique (r,g,b,a) values within a rectangular region.
+    fn unique_colors_in(
+        buf: &[u8],
+        w: u32,
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+    ) -> std::collections::HashSet<(u8, u8, u8, u8)> {
+        let mut set = std::collections::HashSet::new();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                set.insert(px(buf, w, x, y));
+            }
+        }
+        set
+    }
+
+    fn leaf(css: CssStyle) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn root_node(w: f32, h: f32, background: Option<&str>, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: background.map(|c| Background::Color(CssColor::String(c.to_string()))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn abs_box(x: f32, y: f32, w: f32, h: f32, css_extra: CssStyle) -> BoxNode {
+        let mut css = css_extra;
+        css.position = Some(Position::Absolute);
+        css.left = Some(CLP::Px(x));
+        css.top = Some(CLP::Px(y));
+        css.width = Some(CSize::Length(CLP::Px(w)));
+        css.height = Some(CSize::Length(CLP::Px(h)));
+        leaf(css)
+    }
+
+    // ---- gradient-border ----
+
+    #[test]
+    fn gradient_border_paints_both_colors_on_perimeter_center_intact() {
+        // 200x200 box at (100, 100) on a white root; gradient-border 12px
+        // red→blue along the horizontal axis (angle 90). Expect: one vertical
+        // border edge red-dominant, the other blue-dominant, centre untouched.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 12.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        // Sample border midpoints: left edge (x=106, y=200), right edge (x=294, y=200).
+        let left = px(&buf, 400, 106, 200);
+        let right = px(&buf, 400, 294, 200);
+
+        // One side red-dominant, the other blue-dominant (convention-agnostic).
+        let red_side = if left.0 > left.2 { left } else { right };
+        let blue_side = if left.0 > left.2 { right } else { left };
+        assert!(
+            red_side.0 > 150 && red_side.2 < 100,
+            "expected a red-dominant border edge, got {red_side:?}"
+        );
+        assert!(
+            blue_side.2 > 150 && blue_side.0 < 100,
+            "expected a blue-dominant border edge, got {blue_side:?}"
+        );
+        // Both extremes must actually differ (it's a gradient, not a flat color).
+        assert_ne!(
+            left, right,
+            "border edges must show different gradient stops"
+        );
+
+        // Centre of the box stays the root background (white).
+        let center = px(&buf, 400, 200, 200);
+        assert_eq!(
+            center,
+            (255, 255, 255, 255),
+            "box centre must not be painted by the gradient border"
+        );
+
+        // Top border midpoint is painted (not background).
+        let top_mid = px(&buf, 400, 200, 106);
+        assert_ne!(
+            top_mid,
+            (255, 255, 255, 255),
+            "top border edge must be painted"
+        );
+    }
+
+    #[test]
+    fn gradient_border_respects_border_radius() {
+        use crate::css::style::BorderRadius;
+        // Rounded 200x200 box: the square corner pixel must stay background,
+        // while edge midpoints are painted.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                border_radius: Some(BorderRadius::Uniform(CLP::Px(60.0))),
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 10.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        // Square corner (inside the box bounds but outside the rounded path).
+        let corner = px(&buf, 400, 104, 104);
+        assert_eq!(
+            corner,
+            (255, 255, 255, 255),
+            "square corner must stay background with border-radius"
+        );
+        // Edge midpoints painted.
+        let left_mid = px(&buf, 400, 104, 200);
+        let top_mid = px(&buf, 400, 200, 104);
+        assert_ne!(left_mid, (255, 255, 255, 255), "left edge must be painted");
+        assert_ne!(top_mid, (255, 255, 255, 255), "top edge must be painted");
+    }
+
+    #[test]
+    fn gradient_border_replaces_standard_border() {
+        use crate::css::style::{BorderEdges, BorderStyle, Edges};
+        // A node with BOTH border (solid green) and gradient-border (red/blue):
+        // the gradient border wins; no green pixels appear.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                border: Some(BorderEdges {
+                    width: Some(Edges::Uniform(CLP::Px(10.0))),
+                    style: Some(BorderStyle::Solid),
+                    color: Some(CssColor::String("#00ff00".into())),
+                    ..Default::default()
+                }),
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 10.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        let green_pixels = buf
+            .chunks(4)
+            .filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60)
+            .count();
+        assert_eq!(
+            green_pixels, 0,
+            "standard border must not be painted when gradient-border is set"
+        );
+    }
+
+    // ---- noise filter ----
+
+    fn gray_box_with_filter(filter: Option<Vec<FilterFn>>) -> BoxNode {
+        abs_box(
+            50.0,
+            50.0,
+            200.0,
+            200.0,
+            CssStyle {
+                background: Some(Background::Color(CssColor::String("#808080".into()))),
+                filter,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn noise_filter_explodes_unique_color_count() {
+        let mut root_plain = root_node(
+            300.0,
+            300.0,
+            Some("#ffffff"),
+            vec![gray_box_with_filter(None)],
+        );
+        let buf_plain = render_pixels(&mut root_plain, 300, 300);
+
+        let mut root_noise = root_node(
+            300.0,
+            300.0,
+            Some("#ffffff"),
+            vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                intensity: 0.5,
+                seed: 42,
+            }]))],
+        );
+        let buf_noise = render_pixels(&mut root_noise, 300, 300);
+
+        // Sample well inside the box to avoid AA edges.
+        let plain = unique_colors_in(&buf_plain, 300, 70, 70, 230, 230);
+        let noisy = unique_colors_in(&buf_noise, 300, 70, 70, 230, 230);
+        assert!(
+            plain.len() <= 4,
+            "plain box interior should be near-uniform, got {} colors",
+            plain.len()
+        );
+        assert!(
+            noisy.len() > 50,
+            "noise filter should explode the unique color count, got {}",
+            noisy.len()
+        );
+    }
+
+    #[test]
+    fn noise_same_seed_is_byte_identical_across_renders() {
+        let render = || {
+            let mut root = root_node(
+                300.0,
+                300.0,
+                Some("#ffffff"),
+                vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                    intensity: 0.4,
+                    seed: 7,
+                }]))],
+            );
+            render_pixels(&mut root, 300, 300)
+        };
+        let a = render();
+        let b = render();
+        assert_eq!(a, b, "same seed must produce byte-identical grain");
+    }
+
+    #[test]
+    fn noise_different_seeds_differ() {
+        let render = |seed: u64| {
+            let mut root = root_node(
+                300.0,
+                300.0,
+                Some("#ffffff"),
+                vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                    intensity: 0.4,
+                    seed,
+                }]))],
+            );
+            render_pixels(&mut root, 300, 300)
+        };
+        let a = render(1);
+        let b = render(2);
+        assert_ne!(a, b, "different seeds must produce different grain");
+    }
+
+    #[test]
+    fn backdrop_noise_grains_only_the_panel_region() {
+        // Uniform gray root; a panel at (50, 50, 100, 100) with
+        // backdrop-filter noise. Inside the panel: grain (many colors).
+        // Outside: untouched uniform gray.
+        let panel = abs_box(
+            50.0,
+            50.0,
+            100.0,
+            100.0,
+            CssStyle {
+                backdrop_filter: Some(vec![FilterFn::Noise {
+                    intensity: 0.5,
+                    seed: 42,
+                }]),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(300.0, 300.0, Some("#808080"), vec![panel]);
+        let buf = render_pixels(&mut root, 300, 300);
+
+        let inside = unique_colors_in(&buf, 300, 60, 60, 140, 140);
+        let outside = unique_colors_in(&buf, 300, 180, 180, 280, 280);
+        assert!(
+            inside.len() > 30,
+            "panel interior should be grained, got {} colors",
+            inside.len()
+        );
+        assert_eq!(
+            outside.len(),
+            1,
+            "outside the panel must stay uniform, got {} colors",
+            outside.len()
+        );
+    }
+
+    // ---- serde ----
+
+    #[test]
+    fn css_gradient_border_and_noise_deserialize() {
+        let json = r##"{
+            "gradient-border": { "colors": ["#ff0000", "#0000ff"], "width": 3, "angle": 45 },
+            "filter": [{ "fn": "noise", "intensity": 0.3, "seed": 9 }],
+            "backdrop-filter": [{ "fn": "noise" }]
+        }"##;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let gb = s.gradient_border.expect("gradient-border parsed");
+        assert_eq!(gb.colors.len(), 2);
+        assert_eq!(gb.width, 3.0);
+        assert_eq!(gb.angle, 45.0);
+        assert!(matches!(
+            s.filter.as_deref(),
+            Some([FilterFn::Noise {
+                intensity,
+                seed: 9
+            }]) if (intensity - 0.3).abs() < 1e-6
+        ));
+        // Defaults: intensity 0.15, seed 42.
+        assert!(matches!(
+            s.backdrop_filter.as_deref(),
+            Some([FilterFn::Noise {
+                intensity,
+                seed: 42
+            }]) if (intensity - 0.15).abs() < 1e-6
+        ));
+    }
+
+    #[test]
+    fn css_legacy_zombies_accepted() {
+        // backdrop-blur / inner-shadow parse into CssStyle (accepted for
+        // compat) — rendering is intentionally not wired; validate warns.
+        let json = r##"{
+            "backdrop-blur": 20,
+            "inner-shadow": { "color": "#000000", "offset_x": 0, "offset_y": 2, "blur": 8 }
+        }"##;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        assert_eq!(s.backdrop_blur, Some(20.0));
+        assert!(s.inner_shadow.is_some());
     }
 }
 

@@ -887,11 +887,72 @@ fn get_property_value(props: &AnimatedProperties, property: &str) -> f64 {
 
 // ─── Preset expansion ───────────────────────────────────────────────────────
 
+/// Properties eligible for the preset-level `spring` override: motion only.
+/// Opacity keeps its ease (an alpha overshoot flashes), blur/draw_progress
+/// would go out of range on overshoot.
+fn is_motion_property(property: &str) -> bool {
+    matches!(
+        property,
+        "position.x"
+            | "position.y"
+            | "translate_x"
+            | "translate_y"
+            | "scale"
+            | "scale.x"
+            | "scale.y"
+            | "rotation"
+            | "rotate_x"
+            | "rotate_y"
+    )
+}
+
+/// Apply a user-provided spring to a preset's motion animations (issue #88).
+///
+/// Implementation note: a single generic post-processing pass was chosen over
+/// editing each of the ~40 preset builders — the eligibility rules are uniform
+/// and the builders stay oblivious to springs. Rules per animation:
+/// - non-motion property (opacity, blur, …): untouched;
+/// - 2 keyframes: easing → `Spring` with the given config. For `bounce_in` /
+///   `elastic_in` this *overrides* their built-in spring, which thereby acts
+///   as the default when no user config is provided;
+/// - more than 2 keyframes with different endpoints (manual-overshoot
+///   entrances like `scale_in`): collapsed to [first, last] + spring — the
+///   spring supplies the overshoot itself, keeping the manual peak would
+///   double it;
+/// - more than 2 keyframes with identical endpoints (continuous oscillators:
+///   pulse, shake, float): untouched — a spring toward the same value is a
+///   no-op and would freeze the effect.
+fn apply_spring_to_motion(animations: &mut [Animation], spring: &SpringConfig) {
+    for anim in animations.iter_mut() {
+        if !is_motion_property(&anim.property) || anim.keyframes.len() < 2 {
+            continue;
+        }
+        if anim.keyframes.len() > 2 {
+            let first = anim.keyframes.first().unwrap().clone();
+            let last = anim.keyframes.last().unwrap().clone();
+            if (first.value.as_f64() - last.value.as_f64()).abs() < 1e-9 {
+                continue; // oscillator — leave its shape alone
+            }
+            anim.keyframes = vec![first, last];
+        }
+        anim.easing = EasingType::Spring;
+        anim.spring = Some(spring.clone());
+    }
+}
+
 fn expand_preset(
     preset: &AnimationPreset,
     config: &PresetConfig,
     _scene_duration: f64,
 ) -> Vec<Animation> {
+    let mut animations = expand_preset_inner(preset, config);
+    if let Some(spring) = &config.spring {
+        apply_spring_to_motion(&mut animations, spring);
+    }
+    animations
+}
+
+fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<Animation> {
     let delay = config.delay;
     let dur = config.duration;
     let end = delay + dur;
@@ -1436,5 +1497,191 @@ fn kf_anim_loop(property: &str, min: f64, max: f64) -> Animation {
         keyframes: vec![kf(0.0, min), kf(0.5, max), kf(1.0, min)],
         easing: EasingType::EaseInOut,
         spring: None,
+    }
+}
+
+#[cfg(test)]
+mod spring_preset_tests {
+    //! TDD tests for issue #88: spring easing on any preset via
+    //! `AnimationTiming.spring`.
+
+    use super::*;
+    use crate::schema::AnimationEffect;
+    use crate::schema::AnimationTiming;
+
+    fn timing(duration: f64, spring: Option<SpringConfig>) -> AnimationTiming {
+        AnimationTiming {
+            duration,
+            spring,
+            ..Default::default()
+        }
+    }
+
+    fn underdamped() -> SpringConfig {
+        SpringConfig {
+            damping: 8.0,
+            stiffness: 120.0,
+            mass: 1.0,
+        }
+    }
+
+    /// Sample translate_y and opacity over the animation window.
+    fn sample(effects: &[AnimationEffect], duration: f64) -> Vec<(f64, f64, f64)> {
+        let steps = 80;
+        (0..=steps)
+            .map(|i| {
+                let t = duration * i as f64 / steps as f64;
+                let p = resolve_props_for_effects(effects, t, 5.0);
+                (t, p.translate_y as f64, p.opacity as f64)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fade_in_up_spring_overshoots_position() {
+        // Without spring: translate_y eases 60 → 0, never negative.
+        let plain = sample(&[AnimationEffect::FadeInUp(timing(0.8, None))], 0.8);
+        let min_plain = plain.iter().map(|(_, y, _)| *y).fold(f64::MAX, f64::min);
+        assert!(
+            min_plain >= -0.01,
+            "without spring translate_y must never overshoot below 0, got min {min_plain}"
+        );
+
+        // With an underdamped spring: the position overshoots past the final
+        // value (goes measurably negative) somewhere inside the window.
+        let sprung = sample(
+            &[AnimationEffect::FadeInUp(timing(0.8, Some(underdamped())))],
+            0.8,
+        );
+        let min_sprung = sprung.iter().map(|(_, y, _)| *y).fold(f64::MAX, f64::min);
+        assert!(
+            min_sprung < -0.5,
+            "with spring translate_y must overshoot below 0, got min {min_sprung}"
+        );
+
+        // At ~70% of the duration the two positions differ measurably.
+        let y_plain_70 = plain[56].1;
+        let y_sprung_70 = sprung[56].1;
+        assert!(
+            (y_plain_70 - y_sprung_70).abs() > 0.5,
+            "at 70% duration spring vs plain must differ: {y_plain_70} vs {y_sprung_70}"
+        );
+    }
+
+    #[test]
+    fn fade_in_up_spring_does_not_touch_opacity() {
+        let plain = sample(&[AnimationEffect::FadeInUp(timing(0.8, None))], 0.8);
+        let sprung = sample(
+            &[AnimationEffect::FadeInUp(timing(0.8, Some(underdamped())))],
+            0.8,
+        );
+        for (i, ((_, _, a_plain), (_, _, a_sprung))) in plain.iter().zip(sprung.iter()).enumerate()
+        {
+            assert!(
+                (a_plain - a_sprung).abs() < 1e-6,
+                "opacity must be identical with/without spring at sample {i}: {a_plain} vs {a_sprung}"
+            );
+        }
+        // And alpha stays monotone non-decreasing (no overshoot flashes).
+        for w in sprung.windows(2) {
+            assert!(
+                w[1].2 >= w[0].2 - 1e-6,
+                "opacity must be monotone, got {} then {}",
+                w[0].2,
+                w[1].2
+            );
+        }
+    }
+
+    #[test]
+    fn bounce_in_custom_spring_differs_from_default() {
+        let scale_at = |spring: Option<SpringConfig>, t: f64| -> f64 {
+            let fx = [AnimationEffect::BounceIn(timing(0.8, spring))];
+            resolve_props_for_effects(&fx, t, 5.0).scale_x as f64
+        };
+        // Default (damping 12/stiffness 100) vs a heavily overdamped custom
+        // spring must produce different scales mid-flight.
+        let overdamped = SpringConfig {
+            damping: 40.0,
+            stiffness: 100.0,
+            mass: 1.0,
+        };
+        let d = scale_at(None, 0.3);
+        let c = scale_at(Some(overdamped), 0.3);
+        assert!(
+            (d - c).abs() > 0.01,
+            "custom spring must change bounce_in: default {d} vs custom {c}"
+        );
+    }
+
+    #[test]
+    fn scale_in_spring_collapses_manual_overshoot() {
+        // ScaleIn's 3-keyframe manual overshoot (0 → 1.08 → 1) collapses to a
+        // 2-keyframe spring (0 → 1): the spring provides the overshoot itself,
+        // so scale must exceed 1.0 somewhere (underdamped) and converge to 1.
+        let fx = [AnimationEffect::ScaleIn(timing(0.8, Some(underdamped())))];
+        let mut max_scale = f64::MIN;
+        for i in 0..=80 {
+            let t = 0.8 * i as f64 / 80.0;
+            let s = resolve_props_for_effects(&fx, t, 5.0).scale_x as f64;
+            max_scale = max_scale.max(s);
+        }
+        // The manual overshoot keyframe peaks at exactly 1.08; the collapsed
+        // underdamped spring (damping 8 / stiffness 120) peaks well above it —
+        // this discriminates the spring path from the manual keyframe path.
+        assert!(
+            max_scale > 1.12,
+            "spring scale_in must overshoot past the manual 1.08 peak, got max {max_scale}"
+        );
+        let end = resolve_props_for_effects(&fx, 0.8, 5.0).scale_x as f64;
+        assert!(
+            (end - 1.0).abs() < 1e-3,
+            "scale must converge to 1.0 at window end, got {end}"
+        );
+    }
+
+    #[test]
+    fn pulse_oscillator_ignores_spring() {
+        // Pulse's scale loop (1 → 1.05 → 1) has identical endpoints — a
+        // spring toward the same value would freeze the effect, so the
+        // oscillator keeps its own shape.
+        let at = |spring: Option<SpringConfig>, t: f64| -> f64 {
+            let fx = [AnimationEffect::Pulse(timing(1.0, spring))];
+            resolve_props_for_effects(&fx, t, 5.0).scale_x as f64
+        };
+        for i in 0..=20 {
+            let t = i as f64 / 20.0;
+            let plain = at(None, t);
+            let sprung = at(Some(underdamped()), t);
+            assert!(
+                (plain - sprung).abs() < 1e-9,
+                "pulse must be unaffected by spring at t={t}: {plain} vs {sprung}"
+            );
+        }
+    }
+
+    #[test]
+    fn animation_timing_spring_serde_round_trip() {
+        let json = r#"{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 8, "stiffness": 120 } }"#;
+        let fx: AnimationEffect = serde_json::from_str(json).unwrap();
+        let AnimationEffect::FadeInUp(t) = &fx else {
+            panic!("wrong variant");
+        };
+        let s = t.spring.as_ref().expect("spring parsed");
+        assert_eq!(s.damping, 8.0);
+        assert_eq!(s.stiffness, 120.0);
+        assert_eq!(s.mass, 1.0, "mass defaults to 1");
+
+        // Round-trip.
+        let re = serde_json::to_string(&fx).unwrap();
+        let back: AnimationEffect = serde_json::from_str(&re).unwrap();
+        assert_eq!(fx, back);
+
+        // Absent spring stays absent.
+        let plain: AnimationEffect = serde_json::from_str(r#"{ "name": "fade_in_up" }"#).unwrap();
+        let AnimationEffect::FadeInUp(t) = &plain else {
+            panic!("wrong variant");
+        };
+        assert!(t.spring.is_none());
     }
 }

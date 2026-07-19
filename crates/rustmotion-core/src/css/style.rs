@@ -8,7 +8,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::units::{Length, LengthPercentage};
-use crate::schema::{deserialize_animation_effects, AnimationEffect};
+// `GradientBorder` / `InnerShadow` are reused from the schema layer rather
+// than mirrored: same crate, same serde/JsonSchema derives, identical JSON
+// shape either way — a css-local mirror would only duplicate the struct.
+use crate::schema::{deserialize_animation_effects, AnimationEffect, GradientBorder, InnerShadow};
 
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
 /// and lets the cascade fill in inherited / initial values.
@@ -80,6 +83,16 @@ pub struct CssStyle {
     pub opacity: Option<f32>,
     pub mix_blend_mode: Option<BlendMode>,
     pub clip_path: Option<ClipPath>,
+    /// Gradient-colored border painted instead of `border` when present.
+    /// `{ "colors": [...], "width": 2, "angle": 0 }` — angle follows the same
+    /// convention as `background` linear gradients.
+    pub gradient_border: Option<GradientBorder>,
+
+    // ---- Legacy compat (accepted, never rendered — validator warns) ----
+    /// Deprecated: use `backdrop-filter: [{ "fn": "blur", "radius": N }]`.
+    pub backdrop_blur: Option<f32>,
+    /// Deprecated: use `box-shadow` with `"inset": true`.
+    pub inner_shadow: Option<InnerShadow>,
 
     // ---- Filters / effects ----
     pub filter: Option<Vec<FilterFn>>,
@@ -1011,6 +1024,24 @@ pub enum FilterFn {
     Opacity {
         value: f32,
     },
+    /// Deterministic film-grain noise. Works in both `filter` and
+    /// `backdrop-filter` chains (frosted-glass grain).
+    Noise {
+        /// Grain strength in 0..1 (alpha of the noise layer). Default 0.15.
+        #[serde(default = "default_noise_intensity")]
+        intensity: f32,
+        /// Perlin-noise seed — same seed ⇒ identical grain on every frame.
+        #[serde(default = "default_noise_seed")]
+        seed: u64,
+    },
+}
+
+fn default_noise_intensity() -> f32 {
+    0.15
+}
+
+fn default_noise_seed() -> u64 {
+    42
 }
 
 // ---- Blend ----

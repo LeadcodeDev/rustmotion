@@ -90,6 +90,23 @@ impl ParsedLength {
     }
 }
 
+/// Parse a CSS length/percentage string that may also contain transform-origin
+/// axis keywords (`left`, `center`, `right`, `top`, `bottom`).
+///
+/// Keywords are normalised to `ParsedLength::Percent` so that the regular
+/// `resolve` machinery handles them — the caller must still choose the correct
+/// axis dimension (width for x, height for y) in the `LengthContext`.
+pub fn parse_origin_component(s: &str) -> Option<ParsedLength> {
+    let lower = s.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "left" | "top" => return Some(ParsedLength::Percent(0.0)),
+        "center" => return Some(ParsedLength::Percent(50.0)),
+        "right" | "bottom" => return Some(ParsedLength::Percent(100.0)),
+        _ => {}
+    }
+    parse_length(s)
+}
+
 /// Parse a CSS length/percentage string. Whitespace tolerated.
 pub fn parse_length(s: &str) -> Option<ParsedLength> {
     let s = s.trim();
