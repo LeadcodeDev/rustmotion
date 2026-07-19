@@ -6,6 +6,13 @@ description = "Component library for rustmotion (51 components)"
 license = "MIT"
 repository = "https://github.com/LeadcodeDev/rustmotion"
 
+[features]
+default = ["lottie-native"]
+## Native Lottie decoding via the thorvg CPU rasterizer.
+## Enabled by default. Disable with `--no-default-features` to drop the thorvg
+## dependency and fall back to the pre-rendered frames_dir path only.
+lottie-native = ["dep:thorvg", "dep:dashmap"]
+
 [dependencies]
 rustmotion-core = { path = "../rustmotion-core", version = "0.6.0" }
 skia-safe = "0.82"
@@ -20,3 +27,5 @@ qrcode = "0.14"
 gif = "0.13"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 similar = "2"
+thorvg = { version = "0.5", optional = true }
+dashmap = { version = "6", optional = true }
