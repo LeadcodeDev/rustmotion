@@ -334,18 +334,34 @@ pub struct Camera {
     /// Zoom factor. 1.0 = no zoom, 2.0 = 2x zoom in, 0.5 = zoom out.
     #[serde(default = "default_camera_zoom")]
     pub zoom: f32,
-    /// Rotation in degrees around the scene center. Default: 0.
+    /// Rotation in degrees around the camera origin. Default: 0.
     #[serde(default)]
     pub rotation: f32,
+    /// Focal point for zoom/rotation, in frame pixels. Absent = frame centre
+    /// (the historical behaviour). When the object is present, `x`/`y`
+    /// default to 0 (top-left corner) — set both explicitly.
+    #[serde(default)]
+    pub origin: Option<CameraOrigin>,
     /// Keyframe animations for camera properties.
     #[serde(default)]
     pub keyframes: Vec<CameraKeyframe>,
 }
 
+/// Focal point of the camera in frame pixels.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CameraOrigin {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+}
+
 /// A keyframe for a camera property.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CameraKeyframe {
-    /// The camera property to animate: "x", "y", "zoom", "rotation".
+    /// The camera property to animate: "x", "y", "zoom", "rotation",
+    /// "origin.x", "origin.y" (dotted form, matching the component keyframe
+    /// convention for compound properties).
     pub property: String,
     /// Time-value pairs for the animation.
     pub values: Vec<CameraKeyframePoint>,
