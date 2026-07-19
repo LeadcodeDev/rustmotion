@@ -82,6 +82,34 @@ Utilise la propriété `"name": "keyframes"` avec les propriétés `rotate_x`, `
 
 Les rotations >30° déforment le contenu et rendent le texte illisible. Rester dans −30..30.
 
+### Pivot configurable : `transform-origin` et `perspective-origin`
+
+Le pivot de rotation/scale est configurable via `style["transform-origin"]` (et `style["perspective-origin"]` pour le point de fuite de la perspective). Les deux propriétés acceptent :
+
+- Mots-clés : `"left"`, `"center"`, `"right"` (axe X) ; `"top"`, `"center"`, `"bottom"` (axe Y)
+- Pourcentages : `"0%"` (coin), `"50%"` (centre, défaut), `"100%"` (bord opposé)
+- Valeurs px : ex. `"20px"` (relatif au coin haut-gauche de la box)
+
+```json
+{
+  "style": {
+    "transform-origin": { "x": "left", "y": "center" },
+    "animation": [
+      {
+        "name": "keyframes",
+        "keyframes": [
+          { "property": "rotate_y", "keyframes": [{ "time": 0, "value": -45 }, { "time": 1, "value": 0 }] },
+          { "property": "perspective", "keyframes": [{ "time": 0, "value": 800 }, { "time": 1, "value": 800 }] }
+        ]
+      }
+    ]
+  }
+}
+```
+
+L'absence de `transform-origin` = pivot au centre de la box (comportement par défaut, inchangé).
+`perspective-origin` par défaut = même pivot que `transform-origin`.
+
 ---
 
 ## Shadow 3D adaptatif (automatique)
