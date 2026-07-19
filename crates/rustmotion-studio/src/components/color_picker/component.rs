@@ -3,29 +3,50 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dioxus::prelude::*;
 use dioxus_primitives::color_picker::{self, Color, ColorAreaProps, ColorPickerContext};
 use dioxus_primitives::label::Label;
+use dioxus_primitives::popover;
 use dioxus_primitives::slider::*;
+use dioxus_primitives::use_controlled;
 use palette::{encoding, FromColor, Hsv, IntoColor, RgbHue, Srgb};
 
 use crate::components::input::Input;
+
+// ADOPTION BOUNDARY — this file mirrors the OFFICIAL DioxusLabs/components
+// color picker (preview/src/components/color_picker/component.rs at the
+// pinned checkout), composed from the `dioxus_primitives::color_picker` and
+// `popover` primitives. Popover behavior (open state, outside-click dismiss,
+// global Escape) and positioning (CSS `absolute` under the trigger) are
+// UPSTREAM's — we deliberately implement no positioning of our own.
+//
+// Our divergences, kept to the minimum:
+// 1. `--rm-*` theming in style.css (values only; selectors upstream).
+// 2. A local HSV mirror in `ColorPickerRoot` (live drag preview + guaranteed
+//    `on_color_change` propagation).
+// 3. Panel-wide exclusivity: the `ColorPicker` wrapper drives the primitive's
+//    CONTROLLED `open` from the shared [`OpenPicker`] state (one picker open
+//    at a time); upstream's dismiss paths flow through `on_open_change` and
+//    compose cleanly with it.
 
 fn format_color_hex(color: Color) -> String {
     format!("#{color:X}")
 }
 
 /// Which color picker is currently expanded, shared across the inspector
-/// panel so only ONE picker is open at a time: opening a swatch closes any
-/// other. Provided by the panel; pickers fall back to a local open state when
-/// the context is absent.
+/// panel so only ONE picker is open at a time. The wrapper feeds this into
+/// the primitive's controlled `open`; without the context the picker is
+/// uncontrolled (upstream default behavior).
 #[derive(Clone, Copy)]
 pub struct OpenPicker(pub Signal<Option<u64>>);
 
-/// Toggle decision for the exclusive open-picker state (pure): clicking the
-/// open picker closes it, clicking any other opens that one.
-pub fn toggle_picker(current: Option<u64>, id: u64) -> Option<u64> {
-    if current == Some(id) {
+/// Exclusive-state transition for a primitive `on_open_change(open)` event
+/// (pure): opening claims the slot (closing any other picker); closing only
+/// releases it if this picker holds it.
+pub fn apply_open_change(current: Option<u64>, id: u64, open: bool) -> Option<u64> {
+    if open {
+        Some(id)
+    } else if current == Some(id) {
         None
     } else {
-        Some(id)
+        current
     }
 }
 
@@ -33,6 +54,154 @@ pub fn toggle_picker(current: Option<u64>, id: u64) -> Option<u64> {
 fn next_picker_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+#[derive(Clone, Copy)]
+struct ColorPickerRootContext {
+    open: Memo<bool>,
+    disabled: ReadSignal<bool>,
+    color: ReadSignal<Hsv<encoding::Srgb, f64>>,
+}
+
+/// The props for the [`ColorPickerRoot`] component.
+#[derive(Props, Clone, PartialEq)]
+pub struct ColorPickerRootProps {
+    /// The selected color
+    #[props(default)]
+    pub color: ReadSignal<Hsv<encoding::Srgb, f64>>,
+
+    /// Callback when color changes
+    #[props(default)]
+    pub on_color_change: Callback<Hsv<encoding::Srgb, f64>>,
+
+    /// Whether the color picker is disabled
+    #[props(default)]
+    pub disabled: ReadSignal<bool>,
+
+    /// The controlled open state of the popover.
+    pub open: ReadSignal<Option<bool>>,
+
+    /// The default open state when uncontrolled.
+    #[props(default)]
+    pub default_open: bool,
+
+    /// Callback fired when the open state changes.
+    #[props(default)]
+    pub on_open_change: Callback<bool>,
+
+    /// Additional attributes to extend the color picker element
+    #[props(extends = GlobalAttributes)]
+    pub attributes: Vec<Attribute>,
+
+    /// The children of the color picker element
+    pub children: Element,
+}
+
+#[component]
+pub fn ColorPickerRoot(props: ColorPickerRootProps) -> Element {
+    let (open, set_open) = use_controlled(props.open, props.default_open, props.on_open_change);
+
+    // OUR divergence: local mirror of the color. The picker internals (area
+    // drag, hue slider, hex field) read/write THIS state, so every selection
+    // — including mid-drag moves — previews live AND propagates through
+    // `on_color_change` immediately, independent of whether the parent echoes
+    // the new color back through the `color` prop.
+    let mut local = use_signal(|| (props.color)());
+    use_effect(move || {
+        let external = (props.color)();
+        if external != *local.peek() {
+            local.set(external);
+        }
+    });
+    let forward = props.on_color_change;
+    let on_change = move |c: Hsv<encoding::Srgb, f64>| {
+        local.set(c);
+        forward.call(c);
+    };
+
+    use_context_provider(|| ColorPickerRootContext {
+        open,
+        disabled: props.disabled,
+        color: local.into(),
+    });
+
+    rsx! {
+        color_picker::ColorPicker {
+            class: "dx-color-picker",
+            color: local(),
+            on_color_change: on_change,
+            disabled: props.disabled,
+            attributes: props.attributes,
+            popover::PopoverRoot {
+                is_modal: false,
+                open: Some(open()),
+                on_open_change: move |v| set_open.call(v),
+                {props.children}
+            }
+        }
+    }
+}
+
+/// The props for the [`ColorPickerTrigger`] component.
+#[derive(Props, Clone, PartialEq)]
+pub struct ColorPickerTriggerProps {
+    /// Optional label on the trigger button
+    #[props(default)]
+    pub label: Option<String>,
+
+    /// Additional attributes to extend the trigger button
+    #[props(extends = GlobalAttributes)]
+    pub attributes: Vec<Attribute>,
+
+    /// Additional content to render inside the trigger button
+    pub children: Element,
+}
+
+#[component]
+pub fn ColorPickerTrigger(props: ColorPickerTriggerProps) -> Element {
+    let ctx = use_context::<ColorPickerRootContext>();
+    let aria_hex = use_memo(move || {
+        let rgb: Color = Srgb::<f64>::from_color((ctx.color)()).into_format();
+        format_color_hex(rgb)
+    });
+
+    rsx! {
+        popover::PopoverTrigger {
+            class: "dx-color-picker-button",
+            disabled: if (ctx.disabled)() { true },
+            aria_label: format!("Color picker {aria_hex}"),
+            aria_expanded: (ctx.open)(),
+            attributes: props.attributes,
+            ColorSwatch { color: ctx.color }
+            if let Some(label) = props.label { span { {label} } }
+            {props.children}
+        }
+    }
+}
+
+/// The props for the [`ColorPickerPopover`] component.
+#[derive(Props, Clone, PartialEq)]
+pub struct ColorPickerPopoverProps {
+    /// Additional attributes to extend the popover content
+    #[props(extends = GlobalAttributes)]
+    pub attributes: Vec<Attribute>,
+
+    /// The children of the color picker popover
+    pub children: Element,
+}
+
+/// Upstream verbatim: the popover primitive owns open/dismiss (outside click,
+/// global Escape) and the position comes from the stylesheet — no runtime
+/// positioning on our side.
+#[component]
+pub fn ColorPickerPopover(props: ColorPickerPopoverProps) -> Element {
+    rsx! {
+        popover::PopoverContent {
+            class: "dx-color-picker-popover".to_string(),
+            attributes: props.attributes,
+            {props.children}
+        }
+    }
 }
 
 /// The props for the [`ColorPicker`] component.
@@ -54,14 +223,6 @@ pub struct ColorPickerProps {
     #[props(default)]
     pub label: Option<String>,
 
-    /// Unused (kept for call-site compatibility): the picker expands inline
-    /// and manages its own exclusive open state.
-    pub open: ReadSignal<Option<bool>>,
-
-    /// The default open state when uncontrolled.
-    #[props(default)]
-    pub default_open: bool,
-
     /// Callback fired when the open state changes.
     #[props(default)]
     pub on_open_change: Callback<bool>,
@@ -70,127 +231,45 @@ pub struct ColorPickerProps {
     #[props(extends = GlobalAttributes)]
     pub attributes: Vec<Attribute>,
 
-    /// Additional content to append to the expanded editor
+    /// Additional content to append to the default color picker popover
     pub children: Element,
 }
 
-/// # ColorPicker — inline expansion
-///
-/// The open picker renders NO floating popover: it expands IN FLOW directly
-/// below its row (`flex-basis:100%` wraps it to the next line of the
-/// `flex-wrap` row), pushing the content below. No fixed/absolute
-/// positioning, no measurement, no clamping — clipping is impossible by
-/// construction and it scrolls naturally with the panel.
-///
-/// Close: re-click on the swatch, Escape inside the picker subtree, or
-/// opening another swatch (exclusive [`OpenPicker`] state).
-///
-/// The local HSV mirror (live drag preview + guaranteed propagation) is kept
-/// unchanged from the optimistic-edit round.
+/// The styled wrapper every inspector row uses (swatch trigger + popover with
+/// the full editor). Adds panel-wide exclusivity on top of the upstream
+/// primitives by CONTROLLING their `open`.
 #[component]
 pub fn ColorPicker(props: ColorPickerProps) -> Element {
-    // Local mirror of the color: the picker internals (area drag, hue slider,
-    // hex field) read/write THIS state, so every selection — including
-    // mid-drag moves — previews live AND propagates through
-    // `on_color_change` immediately, independent of whether the parent echoes
-    // the new color back through the `color` prop.
-    let mut local = use_signal(|| (props.color)());
-    use_effect(move || {
-        let external = (props.color)();
-        if external != *local.peek() {
-            local.set(external);
-        }
-    });
-    let forward = props.on_color_change;
-    let on_change = move |c: Hsv<encoding::Srgb, f64>| {
-        local.set(c);
-        forward.call(c);
-    };
-
-    // Exclusive open state (panel-wide when the context is provided).
     let id = use_hook(next_picker_id);
-    let shared_open = try_consume_context::<OpenPicker>();
-    let local_open = use_signal(|| false);
-    let is_open = match shared_open {
-        Some(s) => (s.0)() == Some(id),
-        None => local_open(),
-    };
+    let shared = try_consume_context::<OpenPicker>();
+    // Controlled when the panel provides the exclusivity context, otherwise
+    // uncontrolled (upstream default).
+    let controlled_open: Option<bool> = shared.map(|s| (s.0)() == Some(id));
 
-    let on_open_change = props.on_open_change;
-    let toggle = move |_| {
-        let now_open = match shared_open {
-            Some(s) => {
-                let mut sig = s.0;
-                let next = toggle_picker(sig(), id);
-                sig.set(next);
-                next == Some(id)
-            }
-            None => {
-                let mut l = local_open;
-                let v = !l();
-                l.set(v);
-                v
-            }
-        };
-        on_open_change.call(now_open);
-    };
-    let close = move || {
-        match shared_open {
-            Some(s) => {
-                let mut sig = s.0;
-                if sig() == Some(id) {
-                    sig.set(None);
-                }
-            }
-            None => {
-                let mut l = local_open;
-                l.set(false);
-            }
+    let forward_open = props.on_open_change;
+    let on_open_change = move |v: bool| {
+        if let Some(s) = shared {
+            let mut sig = s.0;
+            let next = apply_open_change(sig(), id, v);
+            sig.set(next);
         }
-        on_open_change.call(false);
+        forward_open.call(v);
     };
-
-    let aria_hex = use_memo(move || {
-        let rgb: Color = Srgb::<f64>::from_color(local()).into_format();
-        format_color_hex(rgb)
-    });
 
     rsx! {
-        color_picker::ColorPicker {
-            class: "dx-color-picker",
-            // `display:contents`: the trigger button and the inline editor
-            // become direct items of the surrounding `flex-wrap` row, so the
-            // editor wraps below the row at full row width.
-            style: "display:contents;",
-            color: local(),
-            on_color_change: on_change,
+        ColorPickerRoot {
+            color: props.color,
+            on_color_change: props.on_color_change,
             disabled: props.disabled,
+            open: controlled_open,
+            on_open_change,
             attributes: props.attributes,
-            button {
-                class: "dx-color-picker-button",
-                disabled: (props.disabled)(),
-                aria_label: "Color picker {aria_hex}",
-                aria_expanded: is_open,
-                onclick: toggle,
-                ColorSwatch { color: local }
-                if let Some(label) = props.label {
-                    span { {label} }
-                }
+            ColorPickerTrigger {
+                label: props.label,
             }
-            if is_open {
-                div {
-                    class: "dx-color-picker-inline",
-                    // Escape closes THIS picker; handled locally because the
-                    // panel wrapper stops keydown propagation to the app root.
-                    onkeydown: move |evt: KeyboardEvent| {
-                        if evt.key() == Key::Escape {
-                            evt.stop_propagation();
-                            close();
-                        }
-                    },
-                    ColorPickerSelect {}
-                    {props.children}
-                }
+            ColorPickerPopover {
+                ColorPickerSelect {}
+                {props.children}
             }
         }
     }
@@ -471,15 +550,18 @@ pub fn ColorPickerSelect(props: ColorPickerSelectProps) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::toggle_picker;
+    use super::apply_open_change;
 
     #[test]
     fn only_one_picker_open_at_a_time() {
-        // Opening from nothing.
-        assert_eq!(toggle_picker(None, 7), Some(7));
-        // Re-click on the open picker closes it.
-        assert_eq!(toggle_picker(Some(7), 7), None);
-        // Clicking ANOTHER swatch switches to it (previous one closes).
-        assert_eq!(toggle_picker(Some(7), 9), Some(9));
+        // Opening claims the slot.
+        assert_eq!(apply_open_change(None, 7, true), Some(7));
+        // Opening ANOTHER picker takes the slot over (the first closes: its
+        // controlled `open` becomes false).
+        assert_eq!(apply_open_change(Some(7), 9, true), Some(9));
+        // Closing releases only when this picker holds the slot…
+        assert_eq!(apply_open_change(Some(7), 7, false), None);
+        // …a stale close from a picker that lost the slot changes nothing.
+        assert_eq!(apply_open_change(Some(9), 7, false), Some(9));
     }
 }
