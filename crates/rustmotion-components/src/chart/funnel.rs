@@ -16,11 +16,7 @@ impl Chart {
         h: f32,
         progress: f32,
     ) -> Result<()> {
-        let horizontal = self
-            .direction
-            .as_deref()
-            .map(|d| d == "horizontal")
-            .unwrap_or(false);
+        let horizontal = self.direction == Some(super::ChartDirection::Horizontal);
 
         if horizontal {
             self.render_funnel_horizontal(canvas, w, h, progress)

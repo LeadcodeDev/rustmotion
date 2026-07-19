@@ -41,6 +41,7 @@ pub const EXCLUDED_FIELDS: &[&str] = &[
     "timeline",
     // structured data arrays
     "data",
+    "radar_data",
     "spans",
     "words",
     "lines",
@@ -87,6 +88,9 @@ pub enum PropKind {
     Object(Vec<PropSpec>),
     /// Array of numbers (stat `sparkline_data`, …) → per-entry number rows.
     NumberList,
+    /// Array of non-color strings (chart `axes`/`categories`, …) → per-entry
+    /// text rows.
+    StringList,
     /// Objects/arrays without a known shape → JSON textarea.
     Complex,
 }
@@ -105,6 +109,43 @@ pub fn display_number(raw: &str) -> String {
 pub struct PropSpec {
     pub name: String,
     pub kind: PropKind,
+}
+
+/// Default-palette prefill for an EMPTY color list: for `chart.colors`,
+/// "+ Add color" seeds the list with the engine's actual rendering palette so
+/// the user edits what the canvas shows instead of starting from nothing.
+/// Extend the map here when other components gain a palette.
+pub fn palette_prefill(
+    tag: &str,
+    field: &str,
+    list_is_empty: bool,
+) -> Option<&'static [&'static str]> {
+    if !list_is_empty {
+        return None;
+    }
+    match (tag, field) {
+        ("chart", "colors") => Some(rustmotion::components::chart::DEFAULT_PALETTE),
+        _ => None,
+    }
+}
+
+/// Next entries after a "+ Add" click (pure, single decision point for every
+/// list editor): an EMPTY list with a prefill (chart palette) is seeded with
+/// it — the user gets all 8 editable rows at once; otherwise one default
+/// entry is appended.
+pub fn next_entries_on_add(
+    current: &[String],
+    add_value: &str,
+    prefill: Option<&'static [&'static str]>,
+) -> Vec<String> {
+    match prefill {
+        Some(palette) if current.is_empty() => palette.iter().map(|c| c.to_string()).collect(),
+        _ => {
+            let mut v = current.to_vec();
+            v.push(add_value.to_string());
+            v
+        }
+    }
 }
 
 /// Mutate one sub-key of an object value: `Null` prunes the key; an object
@@ -195,12 +236,90 @@ pub fn is_multiline(name: &str, value: &str) -> bool {
     matches!(name, "code" | "content" | "message") || value.contains('\n')
 }
 
-/// Engine-default placeholder for string inputs (cascade defaults the schema
-/// can't know): `font-family` → "Inter".
+/// Engine-default placeholder for string inputs — properties whose effective
+/// default has no displayable VALUE (auto-sized boxes, unset backgrounds).
 pub fn engine_placeholder(name: &str) -> Option<&'static str> {
     match name {
         "font-family" => Some("Inter"),
+        "background" => Some("none"),
+        "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height" => {
+            Some("auto")
+        }
+        "line-height" | "letter-spacing" => Some("–"),
         _ => None,
+    }
+}
+
+/// Effective ENGINE defaults for CSS properties left unset in the source —
+/// what the renderer actually uses, so the inspector shows the truth instead
+/// of empty controls (same honesty as the Properties round-trip). `CssStyle`
+/// is all-`Option`, so this is a semantic table (source noted per entry),
+/// not schema-derived.
+pub fn css_effective_default(prop: &str) -> Option<Value> {
+    let v = match prop {
+        // Painter: full opacity when unset.
+        "opacity" => Value::from(1.0),
+        // CSS initial value; the layout treats unset as static flow.
+        "position" => Value::from("static"),
+        // Engine absolute-offset defaults (unset offset = 0).
+        "top" | "right" | "bottom" | "left" => Value::from(0),
+        // Paint order default.
+        "z-index" => Value::from(0),
+        // Taffy defaults: no spacing when unset.
+        "padding" | "margin" | "gap" => Value::from(0),
+        // Painter: square corners when unset.
+        "border-radius" => Value::from(0),
+        // CSS initial / engine clipping default.
+        "overflow" | "overflow-x" | "overflow-y" => Value::from("visible"),
+        "visibility" => Value::from("visible"),
+        // Scene/box-builder default (scenes flow as columns).
+        "flex-direction" => Value::from("column"),
+        // Taffy defaults for unset alignment.
+        "align-items" => Value::from("start"),
+        "justify-content" => Value::from("start"),
+        // CSS spec initial values (taffy follows them).
+        "flex-grow" => Value::from(0),
+        "flex-shrink" => Value::from(1),
+        // Cascade default weight (Regular · 400 — matches the curated select).
+        "font-weight" => Value::from("400"),
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// Painter-constant text sizes per component (the typographic default is NOT
+/// global: text paints at 48px, terminal/codeblock at 14px). Unknown tags →
+/// None (placeholder instead of a wrong number).
+pub fn text_default_font_size(tag: &str) -> Option<f64> {
+    match tag {
+        // text.rs: `font_size_px_or(48.0)`.
+        "text" | "caption" | "gradient_text" => Some(48.0),
+        // terminal.rs `FONT_SIZE: f32 = 14.0`; codeblock uses the same size.
+        "terminal" | "codeblock" => Some(14.0),
+        _ => None,
+    }
+}
+
+/// Display default for one CSS row of a given component: per-tag font-size,
+/// white text for the text family (renderer default), else the global table.
+pub fn css_display_default(tag: &str, prop: &str) -> Option<Value> {
+    match prop {
+        "font-size" => text_default_font_size(tag).map(Value::from),
+        "color" if css_family(tag) == CssFamily::TextLike => Some(Value::from("#FFFFFF")),
+        _ => css_effective_default(prop),
+    }
+}
+
+/// `(displayed value, is_default)` for a CSS row: the raw value wins; when
+/// absent, the effective default is shown with the dimmed default marker.
+pub fn css_row_value(raw: String, tag: &str, prop: &str) -> (String, bool) {
+    if !raw.is_empty() {
+        return (raw, false);
+    }
+    match css_display_default(tag, prop) {
+        Some(Value::String(s)) => (s, true),
+        Some(other) => (display_number(&other.to_string()), true),
+        None => (String::new(), false),
     }
 }
 
@@ -325,6 +444,7 @@ fn kind_of_schema_inner(
         Some("string") => PropKind::String,
         Some("array") if is_color_string_array(name, schema, defs, depth) => PropKind::ColorList,
         Some("array") if is_number_array(schema, defs, depth) => PropKind::NumberList,
+        Some("array") if is_string_array(schema, defs, depth) => PropKind::StringList,
         _ => PropKind::Complex,
     }
 }
@@ -345,6 +465,21 @@ fn object_specs(schema: &Value, defs: &Value, depth: u8, obj_level: u8) -> Optio
             })
             .collect(),
     )
+}
+
+/// Array whose items resolve to plain strings (labels, axes, categories) —
+/// color-string arrays are caught earlier by `is_color_string_array`.
+fn is_string_array(schema: &Value, defs: &Value, depth: u8) -> bool {
+    let Some(items) = schema.get("items") else {
+        return false;
+    };
+    let resolved = resolve_arm(items, defs, depth + 1);
+    if primary_type(&resolved) == Some("string") {
+        return true;
+    }
+    let mut info = UnionInfo::default();
+    collect_union(items, defs, depth + 1, &mut info);
+    info.has_string && !info.has_number
 }
 
 /// Array whose items resolve to numbers (`Vec<f64>`, dash patterns, …).
@@ -805,6 +940,142 @@ mod tests {
         }
     }
 
+    // ── Round 6: string lists / palette prefill / typed enums ───────────
+
+    #[test]
+    fn chart_axes_and_categories_are_string_lists() {
+        let props = component_props("chart").expect("chart in schema");
+        assert_eq!(kind_of(props, "axes"), Some(&PropKind::StringList));
+        assert_eq!(kind_of(props, "categories"), Some(&PropKind::StringList));
+        // colors keeps the color editor, sparkline stays numeric (stat).
+        assert_eq!(kind_of(props, "colors"), Some(&PropKind::ColorList));
+        let stat = component_props("stat").unwrap();
+        assert_eq!(kind_of(stat, "sparkline_data"), Some(&PropKind::NumberList));
+    }
+
+    #[test]
+    fn radar_data_is_excluded_from_properties() {
+        let props = component_props("chart").expect("chart in schema");
+        assert!(
+            !props.iter().any(|p| p.name == "radar_data"),
+            "radar_data is chart data — excluded from the generic editor"
+        );
+    }
+
+    #[test]
+    fn palette_prefill_only_for_empty_chart_colors() {
+        let palette = palette_prefill("chart", "colors", true).expect("chart palette");
+        assert_eq!(palette.len(), 8);
+        assert_eq!(palette[0], "#3B82F6");
+        // Non-empty list → no prefill (don't clobber user colors).
+        assert_eq!(palette_prefill("chart", "colors", false), None);
+        // Other tags/fields → None.
+        assert_eq!(palette_prefill("gradient_text", "colors", true), None);
+        assert_eq!(palette_prefill("chart", "axes", true), None);
+    }
+
+    #[test]
+    fn converted_enum_fields_expose_exact_variants() {
+        let stepper = component_props("stepper").expect("stepper in schema");
+        match kind_of(stepper, "orientation") {
+            Some(PropKind::Enum(v)) => {
+                assert!(v.contains(&"horizontal".to_string()), "{v:?}");
+                assert!(v.contains(&"vertical".to_string()), "{v:?}");
+            }
+            other => panic!("orientation should be Enum, got {other:?}"),
+        }
+        let chart = component_props("chart").expect("chart in schema");
+        match kind_of(chart, "direction") {
+            Some(PropKind::Enum(v)) => {
+                assert!(v.contains(&"vertical".to_string()), "{v:?}");
+                assert!(v.contains(&"horizontal".to_string()), "{v:?}");
+            }
+            other => panic!("direction should be Enum, got {other:?}"),
+        }
+    }
+
+    // ── Round 7: effective CSS defaults ─────────────────────────────────
+
+    #[test]
+    fn css_effective_default_table_entries() {
+        assert_eq!(css_effective_default("opacity"), Some(Value::from(1.0)));
+        assert_eq!(
+            css_effective_default("position"),
+            Some(Value::from("static"))
+        );
+        assert_eq!(css_effective_default("padding"), Some(Value::from(0)));
+        assert_eq!(
+            css_effective_default("overflow"),
+            Some(Value::from("visible"))
+        );
+        assert_eq!(css_effective_default("flex-shrink"), Some(Value::from(1)));
+        // No displayable default → placeholder territory.
+        assert_eq!(css_effective_default("background"), None);
+        assert_eq!(css_effective_default("width"), None);
+        assert_eq!(engine_placeholder("background"), Some("none"));
+        assert_eq!(engine_placeholder("width"), Some("auto"));
+    }
+
+    #[test]
+    fn font_size_default_is_per_component() {
+        assert_eq!(text_default_font_size("terminal"), Some(14.0));
+        assert_eq!(text_default_font_size("codeblock"), Some(14.0));
+        assert_eq!(text_default_font_size("text"), Some(48.0));
+        assert_eq!(text_default_font_size("made_up_tag"), None);
+        // Routed through the display default too.
+        assert_eq!(
+            css_display_default("terminal", "font-size"),
+            Some(Value::from(14.0))
+        );
+        assert_eq!(
+            css_display_default("text", "color"),
+            Some(Value::from("#FFFFFF"))
+        );
+        assert_eq!(css_display_default("shape", "color"), None);
+    }
+
+    #[test]
+    fn css_row_value_prefers_raw_and_marks_defaults() {
+        // Raw present → raw, not a default.
+        assert_eq!(
+            css_row_value("12px".into(), "text", "opacity"),
+            ("12px".to_string(), false)
+        );
+        // Raw absent + known default → displayed value with the marker.
+        assert_eq!(
+            css_row_value(String::new(), "text", "opacity"),
+            ("1".to_string(), true)
+        );
+        assert_eq!(
+            css_row_value(String::new(), "card", "position"),
+            ("static".to_string(), true)
+        );
+        // Raw absent, no default → empty, no marker (placeholder shows).
+        assert_eq!(
+            css_row_value(String::new(), "card", "background"),
+            (String::new(), false)
+        );
+    }
+
+    // ── Chart-colors bug fix: unified add decision ──────────────────────
+
+    #[test]
+    fn add_click_seeds_palette_or_appends() {
+        let palette = palette_prefill("chart", "colors", true).unwrap();
+        // Empty chart colors + prefill → all 8 editable rows at once.
+        let seeded = next_entries_on_add(&[], "#ffffff", Some(palette));
+        assert_eq!(seeded.len(), 8);
+        assert_eq!(seeded[0], "#3B82F6");
+        // Non-empty list → plain append even with a prefill available.
+        let appended = next_entries_on_add(&seeded, "#ffffff", Some(palette));
+        assert_eq!(appended.len(), 9);
+        assert_eq!(appended[8], "#ffffff");
+        // NumberList / StringList (no prefill): empty list appends ONE default
+        // entry — no palette-style seeding, no lost click.
+        assert_eq!(next_entries_on_add(&[], "0", None), vec!["0".to_string()]);
+        assert_eq!(next_entries_on_add(&[], "", None), vec![String::new()]);
+    }
+
     // ── Round 5: object / number-list editors ───────────────────────────
 
     #[test]
@@ -852,11 +1123,11 @@ mod tests {
         // Color arrays keep their dedicated editor.
         let gt = component_props("gradient_text").unwrap();
         assert_eq!(kind_of(gt, "colors"), Some(&PropKind::ColorList));
-        // String arrays are neither.
+        // Plain string arrays get their own editor (round 6).
         let strings = serde_json::json!({"type": "array", "items": {"type": "string"}});
         assert_eq!(
             kind_of_schema("labels", &strings, &Value::Null, 0),
-            PropKind::Complex
+            PropKind::StringList
         );
     }
 

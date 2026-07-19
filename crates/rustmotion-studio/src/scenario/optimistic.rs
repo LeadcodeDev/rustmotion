@@ -237,6 +237,140 @@ mod tests {
             { "type": "text", "content": "Hi", "style": { "font-size": 48 } }
         ] } ] }"##;
 
+    // ── Integration: full chart-colors write path (user bug repro) ──────
+
+    /// End-to-end repro of "editing chart colors does nothing": promo file →
+    /// optimistic Field mutation with the 8-color palette (the prefill
+    /// write), second mutation turning colors[0] red, rebuild, pixel check on
+    /// the chart's scene. Proves the DATA path (pointer → set_field_value →
+    /// rebuild → painter `get_color`) end to end.
+    #[test]
+    fn chart_colors_edit_reaches_the_rendered_pixels() {
+        let promo = std::path::Path::new("../../examples/rustmotion-promo.json");
+        if !promo.exists() {
+            panic!("examples/rustmotion-promo.json missing");
+        }
+        // Real open path: typed scenario loaded from the file (model_for uses
+        // an empty scenario and would have no frames before the first edit).
+        let loaded = rustmotion::loader::load_input(&promo.to_path_buf()).expect("promo loads");
+        let shared: Shared = Arc::new(Mutex::new(StudioModel::new(
+            loaded,
+            None,
+            Some(promo.to_path_buf()),
+        )));
+
+        // Find the first chart component in the raw (nested scene→div→card→chart).
+        fn find_chart(node: &Value, ptr: String, out: &mut Option<String>) {
+            if out.is_some() {
+                return;
+            }
+            if node.get("type").and_then(|t| t.as_str()) == Some("chart") {
+                *out = Some(ptr);
+                return;
+            }
+            if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+                for (i, c) in children.iter().enumerate() {
+                    find_chart(c, format!("{ptr}/children/{i}"), out);
+                }
+            }
+        }
+        let (pointer, scene_idx) = {
+            let m = shared.lock().unwrap();
+            let scenes = m.raw["scenes"].as_array().expect("promo scenes").clone();
+            let mut found = None;
+            let mut scene_idx = 0usize;
+            for (si, scene) in scenes.iter().enumerate() {
+                let mut ptr = None;
+                find_chart(scene, format!("/scenes/{si}"), &mut ptr);
+                if let Some(p) = ptr {
+                    found = Some(p);
+                    scene_idx = si;
+                    break;
+                }
+            }
+            (found.expect("promo contains a chart"), scene_idx)
+        };
+
+        let render_scene = |shared: &Shared| -> Vec<u8> {
+            let m = shared.lock().unwrap();
+            let base = m
+                .tasks
+                .iter()
+                .position(|t| {
+                    matches!(t, rustmotion::encode::video::FrameTask::Normal { scene_idx: s, .. }
+                        if *s == scene_idx)
+                })
+                .expect("scene has frames");
+            // Mid-scene so staggered entrances have landed.
+            let idx = (base + 45).min(m.tasks.len() - 1);
+            rustmotion::encode::render_frame_task_scaled(
+                &m.scenario.video,
+                &m.scenario,
+                &m.tasks[idx],
+                0.25,
+            )
+            .expect("render")
+        };
+        let count_red = |rgba: &[u8]| {
+            rgba.chunks_exact(4)
+                .filter(|p| p[0] > 180 && p[1] < 90 && p[2] < 90)
+                .count()
+        };
+
+        let before = render_scene(&shared);
+
+        // Edit 1: the prefill write (exactly what "+ Add color" commits).
+        let palette: Vec<Value> = rustmotion::components::chart::DEFAULT_PALETTE
+            .iter()
+            .map(|c| Value::String(c.to_string()))
+            .collect();
+        apply_optimistic(
+            &shared,
+            &Mutation::Field {
+                pointer: pointer.clone(),
+                field: "colors".into(),
+                value: Value::Array(palette.clone()),
+            },
+        )
+        .expect("palette write applies");
+        // Identical palette → the canvas must NOT change (the UX trap).
+        let after_prefill = render_scene(&shared);
+        assert_eq!(
+            count_red(&before),
+            count_red(&after_prefill),
+            "prefill palette renders identically by design"
+        );
+
+        // Edit 2: the user picks red for the first series.
+        let mut reddened = palette;
+        reddened[0] = Value::String("#FF0000".into());
+        apply_optimistic(
+            &shared,
+            &Mutation::Field {
+                pointer: pointer.clone(),
+                field: "colors".into(),
+                value: Value::Array(reddened),
+            },
+        )
+        .expect("red write applies");
+        {
+            let m = shared.lock().unwrap();
+            assert_eq!(
+                m.raw.pointer(&pointer).unwrap()["colors"][0],
+                serde_json::json!("#FF0000")
+            );
+        }
+        let after_red = render_scene(&shared);
+        // At 0.25 scale the red series line is thin — a clear nonzero jump
+        // is the signal (measured ~14 px; before: 0).
+        assert!(
+            count_red(&after_red) >= count_red(&before) + 10,
+            "chart must actually turn red: before={} after={}",
+            count_red(&before),
+            count_red(&after_red)
+        );
+    }
+
     // ── Self-write skip decision ────────────────────────────────────────
 
     #[test]

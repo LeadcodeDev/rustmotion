@@ -210,6 +210,69 @@ fn ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Floating export-status toast, bottom-right of the canvas area (absolute in
+/// the canvas container — no measurement). Running → live progression;
+/// success → auto-dismissed after ~6 s; failure → persistent with a close
+/// button. Replaces the old topbar status spans, which overlapped the
+/// centered scenario title.
+#[component]
+pub fn ExportToast() -> Element {
+    let export = use_hook(export_slot);
+    let status = use_signal(|| ExportStatus::Idle);
+    use_export_poll(export.clone(), status);
+    let mut dismissed = use_signal(|| None::<ExportStatus>);
+
+    // Auto-dismiss success ~6 s after it appears (a NEW export produces a
+    // different status value, so the toast reappears naturally).
+    use_effect(move || {
+        let s = status();
+        if matches!(s, ExportStatus::Done(_)) && dismissed.peek().as_ref() != Some(&s) {
+            spawn(async move {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                if *status.peek() == s {
+                    dismissed.set(Some(s));
+                }
+            });
+        }
+    });
+
+    let s = status();
+    if matches!(s, ExportStatus::Idle) || dismissed() == Some(s.clone()) {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { style: "position:absolute; right:16px; bottom:16px; z-index:900; display:flex; align-items:center; gap:8px; max-width:60%; padding:8px 12px; font-size:12px; background:var(--rm-surface-2); border:1px solid var(--rm-border); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.35);",
+            match &s {
+                ExportStatus::Running { .. } => rsx! {
+                    span { style: "color:var(--rm-text); white-space:nowrap;", "{export_label(&s)}" }
+                },
+                ExportStatus::Done(path) => rsx! {
+                    span {
+                        title: "{path.display()}",
+                        style: "color:var(--rm-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
+                        "Exported: {path.display()}"
+                    }
+                },
+                ExportStatus::Failed(reason) => rsx! {
+                    span {
+                        title: "{reason}",
+                        style: "color:var(--rm-error); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
+                        "Export failed: {reason}"
+                    }
+                    button {
+                        style: "background:none; border:none; color:var(--rm-text-muted); cursor:pointer; font-size:13px; padding:0 2px;",
+                        title: "Dismiss",
+                        onclick: move |_| dismissed.set(Some(s.clone())),
+                        "✕"
+                    }
+                },
+                ExportStatus::Idle => rsx! {},
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

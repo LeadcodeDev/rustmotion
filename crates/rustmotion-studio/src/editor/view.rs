@@ -10,6 +10,7 @@ use crate::scenario::{
 
 use super::annotations::AnnotationsPanel;
 use super::diff_panel::{DiffPanel, DiffSide};
+use super::export::ExportToast;
 use super::frames::{baseline_arcs, frame_hits, render_frame, scene_prefix, HitPct};
 use super::inspector::InspectorPanel;
 use super::playback::{
@@ -419,7 +420,8 @@ fn Canvas(
 
     rsx! {
         div {
-            style: "flex:1; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
+            // position:relative anchors the export toast (bottom-right).
+            style: "position:relative; flex:1; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden;",
             // Clicking the empty canvas (not an element) clears the selection.
             onclick: move |_| selected.set(None),
             // Wrapper carries the video's aspect ratio and is capped at 100% of the
@@ -434,6 +436,7 @@ fn Canvas(
                 }
                 Overlay { hits, selected, diff_marks }
             }
+            ExportToast {}
         }
     }
 }

@@ -47,11 +47,11 @@ pub struct Cursor {
     pub click_duration: f32,
     /// Visual cursor style: "default" (arrow) or "pointer" (hand).
     /// Currently both render as a bar; this is metadata for future SVG cursors.
-    #[serde(default = "default_cursor_style")]
-    pub cursor_style: String,
+    #[serde(default)]
+    pub cursor_style: CursorStyle,
     /// Easing for movement between waypoints: "ease_in_out" (default), "linear", "ease_out".
-    #[serde(default = "default_path_easing")]
-    pub path_easing: String,
+    #[serde(default)]
+    pub path_easing: CursorPathEasing,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -86,12 +86,24 @@ fn default_click_duration() -> f32 {
     0.3
 }
 
-fn default_cursor_style() -> String {
-    "default".to_string()
+/// Visual cursor style. Closed documented set; JSON values unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorStyle {
+    #[default]
+    Default,
+    Pointer,
 }
 
-fn default_path_easing() -> String {
-    "ease_in_out".to_string()
+/// Easing of the cursor's waypoint path. Closed set, now matched
+/// exhaustively; previously-silent unknown values fail the typed parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorPathEasing {
+    Linear,
+    EaseOut,
+    #[default]
+    EaseInOut,
 }
 
 rustmotion_core::impl_traits!(Cursor {
@@ -161,11 +173,10 @@ impl Cursor {
         let raw_t = ((time - move_start) / move_duration).clamp(0.0, 1.0);
 
         // Apply easing
-        let t = match self.path_easing.as_str() {
-            "linear" => raw_t,
-            "ease_out" => 1.0 - (1.0 - raw_t).powi(3),
-            _ => {
-                // ease_in_out
+        let t = match self.path_easing {
+            CursorPathEasing::Linear => raw_t,
+            CursorPathEasing::EaseOut => 1.0 - (1.0 - raw_t).powi(3),
+            CursorPathEasing::EaseInOut => {
                 if raw_t < 0.5 {
                     4.0 * raw_t * raw_t * raw_t
                 } else {
