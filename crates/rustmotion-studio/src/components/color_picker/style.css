@@ -187,7 +187,10 @@
     position: fixed;
     z-index: 1000;
     top: auto;
-    right: 308px;
+    /* Right edge approaches the LEFT edge of the clicked swatch (not the
+       panel edge). Constant per host context via --picker-anchor-right:
+       panel 300 − swatch-left-offset + 8px gap. Fallback = standard rows. */
+    right: var(--picker-anchor-right, 210px);
     left: auto;
     display: block;
     border-radius: 0.5rem;
@@ -197,6 +200,12 @@
     box-shadow:
         inset 0 0 0 1px var(--rm-border),
         0 8px 24px rgba(0, 0, 0, 0.35);
+    /* Lift so the popover TOP aligns with its trigger row's top: the static
+       position puts it below the swatch → up by swatch height (2rem = 32px)
+       + margin-top (4px) = 36px. A transform on the positioned element
+       itself is fine (only ANCESTOR transforms hijack fixed). */
+    --picker-lift: -36px;
+    transform: translateY(var(--picker-lift));
 }
 
 .dx-color-picker-popover[data-state="open"] {
@@ -208,27 +217,29 @@
     pointer-events: none;
 }
 
+/* The fade keyframes COMPOSE with the lift (an animation's transform would
+   otherwise override the base one and make the box jump at animation end). */
 @keyframes dx-color-picker-popover-fade-in {
     from {
         opacity: 0;
-        transform: translateY(-4px);
+        transform: translateY(calc(var(--picker-lift) - 4px));
     }
 
     to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(var(--picker-lift));
     }
 }
 
 @keyframes dx-color-picker-popover-fade-out {
     from {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(var(--picker-lift));
     }
 
     to {
         opacity: 0;
-        transform: translateY(-4px);
+        transform: translateY(calc(var(--picker-lift) - 4px));
     }
 }
 

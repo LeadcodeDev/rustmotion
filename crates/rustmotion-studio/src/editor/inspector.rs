@@ -616,7 +616,10 @@ pub fn InspectorPanel(
     let fam = family(&kind);
     rsx! {
         div {
-            style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto;",
+            // --picker-anchor-right: popover right-edge offset so it hugs the
+            // swatch's left edge. Standard rows: 300 − (14 section padding +
+            // 76 label + 8 gap) + 8 gap = 210px. Object sub-rows override it.
+            style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto; --picker-anchor-right:210px;",
             // The open picker popover is `position:fixed` at its trigger's
             // static position: it doesn't follow the panel scroll, so close
             // it when the panel scrolls (standard dropdown behavior).
@@ -1536,7 +1539,10 @@ fn ObjectControl(
     };
 
     rsx! {
-        div { style: "display:flex; flex-direction:column; gap:6px; width:100%; padding-left:10px; border-left:2px solid var(--rm-border-2);",
+        // Sub-rows are indented (10px padding + 2px border) and re-nest a
+        // 76px label + 8px gap: swatch sits at 98 + 12 + 84 = 194 from the
+        // panel's left → --picker-anchor-right: 300 − 194 + 8 = 114px.
+        div { style: "display:flex; flex-direction:column; gap:6px; width:100%; padding-left:10px; border-left:2px solid var(--rm-border-2); --picker-anchor-right:114px;",
             for spec in specs {
                 GenericRow {
                     key: "{pointer}-{name}-{spec.name}",
