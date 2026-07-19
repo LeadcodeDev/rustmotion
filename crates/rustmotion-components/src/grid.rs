@@ -22,6 +22,10 @@ pub struct Grid {
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
     pub stagger: Option<f32>,
+    #[serde(default)]
+    pub time_scale: Option<f64>,
+    #[serde(default)]
+    pub time_offset: Option<f64>,
 }
 
 rustmotion_core::impl_traits!(Grid {

@@ -85,6 +85,20 @@ fn validate_children(
             }
         }
 
+        // Container time remapping: time_scale must be strictly positive
+        // (0 would freeze the subtree, negative would run it backwards —
+        // neither is supported; the builder clamps defensively but the
+        // author must be told).
+        if let Some(scale) = container_time_scale(&child.component) {
+            if scale <= 0.0 {
+                errors.push(format!(
+                    "{}: time_scale must be > 0 (got {}). Use a small positive value \
+                     (e.g. 0.1) to slow the subtree down.",
+                    p, scale
+                ));
+            }
+        }
+
         // Animation completion budget check: ensure entrance animations finish within the scene.
         if let Some(anim) = child.component.as_animatable() {
             let start_at = child
@@ -199,6 +213,18 @@ fn validate_children(
             }
             _ => {}
         }
+    }
+}
+
+/// The `time_scale` declared on a container component, if any.
+fn container_time_scale(component: &Component) -> Option<f64> {
+    match component {
+        Component::Card(c) => c.time_scale,
+        Component::Flex(c) => c.time_scale,
+        Component::Grid(c) => c.time_scale,
+        Component::Container(c) => c.time_scale,
+        Component::Positioned(c) => c.time_scale,
+        _ => None,
     }
 }
 
@@ -347,5 +373,37 @@ mod style_warning_tests {
             warnings.iter().any(|w| w.contains("text-overflow")),
             "missing text-overflow warning: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn time_scale_zero_is_an_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "flex",
+            "time_scale": 0.0,
+            "children": [{ "type": "text", "content": "hi" }]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("time_scale must be > 0")),
+            "missing time_scale error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn positive_time_scale_is_accepted() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "flex",
+            "time_scale": 0.5,
+            "time_offset": 1.0,
+            "children": [{ "type": "text", "content": "hi" }]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
     }
 }

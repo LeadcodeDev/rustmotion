@@ -53,6 +53,11 @@ pub struct BuiltScene<'a> {
     /// dispatcher so internal animations shift by the same amount as the
     /// CSS overrides resolved at build time.
     pub stagger_delays: Vec<f64>,
+    /// Per-node affine time remap accumulated from ancestor containers'
+    /// `time_scale`/`time_offset`. Entry `i` is `(scale, shift)` where
+    /// `t_local = scale * t_global + shift`. Default `(1.0, 0.0)` = identity.
+    /// Indexed like `components` and `stagger_delays`.
+    pub time_params: Vec<(f64, f64)>,
 }
 
 /// Build a box tree for a flat list of scene-level children at a given
@@ -116,6 +121,7 @@ where
 {
     let mut components: Vec<Option<&'a ChildComponent>> = vec![None];
     let mut stagger_delays: Vec<f64> = vec![0.0];
+    let mut time_params: Vec<(f64, f64)> = vec![(1.0, 0.0)]; // slot 0 = root (identity)
     let mut next_id: NodeId = 1;
 
     let mut child_boxes = Vec::new();
@@ -124,10 +130,12 @@ where
             c,
             &mut components,
             &mut stagger_delays,
+            &mut time_params,
             &mut next_id,
             anim,
             format!("/children/{i}"),
             0.0,
+            (1.0, 0.0),
         ));
     }
 
@@ -149,6 +157,7 @@ where
         root,
         components,
         stagger_delays,
+        time_params,
     }
 }
 
@@ -205,9 +214,11 @@ fn build_ghosts<'a>(
     child: &'a ChildComponent,
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
+    time_params: &mut Vec<(f64, f64)>,
     next_id: &mut NodeId,
     actx: BuildAnimationCtx,
     stagger_delay: f64,
+    time_remap: (f64, f64),
     effects: &[AnimationEffect],
 ) -> Vec<BoxNode> {
     let (mb, tr) = detect_ghost_effects(effects);
@@ -306,6 +317,7 @@ fn build_ghosts<'a>(
                 // Register a slot so the dispatcher can look up the component.
                 components.push(Some(child));
                 stagger_delays.push(stagger_delay);
+                time_params.push(time_remap);
 
                 ghosts.push(BoxNode {
                     id: ghost_id,
@@ -337,6 +349,7 @@ fn build_ghosts<'a>(
                 *next_id += 1;
                 components.push(Some(child));
                 stagger_delays.push(stagger_delay);
+                time_params.push(time_remap);
 
                 trail_nodes.push(BoxNode {
                     id: ghost_id,
@@ -366,29 +379,47 @@ fn build_ghosts<'a>(
 ///
 /// `stagger_delay` is the animation delay accumulated from ancestor
 /// containers' `stagger` fields.
+/// `time_remap` is the accumulated affine time transform `(scale, shift)` where
+/// `t_local = scale * t_global + shift`. Default is `(1.0, 0.0)` (identity).
 #[allow(clippy::too_many_arguments)]
 fn build_child<'a>(
     child: &'a ChildComponent,
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
+    time_params: &mut Vec<(f64, f64)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     path: String,
     stagger_delay: f64,
+    time_remap: (f64, f64),
 ) -> Vec<BoxNode> {
+    // Compute the local animation context for this node — remapped by the
+    // accumulated affine time transform from ancestor containers.
+    // `t_local = scale * t_global + shift`
+    let local_actx = anim.map(|a| {
+        let (scale, shift) = time_remap;
+        BuildAnimationCtx {
+            time: a.time * scale + shift,
+            scene_duration: a.scene_duration,
+            fps: a.fps,
+        }
+    });
+
     // ── Ghost generation (motion_blur / trail) ───────────────────────────────
     // Must happen before allocating the principal's id so that ghost ids are
     // lower (earlier in the slot table). The principal's id is allocated below.
     let mut ghosts: Vec<BoxNode> = Vec::new();
-    if let Some(actx) = anim {
+    if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, stagger_delay) {
             ghosts = build_ghosts(
                 child,
                 components,
                 stagger_delays,
+                time_params,
                 next_id,
                 actx,
                 stagger_delay,
+                time_remap,
                 &effects,
             );
         }
@@ -398,6 +429,7 @@ fn build_child<'a>(
     *next_id += 1;
     components.push(Some(child));
     stagger_delays.push(stagger_delay);
+    time_params.push(time_remap);
 
     let mut css = component_css(&child.component);
 
@@ -420,7 +452,7 @@ fn build_child<'a>(
     if let Some(animatable) = child.component.as_animatable() {
         let steps = animatable.timeline_steps();
         if steps.iter().any(|s| s.style.is_some()) {
-            let t = anim.map(|a| a.time).unwrap_or(0.0);
+            let t = local_actx.map(|a| a.time).unwrap_or(0.0);
             let skip_opacity = css.transition.is_some();
             apply_style_states(&mut css, steps, t - stagger_delay, skip_opacity);
         }
@@ -430,7 +462,7 @@ fn build_child<'a>(
     // box's CSS. Only paint-time properties (transform, opacity, filter,
     // perspective) flow into CSS — internal animations like draw_progress or
     // char_animation remain on the `AnimatedProperties` legacy path.
-    if let Some(actx) = anim {
+    if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, stagger_delay) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
             if props_has_paint_overrides(&props) {
@@ -446,7 +478,7 @@ fn build_child<'a>(
         use rustmotion_core::css::style::{AudioReactiveProperty, AudioSource, AudioSourceTag};
         use rustmotion_core::engine::renderer::audio_analysis::audio_analysis_cache;
 
-        if let Some(actx) = anim {
+        if let Some(actx) = local_actx {
             let cache = audio_analysis_cache();
             let analysis_opt = if let Some(ref src) = ar.track {
                 cache.get(src).map(|r| r.clone())
@@ -497,24 +529,38 @@ fn build_child<'a>(
     // Visibility window (start_at/end_at) — enforced by the paint pass.
     // The stagger delay shifts the window too, so a hard-cut child appears
     // in step with its staggered siblings.
+    // When there is an accumulated time remap, the window times (which are in
+    // local/remapped time) must be converted back to global time so the paint
+    // pass (which operates on global time) can apply them correctly.
+    // If `t_local = scale * t_global + shift`, then `t_global = (t_local - shift) / scale`.
     let window = child.component.as_timed().and_then(|t| {
         let (start, end) = t.timing();
-        (start.is_some() || end.is_some()).then_some(
+        (start.is_some() || end.is_some()).then_some({
+            let (scale, shift) = time_remap;
+            let to_global = |t_local: f64| -> f64 {
+                if scale.abs() < 1e-10 {
+                    t_local
+                } else {
+                    (t_local - shift) / scale
+                }
+            };
             rustmotion_core::engine::box_tree::PaintWindow {
-                start: start.map(|s| s + stagger_delay),
-                end: end.map(|e| e + stagger_delay),
-            },
-        )
+                start: start.map(|s| to_global(s + stagger_delay)),
+                end: end.map(|e| to_global(e + stagger_delay)),
+            }
+        })
     });
 
     let children_boxes = container_children(
         &child.component,
         components,
         stagger_delays,
+        time_params,
         next_id,
         anim,
         &path,
         stagger_delay,
+        time_remap,
     );
     let intrinsic = component_intrinsic(&child.component);
 
@@ -785,24 +831,72 @@ fn component_intrinsic(
 /// If the component is a container, recurse into its children. Otherwise
 /// return an empty Vec. A container's `stagger` adds `index * stagger`
 /// to each child's inherited animation delay (cumulative across nesting).
+/// `time_remap` is the accumulated affine time transform `(scale, shift)` for
+/// this container node; the container's own `time_scale`/`time_offset` are
+/// composed in to produce the remap for children.
 #[allow(clippy::too_many_arguments)]
 fn container_children<'a>(
     component: &'a Component,
     components: &mut Vec<Option<&'a ChildComponent>>,
     stagger_delays: &mut Vec<f64>,
+    time_params: &mut Vec<(f64, f64)>,
     next_id: &mut NodeId,
     anim: Option<BuildAnimationCtx>,
     parent_path: &str,
     inherited_delay: f64,
+    time_remap: (f64, f64),
 ) -> Vec<BoxNode> {
-    let (children, stagger): (&[ChildComponent], Option<f32>) = match component {
-        Component::Card(c) => (&c.children, c.stagger),
-        Component::Flex(c) => (&c.children, c.stagger),
-        Component::Grid(c) => (&c.children, c.stagger),
-        Component::Container(c) => (&c.children, c.stagger),
-        Component::Positioned(c) => (&c.children, None),
-        _ => return Vec::new(),
-    };
+    let (children, stagger, child_scale, child_offset): (&[ChildComponent], Option<f32>, f64, f64) =
+        match component {
+            Component::Card(c) => (
+                &c.children,
+                c.stagger,
+                c.time_scale.unwrap_or(1.0),
+                c.time_offset.unwrap_or(0.0),
+            ),
+            Component::Flex(c) => (
+                &c.children,
+                c.stagger,
+                c.time_scale.unwrap_or(1.0),
+                c.time_offset.unwrap_or(0.0),
+            ),
+            Component::Grid(c) => (
+                &c.children,
+                c.stagger,
+                c.time_scale.unwrap_or(1.0),
+                c.time_offset.unwrap_or(0.0),
+            ),
+            Component::Container(c) => (
+                &c.children,
+                c.stagger,
+                c.time_scale.unwrap_or(1.0),
+                c.time_offset.unwrap_or(0.0),
+            ),
+            Component::Positioned(c) => (
+                &c.children,
+                None,
+                c.time_scale.unwrap_or(1.0),
+                c.time_offset.unwrap_or(0.0),
+            ),
+            _ => return Vec::new(),
+        };
+
+    // Clamp scale defensively to avoid division-by-zero downstream.
+    let child_scale = child_scale.max(1e-6);
+
+    // Compose the container's time remap with the inherited (accumulated) remap.
+    // Accumulated remap: `t_parent = scale_acc * t_global + shift_acc`
+    // Container formula: `t_child = (t_parent - child_offset) * child_scale`
+    //   = child_scale * (scale_acc * t_global + shift_acc) - child_scale * child_offset
+    //   = (child_scale * scale_acc) * t_global + child_scale * (shift_acc - child_offset)
+    let (scale_acc, shift_acc) = time_remap;
+    let new_scale = child_scale * scale_acc;
+    let new_shift = child_scale * (shift_acc - child_offset);
+    let child_remap = (new_scale, new_shift);
+
+    // `anim` stays GLOBAL all the way down the recursion — each `build_child`
+    // derives its node-local time from the accumulated `child_remap`. Passing
+    // a pre-remapped ctx here would double-apply the transform.
     let step = stagger.unwrap_or(0.0) as f64;
     let mut result = Vec::new();
     for (j, c) in children.iter().enumerate() {
@@ -810,10 +904,12 @@ fn container_children<'a>(
             c,
             components,
             stagger_delays,
+            time_params,
             next_id,
             anim,
             format!("{parent_path}/children/{j}"),
             inherited_delay + j as f64 * step,
+            child_remap,
         ));
     }
     result
@@ -1216,6 +1312,8 @@ mod tests {
             style,
             timeline: Vec::new(),
             stagger: None,
+            time_scale: None,
+            time_offset: None,
         })
     }
 
@@ -1426,6 +1524,8 @@ mod tests {
                 },
                 timeline: Vec::new(),
                 stagger: None,
+                time_scale: None,
+                time_offset: None,
             }),
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,

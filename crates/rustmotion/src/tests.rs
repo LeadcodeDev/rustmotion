@@ -376,6 +376,8 @@ mod component_smoke {
                     style: card_style,
                     timeline: Vec::new(),
                     stagger: None,
+                    time_scale: None,
+                    time_offset: None,
                 }),
                 position: Some(PositionMode::Absolute { x: 10.0, y: 10.0 }),
                 x: None,
@@ -992,6 +994,8 @@ mod component_smoke {
                 style: card_style,
                 timeline: Vec::new(),
                 stagger: None,
+                time_scale: None,
+                time_offset: None,
             }),
             position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -1116,6 +1120,270 @@ mod component_smoke {
             layout.width > 0.0,
             "codeblock width should be > 0, got {}",
             layout.width
+        );
+    }
+
+    // ─── Time Remapping Tests ────────────────────────────────────────────────────
+
+    /// Build a scene with one flex container (time_scale, time_offset) wrapping
+    /// a red rect with fade_in, absolutely positioned at (0, 0).
+    fn flex_fade_in_scene(
+        time_scale: Option<f64>,
+        time_offset: Option<f64>,
+        fade_duration: f64,
+    ) -> Vec<crate::components::ChildComponent> {
+        let json = serde_json::json!({
+            "type": "flex",
+            "time_scale": time_scale,
+            "time_offset": time_offset,
+            "style": { "width": "400px", "height": "300px" },
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": {
+                    "width": "200px",
+                    "height": "200px",
+                    "animation": [{ "name": "fade_in", "duration": fade_duration }]
+                }
+            }]
+        });
+        let component: Component = serde_json::from_value(json).expect("deserialize flex");
+        vec![crate::components::ChildComponent {
+            component,
+            position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }]
+    }
+
+    #[test]
+    fn time_scale_slows_fade_in_animation() {
+        // A flex container with time_scale 0.5 wraps a red shape with fade_in duration=1s.
+        // At t_global=1s the child should be at t_local=0.5s → half-faded.
+        // At t_global=2s the child should be at t_local=1.0s → fully visible.
+        // Without remap, at t_global=1s the fade would be complete.
+        // With scale 0.5, it should still be in-progress at t=1s.
+        let at_1s = render_new_at(
+            &flex_fade_in_scene(Some(0.5), None, 1.0),
+            400,
+            300,
+            1.0,
+            4.0,
+        );
+        let at_2s = render_new_at(
+            &flex_fade_in_scene(Some(0.5), None, 1.0),
+            400,
+            300,
+            2.0,
+            4.0,
+        );
+
+        let red_at_1 = red_sum(&at_1s);
+        let red_at_2 = red_sum(&at_2s);
+        assert!(
+            red_at_2 > red_at_1 + 1000,
+            "time_scale=0.5: at t=1s (half-faded) red_sum={} should be less than at t=2s (fully visible) red_sum={}",
+            red_at_1, red_at_2
+        );
+        assert!(
+            red_at_2 > 5000,
+            "at t=2s (t_local=1.0s, fade complete) shape should be fully visible, red_sum={}",
+            red_at_2
+        );
+    }
+
+    #[test]
+    fn time_offset_delays_animation_start() {
+        // A flex container with time_offset=1.0 wraps a shape with fade_in duration=0.5s.
+        // t_local = (t_global - 1.0) * 1.0
+        // At t_global=0.9s: t_local=-0.1s → nothing visible yet.
+        // At t_global=1.6s: t_local=0.6s → fade complete (duration=0.5).
+        let before = render_new_at(
+            &flex_fade_in_scene(None, Some(1.0), 0.5),
+            400,
+            300,
+            0.9,
+            4.0,
+        );
+        let after = render_new_at(
+            &flex_fade_in_scene(None, Some(1.0), 0.5),
+            400,
+            300,
+            1.6,
+            4.0,
+        );
+
+        let red_before = red_sum(&before);
+        let red_after = red_sum(&after);
+
+        assert!(
+            red_before < 1000,
+            "time_offset=1.0: at t=0.9s animation hasn't started, expected near-zero red, got {}",
+            red_before
+        );
+        assert!(
+            red_after > 5000,
+            "time_offset=1.0: at t=1.6s fade should be complete, expected high red, got {}",
+            red_after
+        );
+    }
+
+    #[test]
+    fn start_at_window_respected_under_time_scale() {
+        // Child with start_at=1.0 inside flex with time_scale=0.5.
+        // start_at is in local time. In global: t_global = start_at / scale = 1.0/0.5 = 2.0s.
+        // At t_global=1.5s: child should still be invisible (local time=0.75 < start_at=1.0).
+        // At t_global=2.5s: child should be visible (local time=1.25 > start_at=1.0).
+        let json = serde_json::json!({
+            "type": "flex",
+            "time_scale": 0.5,
+            "style": { "width": "400px", "height": "300px" },
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "start_at": 1.0,
+                "style": { "width": "200px", "height": "200px" }
+            }]
+        });
+        let make_scene = || {
+            let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
+            vec![crate::components::ChildComponent {
+                component,
+                position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+
+        let invisible = render_new_at(&make_scene(), 400, 300, 1.5, 6.0);
+        let visible = render_new_at(&make_scene(), 400, 300, 2.5, 6.0);
+
+        assert!(
+            red_sum(&invisible) < 500,
+            "start_at=1.0 with scale=0.5: at t_global=1.5 (t_local=0.75) shape should be invisible, red_sum={}",
+            red_sum(&invisible)
+        );
+        assert!(
+            red_sum(&visible) > 5000,
+            "start_at=1.0 with scale=0.5: at t_global=2.5 (t_local=1.25 > start_at=1.0) shape should be visible, red_sum={}",
+            red_sum(&visible)
+        );
+    }
+
+    #[test]
+    fn cascaded_time_scale_compounds() {
+        // Outer flex: time_scale=0.5. Inner flex: time_scale=0.5.
+        // Effective scale on the shape = 0.5 * 0.5 = 0.25.
+        // Shape has fade_in duration=1s.
+        // t_local = t_global * 0.25 (both offsets are 0).
+        // At t_global=3.0s: t_local=0.75s → still fading (not at 1s yet).
+        // At t_global=4.5s: t_local=1.125s → fade complete.
+        let json = serde_json::json!({
+            "type": "flex",
+            "time_scale": 0.5,
+            "style": { "width": "400px", "height": "300px" },
+            "children": [{
+                "type": "flex",
+                "time_scale": 0.5,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "fill": "#ff0000",
+                    "style": {
+                        "width": "100px",
+                        "height": "100px",
+                        "animation": [{ "name": "fade_in", "duration": 1.0 }]
+                    }
+                }]
+            }]
+        });
+        let make_scene = || {
+            let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
+            vec![crate::components::ChildComponent {
+                component,
+                position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+
+        // At t_global=3s: t_local = 3 * 0.25 = 0.75s → fade still incomplete
+        let at_3s = render_new_at(&make_scene(), 400, 300, 3.0, 6.0);
+        // At t_global=4.5s: t_local = 4.5 * 0.25 = 1.125s → fade complete
+        let at_4_5s = render_new_at(&make_scene(), 400, 300, 4.5, 6.0);
+
+        let red_3 = red_sum(&at_3s);
+        let red_4_5 = red_sum(&at_4_5s);
+
+        assert!(
+            red_4_5 > red_3 + 500,
+            "cascaded scale 0.5×0.5=0.25: at t=3s red={} should be less than t=4.5s red={}",
+            red_3,
+            red_4_5
+        );
+        assert!(
+            red_4_5 > 2000,
+            "cascaded scale: at t=4.5s (t_local=1.125s) fade should be complete, red_sum={}",
+            red_4_5
+        );
+    }
+
+    #[test]
+    fn time_scale_affects_internal_paint_ctx_time() {
+        // A line with draw_in duration=1s inside a flex with time_scale=0.5.
+        // At t_global=1s (t_local=0.5s): the line should be about half-drawn.
+        // Without remapping, the line would be fully drawn at t=1s.
+        // We compare draw extent vs a reference without remap.
+        let make_scene = |time_scale: Option<f64>| {
+            let json = serde_json::json!({
+                "type": "flex",
+                "time_scale": time_scale,
+                "children": [{
+                    "type": "line",
+                    "x1": 0.0,
+                    "y1": 150.0,
+                    "x2": 400.0,
+                    "y2": 150.0,
+                    "width": 8.0,
+                    "color": "#ff0000",
+                    "style": {
+                        "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                    }
+                }]
+            });
+            let component: Component = serde_json::from_value(json).expect("deserialize flex+line");
+            vec![crate::components::ChildComponent {
+                component,
+                position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+
+        // At t_global=1s: without remap the line is fully drawn; with scale=0.5 it should be ~half.
+        let without_remap = render_new_at(&make_scene(None), 400, 300, 1.0, 2.0);
+        let with_remap = render_new_at(&make_scene(Some(0.5)), 400, 300, 1.0, 2.0);
+
+        let red_no_remap = red_sum(&without_remap);
+        let red_remapped = red_sum(&with_remap);
+
+        assert!(
+            red_no_remap > red_remapped + 500,
+            "line draw_in with scale=0.5: at t=1s remapped line (red={}) should have less extent \
+             than non-remapped (red={})",
+            red_remapped,
+            red_no_remap
+        );
+        assert!(
+            red_remapped > 200,
+            "line draw_in with scale=0.5: at t=1s (t_local=0.5s) line should be partially drawn, red_sum={}",
+            red_remapped
         );
     }
 }
