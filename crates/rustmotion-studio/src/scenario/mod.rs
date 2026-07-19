@@ -6,6 +6,7 @@ mod diff;
 mod edit;
 mod history;
 mod model;
+mod optimistic;
 mod sidecar;
 
 pub use baseline::{baseline_slot, get_baseline, set_baseline};
@@ -16,6 +17,7 @@ pub use edit::{
 };
 pub use history::{history_slot, record_edit, redo, set_saving, undo, SharedHistory};
 pub use model::{empty_scenario, Shared, StudioModel};
+pub use optimistic::{apply_optimistic, is_self_write, note_self_write, self_write_slot, Mutation};
 pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
 
 /// Which top-level view is shown (library home vs. the editor).

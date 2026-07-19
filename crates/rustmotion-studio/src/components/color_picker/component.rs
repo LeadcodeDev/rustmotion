@@ -57,17 +57,35 @@ pub struct ColorPickerRootProps {
 pub fn ColorPickerRoot(props: ColorPickerRootProps) -> Element {
     let (open, set_open) = use_controlled(props.open, props.default_open, props.on_open_change);
 
+    // Local mirror of the color: the picker internals (area drag, hue slider,
+    // hex field) read/write THIS state, so every selection — including
+    // mid-drag moves — previews live in the popover AND propagates through
+    // `on_color_change` immediately, independent of whether the parent echoes
+    // the new color back through the `color` prop.
+    let mut local = use_signal(|| (props.color)());
+    use_effect(move || {
+        let external = (props.color)();
+        if external != *local.peek() {
+            local.set(external);
+        }
+    });
+    let forward = props.on_color_change;
+    let on_change = move |c: Hsv<encoding::Srgb, f64>| {
+        local.set(c);
+        forward.call(c);
+    };
+
     use_context_provider(|| ColorPickerRootContext {
         open,
         disabled: props.disabled,
-        color: props.color,
+        color: local.into(),
     });
 
     rsx! {
         color_picker::ColorPicker {
             class: "dx-color-picker",
-            color: props.color,
-            on_color_change: props.on_color_change,
+            color: local(),
+            on_color_change: on_change,
             disabled: props.disabled,
             attributes: props.attributes,
             popover::PopoverRoot {
@@ -190,11 +208,43 @@ pub struct ColorPickerPopoverProps {
 
 #[component]
 pub fn ColorPickerPopover(props: ColorPickerPopoverProps) -> Element {
+    let ctx = use_context::<ColorPickerRootContext>();
+    // The inspector docks the picker against the right window edge, so the
+    // popover opens LEFT of the swatch (CSS `right:0`). Vertically it flips
+    // above the swatch when its bottom would clip the window: measured when
+    // the popover opens.
+    let mut node = use_signal(|| None::<std::rc::Rc<MountedData>>);
+    let mut flip_up = use_signal(|| false);
+    use_effect(move || {
+        if (ctx.open)() {
+            if let Some(n) = node() {
+                spawn(async move {
+                    if let Ok(rect) = n.get_client_rect().await {
+                        let win = dioxus::desktop::window();
+                        let vh = win
+                            .inner_size()
+                            .to_logical::<f64>(win.scale_factor())
+                            .height;
+                        flip_up.set(rect.origin.y + rect.size.height > vh - 8.0);
+                    }
+                });
+            }
+        }
+    });
+    let class = if flip_up() {
+        "dx-color-picker-popover flip-up"
+    } else {
+        "dx-color-picker-popover"
+    };
+
     rsx! {
         popover::PopoverContent {
-            class: "dx-color-picker-popover".to_string(),
+            class: class.to_string(),
             attributes: props.attributes,
-            {props.children}
+            div {
+                onmounted: move |e| node.set(Some(e.data())),
+                {props.children}
+            }
         }
     }
 }
