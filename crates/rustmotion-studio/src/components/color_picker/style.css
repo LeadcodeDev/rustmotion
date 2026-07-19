@@ -176,11 +176,18 @@
    absolute popover under the trigger. Single divergence for our right-docked
    inspector: right-anchored (right:0) instead of upstream's left:0, so it
    opens leftward. Values themed to --rm-*. */
+/* Overlay escape (no measurement): `position:fixed` with `top:auto` keeps
+   the box at its STATIC position — vertically level with its trigger row —
+   while escaping every `overflow` ancestor (the scrollable inspector panel
+   clipped the absolute version). Horizontally `right: 308px` (300px panel
+   width constant + 8px gap) lays it just left of the panel, OVER the canvas,
+   always. No ancestor has transform/filter/perspective, so no containing
+   block hijacks the fixed positioning. */
 .dx-color-picker-popover {
-    position: absolute;
+    position: fixed;
     z-index: 1000;
-    top: 100%;
-    right: 0;
+    top: auto;
+    right: 308px;
     left: auto;
     display: block;
     border-radius: 0.5rem;
