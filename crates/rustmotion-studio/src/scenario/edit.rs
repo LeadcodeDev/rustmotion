@@ -55,6 +55,41 @@ pub fn set_field(mut raw: Value, pointer: &str, field: &str, value: &str) -> Opt
     Some(raw)
 }
 
+/// Typed variant of [`set_field`]: writes the JSON value as-is (a number stays
+/// a number, a bool a bool). `Value::Null` REMOVES the field — an emptied
+/// control unsets rather than writing an empty string. Returns the mutated
+/// clone.
+pub fn set_field_value(mut raw: Value, pointer: &str, field: &str, value: Value) -> Option<Value> {
+    let el = raw.pointer_mut(pointer)?;
+    let obj = el.as_object_mut()?;
+    if value.is_null() {
+        obj.remove(field);
+    } else {
+        obj.insert(field.to_string(), value);
+    }
+    Some(raw)
+}
+
+/// Typed variant of [`set_style`]: writes the JSON value as-is into the
+/// element's `style` object. `Value::Null` REMOVES the property. Returns the
+/// mutated clone.
+pub fn set_style_value(mut raw: Value, pointer: &str, prop: &str, value: Value) -> Option<Value> {
+    let el = raw.pointer_mut(pointer)?;
+    let obj = el.as_object_mut()?;
+    if value.is_null() {
+        if let Some(style) = obj.get_mut("style").and_then(|s| s.as_object_mut()) {
+            style.remove(prop);
+        }
+        return Some(raw);
+    }
+    let style = obj
+        .entry("style")
+        .or_insert_with(|| Value::Object(Default::default()));
+    let style_obj = style.as_object_mut()?;
+    style_obj.insert(prop.to_string(), value);
+    Some(raw)
+}
+
 /// Append an annotation object to `raw["annotations"]` (creating the array if
 /// absent). Returns the mutated clone.
 pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
@@ -148,6 +183,46 @@ mod tests {
         assert_eq!(
             read_style(&updated, "/scenes/0/children/0", "font-size").as_deref(),
             Some("48")
+        );
+    }
+
+    #[test]
+    fn set_field_value_keeps_json_types_round_trip() {
+        let updated = set_field_value(raw(), "/scenes/0/children/0", "from", json!(250)).unwrap();
+        let text = serde_json::to_string(&updated).unwrap();
+        let back: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(back["scenes"][0]["children"][0]["from"], json!(250));
+        assert!(
+            back["scenes"][0]["children"][0]["from"].is_number(),
+            "a number must stay a number, not a string"
+        );
+        let updated =
+            set_field_value(updated, "/scenes/0/children/0", "wrap", json!(false)).unwrap();
+        assert_eq!(updated["scenes"][0]["children"][0]["wrap"], json!(false));
+    }
+
+    #[test]
+    fn set_field_value_null_removes_the_field() {
+        let updated =
+            set_field_value(raw(), "/scenes/0/children/0", "content", Value::Null).unwrap();
+        assert!(
+            updated["scenes"][0]["children"][0].get("content").is_none(),
+            "null must remove the key"
+        );
+    }
+
+    #[test]
+    fn set_style_value_null_removes_the_property() {
+        let updated = set_style_value(raw(), "/scenes/0/children/0", "color", Value::Null).unwrap();
+        assert!(updated["scenes"][0]["children"][0]["style"]
+            .get("color")
+            .is_none());
+        // Typed write keeps the number.
+        let updated =
+            set_style_value(updated, "/scenes/0/children/0", "font-size", json!(64)).unwrap();
+        assert_eq!(
+            updated["scenes"][0]["children"][0]["style"]["font-size"],
+            json!(64)
         );
     }
 
