@@ -611,11 +611,16 @@ pub fn InspectorPanel(
     // Provide the debounce handle so all child write helpers share one slot.
     use_context_provider(|| WriteDebounce(Rc::new(RefCell::new(None))));
     // One expanded color picker at a time across the whole panel.
-    let open_picker = use_signal(|| None::<u64>);
+    let mut open_picker = use_signal(|| None::<u64>);
     use_context_provider(|| crate::components::color_picker::OpenPicker(open_picker));
     let fam = family(&kind);
     rsx! {
-        div { style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto;",
+        div {
+            style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto;",
+            // The open picker popover is `position:fixed` at its trigger's
+            // static position: it doesn't follow the panel scroll, so close
+            // it when the panel scrolls (standard dropdown behavior).
+            onscroll: move |_| open_picker.set(None),
             div {
                 style: "padding:14px; display:flex; justify-content:space-between; align-items:center;",
                 div {
