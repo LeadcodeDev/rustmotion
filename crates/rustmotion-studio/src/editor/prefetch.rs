@@ -206,6 +206,39 @@ fn claims() -> &'static Mutex<ClaimSet> {
     SLOT.get_or_init(|| Mutex::new(ClaimSet::default()))
 }
 
+// ── Failure ledger ───────────────────────────────────────────────────────────
+
+/// Attempts a frame gets before workers and the handler stop re-rendering it.
+/// One retry absorbs transient panics; beyond that a panicking frame must not
+/// become an infinite render-panic loop that pegs the workers (the preview
+/// shows the neighboring frame instead).
+pub const MAX_RENDER_ATTEMPTS: u8 = 2;
+
+/// Panicked render attempts per key. Keys carry the generation, so a model
+/// edit naturally retires old entries; the size cap is a runaway backstop.
+#[derive(Default)]
+pub struct FailLedger {
+    map: HashMap<FrameKey, u8>,
+}
+
+impl FailLedger {
+    pub fn record_failure(&mut self, key: FrameKey) {
+        if self.map.len() > 4096 {
+            self.map.clear();
+        }
+        *self.map.entry(key).or_insert(0) += 1;
+    }
+
+    pub fn exhausted(&self, key: &FrameKey) -> bool {
+        self.map.get(key).is_some_and(|&n| n >= MAX_RENDER_ATTEMPTS)
+    }
+}
+
+pub(crate) fn fail_ledger() -> &'static Mutex<FailLedger> {
+    static SLOT: OnceLock<Mutex<FailLedger>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(FailLedger::default()))
+}
+
 /// Prefetch worker count for a machine with `cores` logical cores: leave two
 /// for the UI/webview and the asset handler, keep at least two workers so a
 /// slow frame never serializes the window, and cap at six (JPEG frames past
@@ -324,6 +357,15 @@ fn prefetch_loop() {
             {
                 continue;
             }
+            // A frame that keeps panicking gets MAX_RENDER_ATTEMPTS, then is
+            // left alone — never an infinite render-panic loop.
+            if fail_ledger()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .exhausted(&key)
+            {
+                continue;
+            }
             // Another worker already rendering this frame → take the next one.
             if !claims()
                 .lock()
@@ -344,11 +386,15 @@ fn prefetch_loop() {
                 let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_frame(&scenario, &tasks, frame, scale_factor(scale))
                 }));
-                if let Ok(bytes) = rendered {
-                    frame_cache()
+                match rendered {
+                    Ok(bytes) => frame_cache()
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .insert(key, bytes, gen_b, gen_a, target.current, scale);
+                        .insert(key, bytes, gen_b, gen_a, target.current, scale),
+                    Err(_) => fail_ledger()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .record_failure(key),
                 }
             }
             claims()
@@ -621,6 +667,122 @@ mod tests {
             ..key(1, DiffSide::B, 7)
         };
         assert!(claims.try_claim(other_scale), "other scale");
+    }
+
+    /// TEMP diagnostic (not CI): full-pipeline soak — real worker pool, a
+    /// simulated 30fps playhead publishing targets, a simulated asset handler
+    /// serving frames, and the canvas hit-map pass. Prints RSS + serve stats.
+    /// `cargo test -p rustmotion-studio --release soak_full -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn soak_full_pipeline_rss() {
+        use crate::editor::frames::frame_hits;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let Ok(src) = std::fs::read_to_string("../../examples/dynamic-glass.json") else {
+            eprintln!("skipped: examples/dynamic-glass.json not present");
+            return;
+        };
+        let scenario =
+            Arc::new(rustmotion::loader::load_scenario_from_source(None, Some(&src)).unwrap());
+        let tasks = Arc::new(rustmotion::encode::build_frame_tasks(&scenario));
+        let total = tasks.len() as u32;
+        let rss_mb = || -> u64 {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap()
+                / 1024
+        };
+
+        ensure_prefetcher();
+        static SERVED: AtomicU32 = AtomicU32::new(0);
+        static MISSES: AtomicU32 = AtomicU32::new(0);
+
+        // Simulated playback + asset handler + canvas hit pass, 30fps for 60s.
+        let s2 = scenario.clone();
+        let t2 = tasks.clone();
+        let sim = std::thread::spawn(move || {
+            let mut current = 0u32;
+            for _tick in 0..(30 * 60) {
+                std::thread::sleep(Duration::from_millis(33));
+                current = (current + 1) % total;
+                *prefetch_slot().lock().unwrap_or_else(|e| e.into_inner()) = PrefetchTarget {
+                    current,
+                    playing: true,
+                    generation: 1,
+                    side: DiffSide::B,
+                    scenario: Some(s2.clone()),
+                    tasks: Some(t2.clone()),
+                    path: None,
+                };
+                let key = FrameKey {
+                    generation: 1,
+                    side: DiffSide::B,
+                    frame: current,
+                    scale_pct: preview_scale_pct(),
+                };
+                let hit = frame_cache()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&key);
+                if !hit {
+                    MISSES.fetch_add(1, Ordering::Relaxed);
+                    let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::editor::frames::render_frame(
+                            &s2,
+                            &t2,
+                            current,
+                            scale_factor(key.scale_pct),
+                        )
+                    }));
+                    if let Ok(b) = bytes {
+                        frame_cache()
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(key, b, Some(1), None, current, key.scale_pct);
+                    }
+                }
+                SERVED.fetch_add(1, Ordering::Relaxed);
+                // The canvas hit-map layout pass runs on every tick in the app.
+                let _ = frame_hits(&s2, &t2, current, "/scenes/0");
+            }
+        });
+
+        while !sim.is_finished() {
+            std::thread::sleep(Duration::from_secs(5));
+            println!(
+                "rss={} MB served={} misses={}",
+                rss_mb(),
+                SERVED.load(Ordering::Relaxed),
+                MISSES.load(Ordering::Relaxed)
+            );
+        }
+        sim.join().unwrap();
+        println!(
+            "end rss={} MB misses={}",
+            rss_mb(),
+            MISSES.load(Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn fail_ledger_exhausts_after_max_attempts() {
+        let mut ledger = FailLedger::default();
+        let k = key(1, DiffSide::B, 7);
+        assert!(!ledger.exhausted(&k));
+        ledger.record_failure(k);
+        assert!(!ledger.exhausted(&k), "one transient failure gets a retry");
+        ledger.record_failure(k);
+        assert!(ledger.exhausted(&k), "gives up after MAX_RENDER_ATTEMPTS");
+        assert!(
+            !ledger.exhausted(&key(2, DiffSide::B, 7)),
+            "a new generation retries the same frame"
+        );
     }
 
     #[test]

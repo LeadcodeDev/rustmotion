@@ -17,7 +17,7 @@ use super::playback::{
     playback_action, use_hot_reload, use_playback_clock, PlaybackAction, PlaybackBar,
 };
 use super::prefetch::{
-    frame_cache, preview_scale_pct, scale_factor, use_prefetch_publisher, FrameKey,
+    fail_ledger, frame_cache, preview_scale_pct, scale_factor, use_prefetch_publisher, FrameKey,
 };
 use super::topbar::TopBar;
 
@@ -371,10 +371,25 @@ fn serve_or_render(
     {
         return Ok((*bytes).clone());
     }
+    // A frame whose render keeps panicking is not retried on every <img>
+    // request — fail fast so the webview shows the previous frame instead of
+    // hammering a panic loop.
+    if fail_ledger()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .exhausted(&key)
+    {
+        return Err(());
+    }
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         render_frame(scenario, tasks, idx, scale_factor(key.scale_pct))
     }))
-    .map_err(|_| ())?;
+    .map_err(|_| {
+        fail_ledger()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_failure(key);
+    })?;
     let (gen_b, gen_a) = match key.side {
         DiffSide::B => (gen_b, None),
         DiffSide::A => (None, Some(key.generation)),
