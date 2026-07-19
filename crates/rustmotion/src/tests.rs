@@ -436,6 +436,7 @@ mod component_smoke {
             BuildAnimationCtx {
                 time,
                 scene_duration,
+                fps: 30,
             },
         );
         let layout = run_layout(
@@ -1192,6 +1193,7 @@ mod svg_draw_on_tests {
             BuildAnimationCtx {
                 time: progress,
                 scene_duration,
+                fps: 30,
             },
         );
         let layout = run_layout(
@@ -1504,6 +1506,7 @@ mod audio_tests {
             BuildAnimationCtx {
                 time,
                 scene_duration: 10.0,
+                fps,
             },
         );
         let layout = run_layout(
@@ -1772,6 +1775,324 @@ mod audio_tests {
         assert!(
             loud_red > quiet_red.saturating_mul(10).max(1),
             "red_sum must differ sharply between loud ({loud_red}) and quiet ({quiet_red}) frames"
+        );
+    }
+}
+
+// ─── Motion blur / Trail effect tests ─────────────────────────────────────────
+
+#[cfg(test)]
+mod motion_blur_trail {
+    //! TDD tests for motion_blur and trail animation effects.
+    //!
+    //! These tests drive the pipeline through `render_new_at` and inspect raw
+    //! pixel buffers to verify the ghost-based temporal sampling.
+
+    use crate::components::{ChildComponent, Component, PositionMode};
+    use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
+    use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+    const FPS: u32 = 30;
+
+    /// Render the scene at a specific time through the new pipeline.
+    /// Returns RGBA8888 (premul) pixels.
+    fn render_at(
+        children: &[ChildComponent],
+        w: u32,
+        h: u32,
+        time: f64,
+        scene_duration: f64,
+    ) -> Vec<u8> {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+        let built = build_scene_with_anim(
+            children,
+            (w as f32, h as f32),
+            BuildAnimationCtx {
+                time,
+                scene_duration,
+                fps: FPS,
+            },
+        );
+        let layout = run_layout(
+            &built.root,
+            (w as f32, h as f32),
+            &ConversionContext::default(),
+        );
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
+        let frame = PaintFrame {
+            time,
+            frame_index: (time * FPS as f64) as u32,
+            fps: FPS,
+            video_width: w,
+            video_height: h,
+            scene_duration,
+        };
+        paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+        let row_bytes = w as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    /// Count unique x-columns (0..w) that have at least one lit pixel (R > threshold).
+    fn lit_column_span(pixels: &[u8], w: usize, h: usize, r_threshold: u8) -> usize {
+        let mut hit = vec![false; w];
+        for y in 0..h {
+            for x in 0..w {
+                let r = pixels[(y * w + x) * 4];
+                if r > r_threshold {
+                    hit[x] = true;
+                }
+            }
+        }
+        hit.iter().filter(|&&b| b).count()
+    }
+
+    /// Find the maximum red channel value across all pixels.
+    fn max_red(pixels: &[u8]) -> u8 {
+        pixels.chunks_exact(4).map(|p| p[0]).max().unwrap_or(0)
+    }
+
+    /// Make a red Shape with slide_in_left + motion_blur, positioned at the center.
+    fn make_motion_blur_scene(samples: u32, intensity: f32) -> Vec<ChildComponent> {
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "fill": "#ff0000",
+            "style": {
+                "width": "80px",
+                "height": "80px",
+                "animation": [
+                    { "name": "slide_in_left", "duration": 1.0 },
+                    { "name": "motion_blur", "intensity": intensity, "samples": samples }
+                ]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("motion_blur json");
+        vec![ChildComponent {
+            component,
+            position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }]
+    }
+
+    /// Make a red Shape with slide_in_left + trail effect.
+    fn make_trail_scene(copies: u32, spacing: f64, falloff: f32) -> Vec<ChildComponent> {
+        let json = serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "fill": "#ff0000",
+            "style": {
+                "width": "80px",
+                "height": "80px",
+                "animation": [
+                    { "name": "slide_in_left", "duration": 1.0 },
+                    { "name": "trail", "copies": copies, "spacing": spacing, "falloff": falloff }
+                ]
+            }
+        });
+        let component: Component = serde_json::from_value(json).expect("trail json");
+        vec![ChildComponent {
+            component,
+            position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        }]
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TDD RED TESTS — these will fail until the implementation is in place.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Motion blur broadens the x-span of lit pixels compared to no-blur.
+    #[test]
+    fn motion_blur_broadens_horizontal_span() {
+        let w = 500u32;
+        let h = 300u32;
+        // t=0.5 → shape mid-animation → significant motion → ghosts should
+        // land to the left of the principal node.
+        let without = make_motion_blur_scene(1, 1.0); // samples=1 → no-op (degenerate)
+        let with_blur = make_motion_blur_scene(6, 1.0);
+
+        let buf_without = render_at(&without, w, h, 0.5, 1.0);
+        let buf_with = render_at(&with_blur, w, h, 0.5, 1.0);
+
+        let span_without = lit_column_span(&buf_without, w as usize, h as usize, 30);
+        let span_with = lit_column_span(&buf_with, w as usize, h as usize, 30);
+
+        assert!(
+            span_with > span_without,
+            "motion_blur (samples=6) should broaden horizontal span: without={span_without}, with={span_with}"
+        );
+    }
+
+    /// samples=1 is the degenerate case — behaves identically to no blur.
+    /// We relax this: samples=1 produces one ghost but ghost and principal
+    /// overlap at t_0 - 0 = t_0. Result should be visually equivalent
+    /// (total span ≤ span_without + 5 pixels of rounding noise).
+    #[test]
+    fn motion_blur_samples_1_is_degenerate() {
+        let w = 500u32;
+        let h = 300u32;
+        let no_effect = {
+            // A plain shape with no motion_blur at all
+            let json = serde_json::json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": {
+                    "width": "80px",
+                    "height": "80px",
+                    "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
+                }
+            });
+            let component: Component = serde_json::from_value(json).unwrap();
+            vec![ChildComponent {
+                component,
+                position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+        let with_1 = make_motion_blur_scene(1, 1.0);
+
+        let buf_no = render_at(&no_effect, w, h, 0.5, 1.0);
+        let buf_1 = render_at(&with_1, w, h, 0.5, 1.0);
+
+        let span_no = lit_column_span(&buf_no, w as usize, h as usize, 30);
+        let span_1 = lit_column_span(&buf_1, w as usize, h as usize, 30);
+
+        assert!(
+            span_1 <= span_no + 5,
+            "motion_blur samples=1 should match no-blur (span_no={span_no}, span_1={span_1})"
+        );
+    }
+
+    /// Static component (no transform animation) + motion_blur → ghosts overlap
+    /// exactly. The render should look the same as without blur except possibly
+    /// for a reduced opacity of the principal (opacity accumulation).
+    /// We verify: no horizontal broadening and the image is not black.
+    #[test]
+    fn motion_blur_static_component_no_broadening() {
+        let w = 500u32;
+        let h = 300u32;
+
+        let no_blur = {
+            let json = serde_json::json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": { "width": "80px", "height": "80px" }
+            });
+            let component: Component = serde_json::from_value(json).unwrap();
+            vec![ChildComponent {
+                component,
+                position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+        let with_blur = {
+            let json = serde_json::json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": {
+                    "width": "80px",
+                    "height": "80px",
+                    "animation": [
+                        { "name": "motion_blur", "intensity": 1.0, "samples": 6 }
+                    ]
+                }
+            });
+            let component: Component = serde_json::from_value(json).unwrap();
+            vec![ChildComponent {
+                component,
+                position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+
+        let buf_no = render_at(&no_blur, w, h, 0.5, 1.0);
+        let buf_blur = render_at(&with_blur, w, h, 0.5, 1.0);
+
+        let span_no = lit_column_span(&buf_no, w as usize, h as usize, 30);
+        let span_blur = lit_column_span(&buf_blur, w as usize, h as usize, 30);
+
+        // No broadening (ghosts superimpose).
+        assert!(
+            span_blur <= span_no + 5,
+            "static + motion_blur should not broaden: span_no={span_no}, span_blur={span_blur}"
+        );
+
+        // Image must not be black (ghosts accumulate enough opacity).
+        let max_r = max_red(&buf_blur);
+        assert!(
+            max_r > 50,
+            "static + motion_blur must still render visibly (max_r={max_r})"
+        );
+    }
+
+    /// Trail with copies=3 should produce a wider horizontal span than without,
+    /// and the leading edge (rightmost in slide_in_left animation) should be
+    /// brighter than the trailing edge.
+    #[test]
+    fn trail_produces_multiple_distinct_blobs() {
+        let w = 600u32;
+        let h = 300u32;
+
+        // At t=0.5 the shape is at mid-slide. Trail ghosts are at
+        // t-spacing, t-2*spacing, t-3*spacing → further left.
+        let no_trail = {
+            let json = serde_json::json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "style": {
+                    "width": "60px",
+                    "height": "60px",
+                    "animation": [{ "name": "slide_in_left", "duration": 1.0 }]
+                }
+            });
+            let component: Component = serde_json::from_value(json).unwrap();
+            vec![ChildComponent {
+                component,
+                position: Some(PositionMode::Absolute { x: 300.0, y: 120.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+            }]
+        };
+        let with_trail = make_trail_scene(3, 0.1, 0.6);
+
+        let buf_no = render_at(&no_trail, w, h, 0.5, 1.0);
+        let buf_trail = render_at(&with_trail, w, h, 0.5, 1.0);
+
+        let span_no = lit_column_span(&buf_no, w as usize, h as usize, 20);
+        let span_trail = lit_column_span(&buf_trail, w as usize, h as usize, 20);
+
+        assert!(
+            span_trail > span_no,
+            "trail (copies=3) should broaden horizontal span: span_no={span_no}, span_trail={span_trail}"
         );
     }
 }

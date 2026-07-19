@@ -103,6 +103,10 @@ pub enum BoxKind {
     /// Component-backed leaf or container. Holds an opaque payload that the
     /// dispatcher knows how to handle.
     Component(Arc<dyn std::any::Any + Send + Sync>),
+    /// Temporal ghost for motion-blur / trail effects. Painted exactly like
+    /// `Component` (same payload, same dispatcher dispatch) but excluded from
+    /// the hit-map so the studio never selects a ghost node.
+    Ghost(Arc<dyn std::any::Any + Send + Sync>),
 }
 
 /// Trait implemented by leaves whose intrinsic size depends on their content.

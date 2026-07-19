@@ -79,6 +79,9 @@ pub enum AnimationEffect {
     Orbit(OrbitConfig),
     Keyframes(KeyframesConfig),
     MotionBlur(MotionBlurConfig),
+    /// Temporal trail effect: paints copies of the component at prior times
+    /// with decaying opacity, creating a persistence-of-vision ghost trail.
+    Trail(TrailConfig),
 }
 
 impl AnimationEffect {
@@ -101,7 +104,7 @@ impl AnimationEffect {
             CharScaleIn(c) | CharFadeIn(c) | CharWave(c) | CharBounce(c) | CharRotateIn(c)
             | CharSlideUp(c) => c.delay += by,
             Keyframes(c) => c.delay += by,
-            Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) => {}
+            Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }
 
@@ -330,10 +333,66 @@ pub struct KeyframesConfig {
 }
 
 /// Motion blur configuration.
+///
+/// Ghost nodes are sampled at times `t - i * (shutter / fps) / samples` for
+/// `i` in `1..=samples`. Each ghost and the principal node are painted with
+/// opacity `1.0 / (samples + 1)` so their premultiplied-alpha sum approximates
+/// the shutter-averaged exposure.
+///
+/// `samples = 1` is the degenerate case: the single ghost falls at `t - 0` and
+/// superimposes exactly on the principal → visually equivalent to no blur.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct MotionBlurConfig {
+    /// Reserved for future intensity scaling (currently unused by the ghost
+    /// sampler — the `samples` parameter controls quality). Kept for schema
+    /// compatibility with existing JSON that may carry this field.
     #[serde(default)]
     pub intensity: f32,
+    /// Number of ghost samples in the shutter window (default 6, clamped 1..=16).
+    /// Use 1 to effectively disable (degenerate: ghost = principal position).
+    #[serde(default = "default_motion_blur_samples")]
+    pub samples: u32,
+    /// Fraction of one frame duration used as the shutter window (default 0.5).
+    /// The temporal spread equals `shutter / fps` seconds.
+    #[serde(default = "default_motion_blur_shutter")]
+    pub shutter: f64,
+}
+
+fn default_motion_blur_samples() -> u32 {
+    6
+}
+fn default_motion_blur_shutter() -> f64 {
+    0.5
+}
+
+/// Trail effect configuration.
+///
+/// Produces `copies` ghost nodes behind the principal, each offset in time by
+/// `i * spacing` seconds. The i-th ghost (1-based) is painted with opacity
+/// `base_opacity * falloff^i`; the principal is unchanged. Unlike motion blur,
+/// the trail is additive: the principal retains its full opacity.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct TrailConfig {
+    /// Number of trailing ghost copies (default 4, clamped 1..=12).
+    #[serde(default = "default_trail_copies")]
+    pub copies: u32,
+    /// Time gap between successive ghost copies in seconds (default 0.05).
+    #[serde(default = "default_trail_spacing")]
+    pub spacing: f64,
+    /// Opacity multiplier applied per copy: ghost `i` uses `falloff^i` times
+    /// the component's base opacity (default 0.6).
+    #[serde(default = "default_trail_falloff")]
+    pub falloff: f32,
+}
+
+fn default_trail_copies() -> u32 {
+    4
+}
+fn default_trail_spacing() -> f64 {
+    0.05
+}
+fn default_trail_falloff() -> f32 {
+    0.6
 }
 
 // --- Orbit Config ---

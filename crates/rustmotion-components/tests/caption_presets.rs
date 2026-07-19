@@ -40,6 +40,7 @@ fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
         BuildAnimationCtx {
             time,
             scene_duration: 2.0,
+            fps: 30,
         },
     );
     let layout = run_layout(

@@ -197,6 +197,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
     // Hit-map: record the on-screen bbox of component-backed nodes. The canvas
     // matrix here already includes this node's and all ancestors' transforms,
     // so mapping the (absolute) layout rect yields the device-space AABB.
+    // Ghost nodes are intentionally excluded — they are temporal echoes for
+    // motion-blur/trail effects and must never be selectable in the studio.
     if let (Some(hits), BoxKind::Component(_)) = (ctx.hits, &node.kind) {
         let local = Rect::from_xywh(
             box_layout.x,
@@ -295,8 +297,13 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
-    // 8. component-specific content
-    if let BoxKind::Component(payload) = &node.kind {
+    // 8. component-specific content (Ghost is painted identically to Component;
+    // the only difference is that Ghost is excluded from the hit-map above).
+    let payload_opt = match &node.kind {
+        BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
+        BoxKind::Container => None,
+    };
+    if let Some(payload) = payload_opt {
         ctx.dispatcher
             .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
     }

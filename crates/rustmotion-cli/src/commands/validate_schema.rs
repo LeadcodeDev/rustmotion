@@ -279,7 +279,8 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         AnimationEffect::Glow(_)
         | AnimationEffect::Wiggle(_)
         | AnimationEffect::Orbit(_)
-        | AnimationEffect::MotionBlur(_) => None,
+        | AnimationEffect::MotionBlur(_)
+        | AnimationEffect::Trail(_) => None,
     }
 }
 
