@@ -90,6 +90,19 @@ pub fn set_style_value(mut raw: Value, pointer: &str, prop: &str, value: Value) 
     Some(raw)
 }
 
+/// Duration (seconds) of the scene containing the element at `pointer`
+/// (`/scenes/N/…` or `/composition/V/scenes/N/…`). Used by the inspector's
+/// Timing section as the upper bound for start_at/end_at.
+pub fn scene_duration_for_pointer(raw: &Value, pointer: &str) -> Option<f64> {
+    let segs: Vec<&str> = pointer.split('/').collect();
+    let scene_ptr = match segs.as_slice() {
+        ["", "scenes", n, ..] => format!("/scenes/{n}"),
+        ["", "composition", v, "scenes", n, ..] => format!("/composition/{v}/scenes/{n}"),
+        _ => return None,
+    };
+    raw.pointer(&scene_ptr)?.get("duration")?.as_f64()
+}
+
 /// Append an annotation object to `raw["annotations"]` (creating the array if
 /// absent). Returns the mutated clone.
 pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
@@ -184,6 +197,22 @@ mod tests {
             read_style(&updated, "/scenes/0/children/0", "font-size").as_deref(),
             Some("48")
         );
+    }
+
+    #[test]
+    fn scene_duration_for_pointer_reads_the_containing_scene() {
+        let r = json!({"scenes": [ {"duration": 3.0}, {"duration": 5.5, "children": [ {"type": "text"} ]} ]});
+        assert_eq!(
+            scene_duration_for_pointer(&r, "/scenes/1/children/0"),
+            Some(5.5)
+        );
+        assert_eq!(scene_duration_for_pointer(&r, "/scenes/0"), Some(3.0));
+        let c = json!({"composition": [ {"scenes": [ {"duration": 2.0} ]} ]});
+        assert_eq!(
+            scene_duration_for_pointer(&c, "/composition/0/scenes/0/children/2"),
+            Some(2.0)
+        );
+        assert_eq!(scene_duration_for_pointer(&r, "/video"), None);
     }
 
     #[test]

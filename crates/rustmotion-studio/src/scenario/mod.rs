@@ -12,7 +12,7 @@ pub use baseline::{baseline_slot, get_baseline, set_baseline};
 pub use diff::{diff_scenarios, ChangeKind, ElementChange};
 pub use edit::{
     append_annotation, list_annotations, read_field, read_style_object, remove_annotation,
-    set_field, set_field_value, set_style, set_style_value,
+    scene_duration_for_pointer, set_field, set_field_value, set_style, set_style_value,
 };
 pub use history::{history_slot, record_edit, redo, set_saving, undo, SharedHistory};
 pub use model::{empty_scenario, Shared, StudioModel};
