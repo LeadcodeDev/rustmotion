@@ -11,13 +11,20 @@ mod component_smoke {
         ("icon", r#"{"type":"icon","icon":"check"}"#),
         ("svg", r#"{"type":"svg","content":"<svg></svg>"}"#),
         ("counter", r#"{"type":"counter","from":0,"to":100}"#),
-        ("cursor", r#"{"type":"cursor"}"#),
+        (
+            "cursor",
+            r#"{"type":"cursor","cursor_style":"pointer","path_easing":"linear"}"#,
+        ),
         ("codeblock", r#"{"type":"codeblock","code":"fn main() {}"}"#),
         ("badge", r#"{"type":"badge","text":"New"}"#),
         ("callout", r#"{"type":"callout","text":"Hello"}"#),
         (
             "chart",
             r#"{"type":"chart","chart_type":"bar","data":[{"value":10}]}"#,
+        ),
+        (
+            "chart",
+            r#"{"type":"chart","chart_type":"funnel","direction":"horizontal","data":[{"value":10}]}"#,
         ),
         ("countdown", r#"{"type":"countdown","seconds":60}"#),
         ("divider", r#"{"type":"divider"}"#),
@@ -49,7 +56,7 @@ mod component_smoke {
         ("stat", r#"{"type":"stat","value":"42","label":"Users"}"#),
         (
             "stepper",
-            r#"{"type":"stepper","steps":[{"label":"Step 1"},{"label":"Step 2"}]}"#,
+            r#"{"type":"stepper","orientation":"vertical","steps":[{"label":"Step 1"},{"label":"Step 2"}]}"#,
         ),
         ("switch", r#"{"type":"switch"}"#),
         (
@@ -219,6 +226,16 @@ mod component_smoke {
                 "alias {alias} must serialize to canonical tag {canonical}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_enum_value_fails_the_typed_parse() {
+        // Converted stringly-typed fields (stepper.orientation,
+        // chart.direction, cursor.cursor_style/path_easing) now reject
+        // unknown values at the typed parse — a blocking validate error
+        // instead of a silent fallback (philosophy of #33).
+        let bad = r#"{"type":"stepper","orientation":"diagonal","steps":[{"label":"A"}]}"#;
+        assert!(serde_json::from_str::<Component>(bad).is_err());
     }
 
     #[test]

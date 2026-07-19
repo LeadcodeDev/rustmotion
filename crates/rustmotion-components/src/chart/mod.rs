@@ -20,9 +20,20 @@ mod radial;
 mod scatter;
 mod waterfall;
 
-pub(crate) const DEFAULT_PALETTE: &[&str] = &[
+/// The engine's default series palette. `pub` so the studio can prefill an
+/// empty `colors` list with what the canvas actually renders.
+pub const DEFAULT_PALETTE: &[&str] = &[
     "#3B82F6", "#EF4444", "#22C55E", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316",
 ];
+
+/// Funnel flow direction. Closed set (painter matches both variants); JSON
+/// values unchanged ("vertical"/"horizontal").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartDirection {
+    Vertical,
+    Horizontal,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -123,7 +134,7 @@ pub struct Chart {
     // Funnel direction
     /// Direction for funnel chart: "vertical" (default) or "horizontal".
     #[serde(default)]
-    pub direction: Option<String>,
+    pub direction: Option<ChartDirection>,
 
     // Axes, grid, labels
     #[serde(default)]

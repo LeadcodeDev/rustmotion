@@ -41,6 +41,7 @@ pub const EXCLUDED_FIELDS: &[&str] = &[
     "timeline",
     // structured data arrays
     "data",
+    "radar_data",
     "spans",
     "words",
     "lines",
@@ -87,6 +88,9 @@ pub enum PropKind {
     Object(Vec<PropSpec>),
     /// Array of numbers (stat `sparkline_data`, …) → per-entry number rows.
     NumberList,
+    /// Array of non-color strings (chart `axes`/`categories`, …) → per-entry
+    /// text rows.
+    StringList,
     /// Objects/arrays without a known shape → JSON textarea.
     Complex,
 }
@@ -105,6 +109,24 @@ pub fn display_number(raw: &str) -> String {
 pub struct PropSpec {
     pub name: String,
     pub kind: PropKind,
+}
+
+/// Default-palette prefill for an EMPTY color list: for `chart.colors`,
+/// "+ Add color" seeds the list with the engine's actual rendering palette so
+/// the user edits what the canvas shows instead of starting from nothing.
+/// Extend the map here when other components gain a palette.
+pub fn palette_prefill(
+    tag: &str,
+    field: &str,
+    list_is_empty: bool,
+) -> Option<&'static [&'static str]> {
+    if !list_is_empty {
+        return None;
+    }
+    match (tag, field) {
+        ("chart", "colors") => Some(rustmotion::components::chart::DEFAULT_PALETTE),
+        _ => None,
+    }
 }
 
 /// Mutate one sub-key of an object value: `Null` prunes the key; an object
@@ -325,6 +347,7 @@ fn kind_of_schema_inner(
         Some("string") => PropKind::String,
         Some("array") if is_color_string_array(name, schema, defs, depth) => PropKind::ColorList,
         Some("array") if is_number_array(schema, defs, depth) => PropKind::NumberList,
+        Some("array") if is_string_array(schema, defs, depth) => PropKind::StringList,
         _ => PropKind::Complex,
     }
 }
@@ -345,6 +368,21 @@ fn object_specs(schema: &Value, defs: &Value, depth: u8, obj_level: u8) -> Optio
             })
             .collect(),
     )
+}
+
+/// Array whose items resolve to plain strings (labels, axes, categories) —
+/// color-string arrays are caught earlier by `is_color_string_array`.
+fn is_string_array(schema: &Value, defs: &Value, depth: u8) -> bool {
+    let Some(items) = schema.get("items") else {
+        return false;
+    };
+    let resolved = resolve_arm(items, defs, depth + 1);
+    if primary_type(&resolved) == Some("string") {
+        return true;
+    }
+    let mut info = UnionInfo::default();
+    collect_union(items, defs, depth + 1, &mut info);
+    info.has_string && !info.has_number
 }
 
 /// Array whose items resolve to numbers (`Vec<f64>`, dash patterns, …).
@@ -805,6 +843,60 @@ mod tests {
         }
     }
 
+    // ── Round 6: string lists / palette prefill / typed enums ───────────
+
+    #[test]
+    fn chart_axes_and_categories_are_string_lists() {
+        let props = component_props("chart").expect("chart in schema");
+        assert_eq!(kind_of(props, "axes"), Some(&PropKind::StringList));
+        assert_eq!(kind_of(props, "categories"), Some(&PropKind::StringList));
+        // colors keeps the color editor, sparkline stays numeric (stat).
+        assert_eq!(kind_of(props, "colors"), Some(&PropKind::ColorList));
+        let stat = component_props("stat").unwrap();
+        assert_eq!(kind_of(stat, "sparkline_data"), Some(&PropKind::NumberList));
+    }
+
+    #[test]
+    fn radar_data_is_excluded_from_properties() {
+        let props = component_props("chart").expect("chart in schema");
+        assert!(
+            !props.iter().any(|p| p.name == "radar_data"),
+            "radar_data is chart data — excluded from the generic editor"
+        );
+    }
+
+    #[test]
+    fn palette_prefill_only_for_empty_chart_colors() {
+        let palette = palette_prefill("chart", "colors", true).expect("chart palette");
+        assert_eq!(palette.len(), 8);
+        assert_eq!(palette[0], "#3B82F6");
+        // Non-empty list → no prefill (don't clobber user colors).
+        assert_eq!(palette_prefill("chart", "colors", false), None);
+        // Other tags/fields → None.
+        assert_eq!(palette_prefill("gradient_text", "colors", true), None);
+        assert_eq!(palette_prefill("chart", "axes", true), None);
+    }
+
+    #[test]
+    fn converted_enum_fields_expose_exact_variants() {
+        let stepper = component_props("stepper").expect("stepper in schema");
+        match kind_of(stepper, "orientation") {
+            Some(PropKind::Enum(v)) => {
+                assert!(v.contains(&"horizontal".to_string()), "{v:?}");
+                assert!(v.contains(&"vertical".to_string()), "{v:?}");
+            }
+            other => panic!("orientation should be Enum, got {other:?}"),
+        }
+        let chart = component_props("chart").expect("chart in schema");
+        match kind_of(chart, "direction") {
+            Some(PropKind::Enum(v)) => {
+                assert!(v.contains(&"vertical".to_string()), "{v:?}");
+                assert!(v.contains(&"horizontal".to_string()), "{v:?}");
+            }
+            other => panic!("direction should be Enum, got {other:?}"),
+        }
+    }
+
     // ── Round 5: object / number-list editors ───────────────────────────
 
     #[test]
@@ -852,11 +944,11 @@ mod tests {
         // Color arrays keep their dedicated editor.
         let gt = component_props("gradient_text").unwrap();
         assert_eq!(kind_of(gt, "colors"), Some(&PropKind::ColorList));
-        // String arrays are neither.
+        // Plain string arrays get their own editor (round 6).
         let strings = serde_json::json!({"type": "array", "items": {"type": "string"}});
         assert_eq!(
             kind_of_schema("labels", &strings, &Value::Null, 0),
-            PropKind::Complex
+            PropKind::StringList
         );
     }
 

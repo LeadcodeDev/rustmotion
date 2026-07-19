@@ -22,8 +22,8 @@ use super::view::RevSignal;
 use super::annotations::AnnotationBox;
 use super::properties::{
     component_props, css_family, css_section_props, display_number, effective_element,
-    engine_placeholder, fill_to_value, is_multiline, parse_fill, slider_range, visible_sections,
-    FillMode, PropKind,
+    engine_placeholder, fill_to_value, is_multiline, palette_prefill, parse_fill, slider_range,
+    visible_sections, FillMode, PropKind,
 };
 
 // ── Debounce context ─────────────────────────────────────────────────────────
@@ -711,6 +711,7 @@ fn RootPropsSection(pointer: String, kind: String, element: serde_json::Value) -
                         prop_kind: spec.kind.clone(),
                         value: prop_str(&effective, &spec.name),
                         is_style: false,
+                        host_tag: kind.clone(),
                         is_default: element.get(&spec.name).is_none()
                             && effective.get(&spec.name).map(|v| !v.is_null()).unwrap_or(false),
                     }
@@ -913,6 +914,9 @@ fn GenericRow(
     /// control folds it into the whole-object write.
     #[props(default)]
     custom_commit: Option<Callback<serde_json::Value>>,
+    /// Component tag of the host element (palette prefill lookup).
+    #[props(default)]
+    host_tag: String,
 ) -> Element {
     let shared = use_context::<Shared>();
 
@@ -1095,7 +1099,12 @@ fn GenericRow(
         }
         PropKind::ColorList => {
             rsx! {
-                ColorListControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
+                ColorListControl {
+                    pointer: pointer.clone(),
+                    name: name.clone(),
+                    value: value.clone(),
+                    host_tag: host_tag.clone(),
+                }
             }
         }
         PropKind::Fill => {
@@ -1121,7 +1130,12 @@ fn GenericRow(
                 NumberListControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
             }
         }
-        PropKind::Complex | PropKind::Object(_) | PropKind::NumberList => {
+        PropKind::StringList if !is_style => {
+            rsx! {
+                StringListControl { pointer: pointer.clone(), name: name.clone(), value: value.clone() }
+            }
+        }
+        PropKind::Complex | PropKind::Object(_) | PropKind::NumberList | PropKind::StringList => {
             let commit = commit.clone();
             rsx! {
                 JsonArea {
@@ -1571,10 +1585,65 @@ fn ObjectControl(
     }
 }
 
+/// Generic per-entry list editor — the shared shell of ColorRows /
+/// NumberListControl / StringListControl (rule of three): one row per entry
+/// rendered by `render_item`, a remove button per row and an add button.
+/// `on_add` overrides the default push (palette prefill). Reordering: none.
+#[component]
+fn ListRows(
+    entries: Signal<Vec<String>>,
+    on_change: EventHandler<()>,
+    add_label: String,
+    add_value: String,
+    render_item: Callback<(usize, String), Element>,
+    #[props(default)] on_add: Option<Callback<()>>,
+) -> Element {
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
+            for (i, e) in entries().iter().cloned().enumerate() {
+                div { key: "{i}", style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
+                    {render_item.call((i, e))}
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        size: ButtonSize::IconSm,
+                        title: "Remove entry",
+                        onclick: {
+                            let mut entries = entries;
+                            move |_| {
+                                if entries.read().len() > i {
+                                    entries.write().remove(i);
+                                }
+                                on_change.call(());
+                            }
+                        },
+                        X { size: 13, stroke: "var(--rm-text-muted)" }
+                    }
+                }
+            }
+            Button {
+                variant: ButtonVariant::Outline,
+                size: ButtonSize::Xs,
+                onclick: {
+                    let mut entries = entries;
+                    let add_value = add_value.clone();
+                    move |_| {
+                        if let Some(cb) = &on_add {
+                            cb.call(());
+                        } else {
+                            entries.write().push(add_value.clone());
+                            on_change.call(());
+                        }
+                    }
+                },
+                "{add_label}"
+            }
+        }
+    }
+}
+
 /// Per-entry editor for arrays of numbers (`sparkline_data`, dash patterns…):
-/// number input + remove per entry, "+ Add". Writes the whole array (typed)
-/// once every entry parses; an emptied list removes the field. Kept separate
-/// from `ColorRows` — the item controls share almost nothing.
+/// number input per entry via [`ListRows`]. Writes the whole array (typed)
+/// once every entry parses; an emptied list removes the field.
 #[component]
 fn NumberListControl(pointer: String, name: String, value: String) -> Element {
     let shared = use_context::<Shared>();
@@ -1614,134 +1683,153 @@ fn NumberListControl(pointer: String, name: String, value: String) -> Element {
     };
 
     rsx! {
-        div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
-            for (i, e) in entries().iter().cloned().enumerate() {
-                div { key: "{i}", style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
-                    input {
-                        r#type: "number",
-                        step: "0.1",
-                        style: "{INPUT_STYLE}",
-                        value: "{e}",
-                        oninput: {
-                            let mut entries = entries;
-                            let write = write.clone();
-                            move |ev: FormEvent| {
+        ListRows {
+            entries,
+            on_change: write.clone(),
+            add_label: "+ Add".to_string(),
+            add_value: "0".to_string(),
+            render_item: {
+                let write = write.clone();
+                Callback::new(move |(i, e): (usize, String)| {
+                    let mut entries = entries;
+                    let write = write.clone();
+                    rsx! {
+                        input {
+                            r#type: "number",
+                            step: "0.1",
+                            style: "{INPUT_STYLE}",
+                            value: "{e}",
+                            oninput: move |ev: FormEvent| {
                                 if let Some(slot) = entries.write().get_mut(i) {
                                     *slot = ev.value();
                                 }
                                 write(());
-                            }
-                        },
+                            },
+                        }
                     }
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        size: ButtonSize::IconSm,
-                        title: "Remove entry",
-                        onclick: {
-                            let mut entries = entries;
-                            let write = write.clone();
-                            move |_| {
-                                if entries.read().len() > i {
-                                    entries.write().remove(i);
-                                }
-                                write(());
-                            }
-                        },
-                        X { size: 13, stroke: "var(--rm-text-muted)" }
-                    }
-                }
-            }
-            Button {
-                variant: ButtonVariant::Outline,
-                size: ButtonSize::Xs,
-                onclick: {
+                })
+            },
+        }
+    }
+}
+
+/// Per-entry editor for arrays of non-color strings (chart `axes` /
+/// `categories`…): text input per entry via [`ListRows`]. Writes the whole
+/// array; an emptied list removes the field.
+#[component]
+fn StringListControl(pointer: String, name: String, value: String) -> Element {
+    let shared = use_context::<Shared>();
+    let entries = use_signal(|| serde_json::from_str::<Vec<String>>(&value).unwrap_or_default());
+
+    let write = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        move |_| {
+            let list: Vec<serde_json::Value> = entries
+                .read()
+                .iter()
+                .cloned()
+                .map(serde_json::Value::String)
+                .collect();
+            let value = if list.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Array(list)
+            };
+            write_root_field(&shared, &p, &n, value);
+        }
+    };
+
+    rsx! {
+        ListRows {
+            entries,
+            on_change: write.clone(),
+            add_label: "+ Add".to_string(),
+            add_value: String::new(),
+            render_item: {
+                let write = write.clone();
+                Callback::new(move |(i, e): (usize, String)| {
                     let mut entries = entries;
                     let write = write.clone();
-                    move |_| {
-                        entries.write().push("0".to_string());
-                        write(());
+                    rsx! {
+                        input {
+                            r#type: "text",
+                            style: "{INPUT_STYLE}",
+                            value: "{e}",
+                            oninput: move |ev: FormEvent| {
+                                if let Some(slot) = entries.write().get_mut(i) {
+                                    *slot = ev.value();
+                                }
+                                write(());
+                            },
+                        }
                     }
-                },
-                "+ Add"
-            }
+                })
+            },
         }
     }
 }
 
 // ── Color-list & fill editors ────────────────────────────────────────────────
 
-/// Editable list of color rows (swatch + hex + delete, plus "+ Add color").
-/// Operates on a shared signal so add/remove render immediately (the panel
-/// itself is memoized per selection). Reordering: v1 = none.
+/// Editable list of color rows (swatch + hex per entry) on the generic
+/// [`ListRows`] shell. Operates on a shared signal so add/remove render
+/// immediately (the panel itself is memoized per selection). `on_add`
+/// overrides the add behavior (palette prefill). Reordering: none.
 #[component]
-fn ColorRows(colors: Signal<Vec<String>>, on_change: EventHandler<()>) -> Element {
+fn ColorRows(
+    colors: Signal<Vec<String>>,
+    on_change: EventHandler<()>,
+    #[props(default)] on_add: Option<Callback<()>>,
+) -> Element {
     rsx! {
-        div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
-            for (i, c) in colors().iter().cloned().enumerate() {
-                div { key: "{i}", style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
+        ListRows {
+            entries: colors,
+            on_change,
+            add_label: "+ Add color".to_string(),
+            add_value: "#ffffff".to_string(),
+            on_add,
+            render_item: Callback::new(move |(i, c): (usize, String)| {
+                let mut colors = colors;
+                rsx! {
                     ColorPicker {
                         color: parse_hsv(&c),
-                        on_color_change: {
-                            let mut colors = colors;
-                            move |hsv: Hsv<encoding::Srgb, f64>| {
-                                if let Some(slot) = colors.write().get_mut(i) {
-                                    *slot = hsv_to_hex(hsv);
-                                }
-                                on_change.call(());
+                        on_color_change: move |hsv: Hsv<encoding::Srgb, f64>| {
+                            if let Some(slot) = colors.write().get_mut(i) {
+                                *slot = hsv_to_hex(hsv);
                             }
+                            on_change.call(());
                         },
                     }
                     input {
                         r#type: "text",
                         style: "{HEX_STYLE}",
                         value: "{c}",
-                        oninput: {
-                            let mut colors = colors;
-                            move |e: FormEvent| {
-                                if let Some(slot) = colors.write().get_mut(i) {
-                                    *slot = e.value();
-                                }
-                                on_change.call(());
+                        oninput: move |e: FormEvent| {
+                            if let Some(slot) = colors.write().get_mut(i) {
+                                *slot = e.value();
                             }
+                            on_change.call(());
                         },
-                    }
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        size: ButtonSize::IconSm,
-                        title: "Remove color",
-                        onclick: {
-                            let mut colors = colors;
-                            move |_| {
-                                if colors.read().len() > i {
-                                    colors.write().remove(i);
-                                }
-                                on_change.call(());
-                            }
-                        },
-                        X { size: 13, stroke: "var(--rm-text-muted)" }
                     }
                 }
-            }
-            Button {
-                variant: ButtonVariant::Outline,
-                size: ButtonSize::Xs,
-                onclick: {
-                    let mut colors = colors;
-                    move |_| {
-                        colors.write().push("#ffffff".to_string());
-                        on_change.call(());
-                    }
-                },
-                "+ Add color"
-            }
+            }),
         }
     }
 }
 
-/// Control for [`PropKind::ColorList`] fields (gradient_text `colors`):
-/// per-entry pickers writing the whole array (typed).
+/// Control for [`PropKind::ColorList`] fields (gradient_text/chart `colors`):
+/// per-entry pickers writing the whole array (typed). For an EMPTY
+/// `chart.colors`, "+ Add color" prefills the engine's default palette so the
+/// user edits what the canvas renders (see `palette_prefill`).
 #[component]
-fn ColorListControl(pointer: String, name: String, value: String) -> Element {
+fn ColorListControl(
+    pointer: String,
+    name: String,
+    value: String,
+    #[props(default)] host_tag: String,
+) -> Element {
     let shared = use_context::<Shared>();
     let colors = use_signal(|| serde_json::from_str::<Vec<String>>(&value).unwrap_or_default());
     let write = {
@@ -1758,8 +1846,25 @@ fn ColorListControl(pointer: String, name: String, value: String) -> Element {
             write_root_field(&shared, &p, &n, serde_json::Value::Array(list));
         }
     };
+
+    let is_empty = colors.read().is_empty();
+    let prefill = palette_prefill(&host_tag, &name, is_empty);
+    let on_add = prefill.map(|palette| {
+        let write = write.clone();
+        Callback::new(move |_: ()| {
+            let mut colors = colors;
+            colors.set(palette.iter().map(|c| c.to_string()).collect());
+            write(());
+        })
+    });
+
     rsx! {
-        ColorRows { colors, on_change: write }
+        if is_empty && prefill.is_some() {
+            div { style: "color:var(--rm-text-muted); font-size:10px; opacity:0.7;",
+                "engine palette"
+            }
+        }
+        ColorRows { colors, on_change: write.clone(), on_add }
     }
 }
 

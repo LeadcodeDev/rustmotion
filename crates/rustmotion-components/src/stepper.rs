@@ -20,8 +20,16 @@ fn default_transition_duration() -> f64 {
     0.5
 }
 
-fn default_orientation() -> String {
-    "horizontal".to_string()
+/// Layout axis of the stepper. Closed set, matched exhaustively by the
+/// painter; serde snake_case keeps the JSON values identical
+/// ("horizontal"/"vertical") — an unknown value now fails the typed parse
+/// (blocking validate error, by design).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepperOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
 }
 
 fn default_active_color() -> String {
@@ -64,8 +72,8 @@ pub struct Stepper {
     #[serde(default = "default_transition_duration")]
     pub transition_duration: f64,
     /// Layout direction: "horizontal" or "vertical".
-    #[serde(default = "default_orientation")]
-    pub orientation: String,
+    #[serde(default)]
+    pub orientation: StepperOrientation,
     /// Color of the active step node.
     #[serde(default = "default_active_color")]
     pub active_color: String,
@@ -146,7 +154,7 @@ impl Stepper {
         let emoji_desc_font =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, desc_font_size));
 
-        let is_horizontal = self.orientation == "horizontal";
+        let is_horizontal = self.orientation == StepperOrientation::Horizontal;
 
         if is_horizontal {
             let padding = r + 8.0;
