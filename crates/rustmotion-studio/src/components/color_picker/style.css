@@ -172,55 +172,20 @@
         color-mix(in oklab, var(--focused-border-color) 50%, transparent);
 }
 
-.dx-color-picker-popover {
-    position: absolute;
-    z-index: 1000;
-    top: 100%;
-    /* The inspector docks against the right window edge: anchor the popover's
-       right edge to the swatch so it opens LEFTWARD instead of clipping. */
-    right: 0;
-    left: auto;
-    display: block;
-    border-radius: 0.5rem;
+/* Inline expansion: the open editor lives IN FLOW below its row
+   (flex-basis:100% wraps it in the flex-wrap row) — no positioning, no
+   clipping, scrolls with the panel. */
+.dx-color-picker-inline {
+    flex-basis: 100%;
+    width: 100%;
+    box-sizing: border-box;
     margin-top: 4px;
-    padding: 12px;
-    background: var(--rm-surface);
-    box-shadow:
-        inset 0 0 0 1px var(--rm-border),
-        0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 10px;
+    border-radius: 0.5rem;
+    background: var(--rm-surface-2);
+    box-shadow: inset 0 0 0 1px var(--rm-border);
 }
 
-.dx-color-picker-popover[data-state="open"] {
-    animation: dx-color-picker-popover-fade-in .15s ease-out;
-}
-
-.dx-color-picker-popover[data-state="closed"] {
-    animation: dx-color-picker-popover-fade-out .15s ease-out forwards;
-    pointer-events: none;
-}
-
-@keyframes dx-color-picker-popover-fade-in {
-    from {
-        opacity: 0;
-        transform: translateY(-4px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes dx-color-picker-popover-fade-out {
-    from {
-        opacity: 1;
-        transform: translateY(0);
-    }
-
-    to {
-        opacity: 0;
-        transform: translateY(-4px);
-    }
 }
 
 .dx-color-picker-dialog {

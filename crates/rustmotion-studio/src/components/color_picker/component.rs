@@ -1,9 +1,9 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use dioxus::prelude::*;
 use dioxus_primitives::color_picker::{self, Color, ColorAreaProps, ColorPickerContext};
 use dioxus_primitives::label::Label;
-use dioxus_primitives::popover;
 use dioxus_primitives::slider::*;
-use dioxus_primitives::use_controlled;
 use palette::{encoding, FromColor, Hsv, IntoColor, RgbHue, Srgb};
 
 use crate::components::input::Input;
@@ -12,125 +12,27 @@ fn format_color_hex(color: Color) -> String {
     format!("#{color:X}")
 }
 
-/// Compute the popover's fixed position from the anchor (trigger swatch)
-/// rect, the popover size and the window viewport, all in logical pixels.
-/// Preference: below the anchor, right edges aligned (opens leftward — the
-/// inspector hugs the right window edge); flips above when the bottom would
-/// clip; then a HARD clamp of both axes into `[margin, viewport - size -
-/// margin]` — the clamp always wins, even after the flip.
-pub fn popover_position(
-    anchor: (f64, f64, f64, f64), // x, y, w, h
-    popover: (f64, f64),          // w, h
-    viewport: (f64, f64),         // w, h
-    margin: f64,
-) -> (f64, f64) {
-    const GAP: f64 = 4.0;
-    let (ax, ay, aw, ah) = anchor;
-    let (pw, ph) = popover;
-    let (vw, vh) = viewport;
-
-    // Right-aligned under the anchor.
-    let x = ax + aw - pw;
-    let mut y = ay + ah + GAP;
-    // Flip above when the bottom clips.
-    if y + ph > vh - margin {
-        y = ay - ph - GAP;
-    }
-    // Hard clamp (min first so the margin wins on tiny viewports).
-    let cx = x.min(vw - pw - margin).max(margin);
-    let cy = y.min(vh - ph - margin).max(margin);
-    (cx, cy)
-}
-
+/// Which color picker is currently expanded, shared across the inspector
+/// panel so only ONE picker is open at a time: opening a swatch closes any
+/// other. Provided by the panel; pickers fall back to a local open state when
+/// the context is absent.
 #[derive(Clone, Copy)]
-struct ColorPickerRootContext {
-    open: Memo<bool>,
-    disabled: ReadSignal<bool>,
-    color: ReadSignal<Hsv<encoding::Srgb, f64>>,
-    /// The trigger's mounted node — the popover anchors its fixed position on
-    /// this rect at open time.
-    trigger: Signal<Option<std::rc::Rc<MountedData>>>,
-}
+pub struct OpenPicker(pub Signal<Option<u64>>);
 
-/// The props for the [`ColorPickerRoot`] component.
-#[derive(Props, Clone, PartialEq)]
-pub struct ColorPickerRootProps {
-    /// The selected color
-    #[props(default)]
-    pub color: ReadSignal<Hsv<encoding::Srgb, f64>>,
-
-    /// Callback when color changes
-    #[props(default)]
-    pub on_color_change: Callback<Hsv<encoding::Srgb, f64>>,
-
-    /// Whether the color picker is disabled
-    #[props(default)]
-    pub disabled: ReadSignal<bool>,
-
-    /// The controlled open state of the popover.
-    pub open: ReadSignal<Option<bool>>,
-
-    /// The default open state when uncontrolled.
-    #[props(default)]
-    pub default_open: bool,
-
-    /// Callback fired when the open state changes.
-    #[props(default)]
-    pub on_open_change: Callback<bool>,
-
-    /// Additional attributes to extend the color picker element
-    #[props(extends = GlobalAttributes)]
-    pub attributes: Vec<Attribute>,
-
-    /// The children of the color picker element
-    pub children: Element,
-}
-
-#[component]
-pub fn ColorPickerRoot(props: ColorPickerRootProps) -> Element {
-    let (open, set_open) = use_controlled(props.open, props.default_open, props.on_open_change);
-
-    // Local mirror of the color: the picker internals (area drag, hue slider,
-    // hex field) read/write THIS state, so every selection — including
-    // mid-drag moves — previews live in the popover AND propagates through
-    // `on_color_change` immediately, independent of whether the parent echoes
-    // the new color back through the `color` prop.
-    let mut local = use_signal(|| (props.color)());
-    use_effect(move || {
-        let external = (props.color)();
-        if external != *local.peek() {
-            local.set(external);
-        }
-    });
-    let forward = props.on_color_change;
-    let on_change = move |c: Hsv<encoding::Srgb, f64>| {
-        local.set(c);
-        forward.call(c);
-    };
-
-    let trigger = use_signal(|| None);
-    use_context_provider(|| ColorPickerRootContext {
-        open,
-        disabled: props.disabled,
-        color: local.into(),
-        trigger,
-    });
-
-    rsx! {
-        color_picker::ColorPicker {
-            class: "dx-color-picker",
-            color: local(),
-            on_color_change: on_change,
-            disabled: props.disabled,
-            attributes: props.attributes,
-            popover::PopoverRoot {
-                is_modal: false,
-                open: Some(open()),
-                on_open_change: move |v| set_open.call(v),
-                {props.children}
-            }
-        }
+/// Toggle decision for the exclusive open-picker state (pure): clicking the
+/// open picker closes it, clicking any other opens that one.
+pub fn toggle_picker(current: Option<u64>, id: u64) -> Option<u64> {
+    if current == Some(id) {
+        None
+    } else {
+        Some(id)
     }
+}
+
+/// Stable per-instance picker id.
+fn next_picker_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The props for the [`ColorPicker`] component.
@@ -152,7 +54,8 @@ pub struct ColorPickerProps {
     #[props(default)]
     pub label: Option<String>,
 
-    /// The controlled open state of the popover.
+    /// Unused (kept for call-site compatibility): the picker expands inline
+    /// and manages its own exclusive open state.
     pub open: ReadSignal<Option<bool>>,
 
     /// The default open state when uncontrolled.
@@ -167,139 +70,127 @@ pub struct ColorPickerProps {
     #[props(extends = GlobalAttributes)]
     pub attributes: Vec<Attribute>,
 
-    /// Additional content to append to the default color picker popover
+    /// Additional content to append to the expanded editor
     pub children: Element,
 }
 
+/// # ColorPicker — inline expansion
+///
+/// The open picker renders NO floating popover: it expands IN FLOW directly
+/// below its row (`flex-basis:100%` wraps it to the next line of the
+/// `flex-wrap` row), pushing the content below. No fixed/absolute
+/// positioning, no measurement, no clamping — clipping is impossible by
+/// construction and it scrolls naturally with the panel.
+///
+/// Close: re-click on the swatch, Escape inside the picker subtree, or
+/// opening another swatch (exclusive [`OpenPicker`] state).
+///
+/// The local HSV mirror (live drag preview + guaranteed propagation) is kept
+/// unchanged from the optimistic-edit round.
 #[component]
 pub fn ColorPicker(props: ColorPickerProps) -> Element {
-    rsx! {
-        ColorPickerRoot {
-            color: props.color,
-            on_color_change: props.on_color_change,
-            disabled: props.disabled,
-            open: props.open,
-            default_open: props.default_open,
-            on_open_change: props.on_open_change,
-            attributes: props.attributes,
-            ColorPickerTrigger {
-                label: props.label,
+    // Local mirror of the color: the picker internals (area drag, hue slider,
+    // hex field) read/write THIS state, so every selection — including
+    // mid-drag moves — previews live AND propagates through
+    // `on_color_change` immediately, independent of whether the parent echoes
+    // the new color back through the `color` prop.
+    let mut local = use_signal(|| (props.color)());
+    use_effect(move || {
+        let external = (props.color)();
+        if external != *local.peek() {
+            local.set(external);
+        }
+    });
+    let forward = props.on_color_change;
+    let on_change = move |c: Hsv<encoding::Srgb, f64>| {
+        local.set(c);
+        forward.call(c);
+    };
+
+    // Exclusive open state (panel-wide when the context is provided).
+    let id = use_hook(next_picker_id);
+    let shared_open = try_consume_context::<OpenPicker>();
+    let local_open = use_signal(|| false);
+    let is_open = match shared_open {
+        Some(s) => (s.0)() == Some(id),
+        None => local_open(),
+    };
+
+    let on_open_change = props.on_open_change;
+    let toggle = move |_| {
+        let now_open = match shared_open {
+            Some(s) => {
+                let mut sig = s.0;
+                let next = toggle_picker(sig(), id);
+                sig.set(next);
+                next == Some(id)
             }
-            ColorPickerPopover {
-                ColorPickerSelect {}
-                {props.children}
+            None => {
+                let mut l = local_open;
+                let v = !l();
+                l.set(v);
+                v
+            }
+        };
+        on_open_change.call(now_open);
+    };
+    let close = move || {
+        match shared_open {
+            Some(s) => {
+                let mut sig = s.0;
+                if sig() == Some(id) {
+                    sig.set(None);
+                }
+            }
+            None => {
+                let mut l = local_open;
+                l.set(false);
             }
         }
-    }
-}
+        on_open_change.call(false);
+    };
 
-/// The props for the [`ColorPickerTrigger`] component.
-#[derive(Props, Clone, PartialEq)]
-pub struct ColorPickerTriggerProps {
-    /// Optional label on the trigger button
-    #[props(default)]
-    pub label: Option<String>,
-
-    /// Additional attributes to extend the trigger button
-    #[props(extends = GlobalAttributes)]
-    pub attributes: Vec<Attribute>,
-
-    /// Additional content to render inside the trigger button
-    pub children: Element,
-}
-
-#[component]
-pub fn ColorPickerTrigger(props: ColorPickerTriggerProps) -> Element {
-    let ctx = use_context::<ColorPickerRootContext>();
     let aria_hex = use_memo(move || {
-        let rgb: Color = Srgb::<f64>::from_color((ctx.color)()).into_format();
+        let rgb: Color = Srgb::<f64>::from_color(local()).into_format();
         format_color_hex(rgb)
     });
 
-    let mut trigger = ctx.trigger;
     rsx! {
-        div {
-            style: "display:inline-flex;",
-            onmounted: move |e| trigger.set(Some(e.data())),
-            popover::PopoverTrigger {
-                class: "dx-color-picker-button",
-                disabled: if (ctx.disabled)() { true },
-                aria_label: format!("Color picker {aria_hex}"),
-                aria_expanded: (ctx.open)(),
-                attributes: props.attributes,
-                ColorSwatch { color: ctx.color }
-                if let Some(label) = props.label { span { {label} } }
-                {props.children}
-            }
-        }
-    }
-}
-
-/// The props for the [`ColorPickerPopover`] component.
-#[derive(Props, Clone, PartialEq)]
-pub struct ColorPickerPopoverProps {
-    /// Additional attributes to extend the popover content
-    #[props(extends = GlobalAttributes)]
-    pub attributes: Vec<Attribute>,
-
-    /// The children of the color picker popover
-    pub children: Element,
-}
-
-#[component]
-pub fn ColorPickerPopover(props: ColorPickerPopoverProps) -> Element {
-    let ctx = use_context::<ColorPickerRootContext>();
-    // Fixed positioning computed at open time by [`popover_position`]: below
-    // the swatch opening leftward, flipped above near the window bottom, and
-    // hard-clamped into the viewport on both axes. `position:fixed` escapes
-    // every scrollable/clipping container of the panel.
-    let mut node = use_signal(|| None::<std::rc::Rc<MountedData>>);
-    let mut pos = use_signal(|| None::<(f64, f64)>);
-    use_effect(move || {
-        if (ctx.open)() {
-            if let (Some(t), Some(n)) = ((ctx.trigger)(), node()) {
-                spawn(async move {
-                    let (Ok(anchor), Ok(content)) =
-                        (t.get_client_rect().await, n.get_client_rect().await)
-                    else {
-                        return;
-                    };
-                    let win = dioxus::desktop::window();
-                    let vs = win.inner_size().to_logical::<f64>(win.scale_factor());
-                    // The measured node is the inner content: compensate for
-                    // the popover's own padding (12px each side).
-                    const PAD: f64 = 24.0;
-                    pos.set(Some(popover_position(
-                        (
-                            anchor.origin.x,
-                            anchor.origin.y,
-                            anchor.size.width,
-                            anchor.size.height,
-                        ),
-                        (content.size.width + PAD, content.size.height + PAD),
-                        (vs.width, vs.height),
-                        8.0,
-                    )));
-                });
-            }
-        }
-    });
-    let style = match pos() {
-        Some((x, y)) => {
-            format!("position:fixed; left:{x}px; top:{y}px; right:auto; bottom:auto; margin:0;")
-        }
-        // Not measured yet (first open): keep it invisible for one frame.
-        None => "visibility:hidden;".to_string(),
-    };
-
-    rsx! {
-        popover::PopoverContent {
-            class: "dx-color-picker-popover".to_string(),
-            style: "{style}",
+        color_picker::ColorPicker {
+            class: "dx-color-picker",
+            // `display:contents`: the trigger button and the inline editor
+            // become direct items of the surrounding `flex-wrap` row, so the
+            // editor wraps below the row at full row width.
+            style: "display:contents;",
+            color: local(),
+            on_color_change: on_change,
+            disabled: props.disabled,
             attributes: props.attributes,
-            div {
-                onmounted: move |e| node.set(Some(e.data())),
-                {props.children}
+            button {
+                class: "dx-color-picker-button",
+                disabled: (props.disabled)(),
+                aria_label: "Color picker {aria_hex}",
+                aria_expanded: is_open,
+                onclick: toggle,
+                ColorSwatch { color: local }
+                if let Some(label) = props.label {
+                    span { {label} }
+                }
+            }
+            if is_open {
+                div {
+                    class: "dx-color-picker-inline",
+                    // Escape closes THIS picker; handled locally because the
+                    // panel wrapper stops keydown propagation to the app root.
+                    onkeydown: move |evt: KeyboardEvent| {
+                        if evt.key() == Key::Escape {
+                            evt.stop_propagation();
+                            close();
+                        }
+                    },
+                    ColorPickerSelect {}
+                    {props.children}
+                }
             }
         }
     }
@@ -580,60 +471,15 @@ pub fn ColorPickerSelect(props: ColorPickerSelectProps) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::popover_position;
+    use super::toggle_picker;
 
     #[test]
-    fn anchor_top_right_opens_below_clamped_into_viewport() {
-        // Swatch near the top-right corner of a 1200x800 window.
-        let (x, y) = popover_position(
-            (1150.0, 60.0, 24.0, 24.0),
-            (260.0, 320.0),
-            (1200.0, 800.0),
-            8.0,
-        );
-        // Below the anchor…
-        assert_eq!(y, 60.0 + 24.0 + 4.0);
-        // …right-aligned would be 1174-260=914, fits; but never past the right margin.
-        assert_eq!(x, 914.0);
-        assert!(x + 260.0 <= 1200.0 - 8.0);
-    }
-
-    #[test]
-    fn anchor_near_bottom_flips_above() {
-        let (x, y) = popover_position(
-            (900.0, 700.0, 24.0, 24.0),
-            (260.0, 320.0),
-            (1200.0, 800.0),
-            8.0,
-        );
-        // 700+24+4+320 > 792 → flip above: 700-320-4 = 376.
-        assert_eq!(y, 376.0);
-        assert_eq!(x, 900.0 + 24.0 - 260.0);
-    }
-
-    #[test]
-    fn anchor_top_left_never_clips_left_or_top() {
-        // Right-aligned x would be negative → clamped to the margin.
-        let (x, y) = popover_position(
-            (10.0, 10.0, 24.0, 24.0),
-            (260.0, 320.0),
-            (1200.0, 800.0),
-            8.0,
-        );
-        assert_eq!(x, 8.0);
-        assert_eq!(y, 10.0 + 24.0 + 4.0);
-    }
-
-    #[test]
-    fn tiny_viewport_clamps_to_margins() {
-        // Popover larger than the window: both axes pinned at the margin
-        // (the clamp always wins, even after the flip).
-        let (x, y) = popover_position(
-            (50.0, 90.0, 24.0, 24.0),
-            (260.0, 320.0),
-            (200.0, 150.0),
-            8.0,
-        );
-        assert_eq!((x, y), (8.0, 8.0));
+    fn only_one_picker_open_at_a_time() {
+        // Opening from nothing.
+        assert_eq!(toggle_picker(None, 7), Some(7));
+        // Re-click on the open picker closes it.
+        assert_eq!(toggle_picker(Some(7), 7), None);
+        // Clicking ANOTHER swatch switches to it (previous one closes).
+        assert_eq!(toggle_picker(Some(7), 9), Some(9));
     }
 }
