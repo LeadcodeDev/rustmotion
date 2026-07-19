@@ -1119,6 +1119,303 @@ mod component_smoke {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// SVG draw-on (draw_progress) pixel tests
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// The SVG under test contains two horizontal strokes spatially separated:
+//   - path 1: a line from (10,30) to (90,30)   → top half of the 100×100 box
+//   - path 2: a line from (10,70) to (90,70)   → bottom half of the 100×100 box
+//
+// Both paths have an explicit stroke (white, width 4) so the draw-on mode
+// picks up the SVG stroke color rather than the fill-fallback.
+//
+// The component is rendered in a 100×100 pixel canvas.
+#[cfg(test)]
+mod svg_draw_on_tests {
+    use crate::components::{ChildComponent, Component, PositionMode};
+    use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
+    use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
+
+    // SVG with two horizontal stroked paths, vertically separated.
+    // Path 1 at y=30 (top region), Path 2 at y=70 (bottom region).
+    const TWO_STROKE_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <line x1="10" y1="30" x2="90" y2="30" stroke="white" stroke-width="4"/>
+  <line x1="10" y1="70" x2="90" y2="70" stroke="white" stroke-width="4"/>
+</svg>"#;
+
+    // SVG with two filled rects (no stroke) — draw mode should trace their contour.
+    const TWO_FILL_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="80" height="20" fill="white"/>
+  <rect x="10" y="70" width="80" height="20" fill="white"/>
+</svg>"#;
+
+    /// Render an SVG component with the given JSON fields at the specified
+    /// draw_progress (via animation) and return the raw RGBA8888 pixels.
+    fn render_svg_at(svg_data: &str, extra_fields: serde_json::Value, progress: f64) -> Vec<u8> {
+        let mut json = serde_json::json!({
+            "type": "svg",
+            "data": svg_data,
+            "style": { "width": "100px", "height": "100px" }
+        });
+        // Merge extra_fields
+        if let serde_json::Value::Object(map) = extra_fields {
+            for (k, v) in map {
+                json[k] = v;
+            }
+        }
+        let component: Component = serde_json::from_value(json).expect("svg deserialize");
+        let child = ChildComponent {
+            component,
+            position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let scene = vec![child];
+
+        let w = 100u32;
+        let h = 100u32;
+        let scene_duration = 1.0f64;
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+
+        let built = build_scene_with_anim(
+            &scene,
+            (w as f32, h as f32),
+            BuildAnimationCtx {
+                time: progress,
+                scene_duration,
+            },
+        );
+        let layout = run_layout(
+            &built.root,
+            (w as f32, h as f32),
+            &ConversionContext::default(),
+        );
+        let dispatcher = LegacyPaintDispatcher::for_scene(&built);
+        let frame = PaintFrame {
+            time: progress,
+            frame_index: (progress * 30.0) as u32,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration,
+        };
+        paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
+
+        let row_bytes = w as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        surface.read_pixels(&info, &mut pixels, row_bytes, (0, 0));
+        pixels
+    }
+
+    /// Count non-transparent pixels in RGBA buffer.
+    fn lit(buf: &[u8]) -> usize {
+        buf.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    /// Count non-transparent pixels in horizontal band [y0, y1) of a 100-wide canvas.
+    fn lit_band(buf: &[u8], y0: usize, y1: usize) -> usize {
+        (y0..y1)
+            .flat_map(|y| (0..100usize).map(move |x| (y * 100 + x) * 4))
+            .filter(|&i| buf[i + 3] > 0)
+            .count()
+    }
+
+    // ── T1: draw_progress=0 → zero pixels ────────────────────────────────────
+    #[test]
+    fn draw_progress_zero_paints_nothing() {
+        // No animation configured but draw_progress is forced to 0 via anim at t=0.
+        // We use a draw_in animation so progress maps to draw_progress.
+        let buf = render_svg_at(
+            TWO_STROKE_SVG,
+            serde_json::json!({
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                }
+            }),
+            // t=0: draw_progress animates from 0.0 at delay=0.
+            0.0,
+        );
+        assert_eq!(
+            lit(&buf),
+            0,
+            "draw_progress=0 must produce zero lit pixels (got {})",
+            lit(&buf)
+        );
+    }
+
+    // ── T2: draw_progress=0.5 → only first path visible (overlap=0) ──────────
+    #[test]
+    fn draw_progress_half_shows_first_path_only() {
+        // Two equal-length strokes → at progress=0.5 the first is fully drawn,
+        // the second has not started (sequential, overlap=0).
+        let buf = render_svg_at(
+            TWO_STROKE_SVG,
+            serde_json::json!({
+                "draw_overlap": 0.0,
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                }
+            }),
+            0.5,
+        );
+        // Path 1 is near y=30, path 2 near y=70.
+        let top = lit_band(&buf, 25, 35);
+        let bot = lit_band(&buf, 65, 75);
+        assert!(
+            top > 0,
+            "first path (y≈30) must be visible at draw_progress≈0.5 (top={top})"
+        );
+        assert_eq!(
+            bot, 0,
+            "second path (y≈70) must be absent at draw_progress≈0.5 (bot={bot})"
+        );
+    }
+
+    // ── T3: draw_progress=1.0 → resvg full render (filled pixels) ───────────
+    #[test]
+    fn draw_progress_one_renders_complete_svg() {
+        // At progress=1.0 we fall through to resvg so fills are visible.
+        // TWO_STROKE_SVG only has strokes — just assert both bands are lit.
+        let buf = render_svg_at(
+            TWO_STROKE_SVG,
+            serde_json::json!({
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                }
+            }),
+            // At t slightly before 1.0 draw_progress may still be <1.0.
+            // Use t=1.0 (end of 1s animation) to get progress=1.0.
+            1.0,
+        );
+        let top = lit_band(&buf, 25, 35);
+        let bot = lit_band(&buf, 65, 75);
+        assert!(
+            top > 0,
+            "top band must be lit at draw_progress=1 (top={top})"
+        );
+        assert!(
+            bot > 0,
+            "bot band must be lit at draw_progress=1 (bot={bot})"
+        );
+    }
+
+    // ── T4: draw_overlap=1.0 → both paths drawn in parallel at 0.5 ──────────
+    #[test]
+    fn draw_overlap_one_draws_all_paths_in_parallel() {
+        // With overlap=1.0 every path's window spans the full [0,1] range.
+        // At progress=0.5, both paths are 50% drawn.
+        let buf = render_svg_at(
+            TWO_STROKE_SVG,
+            serde_json::json!({
+                "draw_overlap": 1.0,
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                }
+            }),
+            0.5,
+        );
+        let top = lit_band(&buf, 25, 35);
+        let bot = lit_band(&buf, 65, 75);
+        assert!(
+            top > 0,
+            "with overlap=1 both paths must be partially drawn at 0.5; top={top}"
+        );
+        assert!(
+            bot > 0,
+            "with overlap=1 both paths must be partially drawn at 0.5; bot={bot}"
+        );
+    }
+
+    // ── T5: fill-only SVG → contour visible in draw mode ─────────────────────
+    #[test]
+    fn fill_only_svg_draws_contour_in_draw_mode() {
+        // TWO_FILL_SVG has no stroke; draw mode should trace the contour using
+        // the fill color and draw_stroke_width.
+        let buf = render_svg_at(
+            TWO_FILL_SVG,
+            serde_json::json!({
+                "draw_stroke_width": 3.0,
+                "draw_overlap": 0.0,
+                "style": {
+                    "width": "100px",
+                    "height": "100px",
+                    "animation": [{ "name": "draw_in", "duration": 1.0 }]
+                }
+            }),
+            // At t=0.5, at least some pixels should be visible (first rect partially drawn).
+            0.5,
+        );
+        assert!(
+            lit(&buf) > 0,
+            "fill-only SVG should produce lit pixels in draw mode at 0.5 (got {})",
+            lit(&buf)
+        );
+    }
+
+    // ── T6: static render (no draw, no animation) → resvg bitmap unchanged ───
+    #[test]
+    fn static_svg_renders_without_draw_mode() {
+        // A simple filled-rect SVG with no draw fields. The resvg path must
+        // produce filled pixels in the fill color.
+        let filled_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="80" height="80" fill="red"/>
+</svg>"#;
+        let buf = render_svg_at(
+            filled_svg,
+            serde_json::json!({}), // no extra fields → static resvg path
+            0.5,
+        );
+        // resvg fills the rect red. Count red-dominant pixels.
+        let red_pixels = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > p[2] && p[0] > p[1])
+            .count();
+        assert!(
+            red_pixels > 3000,
+            "static render must produce many red-dominant pixels (got {red_pixels})"
+        );
+    }
+
+    // ── T7: draw: true → static draw trace visible without animation ──────────
+    #[test]
+    fn draw_true_shows_full_trace_without_animation() {
+        // draw: true forces draw-on mode with progress=1.0 when no animation is active.
+        // That should fall through to the resvg render (showing the complete SVG).
+        let buf = render_svg_at(
+            TWO_STROKE_SVG,
+            serde_json::json!({ "draw": true }),
+            0.5, // time doesn't matter, no animation
+        );
+        let top = lit_band(&buf, 25, 35);
+        let bot = lit_band(&buf, 65, 75);
+        assert!(top > 0, "draw:true must show top path (top={top})");
+        assert!(bot > 0, "draw:true must show bot path (bot={bot})");
+    }
+}
+
 #[cfg(test)]
 mod audio_tests {
     use std::sync::Arc;
