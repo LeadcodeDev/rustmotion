@@ -236,12 +236,90 @@ pub fn is_multiline(name: &str, value: &str) -> bool {
     matches!(name, "code" | "content" | "message") || value.contains('\n')
 }
 
-/// Engine-default placeholder for string inputs (cascade defaults the schema
-/// can't know): `font-family` → "Inter".
+/// Engine-default placeholder for string inputs — properties whose effective
+/// default has no displayable VALUE (auto-sized boxes, unset backgrounds).
 pub fn engine_placeholder(name: &str) -> Option<&'static str> {
     match name {
         "font-family" => Some("Inter"),
+        "background" => Some("none"),
+        "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height" => {
+            Some("auto")
+        }
+        "line-height" | "letter-spacing" => Some("–"),
         _ => None,
+    }
+}
+
+/// Effective ENGINE defaults for CSS properties left unset in the source —
+/// what the renderer actually uses, so the inspector shows the truth instead
+/// of empty controls (same honesty as the Properties round-trip). `CssStyle`
+/// is all-`Option`, so this is a semantic table (source noted per entry),
+/// not schema-derived.
+pub fn css_effective_default(prop: &str) -> Option<Value> {
+    let v = match prop {
+        // Painter: full opacity when unset.
+        "opacity" => Value::from(1.0),
+        // CSS initial value; the layout treats unset as static flow.
+        "position" => Value::from("static"),
+        // Engine absolute-offset defaults (unset offset = 0).
+        "top" | "right" | "bottom" | "left" => Value::from(0),
+        // Paint order default.
+        "z-index" => Value::from(0),
+        // Taffy defaults: no spacing when unset.
+        "padding" | "margin" | "gap" => Value::from(0),
+        // Painter: square corners when unset.
+        "border-radius" => Value::from(0),
+        // CSS initial / engine clipping default.
+        "overflow" | "overflow-x" | "overflow-y" => Value::from("visible"),
+        "visibility" => Value::from("visible"),
+        // Scene/box-builder default (scenes flow as columns).
+        "flex-direction" => Value::from("column"),
+        // Taffy defaults for unset alignment.
+        "align-items" => Value::from("start"),
+        "justify-content" => Value::from("start"),
+        // CSS spec initial values (taffy follows them).
+        "flex-grow" => Value::from(0),
+        "flex-shrink" => Value::from(1),
+        // Cascade default weight (Regular · 400 — matches the curated select).
+        "font-weight" => Value::from("400"),
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// Painter-constant text sizes per component (the typographic default is NOT
+/// global: text paints at 48px, terminal/codeblock at 14px). Unknown tags →
+/// None (placeholder instead of a wrong number).
+pub fn text_default_font_size(tag: &str) -> Option<f64> {
+    match tag {
+        // text.rs: `font_size_px_or(48.0)`.
+        "text" | "caption" | "gradient_text" => Some(48.0),
+        // terminal.rs `FONT_SIZE: f32 = 14.0`; codeblock uses the same size.
+        "terminal" | "codeblock" => Some(14.0),
+        _ => None,
+    }
+}
+
+/// Display default for one CSS row of a given component: per-tag font-size,
+/// white text for the text family (renderer default), else the global table.
+pub fn css_display_default(tag: &str, prop: &str) -> Option<Value> {
+    match prop {
+        "font-size" => text_default_font_size(tag).map(Value::from),
+        "color" if css_family(tag) == CssFamily::TextLike => Some(Value::from("#FFFFFF")),
+        _ => css_effective_default(prop),
+    }
+}
+
+/// `(displayed value, is_default)` for a CSS row: the raw value wins; when
+/// absent, the effective default is shown with the dimmed default marker.
+pub fn css_row_value(raw: String, tag: &str, prop: &str) -> (String, bool) {
+    if !raw.is_empty() {
+        return (raw, false);
+    }
+    match css_display_default(tag, prop) {
+        Some(Value::String(s)) => (s, true),
+        Some(other) => (display_number(&other.to_string()), true),
+        None => (String::new(), false),
     }
 }
 
@@ -914,6 +992,69 @@ mod tests {
             }
             other => panic!("direction should be Enum, got {other:?}"),
         }
+    }
+
+    // ── Round 7: effective CSS defaults ─────────────────────────────────
+
+    #[test]
+    fn css_effective_default_table_entries() {
+        assert_eq!(css_effective_default("opacity"), Some(Value::from(1.0)));
+        assert_eq!(
+            css_effective_default("position"),
+            Some(Value::from("static"))
+        );
+        assert_eq!(css_effective_default("padding"), Some(Value::from(0)));
+        assert_eq!(
+            css_effective_default("overflow"),
+            Some(Value::from("visible"))
+        );
+        assert_eq!(css_effective_default("flex-shrink"), Some(Value::from(1)));
+        // No displayable default → placeholder territory.
+        assert_eq!(css_effective_default("background"), None);
+        assert_eq!(css_effective_default("width"), None);
+        assert_eq!(engine_placeholder("background"), Some("none"));
+        assert_eq!(engine_placeholder("width"), Some("auto"));
+    }
+
+    #[test]
+    fn font_size_default_is_per_component() {
+        assert_eq!(text_default_font_size("terminal"), Some(14.0));
+        assert_eq!(text_default_font_size("codeblock"), Some(14.0));
+        assert_eq!(text_default_font_size("text"), Some(48.0));
+        assert_eq!(text_default_font_size("made_up_tag"), None);
+        // Routed through the display default too.
+        assert_eq!(
+            css_display_default("terminal", "font-size"),
+            Some(Value::from(14.0))
+        );
+        assert_eq!(
+            css_display_default("text", "color"),
+            Some(Value::from("#FFFFFF"))
+        );
+        assert_eq!(css_display_default("shape", "color"), None);
+    }
+
+    #[test]
+    fn css_row_value_prefers_raw_and_marks_defaults() {
+        // Raw present → raw, not a default.
+        assert_eq!(
+            css_row_value("12px".into(), "text", "opacity"),
+            ("12px".to_string(), false)
+        );
+        // Raw absent + known default → displayed value with the marker.
+        assert_eq!(
+            css_row_value(String::new(), "text", "opacity"),
+            ("1".to_string(), true)
+        );
+        assert_eq!(
+            css_row_value(String::new(), "card", "position"),
+            ("static".to_string(), true)
+        );
+        // Raw absent, no default → empty, no marker (placeholder shows).
+        assert_eq!(
+            css_row_value(String::new(), "card", "background"),
+            (String::new(), false)
+        );
     }
 
     // ── Chart-colors bug fix: unified add decision ──────────────────────

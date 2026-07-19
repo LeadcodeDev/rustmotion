@@ -159,23 +159,6 @@ pub fn TopBar(
                         "Changes not saved: {msg}"
                     }
                 }
-                match &status {
-                    ExportStatus::Done(path) => rsx! {
-                        span {
-                            title: "{path.display()}",
-                            style: "color:var(--rm-text-muted); font-size:11px; white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis;",
-                            "Exported: {path.display()}"
-                        }
-                    },
-                    ExportStatus::Failed(reason) => rsx! {
-                        span {
-                            title: "{reason}",
-                            style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis;",
-                            "Export failed: {reason}"
-                        }
-                    },
-                    _ => rsx! {},
-                }
                 Button {
                     variant: ButtonVariant::Ghost,
                     size: ButtonSize::IconSm,

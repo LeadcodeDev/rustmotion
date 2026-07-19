@@ -21,9 +21,9 @@ use super::view::RevSignal;
 
 use super::annotations::AnnotationBox;
 use super::properties::{
-    component_props, css_family, css_section_props, display_number, effective_element,
-    engine_placeholder, fill_to_value, is_multiline, next_entries_on_add, palette_prefill,
-    parse_fill, slider_range, visible_sections, FillMode, PropKind,
+    component_props, css_family, css_row_value, css_section_props, display_number,
+    effective_element, engine_placeholder, fill_to_value, is_multiline, next_entries_on_add,
+    palette_prefill, parse_fill, slider_range, visible_sections, FillMode, PropKind,
 };
 
 // ── Debounce context ─────────────────────────────────────────────────────────
@@ -649,6 +649,7 @@ pub fn InspectorPanel(
                     section: *section,
                     pointer: pointer.clone(),
                     style: style.clone(),
+                    tag: kind.clone(),
                 }
             }
             GenericCssSections { pointer: pointer.clone(), kind: kind.clone(), style: style.clone() }
@@ -824,8 +825,9 @@ fn GenericCssSections(pointer: String, kind: String, style: serde_json::Value) -
                                     pointer: pointer.clone(),
                                     name: spec.name.clone(),
                                     prop_kind: spec.kind.clone(),
-                                    value: prop_str(&style, &spec.name),
+                                    value: css_row_value(prop_str(&style, &spec.name), &kind, &spec.name).0,
                                     is_style: true,
+                                    is_default: css_row_value(prop_str(&style, &spec.name), &kind, &spec.name).1,
                                 }
                             }
                         }
@@ -1220,7 +1222,12 @@ fn ContentEditor(pointer: String, content: String) -> Element {
 
 /// One labelled, uppercase-headed section with its rows.
 #[component]
-fn SectionView(section: Section, pointer: String, style: serde_json::Value) -> Element {
+fn SectionView(
+    section: Section,
+    pointer: String,
+    style: serde_json::Value,
+    tag: String,
+) -> Element {
     rsx! {
         div { style: "display:flex; flex-direction:column; gap:8px; padding:12px 14px; border-top:1px solid var(--rm-border);",
             div { style: "{SECTION_HEADER}", "{section.title}" }
@@ -1230,6 +1237,7 @@ fn SectionView(section: Section, pointer: String, style: serde_json::Value) -> E
                     field: *field,
                     pointer: pointer.clone(),
                     style: style.clone(),
+                    tag: tag.clone(),
                 }
             }
         }
@@ -1238,9 +1246,13 @@ fn SectionView(section: Section, pointer: String, style: serde_json::Value) -> E
 
 /// One property row: label on the left, the typed control on the right.
 #[component]
-fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element {
+fn FieldRow(field: Field, pointer: String, style: serde_json::Value, tag: String) -> Element {
     let shared = use_context::<Shared>();
-    let value = prop_str(&style, field.name);
+    // Effective view: an unset property displays the ENGINE default (opacity
+    // slider at 1.0, Position preselecting "static", spacing at 0…) with the
+    // dimmed default marker; the raw value always wins. Emptying a control
+    // still removes the key (back to the default state).
+    let (value, is_default) = css_row_value(prop_str(&style, field.name), &tag, field.name);
 
     let control = match field.ctrl {
         Ctrl::Text | Ctrl::Number => {
@@ -1510,7 +1522,14 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
 
     rsx! {
         div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
-            span { style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px;", "{field.label}" }
+            span {
+                style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px;",
+                title: if is_default { "{field.label} — engine default (not set in the source)" } else { "{field.label}" },
+                "{field.label}"
+                if is_default {
+                    span { style: "margin-left:4px; color:var(--rm-text-muted); opacity:0.6;", "•" }
+                }
+            }
             div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }
         }
     }
