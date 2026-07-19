@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 rustmotion-core = { path = "../rustmotion-core", version = "0.6.0" }
-rustmotion-components = { path = "../rustmotion-components", version = "0.6.0" }
+rustmotion-components = { path = "../rustmotion-components", version = "0.6.0", features = ["lottie-native"] }
 rustmotion-html = { path = "../rustmotion-html", version = "0.6.0" }
 skia-safe = "0.82"
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +35,9 @@ rustfft = "6"
 [features]
 # Opt-in: integration tests that shell out to a real ffmpeg binary.
 ffmpeg_integration = []
+## Re-expose native Lottie decoding (default-on). Activating this feature here
+## propagates to rustmotion-components so consumers only need to touch rustmotion.
+lottie-native = ["rustmotion-components/lottie-native"]
 
 [dev-dependencies]
 schemars = "0.8"

@@ -1551,7 +1551,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -4956,6 +4956,7 @@ dependencies = [
 name = "rustmotion-components"
 version = "0.6.0"
 dependencies = [
+ "dashmap",
  "gif 0.13.3",
  "image",
  "qrcode",
@@ -4967,6 +4968,7 @@ dependencies = [
  "similar",
  "skia-safe",
  "syntect",
+ "thorvg",
  "tiny-skia",
  "usvg",
 ]
@@ -6066,6 +6068,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "thorvg"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f750be5e6ea8988a0d1b31ff622ebb6d8c3257ee54190209b3143afa4bf4bf2d"
+dependencies = [
+ "libm",
+ "thorvg-sys",
+]
+
+[[package]]
+name = "thorvg-sys"
+version = "0.3.0+thorvg-1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fe321bd4d71a36ad167ad736d5ee5123002b11be61582bdde020a4047ec5794"
+dependencies = [
+ "bindgen 0.71.1",
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]
