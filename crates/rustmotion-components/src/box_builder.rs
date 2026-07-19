@@ -19,6 +19,7 @@ use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
 use rustmotion_core::css::{apply_animated_props, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
+use rustmotion_core::schema::video::{AnimationEffect, MotionBlurConfig, TrailConfig};
 
 use crate::divider::DividerDirection;
 use crate::timeline::TimelineDirection;
@@ -31,6 +32,10 @@ use crate::{ChildComponent, Component};
 pub struct BuildAnimationCtx {
     pub time: f64,
     pub scene_duration: f64,
+    /// Frames per second of the output video. Required to convert the
+    /// `shutter` fraction (in `MotionBlurConfig`) into an absolute temporal
+    /// offset: `shutter_window = shutter / fps` seconds.
+    pub fps: u32,
 }
 
 /// Padding allowance to keep arrow/connector heads inside the box.
@@ -115,7 +120,7 @@ where
 
     let mut child_boxes = Vec::new();
     for (i, c) in children.into_iter().enumerate() {
-        child_boxes.push(build_child(
+        child_boxes.extend(build_child(
             c,
             &mut components,
             &mut stagger_delays,
@@ -157,7 +162,208 @@ fn default_root_css(viewport: (f32, f32)) -> CssStyle {
     }
 }
 
-/// Convert a single `ChildComponent` to a `BoxNode`. Recurses into containers.
+/// Detect motion_blur and trail configs from a merged effect list.
+///
+/// Returns `(motion_blur, trail)`. Only the first occurrence of each type is
+/// used; duplicate effects of the same kind are ignored.
+fn detect_ghost_effects(
+    effects: &[AnimationEffect],
+) -> (Option<MotionBlurConfig>, Option<TrailConfig>) {
+    let mut mb: Option<MotionBlurConfig> = None;
+    let mut tr: Option<TrailConfig> = None;
+    for e in effects {
+        match e {
+            AnimationEffect::MotionBlur(c) if mb.is_none() => mb = Some(c.clone()),
+            AnimationEffect::Trail(c) if tr.is_none() => tr = Some(c.clone()),
+            _ => {}
+        }
+    }
+    (mb, tr)
+}
+
+/// Build ghost `BoxNode`s for motion-blur or trail effects.
+///
+/// Returns a `Vec<BoxNode>` of ghosts to be prepended (painted underneath)
+/// the principal node. Each ghost gets a fresh `NodeId` and its own slot in
+/// `components`/`stagger_delays`, both pointing to the same `ChildComponent`
+/// as the principal (v1 approximation: internal content uses frame time, not
+/// ghost time).
+///
+/// # Ghost CSS
+///
+/// For **motion_blur**: the CSS is resolved at `t_ghost = t - i * (shutter/fps)/samples`
+/// and opacity is `base_opacity / (samples + 1)`. The principal's opacity is
+/// kept at its base value so the static (no-motion) case stays visually full.
+///
+/// For **trail**: the CSS is resolved at `t_ghost = t - i * spacing` and
+/// opacity is `base_opacity * falloff^i`. The principal is unchanged.
+///
+/// Only one of `mb` / `tr` is used at a time; if both are present, motion_blur
+/// takes priority.
+#[allow(clippy::too_many_arguments)]
+fn build_ghosts<'a>(
+    child: &'a ChildComponent,
+    components: &mut Vec<Option<&'a ChildComponent>>,
+    stagger_delays: &mut Vec<f64>,
+    next_id: &mut NodeId,
+    actx: BuildAnimationCtx,
+    stagger_delay: f64,
+    effects: &[AnimationEffect],
+) -> Vec<BoxNode> {
+    let (mb, tr) = detect_ghost_effects(effects);
+
+    // Choose the ghost generation strategy.
+    enum Strategy {
+        MotionBlur {
+            samples: u32,
+            shutter_window: f64,
+        },
+        Trail {
+            copies: u32,
+            spacing: f64,
+            falloff: f32,
+        },
+    }
+    let strategy = if let Some(mc) = mb {
+        let samples = mc.samples.clamp(1, 16);
+        if samples <= 1 {
+            // Degenerate: no ghosts needed (ghost = principal position).
+            return Vec::new();
+        }
+        let shutter_window = mc.shutter / actx.fps.max(1) as f64;
+        Strategy::MotionBlur {
+            samples,
+            shutter_window,
+        }
+    } else if let Some(tc) = tr {
+        let copies = tc.copies.clamp(1, 12);
+        Strategy::Trail {
+            copies,
+            spacing: tc.spacing,
+            falloff: tc.falloff,
+        }
+    } else {
+        return Vec::new();
+    };
+
+    let base_css_for_ghost = |ghost_time: f64, ghost_opacity_scale: f32| -> CssStyle {
+        // Start from the same base CSS as the principal.
+        let mut css = component_css(&child.component);
+        if let Some((x, y)) = child.absolute_position() {
+            css.position = Some(Position::Absolute);
+            css.left = Some(CLP::Px(x));
+            css.top = Some(CLP::Px(y));
+        }
+        if let Some(z) = child.z_index {
+            css.z_index = Some(z);
+        }
+        // Apply timeline style states at the ghost time.
+        if let Some(animatable) = child.component.as_animatable() {
+            let steps = animatable.timeline_steps();
+            if steps.iter().any(|s| s.style.is_some()) {
+                let skip_opacity = css.transition.is_some();
+                apply_style_states(&mut css, steps, ghost_time - stagger_delay, skip_opacity);
+            }
+        }
+        // Resolve animation props at the *ghost* time.
+        let ghost_actx = BuildAnimationCtx {
+            time: ghost_time,
+            scene_duration: actx.scene_duration,
+            fps: actx.fps,
+        };
+        if let Some(ghost_effects) = effective_effects(&child.component, stagger_delay) {
+            let props = resolve_props_for_effects(
+                &ghost_effects,
+                ghost_actx.time,
+                ghost_actx.scene_duration,
+            );
+            if props_has_paint_overrides(&props) {
+                apply_animated_props(&mut css, &props);
+            }
+        }
+        // Scale opacity: multiply the base opacity by the ghost opacity factor.
+        let base_opacity = css.opacity.unwrap_or(1.0);
+        css.opacity = Some((base_opacity * ghost_opacity_scale).clamp(0.0, 1.0));
+        css
+    };
+
+    let mut ghosts = Vec::new();
+
+    match strategy {
+        Strategy::MotionBlur {
+            samples,
+            shutter_window,
+        } => {
+            // Ghost opacity: 1 / (samples + 1) of base opacity.
+            // Principal stays at full base opacity (handled in build_child).
+            let ghost_opacity_scale = 1.0 / (samples + 1) as f32;
+            for i in 1..=samples {
+                let ghost_time = actx.time - (i as f64 * shutter_window / samples as f64);
+                let ghost_css = base_css_for_ghost(ghost_time, ghost_opacity_scale);
+
+                let ghost_id = *next_id;
+                *next_id += 1;
+                // Register a slot so the dispatcher can look up the component.
+                components.push(Some(child));
+                stagger_delays.push(stagger_delay);
+
+                ghosts.push(BoxNode {
+                    id: ghost_id,
+                    kind: BoxKind::Ghost(Arc::new(ghost_id)),
+                    css: ghost_css,
+                    children: Vec::new(), // v1: no child recursion in ghosts
+                    intrinsic: None,      // v1: ghosts have no layout-measured content
+                    source_path: None,
+                    window: None,
+                });
+            }
+        }
+        Strategy::Trail {
+            copies,
+            spacing,
+            falloff,
+        } => {
+            // Ghosts painted from oldest (most-trailing) to newest (closest to principal).
+            // We build them in reverse order (copies → 1) so that index i=copies
+            // is the oldest ghost (lowest opacity), and we then reverse to get the
+            // correct under-to-over paint order.
+            let mut trail_nodes = Vec::with_capacity(copies as usize);
+            for i in 1..=copies {
+                let ghost_time = actx.time - i as f64 * spacing;
+                let ghost_opacity_scale = falloff.powi(i as i32);
+                let ghost_css = base_css_for_ghost(ghost_time, ghost_opacity_scale);
+
+                let ghost_id = *next_id;
+                *next_id += 1;
+                components.push(Some(child));
+                stagger_delays.push(stagger_delay);
+
+                trail_nodes.push(BoxNode {
+                    id: ghost_id,
+                    kind: BoxKind::Ghost(Arc::new(ghost_id)),
+                    css: ghost_css,
+                    children: Vec::new(),
+                    intrinsic: None,
+                    source_path: None,
+                    window: None,
+                });
+            }
+            // Oldest ghost (most-trailing) painted first → prepend in reverse.
+            trail_nodes.reverse();
+            ghosts = trail_nodes;
+        }
+    }
+
+    ghosts
+}
+
+/// Convert a single `ChildComponent` into one or more `BoxNode`s.
+///
+/// Returns a `Vec` whose elements are inserted in order into the parent's
+/// `children`. The last element is the principal node; any preceding elements
+/// are `BoxKind::Ghost` nodes inserted *before* (painted underneath) the
+/// principal for motion-blur or trail effects.
+///
 /// `stagger_delay` is the animation delay accumulated from ancestor
 /// containers' `stagger` fields.
 #[allow(clippy::too_many_arguments)]
@@ -169,7 +375,25 @@ fn build_child<'a>(
     anim: Option<BuildAnimationCtx>,
     path: String,
     stagger_delay: f64,
-) -> BoxNode {
+) -> Vec<BoxNode> {
+    // ── Ghost generation (motion_blur / trail) ───────────────────────────────
+    // Must happen before allocating the principal's id so that ghost ids are
+    // lower (earlier in the slot table). The principal's id is allocated below.
+    let mut ghosts: Vec<BoxNode> = Vec::new();
+    if let Some(actx) = anim {
+        if let Some(effects) = effective_effects(&child.component, stagger_delay) {
+            ghosts = build_ghosts(
+                child,
+                components,
+                stagger_delays,
+                next_id,
+                actx,
+                stagger_delay,
+                &effects,
+            );
+        }
+    }
+
     let id = *next_id;
     *next_id += 1;
     components.push(Some(child));
@@ -294,7 +518,7 @@ fn build_child<'a>(
     );
     let intrinsic = component_intrinsic(&child.component);
 
-    BoxNode {
+    let principal = BoxNode {
         id,
         kind: BoxKind::Component(Arc::new(id)),
         css,
@@ -302,7 +526,12 @@ fn build_child<'a>(
         intrinsic,
         source_path: Some(path),
         window,
-    }
+    };
+
+    // Ghosts prepended (painted underneath the principal).
+    let mut result = ghosts;
+    result.push(principal);
+    result
 }
 
 /// The full effect list for a component at paint time: `style.animation`,
@@ -575,21 +804,19 @@ fn container_children<'a>(
         _ => return Vec::new(),
     };
     let step = stagger.unwrap_or(0.0) as f64;
-    children
-        .iter()
-        .enumerate()
-        .map(|(j, c)| {
-            build_child(
-                c,
-                components,
-                stagger_delays,
-                next_id,
-                anim,
-                format!("{parent_path}/children/{j}"),
-                inherited_delay + j as f64 * step,
-            )
-        })
-        .collect()
+    let mut result = Vec::new();
+    for (j, c) in children.iter().enumerate() {
+        result.extend(build_child(
+            c,
+            components,
+            stagger_delays,
+            next_id,
+            anim,
+            format!("{parent_path}/children/{j}"),
+            inherited_delay + j as f64 * step,
+        ));
+    }
+    result
 }
 
 /// Pull the component's `CssStyle`, augmented with intrinsic `width`/`height`

@@ -361,6 +361,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let anim = Some(BuildAnimationCtx {
         time: ctx.time,
         scene_duration: ctx.scene_duration,
+        fps: ctx.fps,
     });
     let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css, anim);
     let layout = run_layout(
@@ -579,6 +580,7 @@ pub fn render_scene_hits(
     let anim = Some(BuildAnimationCtx {
         time,
         scene_duration: scene.duration,
+        fps: config.fps,
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
     let layout = run_layout(&built.root, (vw, vh), &ConversionContext::default());

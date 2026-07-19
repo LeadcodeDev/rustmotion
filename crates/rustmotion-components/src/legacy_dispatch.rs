@@ -383,6 +383,7 @@ mod tests {
                 crate::box_builder::BuildAnimationCtx {
                     time,
                     scene_duration: 1.0,
+                    fps: 30,
                 },
             );
             let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
