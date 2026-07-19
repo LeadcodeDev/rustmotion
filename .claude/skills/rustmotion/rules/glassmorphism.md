@@ -19,7 +19,7 @@ Sans bordure, la carte flotte sans contour visible.
 Sans ombre, elle ne se détache pas du fond.
 
 **Propriété correcte : `backdrop-filter`, pas `backdrop-blur`.**
-`backdrop-blur` n'existe pas dans CssStyle — utiliser `backdrop-filter` avec `{ "fn": "blur", "radius": N }`.
+`backdrop-blur` est accepté pour compat mais **jamais rendu** (le validateur émet un warning) — utiliser `backdrop-filter` avec `{ "fn": "blur", "radius": N }`. Idem pour `inner-shadow` → `box-shadow` avec `"inset": true`.
 
 ---
 
@@ -79,6 +79,43 @@ Règle du pouce : **hex opacity 12–30 sur fond sombre, 60–90 sur fond clair.
 ```
 
 Le `box-shadow` inset blanc (`offset-y: -1`) simule un reflet de lumière en haut de la carte — touche finale qui renforce l'effet verre.
+
+---
+
+## Grain « frosted glass » : le filtre `noise`
+
+Le vrai verre dépoli a une micro-texture. Le filtre `noise` (déterministe : même `seed` = même grain à chaque frame) s'ajoute à la chaîne `backdrop-filter` après le blur :
+
+```json
+{
+  "backdrop-filter": [
+    { "fn": "blur", "radius": 24 },
+    { "fn": "noise", "intensity": 0.12, "seed": 42 }
+  ]
+}
+```
+
+| Paramètre | Défaut | Plage utile |
+|---|---|---|
+| `intensity` | 0.15 | 0.08–0.20 (subtil), 0.25–0.40 (texture visible) |
+| `seed` | 42 | n'importe quel entier — varier entre panels pour éviter un grain identique |
+
+Le filtre marche aussi dans `filter` (grain sur le contenu de l'élément lui-même, style pellicule photo).
+
+---
+
+## Bordure gradient : `gradient-border`
+
+Alternative premium à la bordure translucide unie — un anneau dégradé, border-radius aware, peint **à la place** de `border` quand les deux sont présents :
+
+```json
+{
+  "border-radius": 32,
+  "gradient-border": { "colors": ["#FFFFFF50", "#FFFFFF08"], "width": 1.5, "angle": 180 }
+}
+```
+
+L'angle suit la même convention que les gradients `background`. Un dégradé blanc→transparent vertical simule la lumière qui accroche le haut de la carte.
 
 ---
 

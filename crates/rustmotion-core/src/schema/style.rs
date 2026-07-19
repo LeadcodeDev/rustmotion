@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::video::{
     AnimationEffect, BlendMode, CardBorder, CardShadow, DropShadow, Fill, FilterConfig,
-    GradientBorder, InnerShadow, Stroke, TextBackground, TextGradient, TextShadow,
+    GradientBorder, Stroke, TextBackground, TextGradient, TextShadow,
 };
 
 // --- Card types ---
@@ -389,9 +389,11 @@ pub struct LayerStyle {
     // Text highlight background
     #[serde(default, rename = "text-background")]
     pub text_background: Option<TextBackground>,
-    // Glassmorphism / advanced effects
-    #[serde(default, rename = "backdrop-blur")]
-    pub backdrop_blur: Option<f32>,
+    // Glassmorphism / advanced effects.
+    // `backdrop-blur` / `inner-shadow` were removed (issue #87): they were
+    // never consumed — the working equivalents are the CSS `backdrop-filter`
+    // and `box-shadow` with `inset: true`. `CssStyle` still accepts them for
+    // compat and the validator warns.
     #[serde(default, rename = "gradient-border")]
     pub gradient_border: Option<GradientBorder>,
     // Visual effects
@@ -407,9 +409,6 @@ pub struct LayerStyle {
     pub aspect_ratio: Option<f32>,
     #[serde(default, rename = "text-gradient")]
     pub text_gradient: Option<TextGradient>,
-    // Inner shadow (inset shadow)
-    #[serde(default, rename = "inner-shadow")]
-    pub inner_shadow: Option<InnerShadow>,
     // Motion path: SVG path string that elements follow
     #[serde(default, rename = "motion-path")]
     pub motion_path: Option<String>,
@@ -473,7 +472,6 @@ impl Default for LayerStyle {
             grid_column: None,
             grid_row: None,
             text_background: None,
-            backdrop_blur: None,
             gradient_border: None,
             filter: None,
             drop_shadow: None,
@@ -481,7 +479,6 @@ impl Default for LayerStyle {
             clip_path: None,
             aspect_ratio: None,
             text_gradient: None,
-            inner_shadow: None,
             motion_path: None,
             stagger: None,
             animation: Vec::new(),

@@ -310,8 +310,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext) {
         paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
     }
 
-    // 7. border
-    if let Some(border) = node.css.border.as_ref() {
+    // 7. border — `gradient-border` replaces the standard border when present
+    // (a box has one border, not two stacked ones).
+    if let Some(gb) = node.css.gradient_border.as_ref() {
+        paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
+    } else if let Some(border) = node.css.border.as_ref() {
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
@@ -389,12 +392,59 @@ fn filters_to_image_filter(
                     None,
                 )
             }
+            FilterFn::Noise { intensity, seed } => {
+                match noise_image_filter(*intensity, *seed) {
+                    // Sequential CSS composition: the chain so far is the
+                    // background, the grain layer blends on top of it.
+                    Some(noise) => image_filters::blend(
+                        skia_safe::BlendMode::Overlay,
+                        chain,
+                        Some(noise),
+                        None,
+                    ),
+                    None => chain,
+                }
+            }
             other => color_matrix_for(other)
                 .map(|m| skia_safe::color_filters::matrix_row_major(&m, None))
                 .and_then(|cf| image_filters::color_filter(cf, chain, None)),
         };
     }
     chain
+}
+
+/// Build the film-grain layer for `FilterFn::Noise` as an `ImageFilter`.
+///
+/// Composition formula:
+///   1. `fractal_noise(base_frequency = (0.9, 0.9), octaves = 2, seed)` —
+///      high frequency ⇒ fine per-pixel grain; the Skia Perlin shader is a
+///      pure function of (x, y, seed): no implicit time, so the grain is
+///      byte-identical across frames/renders for a given seed.
+///   2. A 4×5 color matrix collapses RGB to luminance (0.213/0.715/0.072) for
+///      monochrome grain and scales alpha by `intensity` (0..1).
+///   3. The caller blends the result over the chain input with
+///      `BlendMode::Overlay` — grain brightens/darkens the underlying pixels
+///      proportionally to the noise-layer alpha (`intensity`).
+fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilter> {
+    use skia_safe::image_filters;
+
+    let intensity = intensity.clamp(0.0, 1.0);
+    if intensity <= 0.0 {
+        return None;
+    }
+    let noise = skia_safe::shaders::fractal_noise((0.9, 0.9), 2, seed as f32, None)?;
+    // Luminance conversion + alpha scaling in one matrix.
+    let (r, g, b) = (0.213, 0.715, 0.072);
+    #[rustfmt::skip]
+    let m = [
+        r,   g,   b,   0.0,       0.0,
+        r,   g,   b,   0.0,       0.0,
+        r,   g,   b,   0.0,       0.0,
+        0.0, 0.0, 0.0, intensity, 0.0,
+    ];
+    let cf = skia_safe::color_filters::matrix_row_major(&m, None);
+    let mono = noise.with_color_filter(cf);
+    image_filters::shader(mono, None)
 }
 
 /// 4x5 row-major color matrix for a CSS color filter function (translation
@@ -486,7 +536,7 @@ fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
             ];
             Some(m)
         }
-        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } => None,
+        FilterFn::Blur { .. } | FilterFn::DropShadow { .. } | FilterFn::Noise { .. } => None,
     }
 }
 
@@ -973,6 +1023,80 @@ fn paint_border(
     paint.set_color(color);
 
     // Use DRRect = outer minus inner for an accurate stroked border with radius.
+    canvas.draw_drrect(outer, inner, &paint);
+}
+
+/// Paint a gradient-colored border ring (issue #87).
+///
+/// Painted **instead of** the standard `border` when both are set. Unlike
+/// `border`, `gradient-border` is a pure paint decoration: it does not consume
+/// layout space (taffy never sees it), the ring is inset from the border-box
+/// edge by `gb.width`.
+///
+/// The gradient is linear along `gb.angle` with the **same angle convention as
+/// `background` linear gradients** (see [`gradient_endpoints`]) so the two
+/// stay visually consistent within one style block. Colors are evenly spaced.
+fn paint_gradient_border(
+    canvas: &Canvas,
+    layout: &BoxLayout,
+    css: &CssStyle,
+    gb: &crate::schema::GradientBorder,
+    ctx: &LengthContext,
+) {
+    if gb.colors.len() < 2 || gb.width <= 0.0 {
+        return;
+    }
+    let width = gb.width.min(layout.width / 2.0).min(layout.height / 2.0);
+
+    let radius = css
+        .border_radius
+        .as_ref()
+        .map(|r| resolve_border_radius(r, layout, ctx))
+        .unwrap_or([0.0; 4]);
+
+    // Outer ring edge = border box; inner edge = inset by the border width.
+    let outer = border_rrect(layout, radius);
+    let inner_rect = Rect::from_xywh(
+        layout.x + width,
+        layout.y + width,
+        (layout.width - width * 2.0).max(0.0),
+        (layout.height - width * 2.0).max(0.0),
+    );
+    let inner_radius = [
+        (radius[0] - width).max(0.0),
+        (radius[1] - width).max(0.0),
+        (radius[2] - width).max(0.0),
+        (radius[3] - width).max(0.0),
+    ];
+    let inner = rrect_from_corners(inner_rect, inner_radius);
+
+    let colors: Vec<SColor> = gb
+        .colors
+        .iter()
+        .map(|c| parse_color_string(c).unwrap_or(SColor::BLACK))
+        .collect();
+    let n = colors.len();
+    let positions: Vec<f32> = (0..n)
+        .map(|i| i as f32 / (n.saturating_sub(1).max(1) as f32))
+        .collect();
+
+    let bounds = outer.bounds();
+    let (p0, p1) = gradient_endpoints(*bounds, gb.angle);
+    let Some(shader) = skia_safe::gradient_shader::linear(
+        (p0, p1),
+        colors.as_slice(),
+        positions.as_slice(),
+        skia_safe::TileMode::Clamp,
+        None,
+        None,
+    ) else {
+        return;
+    };
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_shader(shader);
     canvas.draw_drrect(outer, inner, &paint);
 }
 
@@ -1825,6 +1949,428 @@ mod transform_origin_tests {
             red_count > 0,
             "expected some red pixels with distinct origins"
         );
+    }
+}
+
+#[cfg(test)]
+mod glassmorphism_tests {
+    //! TDD tests for issue #87: gradient-border painting and the `noise`
+    //! filter function (film grain, deterministic per seed).
+
+    use super::*;
+
+    use crate::css::style::{
+        Background, Color as CssColor, CssStyle, Display, FilterFn, FlexDirection, Position,
+        Size as CSize,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+    use crate::schema::GradientBorder;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn px(buf: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+    }
+
+    /// Unique (r,g,b,a) values within a rectangular region.
+    fn unique_colors_in(
+        buf: &[u8],
+        w: u32,
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+    ) -> std::collections::HashSet<(u8, u8, u8, u8)> {
+        let mut set = std::collections::HashSet::new();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                set.insert(px(buf, w, x, y));
+            }
+        }
+        set
+    }
+
+    fn leaf(css: CssStyle) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn root_node(w: f32, h: f32, background: Option<&str>, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: background.map(|c| Background::Color(CssColor::String(c.to_string()))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn abs_box(x: f32, y: f32, w: f32, h: f32, css_extra: CssStyle) -> BoxNode {
+        let mut css = css_extra;
+        css.position = Some(Position::Absolute);
+        css.left = Some(CLP::Px(x));
+        css.top = Some(CLP::Px(y));
+        css.width = Some(CSize::Length(CLP::Px(w)));
+        css.height = Some(CSize::Length(CLP::Px(h)));
+        leaf(css)
+    }
+
+    // ---- gradient-border ----
+
+    #[test]
+    fn gradient_border_paints_both_colors_on_perimeter_center_intact() {
+        // 200x200 box at (100, 100) on a white root; gradient-border 12px
+        // red→blue along the horizontal axis (angle 90). Expect: one vertical
+        // border edge red-dominant, the other blue-dominant, centre untouched.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 12.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        // Sample border midpoints: left edge (x=106, y=200), right edge (x=294, y=200).
+        let left = px(&buf, 400, 106, 200);
+        let right = px(&buf, 400, 294, 200);
+
+        // One side red-dominant, the other blue-dominant (convention-agnostic).
+        let red_side = if left.0 > left.2 { left } else { right };
+        let blue_side = if left.0 > left.2 { right } else { left };
+        assert!(
+            red_side.0 > 150 && red_side.2 < 100,
+            "expected a red-dominant border edge, got {red_side:?}"
+        );
+        assert!(
+            blue_side.2 > 150 && blue_side.0 < 100,
+            "expected a blue-dominant border edge, got {blue_side:?}"
+        );
+        // Both extremes must actually differ (it's a gradient, not a flat color).
+        assert_ne!(
+            left, right,
+            "border edges must show different gradient stops"
+        );
+
+        // Centre of the box stays the root background (white).
+        let center = px(&buf, 400, 200, 200);
+        assert_eq!(
+            center,
+            (255, 255, 255, 255),
+            "box centre must not be painted by the gradient border"
+        );
+
+        // Top border midpoint is painted (not background).
+        let top_mid = px(&buf, 400, 200, 106);
+        assert_ne!(
+            top_mid,
+            (255, 255, 255, 255),
+            "top border edge must be painted"
+        );
+    }
+
+    #[test]
+    fn gradient_border_respects_border_radius() {
+        use crate::css::style::BorderRadius;
+        // Rounded 200x200 box: the square corner pixel must stay background,
+        // while edge midpoints are painted.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                border_radius: Some(BorderRadius::Uniform(CLP::Px(60.0))),
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 10.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        // Square corner (inside the box bounds but outside the rounded path).
+        let corner = px(&buf, 400, 104, 104);
+        assert_eq!(
+            corner,
+            (255, 255, 255, 255),
+            "square corner must stay background with border-radius"
+        );
+        // Edge midpoints painted.
+        let left_mid = px(&buf, 400, 104, 200);
+        let top_mid = px(&buf, 400, 200, 104);
+        assert_ne!(left_mid, (255, 255, 255, 255), "left edge must be painted");
+        assert_ne!(top_mid, (255, 255, 255, 255), "top edge must be painted");
+    }
+
+    #[test]
+    fn gradient_border_replaces_standard_border() {
+        use crate::css::style::{BorderEdges, BorderStyle, Edges};
+        // A node with BOTH border (solid green) and gradient-border (red/blue):
+        // the gradient border wins; no green pixels appear.
+        let node = abs_box(
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            CssStyle {
+                border: Some(BorderEdges {
+                    width: Some(Edges::Uniform(CLP::Px(10.0))),
+                    style: Some(BorderStyle::Solid),
+                    color: Some(CssColor::String("#00ff00".into())),
+                    ..Default::default()
+                }),
+                gradient_border: Some(GradientBorder {
+                    colors: vec!["#ff0000".into(), "#0000ff".into()],
+                    width: 10.0,
+                    angle: 90.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        let green_pixels = buf
+            .chunks(4)
+            .filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60)
+            .count();
+        assert_eq!(
+            green_pixels, 0,
+            "standard border must not be painted when gradient-border is set"
+        );
+    }
+
+    // ---- noise filter ----
+
+    fn gray_box_with_filter(filter: Option<Vec<FilterFn>>) -> BoxNode {
+        abs_box(
+            50.0,
+            50.0,
+            200.0,
+            200.0,
+            CssStyle {
+                background: Some(Background::Color(CssColor::String("#808080".into()))),
+                filter,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn noise_filter_explodes_unique_color_count() {
+        let mut root_plain = root_node(
+            300.0,
+            300.0,
+            Some("#ffffff"),
+            vec![gray_box_with_filter(None)],
+        );
+        let buf_plain = render_pixels(&mut root_plain, 300, 300);
+
+        let mut root_noise = root_node(
+            300.0,
+            300.0,
+            Some("#ffffff"),
+            vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                intensity: 0.5,
+                seed: 42,
+            }]))],
+        );
+        let buf_noise = render_pixels(&mut root_noise, 300, 300);
+
+        // Sample well inside the box to avoid AA edges.
+        let plain = unique_colors_in(&buf_plain, 300, 70, 70, 230, 230);
+        let noisy = unique_colors_in(&buf_noise, 300, 70, 70, 230, 230);
+        assert!(
+            plain.len() <= 4,
+            "plain box interior should be near-uniform, got {} colors",
+            plain.len()
+        );
+        assert!(
+            noisy.len() > 50,
+            "noise filter should explode the unique color count, got {}",
+            noisy.len()
+        );
+    }
+
+    #[test]
+    fn noise_same_seed_is_byte_identical_across_renders() {
+        let render = || {
+            let mut root = root_node(
+                300.0,
+                300.0,
+                Some("#ffffff"),
+                vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                    intensity: 0.4,
+                    seed: 7,
+                }]))],
+            );
+            render_pixels(&mut root, 300, 300)
+        };
+        let a = render();
+        let b = render();
+        assert_eq!(a, b, "same seed must produce byte-identical grain");
+    }
+
+    #[test]
+    fn noise_different_seeds_differ() {
+        let render = |seed: u64| {
+            let mut root = root_node(
+                300.0,
+                300.0,
+                Some("#ffffff"),
+                vec![gray_box_with_filter(Some(vec![FilterFn::Noise {
+                    intensity: 0.4,
+                    seed,
+                }]))],
+            );
+            render_pixels(&mut root, 300, 300)
+        };
+        let a = render(1);
+        let b = render(2);
+        assert_ne!(a, b, "different seeds must produce different grain");
+    }
+
+    #[test]
+    fn backdrop_noise_grains_only_the_panel_region() {
+        // Uniform gray root; a panel at (50, 50, 100, 100) with
+        // backdrop-filter noise. Inside the panel: grain (many colors).
+        // Outside: untouched uniform gray.
+        let panel = abs_box(
+            50.0,
+            50.0,
+            100.0,
+            100.0,
+            CssStyle {
+                backdrop_filter: Some(vec![FilterFn::Noise {
+                    intensity: 0.5,
+                    seed: 42,
+                }]),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(300.0, 300.0, Some("#808080"), vec![panel]);
+        let buf = render_pixels(&mut root, 300, 300);
+
+        let inside = unique_colors_in(&buf, 300, 60, 60, 140, 140);
+        let outside = unique_colors_in(&buf, 300, 180, 180, 280, 280);
+        assert!(
+            inside.len() > 30,
+            "panel interior should be grained, got {} colors",
+            inside.len()
+        );
+        assert_eq!(
+            outside.len(),
+            1,
+            "outside the panel must stay uniform, got {} colors",
+            outside.len()
+        );
+    }
+
+    // ---- serde ----
+
+    #[test]
+    fn css_gradient_border_and_noise_deserialize() {
+        let json = r##"{
+            "gradient-border": { "colors": ["#ff0000", "#0000ff"], "width": 3, "angle": 45 },
+            "filter": [{ "fn": "noise", "intensity": 0.3, "seed": 9 }],
+            "backdrop-filter": [{ "fn": "noise" }]
+        }"##;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let gb = s.gradient_border.expect("gradient-border parsed");
+        assert_eq!(gb.colors.len(), 2);
+        assert_eq!(gb.width, 3.0);
+        assert_eq!(gb.angle, 45.0);
+        assert!(matches!(
+            s.filter.as_deref(),
+            Some([FilterFn::Noise {
+                intensity,
+                seed: 9
+            }]) if (intensity - 0.3).abs() < 1e-6
+        ));
+        // Defaults: intensity 0.15, seed 42.
+        assert!(matches!(
+            s.backdrop_filter.as_deref(),
+            Some([FilterFn::Noise {
+                intensity,
+                seed: 42
+            }]) if (intensity - 0.15).abs() < 1e-6
+        ));
+    }
+
+    #[test]
+    fn css_legacy_zombies_accepted() {
+        // backdrop-blur / inner-shadow parse into CssStyle (accepted for
+        // compat) — rendering is intentionally not wired; validate warns.
+        let json = r##"{
+            "backdrop-blur": 20,
+            "inner-shadow": { "color": "#000000", "offset_x": 0, "offset_y": 2, "blur": 8 }
+        }"##;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        assert_eq!(s.backdrop_blur, Some(20.0));
+        assert!(s.inner_shadow.is_some());
     }
 }
 

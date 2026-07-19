@@ -600,7 +600,7 @@ pub struct CardBorder {
     pub width: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GradientBorder {
     pub colors: Vec<String>,
     #[serde(default = "default_gradient_border_width")]
@@ -625,7 +625,7 @@ pub struct CardShadow {
 }
 
 /// Inner shadow configuration (inset shadow).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InnerShadow {
     pub color: String,
     #[serde(default)]
