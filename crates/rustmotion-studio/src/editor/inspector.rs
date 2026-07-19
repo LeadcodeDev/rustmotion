@@ -610,6 +610,9 @@ pub fn InspectorPanel(
 ) -> Element {
     // Provide the debounce handle so all child write helpers share one slot.
     use_context_provider(|| WriteDebounce(Rc::new(RefCell::new(None))));
+    // One expanded color picker at a time across the whole panel.
+    let open_picker = use_signal(|| None::<u64>);
+    use_context_provider(|| crate::components::color_picker::OpenPicker(open_picker));
     let fam = family(&kind);
     rsx! {
         div { style: "width:300px; flex:none; min-height:0; background:var(--rm-surface); border-left:1px solid var(--rm-border); box-sizing:border-box; display:flex; flex-direction:column; overflow:auto;",
@@ -969,7 +972,7 @@ fn GenericRow(
             let pick_commit = commit.clone();
             let hex_commit = commit.clone();
             rsx! {
-                div { style: "display:flex; align-items:center; gap:6px; width:100%;",
+                div { style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px; width:100%;",
                     ColorPicker {
                         color: color(),
                         on_color_change: move |c: Hsv<encoding::Srgb, f64>| {
@@ -1422,7 +1425,7 @@ fn FieldRow(field: Field, pointer: String, style: serde_json::Value) -> Element 
         Ctrl::Color { clearable } => {
             let mut color = use_signal(|| parse_hsv(&value));
             rsx! {
-                div { style: "display:flex; align-items:center; gap:6px; width:100%;",
+                div { style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px; width:100%;",
                     ColorPicker {
                         color: color(),
                         on_color_change: {
@@ -1602,7 +1605,7 @@ fn NumberListControl(pointer: String, name: String, value: String) -> Element {
     rsx! {
         div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
             for (i, e) in entries().iter().cloned().enumerate() {
-                div { key: "{i}", style: "display:flex; align-items:center; gap:6px;",
+                div { key: "{i}", style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
                     input {
                         r#type: "number",
                         step: "0.1",
@@ -1664,7 +1667,7 @@ fn ColorRows(colors: Signal<Vec<String>>, on_change: EventHandler<()>) -> Elemen
     rsx! {
         div { style: "display:flex; flex-direction:column; gap:6px; width:100%;",
             for (i, c) in colors().iter().cloned().enumerate() {
-                div { key: "{i}", style: "display:flex; align-items:center; gap:6px;",
+                div { key: "{i}", style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
                     ColorPicker {
                         color: parse_hsv(&c),
                         on_color_change: {
@@ -1807,7 +1810,7 @@ fn FillControl(pointer: String, name: String, value: String) -> Element {
                 {seg(FillMode::Radial, "Radial")}
             }
             if mode() == FillMode::Single {
-                div { style: "display:flex; align-items:center; gap:6px;",
+                div { style: "display:flex; flex-wrap:wrap; align-items:center; gap:6px;",
                     ColorPicker {
                         color: parse_hsv(colors.read().first().map(String::as_str).unwrap_or("#ffffff")),
                         on_color_change: {
