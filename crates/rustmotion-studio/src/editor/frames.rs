@@ -186,6 +186,15 @@ mod tests {
     }
 
     #[test]
+    fn renders_frame_at_reduced_scale() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let jpeg = render_frame(&scenario, &tasks, 0, 0.5);
+        let img = image::load_from_memory(&jpeg).expect("decodable JPEG");
+        assert_eq!((img.width(), img.height()), (640, 360), "half of 1280x720");
+    }
+
+    #[test]
     fn frame_hits_are_in_percent_and_have_kind() {
         let json = r##"{ "video": { "width": 800, "height": 600, "background": "#101418" }, "scenes": [ { "duration": 1.0, "children": [ { "type": "text", "content": "Hi", "style": { "font-size": 40 } } ] } ] }"##;
         let scenario = rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap();

@@ -16,7 +16,9 @@ use super::inspector::InspectorPanel;
 use super::playback::{
     playback_action, use_hot_reload, use_playback_clock, PlaybackAction, PlaybackBar,
 };
-use super::prefetch::{frame_cache, use_prefetch_publisher, FrameKey};
+use super::prefetch::{
+    frame_cache, preview_scale_pct, scale_factor, use_prefetch_publisher, FrameKey,
+};
 use super::topbar::TopBar;
 
 /// The hot-reload revision signal, exposed via context so the optimistic edit
@@ -58,6 +60,10 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     // Diff/review mode: toggle + which state the canvas shows (A = baseline).
     let diff_active = use_signal(|| false);
     let diff_side = use_signal(|| DiffSide::B);
+    // Preview render scale (percent). The atomic is the source of truth for
+    // the render threads; this signal mirrors it for the UI (selector value,
+    // <img> URL cache-bust).
+    let preview_scale = use_signal(preview_scale_pct);
 
     // Asset handler: GET /frame/{idx} -> JPEG of that frame. `?side=a` renders
     // the BASELINE scenario instead (diff mode flip). Cache-first: a prefetched
@@ -94,6 +100,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                             generation: hash,
                             side: DiffSide::A,
                             frame: idx,
+                            scale_pct: preview_scale_pct(),
                         };
                         serve_or_render(key, idx, &scenario, &tasks, None)
                     }
@@ -108,6 +115,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                     generation,
                     side: DiffSide::B,
                     frame: idx,
+                    scale_pct: preview_scale_pct(),
                 };
                 serve_or_render(key, idx, &scenario, &tasks, Some(generation))
             };
@@ -317,8 +325,8 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             }
             div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
                 div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
-                    Canvas { current, rev, show_hits, selected, diff_active, diff_side, diff_marks }
-                    PlaybackBar { current, playing, total, diff_active, diff_side }
+                    Canvas { current, rev, show_hits, selected, diff_active, diff_side, diff_marks, preview_scale }
+                    PlaybackBar { current, playing, total, diff_active, diff_side, preview_scale }
                 }
                 div {
                     style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
@@ -364,7 +372,7 @@ fn serve_or_render(
         return Ok((*bytes).clone());
     }
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        render_frame(scenario, tasks, idx, 1.0)
+        render_frame(scenario, tasks, idx, scale_factor(key.scale_pct))
     }))
     .map_err(|_| ())?;
     let (gen_b, gen_a) = match key.side {
@@ -374,7 +382,7 @@ fn serve_or_render(
     frame_cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(key, rendered.clone(), gen_b, gen_a, idx);
+        .insert(key, rendered.clone(), gen_b, gen_a, idx, key.scale_pct);
     Ok(rendered)
 }
 
@@ -393,6 +401,7 @@ fn Canvas(
     diff_active: Signal<bool>,
     diff_side: Signal<DiffSide>,
     diff_marks: Vec<(String, ChangeKind)>,
+    preview_scale: Signal<u16>,
 ) -> Element {
     let shared = use_context::<Shared>();
     // Arc snapshots under a brief lock; the hit-map layout render below runs
@@ -405,6 +414,9 @@ fn Canvas(
     let max = (tasks.len() as u32).saturating_sub(1);
     let cur = current().min(max);
     let r = rev();
+    // In the URL purely as a cache-buster: a scale change re-requests the
+    // frame (the handler reads the scale itself from the atomic).
+    let s = preview_scale();
     let side_a = diff_active() && diff_side() == DiffSide::A;
     let side_suffix = if side_a { "&side=a" } else { "" };
 
@@ -431,7 +443,7 @@ fn Canvas(
             // overlay stays exactly aligned.
             div { style: "position:relative; aspect-ratio:{vw} / {vh}; max-width:100%; max-height:100%; min-width:0; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
                 img {
-                    src: "/frame/{cur}?v={r}{side_suffix}",
+                    src: "/frame/{cur}?v={r}&s={s}{side_suffix}",
                     style: "display:block; width:100%; height:100%;",
                 }
                 Overlay { hits, selected, diff_marks }
