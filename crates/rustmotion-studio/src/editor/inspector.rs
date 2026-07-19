@@ -12,9 +12,12 @@ use crate::components::color_picker::ColorPicker;
 use crate::components::select::{Select, SelectOption};
 use crate::components::slider::Slider;
 use crate::components::switch::Switch;
-use crate::scenario::{set_field, set_style, Shared};
+use crate::scenario::{set_field, set_field_value, set_style, set_style_value, Shared};
 
 use super::annotations::AnnotationBox;
+use super::properties::{
+    component_props, css_family, css_section_props, slider_range, visible_sections, PropKind,
+};
 
 // ── Debounce context ─────────────────────────────────────────────────────────
 
@@ -573,10 +576,12 @@ fn num_display(value: &str, step: f64) -> String {
 
 // ── Panel ────────────────────────────────────────────────────────────────────
 
-/// The right-hand inspector for the selected element: header, the content
-/// editor (text family only), the per-type style sections, and the
-/// "comment for the agent" box. Driven by frame-independent values, so it stays
-/// memoized and doesn't re-render on playback.
+/// The right-hand inspector for the selected element: header, the schema-driven
+/// Properties section (component root fields), the content editor (text family
+/// only), the curated per-type style sections, the generic (schema-complete)
+/// CSS sections, and the "comment for the agent" box. Driven by
+/// frame-independent values, so it stays memoized and doesn't re-render on
+/// playback.
 #[component]
 pub fn InspectorPanel(
     selected: Signal<Option<(u32, String, String)>>,
@@ -585,6 +590,7 @@ pub fn InspectorPanel(
     current: Signal<u32>,
     content: Option<String>,
     style: serde_json::Value,
+    element: serde_json::Value,
 ) -> Element {
     // Provide the debounce handle so all child write helpers share one slot.
     use_context_provider(|| WriteDebounce(Rc::new(RefCell::new(None))));
@@ -606,6 +612,7 @@ pub fn InspectorPanel(
                     "✕"
                 }
             }
+            RootPropsSection { pointer: pointer.clone(), kind: kind.clone(), element }
             if fam == Family::Text {
                 ContentEditor { pointer: pointer.clone(), content: content.clone().unwrap_or_default() }
             }
@@ -617,7 +624,351 @@ pub fn InspectorPanel(
                     style: style.clone(),
                 }
             }
+            GenericCssSections { pointer: pointer.clone(), kind: kind.clone(), style: style.clone() }
             AnnotationBox { pointer, kind, current }
+        }
+    }
+}
+
+/// Names already handled by the curated controls for a family — the generic
+/// sections skip these so no property appears twice.
+fn curated_names(fam: Family) -> std::collections::BTreeSet<&'static str> {
+    let mut set = std::collections::BTreeSet::new();
+    for section in sections(fam) {
+        for field in section.fields {
+            set.insert(field.name);
+            if matches!(field.ctrl, Ctrl::StyleToggles) {
+                set.insert("font-weight");
+                set.insert("font-style");
+            }
+        }
+    }
+    set
+}
+
+/// Schema-driven "Properties" section: the component's editable root fields
+/// (counter `from`/`to`/`decimals`…, badge `label`…), typed writes. `content`
+/// is skipped for the text family (the Content editor owns it).
+#[component]
+fn RootPropsSection(pointer: String, kind: String, element: serde_json::Value) -> Element {
+    let Some(props) = component_props(&kind) else {
+        return rsx! {};
+    };
+    let skip_content = family(&kind) == Family::Text;
+    let rows: Vec<_> = props
+        .iter()
+        .filter(|p| !(skip_content && p.name == "content"))
+        .collect();
+    if rows.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        CollapsibleSection { title: "Properties".to_string(), start_open: true,
+            for spec in rows {
+                GenericRow {
+                    key: "{pointer}-root-{spec.name}",
+                    pointer: pointer.clone(),
+                    name: spec.name.clone(),
+                    prop_kind: spec.kind.clone(),
+                    value: prop_str(&element, &spec.name),
+                    is_style: false,
+                }
+            }
+        }
+    }
+}
+
+/// The schema-complete CSS sections for the component's family, minus every
+/// property the curated controls already expose. Collapsed by default.
+#[component]
+fn GenericCssSections(pointer: String, kind: String, style: serde_json::Value) -> Element {
+    let curated = curated_names(family(&kind));
+    let sections_for_family = visible_sections(css_family(&kind));
+    rsx! {
+        for section in sections_for_family {
+            {
+                let props: Vec<_> = css_section_props(section)
+                    .into_iter()
+                    .filter(|p| !curated.contains(p.name.as_str()))
+                    .collect();
+                rsx! {
+                    if !props.is_empty() {
+                        CollapsibleSection {
+                            key: "{pointer}-{section.label()}",
+                            title: section.label().to_string(),
+                            start_open: false,
+                            for spec in props {
+                                GenericRow {
+                                    key: "{pointer}-css-{spec.name}",
+                                    pointer: pointer.clone(),
+                                    name: spec.name.clone(),
+                                    prop_kind: spec.kind.clone(),
+                                    value: prop_str(&style, &spec.name),
+                                    is_style: true,
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A section with a clickable header that folds its rows.
+#[component]
+fn CollapsibleSection(title: String, start_open: bool, children: Element) -> Element {
+    let mut open = use_signal(|| start_open);
+    let chevron = if open() { "▾" } else { "▸" };
+    rsx! {
+        div { style: "display:flex; flex-direction:column; gap:8px; padding:12px 14px; border-top:1px solid var(--rm-border);",
+            div {
+                style: "{SECTION_HEADER} cursor:pointer; user-select:none;",
+                onclick: move |_| open.set(!open()),
+                "{chevron} {title}"
+            }
+            if open() {
+                {children}
+            }
+        }
+    }
+}
+
+/// Parse a generic control's text into the TYPED JSON value written to a root
+/// field. Empty → `Null` (remove). Numbers stay numbers (integral floats
+/// become JSON integers so `u8`-style fields deserialize), bools bools,
+/// Complex must be valid JSON.
+fn parse_root_value(kind: &PropKind, text: &str) -> Result<serde_json::Value, ()> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    Ok(match kind {
+        PropKind::Number => {
+            let f: f64 = t.parse().map_err(|_| ())?;
+            if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+                serde_json::Value::from(f as i64)
+            } else {
+                serde_json::Value::from(f)
+            }
+        }
+        PropKind::Bool => serde_json::Value::Bool(t == "true"),
+        PropKind::Complex => serde_json::from_str(t).map_err(|_| ())?,
+        _ => serde_json::Value::String(text.to_string()),
+    })
+}
+
+/// One generic (schema-driven) property row. `is_style` picks the write path:
+/// style properties write CSS strings (an emptied control REMOVES the
+/// declaration); root fields write typed JSON (empty removes the field /
+/// HTML attribute).
+#[component]
+fn GenericRow(
+    pointer: String,
+    name: String,
+    prop_kind: PropKind,
+    value: String,
+    is_style: bool,
+) -> Element {
+    let shared = use_context::<Shared>();
+
+    // Single write route shared by every control variant.
+    let commit: Rc<dyn Fn(&str)> = {
+        let shared = shared.clone();
+        let p = pointer.clone();
+        let n = name.clone();
+        let k = prop_kind.clone();
+        Rc::new(move |text: &str| {
+            if is_style {
+                if text.trim().is_empty() {
+                    write_style_removal(&shared, &p, &n);
+                } else {
+                    write_prop(&shared, &p, &n, text);
+                }
+            } else if let Ok(v) = parse_root_value(&k, text) {
+                write_root_field(&shared, &p, &n, v);
+            }
+        })
+    };
+
+    let control = match prop_kind.clone() {
+        PropKind::Bool => {
+            let commit = commit.clone();
+            rsx! {
+                Switch {
+                    default_checked: value == "true",
+                    on_checked_change: move |checked: bool| {
+                        commit(if checked { "true" } else { "false" })
+                    },
+                }
+            }
+        }
+        PropKind::Enum(variants) => {
+            let mut items = variants;
+            if !value.is_empty() && !items.iter().any(|o| o == &value) {
+                items.insert(0, value.clone());
+            }
+            let options = items.iter().enumerate().map(|(i, opt)| {
+                rsx! {
+                    SelectOption::<String> { key: "{opt}", index: i, value: opt.clone(), text_value: "{opt}", "{opt}" }
+                }
+            });
+            let commit = commit.clone();
+            rsx! {
+                Select::<String> {
+                    width: "100%",
+                    default_value: if value.is_empty() { None } else { Some(value.clone()) },
+                    on_value_change: move |v: Option<String>| {
+                        if let Some(v) = v {
+                            commit(&v);
+                        }
+                    },
+                    {options}
+                }
+            }
+        }
+        PropKind::Color => {
+            let mut color = use_signal(|| parse_hsv(&value));
+            let pick_commit = commit.clone();
+            let hex_commit = commit.clone();
+            rsx! {
+                div { style: "display:flex; align-items:center; gap:6px; width:100%;",
+                    ColorPicker {
+                        color: color(),
+                        on_color_change: move |c: Hsv<encoding::Srgb, f64>| {
+                            color.set(c);
+                            pick_commit(&hsv_to_hex(c));
+                        },
+                    }
+                    input {
+                        r#type: "text",
+                        style: "{HEX_STYLE}",
+                        value: "{value}",
+                        oninput: move |e: FormEvent| {
+                            let v = e.value();
+                            if v.trim_start_matches('#').len() >= 6 {
+                                color.set(parse_hsv(&v));
+                            }
+                            hex_commit(&v);
+                        },
+                    }
+                }
+            }
+        }
+        PropKind::Number => {
+            if let Some((min, max, step)) = slider_range(&name) {
+                let mut num = use_signal(|| parse_num(&value).unwrap_or(min));
+                let mut txt = use_signal(|| num_display(&value, step));
+                let slide_commit = commit.clone();
+                let type_commit = commit.clone();
+                rsx! {
+                    div { style: "display:flex; align-items:center; gap:8px; width:100%;",
+                        div { style: "flex:1; min-width:0;",
+                            Slider {
+                                value: Some(num()),
+                                min,
+                                max,
+                                step,
+                                on_value_change: move |v: f64| {
+                                    num.set(v);
+                                    txt.set(fmt_num(v, step));
+                                    slide_commit(&fmt_num(v, step));
+                                },
+                            }
+                        }
+                        input {
+                            r#type: "text",
+                            style: "{NUM_STYLE}",
+                            value: "{txt}",
+                            oninput: move |e: FormEvent| {
+                                let raw = e.value();
+                                txt.set(raw.clone());
+                                if let Some(v) = parse_num(&raw) {
+                                    num.set(v);
+                                }
+                                type_commit(&raw);
+                            },
+                        }
+                    }
+                }
+            } else {
+                let commit = commit.clone();
+                rsx! {
+                    input {
+                        r#type: "text",
+                        style: "{INPUT_STYLE}",
+                        value: "{value}",
+                        oninput: move |e: FormEvent| commit(&e.value()),
+                    }
+                }
+            }
+        }
+        PropKind::Unit | PropKind::String => {
+            let commit = commit.clone();
+            rsx! {
+                input {
+                    r#type: "text",
+                    style: "{INPUT_STYLE}",
+                    value: "{value}",
+                    oninput: move |e: FormEvent| commit(&e.value()),
+                }
+            }
+        }
+        PropKind::Complex => {
+            let commit = commit.clone();
+            rsx! {
+                JsonArea {
+                    initial: value.clone(),
+                    on_commit: move |text: String| commit(&text),
+                }
+            }
+        }
+    };
+
+    rsx! {
+        div { style: "display:flex; align-items:center; gap:8px; min-height:26px;",
+            span {
+                style: "width:76px; flex:none; color:var(--rm-text-muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
+                title: "{name}",
+                "{name}"
+            }
+            div { style: "flex:1; min-width:0; display:flex; justify-content:flex-end;", {control} }
+        }
+    }
+}
+
+/// Folded JSON editor for Complex values: parse-checked on blur; invalid input
+/// shows an error border and never writes.
+#[component]
+fn JsonArea(initial: String, on_commit: EventHandler<String>) -> Element {
+    let mut txt = use_signal(|| initial.clone());
+    let mut bad = use_signal(|| false);
+    let border = if bad() {
+        "var(--rm-error)"
+    } else {
+        "var(--rm-border-2)"
+    };
+    rsx! {
+        textarea {
+            style: "width:100%; box-sizing:border-box; min-height:44px; resize:vertical; padding:6px 8px; background:var(--rm-bg); color:var(--rm-text); border:1px solid {border}; border-radius:6px; font-size:11px; font-family:monospace;",
+            value: "{txt}",
+            oninput: move |e: FormEvent| {
+                txt.set(e.value());
+                bad.set(false);
+            },
+            onblur: move |_| {
+                let t = txt();
+                let trimmed = t.trim().to_string();
+                if trimmed.is_empty() {
+                    bad.set(false);
+                    on_commit.call(String::new());
+                } else if serde_json::from_str::<serde_json::Value>(&trimmed).is_ok() {
+                    bad.set(false);
+                    on_commit.call(trimmed);
+                } else {
+                    bad.set(true);
+                }
+            },
         }
     }
 }
@@ -970,7 +1321,7 @@ enum WritePayload {
         path: std::path::PathBuf,
         raw: serde_json::Value,
         pointer: String,
-        prop: &'static str,
+        prop: String,
         value: String,
     },
     Content {
@@ -979,13 +1330,42 @@ enum WritePayload {
         pointer: String,
         text: String,
     },
+    /// Typed root-field write (`Value::Null` removes the field / attribute).
+    RootField {
+        path: std::path::PathBuf,
+        raw: serde_json::Value,
+        pointer: String,
+        field: String,
+        value: serde_json::Value,
+    },
+    /// Remove one style property (emptied generic control).
+    StyleRemove {
+        path: std::path::PathBuf,
+        raw: serde_json::Value,
+        pointer: String,
+        prop: String,
+    },
 }
 
 impl WritePayload {
     fn path(&self) -> &std::path::Path {
         match self {
-            WritePayload::Prop { path, .. } | WritePayload::Content { path, .. } => path,
+            WritePayload::Prop { path, .. }
+            | WritePayload::Content { path, .. }
+            | WritePayload::RootField { path, .. }
+            | WritePayload::StyleRemove { path, .. } => path,
         }
+    }
+}
+
+/// A root-field JSON value as an HTML attribute string. `Null` → empty (which
+/// [`rustmotion::loader::set_html_attribute`] treats as "remove"); complex
+/// values are compact JSON (attributes are strings; the transpiler coerces).
+fn root_value_to_attr(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -1093,14 +1473,63 @@ fn perform_write(payload: &WritePayload) -> Result<bool, String> {
             }
             Ok(false)
         }
+        WritePayload::RootField {
+            path,
+            raw,
+            pointer,
+            field,
+            value,
+        } => {
+            if rustmotion::loader::is_html_path(path) {
+                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+                let attr = root_value_to_attr(value);
+                if let Some(updated) =
+                    rustmotion::loader::set_html_attribute(&html, pointer, field, &attr)
+                {
+                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    return Ok(true);
+                }
+            } else if let Some(updated) =
+                set_field_value(raw.clone(), pointer, field, value.clone())
+            {
+                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
+                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        WritePayload::StyleRemove {
+            path,
+            raw,
+            pointer,
+            prop,
+        } => {
+            if rustmotion::loader::is_html_path(path) {
+                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+                if let Some(updated) =
+                    rustmotion::loader::remove_html_inline_style(&html, pointer, prop)
+                {
+                    std::fs::write(path, updated).map_err(|e| format!("write: {e}"))?;
+                    return Ok(true);
+                }
+            } else if let Some(updated) =
+                set_style_value(raw.clone(), pointer, prop, serde_json::Value::Null)
+            {
+                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
+                std::fs::write(path, s).map_err(|e| format!("write: {e}"))?;
+                return Ok(true);
+            }
+            Ok(false)
+        }
     }
 }
 
 /// Write a single style property back to the scenario file. Schedules a debounced
 /// write (~250 ms) so rapid slider drags and keystrokes coalesce into one flush.
 /// Empty values are ignored so clearing a field mid-edit doesn't collapse the
-/// element. Write errors are stored in the model and surfaced in the topbar.
-fn write_prop(shared: &Shared, pointer: &str, prop: &'static str, value: &str) {
+/// element (generic controls route empties through [`write_style_removal`]
+/// instead). Write errors are stored in the model and surfaced in the topbar.
+fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
     if value.trim().is_empty() {
         return;
     }
@@ -1119,8 +1548,56 @@ fn write_prop(shared: &Shared, pointer: &str, prop: &'static str, value: &str) {
             path,
             raw,
             pointer: pointer.to_string(),
-            prop,
+            prop: prop.to_string(),
             value: value.to_string(),
+        },
+    );
+}
+
+/// Typed write of a component root field (schema-driven Properties section).
+/// `Value::Null` removes the field (JSON) / the attribute (HTML). Debounced
+/// with the same guarantees as [`write_prop`].
+fn write_root_field(shared: &Shared, pointer: &str, field: &str, value: serde_json::Value) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (m.path.clone(), m.raw.clone())
+    };
+    let Some(path) = path else {
+        return;
+    };
+    let debounce = consume_context::<WriteDebounce>();
+    schedule_write(
+        &debounce,
+        shared.clone(),
+        WritePayload::RootField {
+            path,
+            raw,
+            pointer: pointer.to_string(),
+            field: field.to_string(),
+            value,
+        },
+    );
+}
+
+/// Remove one style property (an emptied generic control unsets the key /
+/// declaration rather than writing an empty string). Debounced.
+fn write_style_removal(shared: &Shared, pointer: &str, prop: &str) {
+    let (path, raw) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (m.path.clone(), m.raw.clone())
+    };
+    let Some(path) = path else {
+        return;
+    };
+    let debounce = consume_context::<WriteDebounce>();
+    schedule_write(
+        &debounce,
+        shared.clone(),
+        WritePayload::StyleRemove {
+            path,
+            raw,
+            pointer: pointer.to_string(),
+            prop: prop.to_string(),
         },
     );
 }

@@ -5021,6 +5021,7 @@ dependencies = [
  "palette",
  "rfd",
  "rustmotion",
+ "schemars",
  "serde_json",
  "tokio",
 ]

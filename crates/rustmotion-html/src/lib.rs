@@ -258,6 +258,82 @@ pub fn set_text_content(html: &str, pointer: &str, text: &str) -> Option<String>
     Some(serialize_element(&root))
 }
 
+/// Set or replace a plain attribute on the element addressed by the JSON
+/// pointer (into the transpiled scenario), returning the rewritten HTML. Used
+/// by the studio inspector for component root fields (`<rm-counter from=…>`).
+/// Attributes are strings; the transpiler's coercion re-types them on load.
+/// An EMPTY `value` REMOVES the attribute (unset, not empty-string — the
+/// transpiler skips empty attributes anyway). `anim`, `style` and every other
+/// attribute are preserved (mirrors [`set_inline_style`]). Returns `None` if
+/// the pointer doesn't resolve to an element.
+pub fn set_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Option<String> {
+    let dom = parse_fragment_dom(html);
+    let root = find_element(&dom.document, "rustmotion")?;
+    let target = resolve_pointer(&root, pointer)?;
+    set_attr(&target, name, value)?;
+    Some(serialize_element(&root))
+}
+
+/// Remove one inline `style` property from the element addressed by the JSON
+/// pointer, returning the rewritten HTML (an emptied inspector control unsets
+/// the declaration). Other declarations and attributes are preserved. Returns
+/// `None` if the pointer doesn't resolve to an element.
+pub fn remove_inline_style(html: &str, pointer: &str, prop: &str) -> Option<String> {
+    let dom = parse_fragment_dom(html);
+    let root = find_element(&dom.document, "rustmotion")?;
+    let target = resolve_pointer(&root, pointer)?;
+    remove_style_decl(&target, prop)?;
+    Some(serialize_element(&root))
+}
+
+/// Upsert (or, for an empty value, remove) a plain attribute on an element.
+fn set_attr(handle: &Handle, name: &str, value: &str) -> Option<()> {
+    let NodeData::Element { attrs, .. } = &handle.data else {
+        return None;
+    };
+    let mut attrs = attrs.borrow_mut();
+    if value.is_empty() {
+        attrs.retain(|a| a.name.local.as_ref() != name);
+        return Some(());
+    }
+    if let Some(a) = attrs.iter_mut().find(|a| a.name.local.as_ref() == name) {
+        a.value = value.into();
+    } else {
+        attrs.push(Attribute {
+            name: QualName::new(None, ns!(), name.into()),
+            value: value.into(),
+        });
+    }
+    Some(())
+}
+
+/// Drop one `prop: value` declaration from an element's `style` attribute.
+fn remove_style_decl(handle: &Handle, prop: &str) -> Option<()> {
+    let NodeData::Element { attrs, .. } = &handle.data else {
+        return None;
+    };
+    let mut attrs = attrs.borrow_mut();
+    let Some(a) = attrs.iter_mut().find(|a| a.name.local.as_ref() == "style") else {
+        return Some(()); // no style attribute → nothing to remove
+    };
+    let kept: Vec<String> = a
+        .value
+        .split(';')
+        .filter_map(|decl| {
+            let decl = decl.trim();
+            let (k, v) = decl.split_once(':')?;
+            let k = k.trim();
+            if k == prop || k.is_empty() {
+                None
+            } else {
+                Some(format!("{k}:{}", v.trim()))
+            }
+        })
+        .collect();
+    a.value = kept.join("; ").as_str().into();
+    Some(())
+}
+
 /// Replace an element's children with a single text node.
 fn set_text(handle: &Handle, text: &str) -> Option<()> {
     if !matches!(handle.data, NodeData::Element { .. }) {
@@ -446,6 +522,51 @@ mod lib_tests {
     #[test]
     fn missing_root_is_an_error() {
         assert!(crate::html_to_scenario_value("<div>no root</div>").is_err());
+    }
+
+    // --- set_attribute (studio schema inspector) ---
+
+    #[test]
+    fn set_attribute_updates_counter_from_and_retypes_on_transpile() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><rm-counter from="0" to="100" anim="fade-in" style="font-size:64; color:#fff"></rm-counter></scene></rustmotion>"##;
+        let out = crate::set_attribute(html, "/scenes/0/children/0", "from", "250").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        let child = &v["scenes"][0]["children"][0];
+        // The attribute string is re-typed to a number by the transpiler.
+        assert_eq!(child["from"], json!(250));
+        assert!(child["from"].is_number());
+        // Other attributes are preserved: to, anim (→ style.animation), style.
+        assert_eq!(child["to"], json!(100));
+        assert_eq!(child["style"]["font-size"], json!(64));
+        assert_eq!(child["style"]["color"], json!("#fff"));
+        assert_eq!(child["style"]["animation"][0]["name"], json!("fade_in"));
+    }
+
+    #[test]
+    fn set_attribute_inserts_when_absent() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><rm-counter from="0" to="10"></rm-counter></scene></rustmotion>"##;
+        let out = crate::set_attribute(html, "/scenes/0/children/0", "suffix", "%").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        assert_eq!(v["scenes"][0]["children"][0]["suffix"], json!("%"));
+    }
+
+    #[test]
+    fn set_attribute_empty_value_removes_the_attribute() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><rm-counter from="0" to="10" suffix="%"></rm-counter></scene></rustmotion>"##;
+        let out = crate::set_attribute(html, "/scenes/0/children/0", "suffix", "").unwrap();
+        assert!(!out.contains("suffix"), "attribute removed: {out}");
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        assert!(v["scenes"][0]["children"][0].get("suffix").is_none());
+    }
+
+    #[test]
+    fn remove_inline_style_drops_only_that_declaration() {
+        let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-size:96; color:#fff">Hi</h1></scene></rustmotion>"##;
+        let out = crate::remove_inline_style(html, "/scenes/0/children/0", "color").unwrap();
+        let v = crate::html_to_scenario_value(&out).unwrap();
+        let style = &v["scenes"][0]["children"][0]["style"];
+        assert!(style.get("color").is_none(), "color removed");
+        assert_eq!(style["font-size"], json!(96), "other declarations kept");
     }
 
     // --- anim round-trip (studio) ---

@@ -175,6 +175,19 @@ pub fn set_html_text_content(html: &str, pointer: &str, text: &str) -> Option<St
     rustmotion_html::set_text_content(html, pointer, text)
 }
 
+/// Set/replace a plain attribute on an HTML-dialect element by JSON pointer
+/// (studio inspector, component root fields). An empty value removes the
+/// attribute. Attributes are strings; transpile coercion re-types them.
+pub fn set_html_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Option<String> {
+    rustmotion_html::set_attribute(html, pointer, name, value)
+}
+
+/// Remove one inline `style` declaration on an HTML-dialect element by JSON
+/// pointer (studio inspector, emptied style control).
+pub fn remove_html_inline_style(html: &str, pointer: &str, prop: &str) -> Option<String> {
+    rustmotion_html::remove_inline_style(html, pointer, prop)
+}
+
 #[cfg(test)]
 mod html_tests {
     use super::*;

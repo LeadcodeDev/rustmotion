@@ -8,6 +8,7 @@ pub mod frames;
 mod inspector;
 mod playback;
 mod prefetch;
+mod properties;
 mod topbar;
 mod view;
 

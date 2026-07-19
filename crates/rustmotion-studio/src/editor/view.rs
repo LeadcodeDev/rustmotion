@@ -170,7 +170,20 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             let m = inspector_shared.lock().unwrap_or_else(|e| e.into_inner());
             let style = read_style_object(&m.raw, &pointer);
             let content = read_field(&m.raw, &pointer, "content");
-            (pointer, style, kind, content)
+            // Element root object (children stripped) for the schema-driven
+            // Properties section.
+            let element = m
+                .raw
+                .pointer(&pointer)
+                .cloned()
+                .map(|mut v| {
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("children");
+                    }
+                    v
+                })
+                .unwrap_or(serde_json::Value::Null);
+            (pointer, style, kind, content, element)
         })
     });
 
@@ -287,8 +300,8 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                             current,
                             diff_active,
                         }
-                    } else if let Some((pointer, style, kind, content)) = panel {
-                        InspectorPanel { selected, pointer, kind, current, content, style }
+                    } else if let Some((pointer, style, kind, content, element)) = panel {
+                        InspectorPanel { selected, pointer, kind, current, content, style, element }
                     }
                 }
             }
