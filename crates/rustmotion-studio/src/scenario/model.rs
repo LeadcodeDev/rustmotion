@@ -6,9 +6,14 @@ use rustmotion::schema::ResolvedScenario;
 /// Live studio state shared between the file watcher and the UI/asset handler.
 /// Wrapped in `Arc<Mutex<_>>` (`Shared`) so the watcher thread can swap in a
 /// reloaded scenario while the webview reads frames.
+///
+/// `scenario`/`tasks` are `Arc` snapshots: consumers that render clone the
+/// Arcs under a brief lock and work WITHOUT the model lock (frame handler,
+/// hit-map, prefetcher). Watcher reloads build fresh Arcs; in-flight renders
+/// keep the old snapshot alive until they finish.
 pub struct StudioModel {
-    pub scenario: ResolvedScenario,
-    pub tasks: Vec<FrameTask>,
+    pub scenario: Arc<ResolvedScenario>,
+    pub tasks: Arc<Vec<FrameTask>>,
     pub total_frames: u32,
     /// Load/parse error surfaced as a full-screen banner in the editor.
     pub error: Option<String>,
@@ -57,8 +62,8 @@ impl StudioModel {
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         let total_frames = tasks.len() as u32;
         Self {
-            scenario,
-            tasks,
+            scenario: Arc::new(scenario),
+            tasks: Arc::new(tasks),
             total_frames,
             error,
             write_error: None,

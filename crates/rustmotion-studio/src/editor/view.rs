@@ -10,9 +10,10 @@ use crate::scenario::{
 
 use super::annotations::AnnotationsPanel;
 use super::diff_panel::{DiffPanel, DiffSide};
-use super::frames::{frame_hits, render_baseline_frame, render_frame, scene_prefix, HitPct};
+use super::frames::{baseline_arcs, frame_hits, render_frame, scene_prefix, HitPct};
 use super::inspector::InspectorPanel;
 use super::playback::{use_hot_reload, use_playback_clock, PlaybackBar};
+use super::prefetch::{frame_cache, use_prefetch_publisher, FrameKey};
 use super::topbar::TopBar;
 
 /// Overlay element boxes: invisible by default. Only the single hovered element
@@ -50,12 +51,12 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     let diff_side = use_signal(|| DiffSide::B);
 
     // Asset handler: GET /frame/{idx} -> JPEG of that frame. `?side=a` renders
-    // the BASELINE scenario instead (diff mode flip), from the cached baseline
-    // model.
-    //
-    // Safety note: rendering is wrapped in `catch_unwind` so a Skia panic
-    // converts to an error instead of poisoning the Mutex and killing the
-    // session for all future requests.
+    // the BASELINE scenario instead (diff mode flip). Cache-first: a prefetched
+    // frame is served straight from memory (no model lock, no render). On miss,
+    // the Arcs are cloned under a brief lock and the render runs OUTSIDE any
+    // lock (catch_unwind keeps a Skia panic from poisoning anything), then the
+    // frame is inserted so the next request hits. The prefetcher may race this
+    // path and render the same frame once more — accepted, the cache dedupes.
     let handler_shared = shared.clone();
     use_asset_handler(
         "frame",
@@ -74,15 +75,32 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                     let m = handler_shared.lock().unwrap_or_else(|e| e.into_inner());
                     m.path.clone()
                 };
-                path.and_then(|p| get_baseline(&baseline_slot(), &p).map(|b| (p, b)))
+                match path
+                    .and_then(|p| get_baseline(&baseline_slot(), &p).map(|b| (p, b)))
                     .ok_or(())
-                    .and_then(|(p, b)| render_baseline_frame(&p, &b.source, idx).map_err(|_| ()))
+                    .and_then(|(p, b)| baseline_arcs(&p, &b.source).map_err(|_| ()))
+                {
+                    Ok((hash, scenario, tasks)) => {
+                        let key = FrameKey {
+                            generation: hash,
+                            side: DiffSide::A,
+                            frame: idx,
+                        };
+                        serve_or_render(key, idx, &scenario, &tasks, None)
+                    }
+                    Err(()) => Err(()),
+                }
             } else {
-                let m = handler_shared.lock().unwrap_or_else(|e| e.into_inner());
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    render_frame(&m.scenario, &m.tasks, idx, 1.0)
-                }))
-                .map_err(|_| ())
+                let (scenario, tasks, generation) = {
+                    let m = handler_shared.lock().unwrap_or_else(|e| e.into_inner());
+                    (m.scenario.clone(), m.tasks.clone(), m.generation)
+                };
+                let key = FrameKey {
+                    generation,
+                    side: DiffSide::B,
+                    frame: idx,
+                };
+                serve_or_render(key, idx, &scenario, &tasks, Some(generation))
             };
             match result {
                 Ok(jpeg) => {
@@ -111,6 +129,15 @@ pub fn StudioApp(view: Signal<View>) -> Element {
 
     use_playback_clock(shared.clone(), current, playing);
     use_hot_reload(shared.clone(), rev);
+    // Publish the playhead/side/model snapshot for the background prefetcher.
+    use_prefetch_publisher(
+        shared.clone(),
+        current,
+        playing,
+        rev,
+        diff_active,
+        diff_side,
+    );
 
     let (total, err, write_err, title, annotations) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -272,6 +299,40 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     }
 }
 
+/// Cache-first frame fetch for the asset handler: serve the prefetched JPEG
+/// when present, otherwise render outside any lock (panic-fenced) and insert
+/// into the cache for the next request. `gen_b` is `Some(model generation)`
+/// when serving side B (drives stale-generation eviction); side A passes the
+/// baseline hash inside `key.generation` and `None` here.
+fn serve_or_render(
+    key: FrameKey,
+    idx: u32,
+    scenario: &rustmotion::schema::ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    gen_b: Option<u64>,
+) -> Result<Vec<u8>, ()> {
+    if let Some(bytes) = frame_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+    {
+        return Ok((*bytes).clone());
+    }
+    let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_frame(scenario, tasks, idx, 1.0)
+    }))
+    .map_err(|_| ())?;
+    let (gen_b, gen_a) = match key.side {
+        DiffSide::B => (gen_b, None),
+        DiffSide::A => (None, Some(key.generation)),
+    };
+    frame_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, rendered.clone(), gen_b, gen_a, idx);
+    Ok(rendered)
+}
+
 /// The preview canvas: the rendered frame plus the clickable element overlay.
 /// It owns the reads of `current`/`rev`/`show_hits`, so a playback tick or a
 /// model reload (e.g. after an inspector edit) re-renders ONLY this subtree —
@@ -289,23 +350,25 @@ fn Canvas(
     diff_marks: Vec<(String, ChangeKind)>,
 ) -> Element {
     let shared = use_context::<Shared>();
-    let (max, vw, vh) = {
+    // Arc snapshots under a brief lock; the hit-map layout render below runs
+    // WITHOUT the model lock.
+    let (scenario, tasks) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (
-            m.total_frames.saturating_sub(1),
-            m.scenario.video.width,
-            m.scenario.video.height,
-        )
+        (m.scenario.clone(), m.tasks.clone())
     };
+    let (vw, vh) = (scenario.video.width, scenario.video.height);
+    let max = (tasks.len() as u32).saturating_sub(1);
     let cur = current().min(max);
     let r = rev();
     let side_a = diff_active() && diff_side() == DiffSide::A;
     let side_suffix = if side_a { "&side=a" } else { "" };
 
     let hits = if show_hits() && !side_a {
-        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        let prefix = scene_prefix(&m.raw, &m.tasks, cur);
-        frame_hits(&m.scenario, &m.tasks, cur, &prefix)
+        let prefix = {
+            let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+            scene_prefix(&m.raw, &tasks, cur)
+        };
+        frame_hits(&scenario, &tasks, cur, &prefix)
     } else {
         Vec::new()
     };

@@ -8,7 +8,8 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::scenario::{ChangeKind, ElementChange, Shared};
 
 /// Which state the canvas renders in diff mode: A = baseline, B = current.
-#[derive(Clone, Copy, PartialEq)]
+/// `Eq + Hash` so it can key the frame-prefetch cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiffSide {
     A,
     B,
@@ -46,14 +47,17 @@ fn frame_for_change(shared: &Shared, change: &ElementChange) -> Option<u32> {
         }
         _ => return None,
     };
-    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-    let fps = m.scenario.video.fps.max(1);
-    let base = m.tasks.iter().position(|t| {
+    // Arc snapshot; the task scan runs without the model lock.
+    let (fps, tasks) = {
+        let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (m.scenario.video.fps.max(1), m.tasks.clone())
+    };
+    let base = tasks.iter().position(|t| {
         matches!(t, rustmotion::encode::video::FrameTask::Normal { view_idx, scene_idx, .. }
             if *view_idx == view && *scene_idx == scene)
     })?;
     let offset = (change.start_at.unwrap_or(0.0).max(0.0) * fps as f64) as usize;
-    let frame = (base + offset).min(m.tasks.len().saturating_sub(1));
+    let frame = (base + offset).min(tasks.len().saturating_sub(1));
     Some(frame as u32)
 }
 
