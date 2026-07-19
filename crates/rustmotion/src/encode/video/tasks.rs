@@ -78,8 +78,8 @@ pub fn render_frame_task_scaled(
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     use crate::engine::render::{
-        render_scene_bg_scaled, render_scene_fg_scaled, render_scene_frame,
-        render_scene_frame_scaled, render_scene_frame_scaled_with_prev_bg,
+        post_effects::apply_post_effects, render_scene_bg_scaled, render_scene_fg_scaled,
+        render_scene_frame, render_scene_frame_scaled, render_scene_frame_scaled_with_prev_bg,
     };
 
     match task {
@@ -97,14 +97,24 @@ pub fn render_frame_task_scaled(
             } else {
                 None
             };
-            render_scene_frame_scaled_with_prev_bg(
+            let mut pixels = render_scene_frame_scaled_with_prev_bg(
                 config,
                 scene,
                 *frame_in_scene,
                 *scene_total_frames,
                 scale_factor,
                 prev_bg,
-            )
+            )?;
+            let scaled_w = (config.width as f32 * scale_factor) as u32;
+            let scaled_h = (config.height as f32 * scale_factor) as u32;
+            apply_post_effects(
+                &mut pixels,
+                scaled_w,
+                scaled_h,
+                &scene.effects,
+                *frame_in_scene,
+            );
+            Ok(pixels)
         }
         FrameTask::SlideTransition {
             view_idx,
@@ -158,7 +168,8 @@ pub fn render_frame_task_scaled(
                     *scene_b_total_frames,
                     scale_factor,
                 )?;
-                return Ok(camera_pan_transition(
+                // CameraPan composites two scenes; apply scene_b effects to the composited result.
+                let mut composited = camera_pan_transition(
                     &bg,
                     &fg_a,
                     &fg_b,
@@ -168,7 +179,15 @@ pub fn render_frame_task_scaled(
                     dx * scale_factor,
                     dy * scale_factor,
                     easing,
-                ));
+                );
+                apply_post_effects(
+                    &mut composited,
+                    scaled_w,
+                    scaled_h,
+                    &scenes[*scene_b_idx].effects,
+                    *frame_in_transition,
+                );
+                return Ok(composited);
             }
 
             let (frame_a, frame_b) = if scale_factor == 1.0 {
@@ -203,14 +222,26 @@ pub fn render_frame_task_scaled(
                 (a, b)
             };
 
-            Ok(apply_transition(
+            // For slide transitions, apply effects of scene_b to the composited result.
+            // Rationale: the transition is the "entry" of scene_b; its post-effects
+            // (e.g. vignette) should appear on the blended frames to avoid a
+            // jarring pop when the transition ends and Normal frames begin.
+            let mut composited = apply_transition(
                 &frame_a,
                 &frame_b,
                 scaled_w,
                 scaled_h,
                 progress,
                 transition_type,
-            ))
+            );
+            apply_post_effects(
+                &mut composited,
+                scaled_w,
+                scaled_h,
+                &scenes[*scene_b_idx].effects,
+                *frame_in_transition,
+            );
+            Ok(composited)
         }
         FrameTask::WorldFrame {
             view_idx,

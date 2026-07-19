@@ -1,5 +1,6 @@
 mod background;
 mod canvas_guard;
+pub mod post_effects;
 mod scene;
 
 pub(crate) use canvas_guard::CanvasGuard;
