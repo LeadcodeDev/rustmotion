@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#FFE500" },
+  "fonts": [{ "family": "Anton", "source": "google", "weights": [400] }],
+  "scenes": [
+    {
+      "duration": 3.5,
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 0 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#FFE500", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "ON FAIT DU", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.55 }] } },
+        { "type": "text", "content": "MOTION", "style": { "font-family": "Anton", "font-size": 300, "color": "#0A0A0A", "line-height": 0.92, "letter-spacing": 2, "animation": [{ "name": "slide_in_up", "delay": 0.12, "duration": 0.6 }] } },
+        { "type": "text", "content": "QUI VEND", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.24, "duration": 0.6 }] } }
+      ]
+    },
+    {
+      "duration": 3.2,
+      "transition": { "type": "wipe_up", "duration": 0.35 },
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 6 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "STUDIO DE", "style": { "font-family": "Anton", "font-size": 150, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.55 }] } },
+        { "type": "text", "content": "MOTION DESIGN", "style": { "font-family": "Anton", "font-size": 200, "color": "#FFE500", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "scale_in", "delay": 0.18, "duration": 0.6, "overshoot": 0.12 }] } }
+      ]
+    },
+    {
+      "duration": 4.0,
+      "transition": { "type": "wipe_left", "duration": 0.35 },
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 56 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#1A1AE5", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "LE STUDIO EN CHIFFRES", "style": { "font-family": "Anton", "font-size": 44, "color": "#8AB0FF", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.4 }] } },
+        {
+          "type": "div",
+          "style": { "flex-direction": "row", "align-items": "flex-start", "justify-content": "center", "gap": 96 },
+          "children": [
+            {
+              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
+              "children": [
+                { "type": "counter", "from": 0, "to": 30, "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                { "type": "text", "content": "JOURS DE PROD", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+              ]
+            },
+            {
+              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
+              "children": [
+                { "type": "counter", "from": 0, "to": 120, "prefix": "+", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                { "type": "text", "content": "VIDEOS LIVREES", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+              ]
+            },
+            {
+              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
+              "children": [
+                { "type": "counter", "from": 0, "to": 3, "prefix": "x", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                { "type": "text", "content": "CONVERSION", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 3.6,
+      "transition": { "type": "wipe_right", "duration": 0.35 },
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 36 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#FF4A32", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "CE QU'ON FAIT", "style": { "font-family": "Anton", "font-size": 40, "color": "#0A0A0A", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.35 }] } },
+        {
+          "type": "div",
+          "style": { "flex-direction": "column", "align-items": "center", "gap": 0 },
+          "children": [
+            { "type": "text", "content": "BRANDING", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.1, "duration": 0.5 }] } },
+            { "type": "text", "content": "PITCH DECK", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.22, "duration": 0.5 }] } },
+            { "type": "text", "content": "PRODUIT", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.34, "duration": 0.5 }] } },
+            { "type": "text", "content": "SOCIAL", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.46, "duration": 0.5 }] } }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 3.4,
+      "transition": { "type": "wipe_down", "duration": 0.35 },
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 4 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#00E676", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "PAS DE BLABLA.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.5 }] } },
+        { "type": "text", "content": "QUE DU MOUVEMENT.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.16, "duration": 0.5 }] } }
+      ]
+    },
+    {
+      "duration": 3.4,
+      "transition": { "type": "slide", "duration": 0.35 },
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 28 },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        { "type": "text", "content": "ON COMMENCE ?", "style": { "font-family": "Anton", "font-size": 240, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "scale_in", "delay": 0.0, "duration": 0.6, "overshoot": 0.1 }] } },
+        { "type": "shape", "shape": "rounded_rect", "fill": "#FFE500", "style": { "width": 520, "height": 10, "border-radius": 5, "animation": [{ "name": "slide_in_left", "delay": 0.35, "duration": 0.5 }] } },
+        { "type": "text", "content": "STUDIO@1600.STYLE", "style": { "font-family": "Anton", "font-size": 56, "color": "#FFE500", "letter-spacing": 8, "animation": [{ "name": "fade_in", "delay": 0.5, "duration": 0.5 }] } }
+      ]
+    }
+  ]
+}
