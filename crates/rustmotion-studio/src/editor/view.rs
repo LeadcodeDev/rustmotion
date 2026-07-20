@@ -325,7 +325,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             }
             div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
                 div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
-                    Canvas { current, rev, show_hits, selected, diff_active, diff_side, diff_marks, preview_scale }
+                    Canvas { current, rev, show_hits, playing, selected, diff_active, diff_side, diff_marks, preview_scale }
                     PlaybackBar { current, playing, total, diff_active, diff_side, preview_scale }
                 }
                 div {
@@ -407,11 +407,24 @@ fn serve_or_render(
 /// never the editor chrome or the inspector, which keep their own state.
 /// In diff mode with side A, the image renders the baseline scenario (the
 /// overlay is hidden: its boxes come from the current model's layout).
+/// Whether the clickable-element hit-map should be (re)computed this render.
+///
+/// Computing it runs a FULL paint pass (backdrop-filters and all) on a
+/// full-resolution raster surface on the MAIN thread — ~150ms per frame on a
+/// glass-heavy scene. During playback the playhead moves at fps and nothing is
+/// hoverable, so recomputing per frame just pins the main thread at 100% and
+/// freezes the UI. The hit-map only matters at rest (hover/click the inspector),
+/// so skip it while playing; it returns the instant playback pauses.
+pub fn should_compute_hits(show_hits: bool, side_a: bool, playing: bool) -> bool {
+    show_hits && !side_a && !playing
+}
+
 #[component]
 fn Canvas(
     current: Signal<u32>,
     rev: Signal<u64>,
     show_hits: Signal<bool>,
+    playing: Signal<bool>,
     mut selected: Signal<Option<(u32, String, String)>>,
     diff_active: Signal<bool>,
     diff_side: Signal<DiffSide>,
@@ -435,7 +448,7 @@ fn Canvas(
     let side_a = diff_active() && diff_side() == DiffSide::A;
     let side_suffix = if side_a { "&side=a" } else { "" };
 
-    let hits = if show_hits() && !side_a {
+    let hits = if should_compute_hits(show_hits(), side_a, playing()) {
         let prefix = {
             let m = shared.lock().unwrap_or_else(|e| e.into_inner());
             scene_prefix(&m.raw, &tasks, cur)
@@ -549,5 +562,30 @@ fn Overlay(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hits_skipped_during_playback() {
+        // The whole point: playing never computes the (expensive) hit-map.
+        assert!(!should_compute_hits(true, false, true));
+    }
+
+    #[test]
+    fn hits_computed_at_rest_when_enabled() {
+        assert!(should_compute_hits(true, false, false));
+    }
+
+    #[test]
+    fn hits_never_computed_when_disabled_or_baseline() {
+        assert!(!should_compute_hits(false, false, false), "Inspect off");
+        assert!(
+            !should_compute_hits(true, true, false),
+            "baseline (A) has no current-model hit-map"
+        );
     }
 }
