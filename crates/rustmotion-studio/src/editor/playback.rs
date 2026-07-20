@@ -4,7 +4,10 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{Pause, Play};
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::select::{Select, SelectOption};
 use crate::scenario::Shared;
+
+use super::prefetch::{set_preview_scale_pct, PREVIEW_SCALE_CHOICES};
 
 /// What a playback keyboard shortcut does (see [`playback_action`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +96,7 @@ pub fn PlaybackBar(
     total: u32,
     diff_active: Signal<bool>,
     mut diff_side: Signal<super::diff_panel::DiffSide>,
+    mut preview_scale: Signal<u16>,
 ) -> Element {
     use super::diff_panel::DiffSide;
 
@@ -161,6 +165,34 @@ pub fn PlaybackBar(
                         current.set(v);
                     }
                 },
+            }
+            // Preview quality: render scale of the preview frames only (the
+            // export always renders at 100%). Lower = smoother playback on
+            // heavy scenarios (glass, camera, parallax).
+            div {
+                title: "Preview quality (export is always 100%)",
+                style: "width:96px; flex:none;",
+                Select::<u16> {
+                    default_value: Some(preview_scale()),
+                    on_value_change: move |v: Option<u16>| {
+                        if let Some(pct) = v {
+                            // Atomic first: the render threads and the asset
+                            // handler must see the new scale before the signal
+                            // change triggers the <img> refetch.
+                            set_preview_scale_pct(pct);
+                            preview_scale.set(pct);
+                        }
+                    },
+                    for (i, pct) in PREVIEW_SCALE_CHOICES.iter().enumerate() {
+                        SelectOption::<u16> {
+                            key: "{pct}",
+                            index: i,
+                            value: *pct,
+                            text_value: "{pct}%",
+                            "{pct}%"
+                        }
+                    }
+                }
             }
             div { style: "min-width:120px; text-align:right; color:var(--rm-text-muted);",
                 "{cur} / {max}"

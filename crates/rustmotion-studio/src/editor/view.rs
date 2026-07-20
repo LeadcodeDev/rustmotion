@@ -16,7 +16,9 @@ use super::inspector::InspectorPanel;
 use super::playback::{
     playback_action, use_hot_reload, use_playback_clock, PlaybackAction, PlaybackBar,
 };
-use super::prefetch::{frame_cache, use_prefetch_publisher, FrameKey};
+use super::prefetch::{
+    fail_ledger, frame_cache, preview_scale_pct, scale_factor, use_prefetch_publisher, FrameKey,
+};
 use super::topbar::TopBar;
 
 /// The hot-reload revision signal, exposed via context so the optimistic edit
@@ -58,6 +60,10 @@ pub fn StudioApp(view: Signal<View>) -> Element {
     // Diff/review mode: toggle + which state the canvas shows (A = baseline).
     let diff_active = use_signal(|| false);
     let diff_side = use_signal(|| DiffSide::B);
+    // Preview render scale (percent). The atomic is the source of truth for
+    // the render threads; this signal mirrors it for the UI (selector value,
+    // <img> URL cache-bust).
+    let preview_scale = use_signal(preview_scale_pct);
 
     // Asset handler: GET /frame/{idx} -> JPEG of that frame. `?side=a` renders
     // the BASELINE scenario instead (diff mode flip). Cache-first: a prefetched
@@ -94,6 +100,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                             generation: hash,
                             side: DiffSide::A,
                             frame: idx,
+                            scale_pct: preview_scale_pct(),
                         };
                         serve_or_render(key, idx, &scenario, &tasks, None)
                     }
@@ -108,6 +115,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                     generation,
                     side: DiffSide::B,
                     frame: idx,
+                    scale_pct: preview_scale_pct(),
                 };
                 serve_or_render(key, idx, &scenario, &tasks, Some(generation))
             };
@@ -317,8 +325,8 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             }
             div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
                 div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
-                    Canvas { current, rev, show_hits, selected, diff_active, diff_side, diff_marks }
-                    PlaybackBar { current, playing, total, diff_active, diff_side }
+                    Canvas { current, rev, show_hits, playing, selected, diff_active, diff_side, diff_marks, preview_scale }
+                    PlaybackBar { current, playing, total, diff_active, diff_side, preview_scale }
                 }
                 div {
                     style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
@@ -363,10 +371,25 @@ fn serve_or_render(
     {
         return Ok((*bytes).clone());
     }
+    // A frame whose render keeps panicking is not retried on every <img>
+    // request — fail fast so the webview shows the previous frame instead of
+    // hammering a panic loop.
+    if fail_ledger()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .exhausted(&key)
+    {
+        return Err(());
+    }
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        render_frame(scenario, tasks, idx, 1.0)
+        render_frame(scenario, tasks, idx, scale_factor(key.scale_pct))
     }))
-    .map_err(|_| ())?;
+    .map_err(|_| {
+        fail_ledger()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_failure(key);
+    })?;
     let (gen_b, gen_a) = match key.side {
         DiffSide::B => (gen_b, None),
         DiffSide::A => (None, Some(key.generation)),
@@ -374,7 +397,7 @@ fn serve_or_render(
     frame_cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(key, rendered.clone(), gen_b, gen_a, idx);
+        .insert(key, rendered.clone(), gen_b, gen_a, idx, key.scale_pct);
     Ok(rendered)
 }
 
@@ -384,15 +407,29 @@ fn serve_or_render(
 /// never the editor chrome or the inspector, which keep their own state.
 /// In diff mode with side A, the image renders the baseline scenario (the
 /// overlay is hidden: its boxes come from the current model's layout).
+/// Whether the clickable-element hit-map should be (re)computed this render.
+///
+/// Computing it runs a FULL paint pass (backdrop-filters and all) on a
+/// full-resolution raster surface on the MAIN thread — ~150ms per frame on a
+/// glass-heavy scene. During playback the playhead moves at fps and nothing is
+/// hoverable, so recomputing per frame just pins the main thread at 100% and
+/// freezes the UI. The hit-map only matters at rest (hover/click the inspector),
+/// so skip it while playing; it returns the instant playback pauses.
+pub fn should_compute_hits(show_hits: bool, side_a: bool, playing: bool) -> bool {
+    show_hits && !side_a && !playing
+}
+
 #[component]
 fn Canvas(
     current: Signal<u32>,
     rev: Signal<u64>,
     show_hits: Signal<bool>,
+    playing: Signal<bool>,
     mut selected: Signal<Option<(u32, String, String)>>,
     diff_active: Signal<bool>,
     diff_side: Signal<DiffSide>,
     diff_marks: Vec<(String, ChangeKind)>,
+    preview_scale: Signal<u16>,
 ) -> Element {
     let shared = use_context::<Shared>();
     // Arc snapshots under a brief lock; the hit-map layout render below runs
@@ -405,10 +442,13 @@ fn Canvas(
     let max = (tasks.len() as u32).saturating_sub(1);
     let cur = current().min(max);
     let r = rev();
+    // In the URL purely as a cache-buster: a scale change re-requests the
+    // frame (the handler reads the scale itself from the atomic).
+    let s = preview_scale();
     let side_a = diff_active() && diff_side() == DiffSide::A;
     let side_suffix = if side_a { "&side=a" } else { "" };
 
-    let hits = if show_hits() && !side_a {
+    let hits = if should_compute_hits(show_hits(), side_a, playing()) {
         let prefix = {
             let m = shared.lock().unwrap_or_else(|e| e.into_inner());
             scene_prefix(&m.raw, &tasks, cur)
@@ -431,7 +471,7 @@ fn Canvas(
             // overlay stays exactly aligned.
             div { style: "position:relative; aspect-ratio:{vw} / {vh}; max-width:100%; max-height:100%; min-width:0; box-shadow:0 8px 40px rgba(0,0,0,0.5); line-height:0;",
                 img {
-                    src: "/frame/{cur}?v={r}{side_suffix}",
+                    src: "/frame/{cur}?v={r}&s={s}{side_suffix}",
                     style: "display:block; width:100%; height:100%;",
                 }
                 Overlay { hits, selected, diff_marks }
@@ -522,5 +562,30 @@ fn Overlay(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hits_skipped_during_playback() {
+        // The whole point: playing never computes the (expensive) hit-map.
+        assert!(!should_compute_hits(true, false, true));
+    }
+
+    #[test]
+    fn hits_computed_at_rest_when_enabled() {
+        assert!(should_compute_hits(true, false, false));
+    }
+
+    #[test]
+    fn hits_never_computed_when_disabled_or_baseline() {
+        assert!(!should_compute_hits(false, false, false), "Inspect off");
+        assert!(
+            !should_compute_hits(true, true, false),
+            "baseline (A) has no current-model hit-map"
+        );
     }
 }

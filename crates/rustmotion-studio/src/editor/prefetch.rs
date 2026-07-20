@@ -8,8 +8,9 @@
 //! mutex; a frame can at worst be rendered twice when the `<img>` requests it
 //! while the prefetcher is mid-render (accepted — no cross-coordination).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -30,13 +31,37 @@ pub const WINDOW_AHEAD: u32 = 30;
 /// Frames kept behind the playhead while paused (scrub-back comfort).
 pub const WINDOW_BEHIND: u32 = 5;
 
+/// Preview render scale in percent. Applies to every preview render (prefetch
+/// workers and the on-demand asset handler); the export path always renders at
+/// full resolution. Atomic so non-UI threads read it without a Dioxus runtime.
+pub const DEFAULT_PREVIEW_SCALE_PCT: u16 = 50;
+/// The scales offered by the transport-bar quality selector.
+pub const PREVIEW_SCALE_CHOICES: [u16; 4] = [100, 75, 50, 25];
+
+static PREVIEW_SCALE_PCT: AtomicU16 = AtomicU16::new(DEFAULT_PREVIEW_SCALE_PCT);
+
+pub fn preview_scale_pct() -> u16 {
+    PREVIEW_SCALE_PCT.load(Ordering::Relaxed)
+}
+
+pub fn set_preview_scale_pct(pct: u16) {
+    PREVIEW_SCALE_PCT.store(pct.clamp(10, 100), Ordering::Relaxed);
+}
+
+/// Percent → render scale factor for [`render_frame`].
+pub fn scale_factor(pct: u16) -> f32 {
+    pct as f32 / 100.0
+}
+
 /// Cache key: which model state (`generation` = model generation for side B,
-/// baseline source hash for side A), which side, which frame.
+/// baseline source hash for side A), which side, which frame, at which
+/// preview scale (a frame rendered at 50% must never be served for 100%).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameKey {
     pub generation: u64,
     pub side: DiffSide,
     pub frame: u32,
+    pub scale_pct: u16,
 }
 
 // ── Pure logic ───────────────────────────────────────────────────────────────
@@ -68,7 +93,8 @@ pub fn prefetch_window(current: u32, playing: bool, total: u32) -> Vec<u32> {
     out
 }
 
-/// Which keys to drop: every stale-generation entry for a side whose expected
+/// Which keys to drop: every entry at a different preview scale than
+/// `scale_pct`, every stale-generation entry for a side whose expected
 /// generation is known (`None` = unknowable, keep), then — if the map would
 /// still exceed `cap` — the entries farthest from the playhead (`head`) until
 /// it fits.
@@ -78,10 +104,14 @@ pub fn select_evictions(
     gen_a: Option<u64>,
     head: u32,
     cap: usize,
+    scale_pct: u16,
 ) -> Vec<FrameKey> {
-    let is_stale = |k: &FrameKey| match k.side {
-        DiffSide::B => gen_b.is_some_and(|g| k.generation != g),
-        DiffSide::A => gen_a.is_some_and(|g| k.generation != g),
+    let is_stale = |k: &FrameKey| {
+        k.scale_pct != scale_pct
+            || match k.side {
+                DiffSide::B => gen_b.is_some_and(|g| k.generation != g),
+                DiffSide::A => gen_a.is_some_and(|g| k.generation != g),
+            }
     };
 
     let mut evict: Vec<FrameKey> = keys.iter().filter(|k| is_stale(k)).copied().collect();
@@ -121,6 +151,8 @@ impl FrameCache {
     }
 
     /// Insert a frame then enforce the eviction policy around the playhead.
+    /// `scale_pct` is the expected preview scale: entries at any other scale
+    /// are purged (a scale change instantly frees the whole stale set).
     pub fn insert(
         &mut self,
         key: FrameKey,
@@ -128,10 +160,11 @@ impl FrameCache {
         gen_b: Option<u64>,
         gen_a: Option<u64>,
         head: u32,
+        scale_pct: u16,
     ) {
         self.map.insert(key, Arc::new(bytes));
         let keys: Vec<FrameKey> = self.map.keys().copied().collect();
-        for k in select_evictions(&keys, gen_b, gen_a, head, CACHE_CAP) {
+        for k in select_evictions(&keys, gen_b, gen_a, head, CACHE_CAP, scale_pct) {
             self.map.remove(&k);
         }
     }
@@ -144,6 +177,74 @@ pub fn frame_cache() -> SharedFrameCache {
     static SLOT: OnceLock<SharedFrameCache> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(FrameCache::default())))
         .clone()
+}
+
+// ── Claim set ────────────────────────────────────────────────────────────────
+
+/// In-flight render claims shared by the prefetch workers: a worker renders a
+/// frame only after winning its claim, so N workers spread over the window
+/// instead of rendering the same nearest frame N times.
+#[derive(Default)]
+pub struct ClaimSet {
+    set: HashSet<FrameKey>,
+}
+
+impl ClaimSet {
+    /// `true` when the caller now owns the claim; `false` when another worker
+    /// already holds it.
+    pub fn try_claim(&mut self, key: FrameKey) -> bool {
+        self.set.insert(key)
+    }
+
+    pub fn release(&mut self, key: &FrameKey) {
+        self.set.remove(key);
+    }
+}
+
+fn claims() -> &'static Mutex<ClaimSet> {
+    static SLOT: OnceLock<Mutex<ClaimSet>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(ClaimSet::default()))
+}
+
+// ── Failure ledger ───────────────────────────────────────────────────────────
+
+/// Attempts a frame gets before workers and the handler stop re-rendering it.
+/// One retry absorbs transient panics; beyond that a panicking frame must not
+/// become an infinite render-panic loop that pegs the workers (the preview
+/// shows the neighboring frame instead).
+pub const MAX_RENDER_ATTEMPTS: u8 = 2;
+
+/// Panicked render attempts per key. Keys carry the generation, so a model
+/// edit naturally retires old entries; the size cap is a runaway backstop.
+#[derive(Default)]
+pub struct FailLedger {
+    map: HashMap<FrameKey, u8>,
+}
+
+impl FailLedger {
+    pub fn record_failure(&mut self, key: FrameKey) {
+        if self.map.len() > 4096 {
+            self.map.clear();
+        }
+        *self.map.entry(key).or_insert(0) += 1;
+    }
+
+    pub fn exhausted(&self, key: &FrameKey) -> bool {
+        self.map.get(key).is_some_and(|&n| n >= MAX_RENDER_ATTEMPTS)
+    }
+}
+
+pub(crate) fn fail_ledger() -> &'static Mutex<FailLedger> {
+    static SLOT: OnceLock<Mutex<FailLedger>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(FailLedger::default()))
+}
+
+/// Prefetch worker count for a machine with `cores` logical cores: leave two
+/// for the UI/webview and the asset handler, keep at least two workers so a
+/// slow frame never serializes the window, and cap at six (JPEG frames past
+/// that saturate the cache mutex instead of helping).
+pub fn worker_count(cores: usize) -> usize {
+    cores.saturating_sub(2).clamp(2, 6)
 }
 
 // ── Prefetcher ───────────────────────────────────────────────────────────────
@@ -182,17 +283,24 @@ fn prefetch_slot() -> Arc<Mutex<PrefetchTarget>> {
         .clone()
 }
 
-/// (current, playing, generation, side) — the tuple whose change aborts an
-/// in-flight prefetch pass so the window re-targets immediately.
-fn target_fingerprint(t: &PrefetchTarget) -> (u32, bool, u64, DiffSide) {
-    (t.current, t.playing, t.generation, t.side)
+/// (current, playing, generation, side, scale) — the tuple whose change aborts
+/// an in-flight prefetch pass so the window re-targets immediately.
+fn target_fingerprint(t: &PrefetchTarget, scale_pct: u16) -> (u32, bool, u64, DiffSide, u16) {
+    (t.current, t.playing, t.generation, t.side, scale_pct)
 }
 
-/// Spawn the singleton prefetch thread (idempotent).
+/// Spawn the prefetch worker pool (idempotent). Workers share the window
+/// through the claim set: each renders the nearest unclaimed missing frame,
+/// so throughput scales with cores instead of serializing on one thread.
 pub fn ensure_prefetcher() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        std::thread::spawn(prefetch_loop);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        for _ in 0..worker_count(cores) {
+            std::thread::spawn(prefetch_loop);
+        }
     });
 }
 
@@ -226,7 +334,8 @@ fn prefetch_loop() {
 
         let total = tasks.len() as u32;
         let window = prefetch_window(target.current, target.playing, total);
-        let fingerprint = target_fingerprint(&target);
+        let scale = preview_scale_pct();
+        let fingerprint = target_fingerprint(&target, scale);
         // Expected generations for eviction: the model generation is always
         // known; the baseline hash only while side A is active.
         let (gen_b, gen_a) = match target.side {
@@ -239,6 +348,7 @@ fn prefetch_loop() {
                 generation: gen,
                 side: target.side,
                 frame,
+                scale_pct: scale,
             };
             if frame_cache()
                 .lock()
@@ -247,25 +357,59 @@ fn prefetch_loop() {
             {
                 continue;
             }
-            // Panic fence: a Skia panic must skip the frame, not kill the
-            // prefetcher for the whole session.
-            let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_frame(&scenario, &tasks, frame, 1.0)
-            }));
-            if let Ok(bytes) = rendered {
-                frame_cache()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(key, bytes, gen_b, gen_a, target.current);
+            // A frame that keeps panicking gets MAX_RENDER_ATTEMPTS, then is
+            // left alone — never an infinite render-panic loop.
+            if fail_ledger()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .exhausted(&key)
+            {
+                continue;
             }
+            // Another worker already rendering this frame → take the next one.
+            if !claims()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_claim(key)
+            {
+                continue;
+            }
+            // Double-check after winning the claim: the asset handler may have
+            // rendered and inserted this frame while we raced for it.
+            let already = frame_cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&key);
+            if !already {
+                // Panic fence: a Skia panic must skip the frame, not kill the
+                // worker for the whole session.
+                let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_frame(&scenario, &tasks, frame, scale_factor(scale))
+                }));
+                match rendered {
+                    Ok(bytes) => frame_cache()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(key, bytes, gen_b, gen_a, target.current, scale),
+                    Err(_) => fail_ledger()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .record_failure(key),
+                }
+            }
+            claims()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .release(&key);
 
             // Abort the pass as soon as the UI retargets (seek, play/pause,
-            // reload, side flip) so the new window starts immediately.
+            // reload, side flip, scale change) so the new window starts
+            // immediately.
             let now = prefetch_slot()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
-            if target_fingerprint(&now) != fingerprint {
+            if target_fingerprint(&now, preview_scale_pct()) != fingerprint {
                 break;
             }
         }
@@ -323,6 +467,7 @@ mod tests {
             generation: gen,
             side,
             frame,
+            scale_pct: 100,
         }
     }
 
@@ -387,7 +532,7 @@ mod tests {
             key(7, DiffSide::A, 5), // stale (gen_a = 9)
             key(9, DiffSide::A, 6),
         ];
-        let out = select_evictions(&keys, Some(2), Some(9), 5, 100);
+        let out = select_evictions(&keys, Some(2), Some(9), 5, 100, 100);
         assert!(out.contains(&key(1, DiffSide::B, 0)));
         assert!(out.contains(&key(7, DiffSide::A, 5)));
         assert_eq!(out.len(), 2, "fresh entries stay under cap");
@@ -396,7 +541,7 @@ mod tests {
     #[test]
     fn evictions_unknown_side_a_generation_keeps_a_entries() {
         let keys = vec![key(7, DiffSide::A, 5), key(2, DiffSide::B, 5)];
-        let out = select_evictions(&keys, Some(2), None, 5, 100);
+        let out = select_evictions(&keys, Some(2), None, 5, 100, 100);
         assert!(out.is_empty(), "A staleness unknowable without gen_a");
     }
 
@@ -407,7 +552,7 @@ mod tests {
             .iter()
             .map(|&f| key(1, DiffSide::B, f))
             .collect();
-        let out = select_evictions(&keys, Some(1), None, 10, 4);
+        let out = select_evictions(&keys, Some(1), None, 10, 4, 100);
         assert_eq!(out.len(), 2);
         assert!(out.contains(&key(1, DiffSide::B, 50)));
         assert!(out.contains(&key(1, DiffSide::B, 30)));
@@ -417,7 +562,7 @@ mod tests {
     fn evictions_stale_then_distance_combined() {
         let mut keys: Vec<FrameKey> = (0..5).map(|f| key(1, DiffSide::B, f)).collect(); // stale
         keys.extend((0..6).map(|f| key(2, DiffSide::B, f * 10))); // fresh: 0,10,20,30,40,50
-        let out = select_evictions(&keys, Some(2), None, 0, 4);
+        let out = select_evictions(&keys, Some(2), None, 0, 4, 100);
         // All 5 stale go, plus the 2 farthest fresh (50, 40) to reach cap 4.
         assert_eq!(out.len(), 7);
         assert!(out.contains(&key(2, DiffSide::B, 50)));
@@ -425,13 +570,27 @@ mod tests {
         assert!(!out.contains(&key(2, DiffSide::B, 0)));
     }
 
+    #[test]
+    fn evictions_drop_other_scale_entries() {
+        let old = FrameKey {
+            scale_pct: 100,
+            ..key(1, DiffSide::B, 5)
+        };
+        let fresh = FrameKey {
+            scale_pct: 50,
+            ..key(1, DiffSide::B, 5)
+        };
+        let out = select_evictions(&[old, fresh], Some(1), None, 5, 100, 50);
+        assert_eq!(out, vec![old], "same frame at the old scale is stale");
+    }
+
     // ── Cache integration (fake frames, no threads) ─────────────────────
 
     #[test]
     fn cache_roundtrip_and_side_separation() {
         let mut c = FrameCache::default();
-        c.insert(key(1, DiffSide::B, 3), vec![0xB], Some(1), None, 3);
-        c.insert(key(1, DiffSide::A, 3), vec![0xA], None, Some(1), 3);
+        c.insert(key(1, DiffSide::B, 3), vec![0xB], Some(1), None, 3, 100);
+        c.insert(key(1, DiffSide::A, 3), vec![0xA], None, Some(1), 3, 100);
         assert_eq!(c.get(&key(1, DiffSide::B, 3)).unwrap().as_slice(), &[0xB]);
         assert_eq!(c.get(&key(1, DiffSide::A, 3)).unwrap().as_slice(), &[0xA]);
         assert!(
@@ -444,7 +603,7 @@ mod tests {
     fn cache_stays_bounded_and_keeps_nearest() {
         let mut c = FrameCache::default();
         for f in 0..(CACHE_CAP as u32 + 20) {
-            c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0);
+            c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0, 100);
         }
         assert!(c.len() <= CACHE_CAP);
         assert!(
@@ -461,11 +620,189 @@ mod tests {
     fn cache_purges_old_generation_on_insert() {
         let mut c = FrameCache::default();
         for f in 0..10 {
-            c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0);
+            c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0, 100);
         }
         // First insert of the new generation purges every old-gen entry.
-        c.insert(key(2, DiffSide::B, 0), vec![0], Some(2), None, 0);
+        c.insert(key(2, DiffSide::B, 0), vec![0], Some(2), None, 0, 100);
         assert_eq!(c.len(), 1);
         assert!(c.contains(&key(2, DiffSide::B, 0)));
+    }
+
+    #[test]
+    fn cache_purges_old_scale_on_insert() {
+        let mut c = FrameCache::default();
+        for f in 0..10 {
+            c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0, 100);
+        }
+        // First insert after a scale switch purges every 100% entry.
+        let half = FrameKey {
+            scale_pct: 50,
+            ..key(1, DiffSide::B, 0)
+        };
+        c.insert(half, vec![0], Some(1), None, 0, 50);
+        assert_eq!(c.len(), 1);
+        assert!(c.contains(&half));
+    }
+
+    // ── Claims / workers ────────────────────────────────────────────────
+
+    #[test]
+    fn claim_is_exclusive_until_released() {
+        let mut claims = ClaimSet::default();
+        let k = key(1, DiffSide::B, 7);
+        assert!(claims.try_claim(k), "first claim wins");
+        assert!(!claims.try_claim(k), "second claim loses while held");
+        claims.release(&k);
+        assert!(claims.try_claim(k), "claimable again after release");
+    }
+
+    #[test]
+    fn claims_are_per_key() {
+        let mut claims = ClaimSet::default();
+        assert!(claims.try_claim(key(1, DiffSide::B, 7)));
+        assert!(claims.try_claim(key(1, DiffSide::B, 8)), "other frame");
+        assert!(claims.try_claim(key(1, DiffSide::A, 7)), "other side");
+        let other_scale = FrameKey {
+            scale_pct: 50,
+            ..key(1, DiffSide::B, 7)
+        };
+        assert!(claims.try_claim(other_scale), "other scale");
+    }
+
+    /// TEMP diagnostic (not CI): full-pipeline soak — real worker pool, a
+    /// simulated 30fps playhead publishing targets, a simulated asset handler
+    /// serving frames, and the canvas hit-map pass. Prints RSS + serve stats.
+    /// `cargo test -p rustmotion-studio --release soak_full -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn soak_full_pipeline_rss() {
+        use crate::editor::frames::frame_hits;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let Ok(src) = std::fs::read_to_string("../../examples/dynamic-glass.json") else {
+            eprintln!("skipped: examples/dynamic-glass.json not present");
+            return;
+        };
+        let scenario =
+            Arc::new(rustmotion::loader::load_scenario_from_source(None, Some(&src)).unwrap());
+        let tasks = Arc::new(rustmotion::encode::build_frame_tasks(&scenario));
+        let total = tasks.len() as u32;
+        let rss_mb = || -> u64 {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap()
+                / 1024
+        };
+
+        ensure_prefetcher();
+        static SERVED: AtomicU32 = AtomicU32::new(0);
+        static MISSES: AtomicU32 = AtomicU32::new(0);
+
+        // Simulated playback + asset handler + canvas hit pass, 30fps for 60s.
+        let s2 = scenario.clone();
+        let t2 = tasks.clone();
+        let sim = std::thread::spawn(move || {
+            let mut current = 0u32;
+            for _tick in 0..(30 * 60) {
+                std::thread::sleep(Duration::from_millis(33));
+                current = (current + 1) % total;
+                *prefetch_slot().lock().unwrap_or_else(|e| e.into_inner()) = PrefetchTarget {
+                    current,
+                    playing: true,
+                    generation: 1,
+                    side: DiffSide::B,
+                    scenario: Some(s2.clone()),
+                    tasks: Some(t2.clone()),
+                    path: None,
+                };
+                let key = FrameKey {
+                    generation: 1,
+                    side: DiffSide::B,
+                    frame: current,
+                    scale_pct: preview_scale_pct(),
+                };
+                let hit = frame_cache()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&key);
+                if !hit {
+                    MISSES.fetch_add(1, Ordering::Relaxed);
+                    let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::editor::frames::render_frame(
+                            &s2,
+                            &t2,
+                            current,
+                            scale_factor(key.scale_pct),
+                        )
+                    }));
+                    if let Ok(b) = bytes {
+                        frame_cache()
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(key, b, Some(1), None, current, key.scale_pct);
+                    }
+                }
+                SERVED.fetch_add(1, Ordering::Relaxed);
+                // The canvas hit-map layout pass runs on every tick in the app.
+                let _ = frame_hits(&s2, &t2, current, "/scenes/0");
+            }
+        });
+
+        while !sim.is_finished() {
+            std::thread::sleep(Duration::from_secs(5));
+            println!(
+                "rss={} MB served={} misses={}",
+                rss_mb(),
+                SERVED.load(Ordering::Relaxed),
+                MISSES.load(Ordering::Relaxed)
+            );
+        }
+        sim.join().unwrap();
+        println!(
+            "end rss={} MB misses={}",
+            rss_mb(),
+            MISSES.load(Ordering::Relaxed)
+        );
+    }
+
+    #[test]
+    fn fail_ledger_exhausts_after_max_attempts() {
+        let mut ledger = FailLedger::default();
+        let k = key(1, DiffSide::B, 7);
+        assert!(!ledger.exhausted(&k));
+        ledger.record_failure(k);
+        assert!(!ledger.exhausted(&k), "one transient failure gets a retry");
+        ledger.record_failure(k);
+        assert!(ledger.exhausted(&k), "gives up after MAX_RENDER_ATTEMPTS");
+        assert!(
+            !ledger.exhausted(&key(2, DiffSide::B, 7)),
+            "a new generation retries the same frame"
+        );
+    }
+
+    #[test]
+    fn worker_count_leaves_ui_cores_and_stays_bounded() {
+        assert_eq!(worker_count(1), 2, "floor: two workers even on tiny CPUs");
+        assert_eq!(worker_count(4), 2);
+        assert_eq!(worker_count(8), 6);
+        assert_eq!(worker_count(12), 6, "cap at six");
+    }
+
+    #[test]
+    fn scale_setter_clamps_and_factor_converts() {
+        set_preview_scale_pct(50);
+        assert_eq!(preview_scale_pct(), 50);
+        set_preview_scale_pct(0);
+        assert_eq!(preview_scale_pct(), 10, "clamped to the floor");
+        set_preview_scale_pct(200);
+        assert_eq!(preview_scale_pct(), 100, "clamped to full resolution");
+        assert_eq!(scale_factor(50), 0.5);
+        assert_eq!(scale_factor(100), 1.0);
+        set_preview_scale_pct(DEFAULT_PREVIEW_SCALE_PCT);
     }
 }

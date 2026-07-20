@@ -96,7 +96,11 @@ pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
             height: metrics_for(style).line_height,
         };
     }
-    let mut fs = font_system().lock().unwrap();
+    // Poison-tolerant: a panic on another render thread (e.g. a Skia panic
+    // caught by a preview worker's panic fence) must not poison text shaping
+    // for every subsequent frame — the FontSystem stays usable, each shape
+    // call builds its own Buffer.
+    let mut fs = font_system().lock().unwrap_or_else(|e| e.into_inner());
     let metrics = metrics_for(style);
     let mut buf = Buffer::new(&mut fs, metrics);
     buf.set_size(style.max_width, None);
@@ -128,7 +132,8 @@ pub fn paint_text(
     if text.is_empty() {
         return;
     }
-    let mut fs = font_system().lock().unwrap();
+    // Poison-tolerant for the same reason as in `measure_text`.
+    let mut fs = font_system().lock().unwrap_or_else(|e| e.into_inner());
     let metrics = metrics_for(style);
     let mut buf = Buffer::new(&mut fs, metrics);
     buf.set_size(style.max_width, None);
@@ -136,7 +141,7 @@ pub fn paint_text(
     buf.set_text(text, &attrs_for(style), Shaping::Advanced, None);
     buf.shape_until_scroll(&mut fs, false);
 
-    let mut sc = swash_cache().lock().unwrap();
+    let mut sc = swash_cache().lock().unwrap_or_else(|e| e.into_inner());
     let ccolor = CColor::rgba(color.r(), color.g(), color.b(), color.a());
 
     for run in buf.layout_runs() {
@@ -263,5 +268,21 @@ mod tests {
         };
         let m = measure_text("the quick brown fox", &style);
         assert!(m.height < 16.0 * 1.2 * 2.0, "should be one line");
+    }
+
+    /// A panic on another thread while it holds the font mutex (e.g. a Skia
+    /// panic caught by a preview worker's panic fence) poisons the lock.
+    /// Shaping must survive that — otherwise one panic turns every subsequent
+    /// text render on every thread into a panic cascade.
+    #[test]
+    fn measure_survives_poisoned_font_mutex() {
+        let _ = std::thread::spawn(|| {
+            let _guard = font_system().lock().unwrap_or_else(|e| e.into_inner());
+            panic!("deliberate poison");
+        })
+        .join();
+        assert!(font_system().is_poisoned(), "setup must have poisoned");
+        let m = measure_text("still shaping", &TextStyle::default());
+        assert!(m.width > 0.0, "measure works despite the poisoned mutex");
     }
 }

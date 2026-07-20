@@ -185,6 +185,64 @@ mod tests {
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "must be a JPEG");
     }
 
+    /// TEMP diagnostic (not part of CI): replicate the prefetch worker pool on
+    /// the dynamic-glass example and print RSS growth. Run with
+    /// `RM_STRESS_SCALE=0.5 cargo test -p rustmotion-studio --release stress_rss -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn stress_rss_worker_pool() {
+        use std::sync::Arc;
+        let Ok(src) = std::fs::read_to_string("../../examples/dynamic-glass.json") else {
+            eprintln!("skipped: examples/dynamic-glass.json not present");
+            return;
+        };
+        let scenario =
+            Arc::new(rustmotion::loader::load_scenario_from_source(None, Some(&src)).unwrap());
+        let tasks = Arc::new(rustmotion::encode::build_frame_tasks(&scenario));
+        let scale: f32 = std::env::var("RM_STRESS_SCALE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.5);
+        let rss_kb = || -> u64 {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+        };
+        println!("scale={scale} start rss={} MB", rss_kb() / 1024);
+        let workers: Vec<_> = (0..6u32)
+            .map(|w| {
+                let s = scenario.clone();
+                let t = tasks.clone();
+                std::thread::spawn(move || {
+                    for _pass in 0..6 {
+                        for f in (130..190).filter(|f| f % 6 == w) {
+                            let _ = render_frame(&s, &t, f, scale);
+                        }
+                    }
+                })
+            })
+            .collect();
+        while workers.iter().any(|w| !w.is_finished()) {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            println!("rss={} MB", rss_kb() / 1024);
+        }
+        for w in workers {
+            w.join().unwrap();
+        }
+        println!("end rss={} MB", rss_kb() / 1024);
+    }
+
+    #[test]
+    fn renders_frame_at_reduced_scale() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let jpeg = render_frame(&scenario, &tasks, 0, 0.5);
+        let img = image::load_from_memory(&jpeg).expect("decodable JPEG");
+        assert_eq!((img.width(), img.height()), (640, 360), "half of 1280x720");
+    }
+
     #[test]
     fn frame_hits_are_in_percent_and_have_kind() {
         let json = r##"{ "video": { "width": 800, "height": 600, "background": "#101418" }, "scenes": [ { "duration": 1.0, "children": [ { "type": "text", "content": "Hi", "style": { "font-size": 40 } } ] } ] }"##;
