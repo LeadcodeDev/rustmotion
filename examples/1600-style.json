@@ -4,55 +4,147 @@
   "fonts": [{ "family": "Anton", "source": "google", "weights": [400] }],
   "scenes": [
     {
-      "duration": 3.5,
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 0 },
+      "duration": 3.8,
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.02 }, { "time": 3.8, "value": 1.12 }], "easing": "ease_out" },
+          { "property": "origin.x", "values": [{ "time": 0, "value": 820 }, { "time": 3.8, "value": 1040 }], "easing": "ease_in_out" },
+          { "property": "origin.y", "values": [{ "time": 0, "value": 600 }, { "time": 3.8, "value": 500 }], "easing": "ease_in_out" },
+          { "property": "rotation", "values": [{ "time": 0, "value": -1.5 }, { "time": 3.8, "value": 0.5 }], "easing": "ease_in_out" }
+        ]
+      },
       "children": [
         { "type": "shape", "shape": "rounded_rect", "fill": "#FFE500", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "ON FAIT DU", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.55 }] } },
-        { "type": "text", "content": "MOTION", "style": { "font-family": "Anton", "font-size": 300, "color": "#0A0A0A", "line-height": 0.92, "letter-spacing": 2, "animation": [{ "name": "slide_in_up", "delay": 0.12, "duration": 0.6 }] } },
-        { "type": "text", "content": "QUI VEND", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.24, "duration": 0.6 }] } }
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.35, "overflow": "hidden", "flex-direction": "column", "align-items": "center", "justify-content": "center" },
+          "children": [
+            { "type": "text", "content": "STUDIO", "style": { "font-family": "Anton", "font-size": 440, "color": "#EFD200", "line-height": 0.9, "letter-spacing": 4, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 0 },
+          "children": [
+            { "type": "text", "content": "ON FAIT DU", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.55 }] } },
+            { "type": "text", "content": "MOTION", "style": { "font-family": "Anton", "font-size": 300, "color": "#0A0A0A", "line-height": 0.92, "letter-spacing": 2, "perspective": 900, "animation": [{ "name": "flip_in_x", "delay": 0.15, "duration": 0.8 }] } },
+            { "type": "text", "content": "QUI VEND", "style": { "font-family": "Anton", "font-size": 118, "color": "#0A0A0A", "line-height": 1.0, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.32, "duration": 0.6 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.75 },
+          "children": [
+            { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 250, "y": 240, "style": { "width": 44, "height": 44, "animation": [{ "name": "fade_in", "delay": 0.5, "duration": 0.4 }, { "name": "float_3d", "loop": true }] } },
+            { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 1600, "y": 780, "style": { "width": 60, "height": 60, "animation": [{ "name": "fade_in", "delay": 0.7, "duration": 0.4 }, { "name": "float_3d", "loop": true }] } }
+          ]
+        }
       ]
     },
     {
-      "duration": 3.2,
+      "duration": 3.4,
       "transition": { "type": "wipe_up", "duration": 0.35 },
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 6 },
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.14 }, { "time": 3.4, "value": 1.0 }], "easing": "ease_out" },
+          { "property": "origin.x", "values": [{ "time": 0, "value": 1100 }, { "time": 3.4, "value": 900 }], "easing": "ease_in_out" }
+        ]
+      },
       "children": [
         { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "STUDIO DE", "style": { "font-family": "Anton", "font-size": 150, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.55 }] } },
-        { "type": "text", "content": "MOTION DESIGN", "style": { "font-family": "Anton", "font-size": 200, "color": "#FFE500", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "scale_in", "delay": 0.18, "duration": 0.6, "overshoot": 0.12 }] } }
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.4, "overflow": "hidden", "flex-direction": "column", "align-items": "center", "justify-content": "center" },
+          "children": [
+            { "type": "text", "content": "2026", "style": { "font-family": "Anton", "font-size": 640, "color": "#161616", "line-height": 0.9, "letter-spacing": 10, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 6 },
+          "children": [
+            { "type": "text", "content": "STUDIO DE", "style": { "font-family": "Anton", "font-size": 150, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "perspective": 1000, "transform-origin": { "x": "center", "y": "bottom" }, "animation": [{ "name": "flip_in_x", "delay": 0.0, "duration": 0.7 }] } },
+            { "type": "text", "content": "MOTION DESIGN", "style": { "font-family": "Anton", "font-size": 200, "color": "#FFE500", "line-height": 0.95, "letter-spacing": 2, "perspective": 1000, "animation": [{ "name": "tilt_in", "delay": 0.2, "duration": 0.7 }, { "name": "float_3d", "loop": true }] } }
+          ]
+        }
       ]
     },
     {
-      "duration": 4.0,
+      "duration": 4.2,
       "transition": { "type": "wipe_left", "duration": 0.35 },
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 56 },
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.0 }, { "time": 4.2, "value": 1.1 }], "easing": "ease_in_out" },
+          { "property": "origin.y", "values": [{ "time": 0, "value": 640 }, { "time": 4.2, "value": 560 }], "easing": "ease_in_out" }
+        ]
+      },
       "children": [
         { "type": "shape", "shape": "rounded_rect", "fill": "#1A1AE5", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "LE STUDIO EN CHIFFRES", "style": { "font-family": "Anton", "font-size": 44, "color": "#8AB0FF", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.4 }] } },
         {
-          "type": "div",
-          "style": { "flex-direction": "row", "align-items": "flex-start", "justify-content": "center", "gap": 96 },
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.4, "overflow": "hidden", "flex-direction": "column", "align-items": "center", "justify-content": "center" },
           "children": [
+            { "type": "text", "content": "150+", "style": { "font-family": "Anton", "font-size": 620, "color": "#1414C6", "line-height": 0.9, "letter-spacing": 8, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 56 },
+          "children": [
+            { "type": "text", "content": "LE STUDIO EN CHIFFRES", "style": { "font-family": "Anton", "font-size": 44, "color": "#8AB0FF", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.4 }] } },
             {
-              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
+              "type": "div",
+              "style": { "flex-direction": "row", "align-items": "flex-start", "justify-content": "center", "gap": 96, "perspective": 1200 },
               "children": [
-                { "type": "counter", "from": 0, "to": 30, "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
-                { "type": "text", "content": "JOURS DE PROD", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+                { "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420, "animation": [{ "name": "flip_in_y", "delay": 0.15, "duration": 0.7 }] }, "children": [
+                  { "type": "counter", "from": 0, "to": 30, "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                  { "type": "text", "content": "JOURS DE PROD", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+                ] },
+                { "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420, "animation": [{ "name": "flip_in_y", "delay": 0.32, "duration": 0.7 }] }, "children": [
+                  { "type": "counter", "from": 0, "to": 120, "prefix": "+", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                  { "type": "text", "content": "VIDEOS LIVREES", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+                ] },
+                { "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420, "animation": [{ "name": "flip_in_y", "delay": 0.49, "duration": 0.7 }] }, "children": [
+                  { "type": "counter", "from": 0, "to": 3, "prefix": "x", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
+                  { "type": "text", "content": "CONVERSION", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+                ] }
               ]
-            },
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 3.8,
+      "transition": { "type": "wipe_right", "duration": 0.35 },
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.08 }, { "time": 3.8, "value": 1.0 }], "easing": "ease_out" },
+          { "property": "origin.x", "values": [{ "time": 0, "value": 760 }, { "time": 3.8, "value": 1000 }], "easing": "ease_in_out" }
+        ]
+      },
+      "children": [
+        { "type": "shape", "shape": "rounded_rect", "fill": "#FF4A32", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.4, "overflow": "hidden", "flex-direction": "column", "align-items": "flex-end", "justify-content": "center" },
+          "children": [
+            { "type": "text", "content": "GO", "style": { "font-family": "Anton", "font-size": 900, "color": "#EE3A22", "line-height": 0.9, "letter-spacing": 4, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 36 },
+          "children": [
+            { "type": "text", "content": "CE QU'ON FAIT", "style": { "font-family": "Anton", "font-size": 40, "color": "#0A0A0A", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.35 }] } },
             {
-              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
+              "type": "div",
+              "style": { "flex-direction": "column", "align-items": "center", "gap": 0, "perspective": 1400 },
               "children": [
-                { "type": "counter", "from": 0, "to": 120, "prefix": "+", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
-                { "type": "text", "content": "VIDEOS LIVREES", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
-              ]
-            },
-            {
-              "type": "div", "style": { "flex-direction": "column", "align-items": "center", "gap": 28, "width": 420 },
-              "children": [
-                { "type": "counter", "from": 0, "to": 3, "prefix": "x", "style": { "font-family": "Anton", "font-size": 190, "height": 200, "color": "#F5F0E8", "line-height": 1.0, "text-align": "center" } },
-                { "type": "text", "content": "CONVERSION", "style": { "font-family": "Anton", "font-size": 32, "color": "#8AB0FF", "letter-spacing": 4, "text-align": "center" } }
+                { "type": "text", "content": "BRANDING", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "transform-origin": { "x": "left", "y": "center" }, "animation": [{ "name": "flip_in_y", "delay": 0.1, "duration": 0.55 }] } },
+                { "type": "text", "content": "PITCH DECK", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "transform-origin": { "x": "left", "y": "center" }, "animation": [{ "name": "flip_in_y", "delay": 0.22, "duration": 0.55 }] } },
+                { "type": "text", "content": "PRODUIT", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "transform-origin": { "x": "left", "y": "center" }, "animation": [{ "name": "flip_in_y", "delay": 0.34, "duration": 0.55 }] } },
+                { "type": "text", "content": "SOCIAL", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "transform-origin": { "x": "left", "y": "center" }, "animation": [{ "name": "flip_in_y", "delay": 0.46, "duration": 0.55 }] } }
               ]
             }
           ]
@@ -61,42 +153,60 @@
     },
     {
       "duration": 3.6,
-      "transition": { "type": "wipe_right", "duration": 0.35 },
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 36 },
+      "transition": { "type": "wipe_down", "duration": 0.35 },
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.14 }, { "time": 3.6, "value": 1.07 }], "easing": "ease_out" },
+          { "property": "rotation", "values": [{ "time": 0, "value": 1.8 }, { "time": 3.6, "value": 0.0 }], "easing": "ease_in_out" }
+        ]
+      },
       "children": [
-        { "type": "shape", "shape": "rounded_rect", "fill": "#FF4A32", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "CE QU'ON FAIT", "style": { "font-family": "Anton", "font-size": 40, "color": "#0A0A0A", "letter-spacing": 6, "animation": [{ "name": "fade_in", "delay": 0.0, "duration": 0.35 }] } },
+        { "type": "shape", "shape": "rounded_rect", "fill": "#00E676", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
         {
-          "type": "div",
-          "style": { "flex-direction": "column", "align-items": "center", "gap": 0 },
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.4, "overflow": "hidden", "flex-direction": "column", "align-items": "flex-start", "justify-content": "flex-start" },
           "children": [
-            { "type": "text", "content": "BRANDING", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.1, "duration": 0.5 }] } },
-            { "type": "text", "content": "PITCH DECK", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.22, "duration": 0.5 }] } },
-            { "type": "text", "content": "PRODUIT", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.34, "duration": 0.5 }] } },
-            { "type": "text", "content": "SOCIAL", "style": { "font-family": "Anton", "font-size": 122, "color": "#0A0A0A", "line-height": 1.02, "letter-spacing": 1, "animation": [{ "name": "slide_in_left", "delay": 0.46, "duration": 0.5 }] } }
+            { "type": "text", "content": "OUI", "style": { "font-family": "Anton", "font-size": 720, "color": "#00C765", "line-height": 0.85, "letter-spacing": 4, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 4 },
+          "children": [
+            { "type": "text", "content": "PAS DE BLABLA.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "perspective": 1100, "animation": [{ "name": "flip_in_x", "delay": 0.0, "duration": 0.55 }] } },
+            { "type": "text", "content": "QUE DU MOUVEMENT.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "perspective": 1100, "animation": [{ "name": "flip_in_x", "delay": 0.18, "duration": 0.55 }] } }
           ]
         }
       ]
     },
     {
-      "duration": 3.4,
-      "transition": { "type": "wipe_down", "duration": 0.35 },
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 4 },
-      "children": [
-        { "type": "shape", "shape": "rounded_rect", "fill": "#00E676", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "PAS DE BLABLA.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.0, "duration": 0.5 }] } },
-        { "type": "text", "content": "QUE DU MOUVEMENT.", "style": { "font-family": "Anton", "font-size": 170, "color": "#0A0A0A", "line-height": 0.98, "letter-spacing": 1, "animation": [{ "name": "slide_in_up", "delay": 0.16, "duration": 0.5 }] } }
-      ]
-    },
-    {
-      "duration": 3.4,
+      "duration": 3.8,
       "transition": { "type": "slide", "duration": 0.35 },
-      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 28 },
+      "camera": {
+        "keyframes": [
+          { "property": "zoom", "values": [{ "time": 0, "value": 1.0 }, { "time": 3.8, "value": 1.14 }], "easing": "ease_in" },
+          { "property": "origin.x", "values": [{ "time": 0, "value": 960 }, { "time": 3.8, "value": 900 }], "easing": "ease_in_out" },
+          { "property": "origin.y", "values": [{ "time": 0, "value": 480 }, { "time": 3.8, "value": 540 }], "easing": "ease_in_out" }
+        ]
+      },
       "children": [
         { "type": "shape", "shape": "rounded_rect", "fill": "#0A0A0A", "position": "absolute", "x": 0, "y": 0, "style": { "width": 1920, "height": 1080, "border-radius": 0 } },
-        { "type": "text", "content": "ON COMMENCE ?", "style": { "font-family": "Anton", "font-size": 240, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "animation": [{ "name": "scale_in", "delay": 0.0, "duration": 0.6, "overshoot": 0.1 }] } },
-        { "type": "shape", "shape": "rounded_rect", "fill": "#FFE500", "style": { "width": 520, "height": 10, "border-radius": 5, "animation": [{ "name": "slide_in_left", "delay": 0.35, "duration": 0.5 }] } },
-        { "type": "text", "content": "STUDIO@1600.STYLE", "style": { "font-family": "Anton", "font-size": 56, "color": "#FFE500", "letter-spacing": 8, "animation": [{ "name": "fade_in", "delay": 0.5, "duration": 0.5 }] } }
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 0.4, "overflow": "hidden", "flex-direction": "column", "align-items": "flex-end", "justify-content": "flex-end" },
+          "children": [
+            { "type": "text", "content": "?", "style": { "font-family": "Anton", "font-size": 1100, "color": "#171717", "line-height": 0.8, "animation": [{ "name": "fade_in", "duration": 1.0 }] } }
+          ]
+        },
+        {
+          "type": "div", "position": "absolute", "x": 0, "y": 0,
+          "style": { "width": 1920, "height": 1080, "depth": 1.0, "flex-direction": "column", "align-items": "center", "justify-content": "center", "gap": 28 },
+          "children": [
+            { "type": "text", "content": "ON COMMENCE ?", "style": { "font-family": "Anton", "font-size": 240, "color": "#F5F0E8", "line-height": 0.95, "letter-spacing": 2, "perspective": 1000, "animation": [{ "name": "tilt_in", "delay": 0.0, "duration": 0.6 }] } },
+            { "type": "shape", "shape": "rounded_rect", "fill": "#FFE500", "style": { "width": 520, "height": 10, "border-radius": 5, "animation": [{ "name": "slide_in_left", "delay": 0.35, "duration": 0.5 }] } },
+            { "type": "text", "content": "STUDIO@1600.STYLE", "style": { "font-family": "Anton", "font-size": 56, "color": "#FFE500", "letter-spacing": 8, "animation": [{ "name": "fade_in", "delay": 0.5, "duration": 0.5 }] } }
+          ]
+        }
       ]
     }
   ]

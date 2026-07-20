@@ -21,6 +21,20 @@ Recette pour produire des vidéos dans l'esprit des studios de motion design typ
 - **Transitions entre scènes** : franches et directionnelles — `wipe_up` / `wipe_left` / `wipe_right` / `wipe_down` / `slide`, durée 0.35s. Alterner les directions pour le rythme.
 - **Chiffres** : `counter` (`from`/`to`, `prefix`), il monte sur la durée de la scène. Réserver sa hauteur (`"height"` ≈ font-size + 10) et un `gap` ≥ 24 avec son label, sinon le label remonte sur le chiffre (le counter hors `card` n'a pas de correction de baseline).
 
+## Profondeur & caméra — jouer sur l'espace
+
+Sans ça, le style est un diaporama 2D. Trois leviers, cumulés sur chaque scène :
+
+1. **Caméra en mouvement continu** (`scene.camera.keyframes`, propriétés `zoom` / `origin.x` / `origin.y` / `rotation`) : un push-in ou pull-out lent (zoom 1.0↔1.14) + une dérive du point focal (`origin`) donne une vie permanente. Alterner push-in / pull-out d'une scène à l'autre.
+2. **Plans de profondeur** (`style.depth` sur les enfants **directs** de la scène, qui deviennent les plans de parallaxe) : structurer chaque scène en 3 plans absolus plein cadre —
+   - **fond profond** `depth ~0.4` : un mot/chiffre géant ton-sur-ton (`overflow: hidden` sur le plan pour le clipper au cadre) ;
+   - **contenu** `depth 1.0` : la typo principale ;
+   - **avant-plan** `depth ~1.75` : petites formes d'accent avec `float_3d` en boucle.
+   Au mouvement caméra, les plans se séparent → vraie profondeur.
+3. **Entrées en rotation 3D** sur la ligne clé : `flip_in_x` / `flip_in_y` / `tilt_in` (+ `perspective` 900–1400 sur l'élément, `transform-origin` pour pivoter sur une charnière), qui se résolvent face caméra → lisible une fois posé.
+
+**Piège du bleed** : une `rotation` caméra (ou un zoom < 1.0) révèle le `video.background` aux coins. Garder un zoom couvrant pendant toute la rotation (`zoom ≥ ~1.06` pour ±2°), ou fixer `video.background` à la couleur de la scène. Un `origin` qui dérive à zoom 1.0 ne bleede pas (l'origin n'a d'effet qu'avec du zoom).
+
 ## Structure d'une scène type
 
 ```json
