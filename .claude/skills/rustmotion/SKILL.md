@@ -223,6 +223,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
 - [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
+- [rules/world-view.md](rules/world-view.md) - **CRITICAL:** `world` view = the only mechanism for real continuity across beats (no scene-boundary cuts); `world-position` coordinate model + ambient-halo recipe
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
 - [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
 - [rules/icon-format.md](rules/icon-format.md) - Icons use Iconify (200k+ icons), format "prefix:name" (e.g. "lucide:home")
@@ -550,6 +551,11 @@ The two examples below are short excerpts. For full, validated, end-to-end scena
 | `layout`     | object | `null`   | Scene-level flex layout (see below)            |
 | `transition` | object | `null`   | Transition to this scene from the previous one |
 | `freeze_at`  | f64    | `null`   | Freeze the scene at this time (seconds)        |
+| `world-position` | `{x, y}` | `null` | **(world view only)** Camera waypoint for this scene — NOT the scene's origin. See [rules/world-view.md](rules/world-view.md). |
+| `persist`    | bool   | `false`  | **(world view only)** Keep this scene's content visible (fully opaque) after its own time window ends |
+| `camera`     | object | `null`   | Virtual camera (pan/zoom/rotation) — see [Virtual Camera](#virtual-camera) below |
+
+Note the casing: `world-position` is kebab-case, `freeze_at` is snake_case — a real inconsistency in the schema, not a typo. Copy the field name exactly as shown.
 
 Each scene is an **implicit flex container** at video dimensions. All children participate in flex flow. Children with `position` inside a `card` become absolute. Default direction: `column`.
 
@@ -582,6 +588,43 @@ Think of scene composition exactly like HTML/CSS: **prefer normal flow** (flex c
 ```
 
 **Decorative/background shapes must always be absolute** — a non-absolute shape or particle in the flex flow consumes height and can push content off-center or to the bottom of the screen. Always add `"position": "absolute", "x": 0, "y": 0` to ambient shapes and particles.
+
+#### Views & Composition (`composition`)
+
+`scenes` at the scenario root is shorthand for a single implicit `slide` view. For multiple **views** — or to unlock the `world` view — use `composition` instead. `composition` and root-level `scenes` are mutually exclusive (using both is an error).
+
+```json
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30 },
+  "composition": [
+    { "type": "slide", "scenes": [ { "duration": 3.0, "children": [ { "type": "text", "content": "Slide beat" } ] } ] },
+    {
+      "type": "world",
+      "camera_pan_duration": 1.0,
+      "camera_easing": "ease_in_out",
+      "background": { "preset": "halo", "zones": [ { "color": "#6366F1AA", "x": 0.3, "y": 0.4, "radius": 0.5 } ] },
+      "scenes": [
+        { "duration": 2.5, "children": [ { "type": "text", "content": "World beat one" } ] },
+        { "duration": 2.5, "children": [ { "type": "text", "content": "World beat two" } ] }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | enum | `"slide"` | `"slide"` (scene-to-scene, coupe/transition) or `"world"` (continuous virtual camera) |
+| `scenes` | array | `[]` | Same scene objects as root `scenes` (supports `include` too) |
+| `transition` | object | `null` | Transition **entering this view** from the previous view (same shape as a scene `transition`) |
+| `background` | string/object | `null` | Shared background for the whole view — for `world`, this is where the ambient glow layer belongs (`preset: "halo"`), never as per-scene shapes |
+| `camera_easing` | enum | `"ease_in_out"` | **(world)** Easing for the camera pan between scene waypoints |
+| `camera_pan_duration` | f64 | `0.8` | **(world)** Duration (seconds) of the camera pan at each scene boundary |
+
+**`slide` views** are what the rest of this document describes: scenes render in sequence, `transition` composites two already-rendered frame buffers (fade/wipe/zoom/…) — no element survives the cut.
+
+**`world` views** are the only mechanism that produces real continuity between beats: a single virtual camera glides between scene waypoints (`world-position`), with a crossfade during the pan instead of a hard cut, over a shared `background`. Full recipe, coordinate model, and a validated multi-beat example: [rules/world-view.md](rules/world-view.md).
 
 #### Include (Composable Scenarios)
 
@@ -2263,8 +2306,11 @@ With `transition`, background properties (colors, speed, spacing, element_size, 
 | `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots; stroke width for concentric_circles |
 | `spacing`      | f32    | `60.0`            | Element spacing for grid_dots/concentric_circles |
 | `count`        | u32    | `null`            | Number of circles for concentric_circles (overrides spacing) |
+| `zones`        | array  | `[]`              | `halo` only — `[{ "color": "#hex", "x": 0.0-1.0, "y": 0.0-1.0, "radius": 0.0-1.0 }]`. `x`/`y` are fractions of width/height, `radius` a fraction of `max(width, height)`. |
 | `$ref`         | string | `null`            | Reference to a named template in `backgrounds` |
 | `transition`   | object | `null`            | `{ "duration": f64, "easing": "ease_in_out" }` — interpolates from prev scene |
+
+The same `background` field also exists at the **view** level (`composition[].background`) — that's the recommended place for an ambient `halo` glow in a `world` view, since a per-scene shape glow either fails viewport validation or, once clipped to pass, becomes a visible hard-edged rectangle during a camera pan. See [rules/world-view.md](rules/world-view.md).
 
 ---
 

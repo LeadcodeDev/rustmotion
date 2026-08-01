@@ -1,8 +1,8 @@
 use crate::engine::transition::{apply_transition, camera_pan_transition};
 use crate::error::Result;
 use crate::schema::{
-    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType, VideoConfig,
-    ViewType,
+    EasingType, PanBackground, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType,
+    VideoConfig, ViewType,
 };
 
 /// Description of what to render for a specific frame
@@ -154,6 +154,24 @@ pub fn render_frame_task_scaled(
                     frame_a_idx,
                     scale_factor,
                 )?;
+                // The transition belongs to the scene being entered, so that is
+                // where the background mode lives.
+                let pan_bg = scenes[*scene_b_idx]
+                    .transition
+                    .as_ref()
+                    .map(|t| t.background)
+                    .unwrap_or_default();
+                // Only rendered when the backgrounds travel — otherwise scene A's
+                // is a fixed backdrop and rendering B's would be wasted work.
+                let bg_b = match pan_bg {
+                    PanBackground::Travel => Some(render_scene_bg_scaled(
+                        config,
+                        &scenes[*scene_b_idx],
+                        *frame_in_transition,
+                        scale_factor,
+                    )?),
+                    PanBackground::Static => None,
+                };
                 let fg_a = render_scene_fg_scaled(
                     config,
                     &scenes[*scene_a_idx],
@@ -171,6 +189,7 @@ pub fn render_frame_task_scaled(
                 // CameraPan composites two scenes; apply scene_b effects to the composited result.
                 let mut composited = camera_pan_transition(
                     &bg,
+                    bg_b.as_deref(),
                     &fg_a,
                     &fg_b,
                     scaled_w,

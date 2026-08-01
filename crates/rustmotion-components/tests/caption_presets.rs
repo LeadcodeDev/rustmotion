@@ -26,6 +26,7 @@ fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
         x: None,
         y: None,
         z_index: None,
+        bleed: false,
     };
     let children = vec![child];
 

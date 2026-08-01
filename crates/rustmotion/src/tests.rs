@@ -318,6 +318,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             };
             let scene = vec![child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -381,6 +382,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             };
             let card_style = CssStyle {
                 flex_direction: Some(FlexDirection::Column),
@@ -402,6 +404,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             };
             let scene = vec![card_child];
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -515,6 +518,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
         let new_buf = render_new(&scene, 400, 300);
@@ -549,6 +553,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
@@ -583,6 +588,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }]
     }
 
@@ -641,6 +647,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let buf = render_new_at(&[child], 400, 300, 0.5, 1.0);
         assert!(
@@ -730,6 +737,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let buf = render_new_at(&[child], 300, 200, 0.25, 2.0);
         // Children flow in a column with a 10px gap: bands 0..40, 50..90, 100..140.
@@ -817,6 +825,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
         let blue_sum = |buf: &[u8]| -> u64 { buf.chunks_exact(4).map(|p| p[2] as u64).sum() };
@@ -917,6 +926,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 400, 300, 0.05, 1.0);
@@ -956,6 +966,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
         let early = render_new_at(&scene, 500, 300, 0.05, 1.0);
@@ -1001,6 +1012,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
 
         let card_style = CssStyle {
@@ -1021,6 +1033,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![card_child];
         let built = build_scene(&scene, (1920.0, 1080.0));
@@ -1175,6 +1188,7 @@ mod component_smoke {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }]
     }
 
@@ -1276,6 +1290,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
 
@@ -1329,6 +1344,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
 
@@ -1383,6 +1399,7 @@ mod component_smoke {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
 
@@ -1463,6 +1480,7 @@ mod svg_draw_on_tests {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
         let scene = vec![child];
 
@@ -1767,6 +1785,7 @@ mod audio_tests {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }
     }
 
@@ -2178,6 +2197,7 @@ mod motion_blur_trail {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }]
     }
 
@@ -2203,6 +2223,7 @@ mod motion_blur_trail {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }]
     }
 
@@ -2259,6 +2280,7 @@ mod motion_blur_trail {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
         let with_1 = make_motion_blur_scene(1, 1.0);
@@ -2298,6 +2320,7 @@ mod motion_blur_trail {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
         let with_blur = {
@@ -2320,6 +2343,7 @@ mod motion_blur_trail {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
 
@@ -2371,6 +2395,7 @@ mod motion_blur_trail {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             }]
         };
         let with_trail = make_trail_scene(3, 0.1, 0.6);

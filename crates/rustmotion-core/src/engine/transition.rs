@@ -380,8 +380,17 @@ fn dissolve_transition(
 /// Camera pan transition: static background + sliding foreground children.
 /// `bg` is the static background, `fg_a`/`fg_b` are children-only (transparent).
 /// fg_a slides out by (-dx*t, -dy*t), fg_b slides in from (dx*(1-t), dy*(1-t)).
+/// Composite a camera pan between two scenes.
+///
+/// `bg_b` is `None` when the backgrounds stay put: `bg_a` is then drawn once as
+/// a fixed backdrop and only the foregrounds slide, which is what keeps a
+/// shared ambience continuous across a beat. When `Some`, each background
+/// travels locked to its own foreground, so the two beats read as different
+/// places rather than one space.
+#[allow(clippy::too_many_arguments)]
 pub fn camera_pan_transition(
-    bg: &[u8],
+    bg_a: &[u8],
+    bg_b: Option<&[u8]>,
     fg_a: &[u8],
     fg_b: &[u8],
     width: u32,
@@ -395,30 +404,83 @@ pub fn camera_pan_transition(
 
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
-    let img_bg = match frame_to_image(bg, width, height) {
+    let img_bg_a = match frame_to_image(bg_a, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
     let img_fg_a = match frame_to_image(fg_a, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
     let img_fg_b = match frame_to_image(fg_b, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
 
     let canvas = surface.canvas();
 
-    // Static background
-    canvas.draw_image(&img_bg, (0.0, 0.0), None);
+    // Offsets: the outgoing plane exits, the incoming one arrives. They tile
+    // exactly, so together they always cover the frame.
+    let (out_x, out_y) = (-dx * t, -dy * t);
+    let (in_x, in_y) = (dx * (1.0 - t), dy * (1.0 - t));
 
-    // fg_a slides out
-    canvas.draw_image(&img_fg_a, (-dx * t, -dy * t), None);
-    // fg_b slides in
-    canvas.draw_image(&img_fg_b, (dx * (1.0 - t), dy * (1.0 - t)), None);
+    match bg_b.and_then(|b| frame_to_image(b, width, height)) {
+        // Travelling: each background moves with its own scene, but at a
+        // fraction of the foreground's distance and fading across the pan.
+        //
+        // Two reasons for the fraction. It is how parallax actually works —
+        // what is far away moves less — and it makes the two backgrounds
+        // overlap across most of the frame instead of meeting edge to edge.
+        // Opaque images laid side by side join on a hard line no crossfade can
+        // hide; overlapping ones dissolve into each other.
+        Some(img_bg_b) => {
+            // Backgrounds drift at a fraction of the foreground's distance —
+            // that is how parallax works, and it keeps them overlapping
+            // instead of meeting edge to edge, where two opaque images join on
+            // a line no fade can hide.
+            const BG_PARALLAX: f32 = 0.12;
+            let (bax, bay) = (out_x * BG_PARALLAX, out_y * BG_PARALLAX);
+            let (bbx, bby) = (in_x * BG_PARALLAX, in_y * BG_PARALLAX);
+
+            // Translating an opaque image uncovers a strip on the opposite
+            // side, and that strip reads as a hard edge just as much as a
+            // join would. Each layer is therefore overscaled by exactly its
+            // own current displacement — just enough to cover, never more.
+            //
+            // Sizing it on the *maximum* drift instead makes the margin
+            // constant across the transition, including at both ends where the
+            // displacement is zero. The background then jumps between a normal
+            // frame and an enlarged one at every junction — measured at up to
+            // 128px of halo movement in a single frame, an order of magnitude
+            // beyond the drift itself. Tying the margin to the current offset
+            // makes it vanish exactly where a transition meets a normal frame,
+            // so the two are continuous.
+            let w = width as f32;
+            let h = height as f32;
+            let spread = |ox: f32, oy: f32| {
+                let (mx, my) = (ox.abs(), oy.abs());
+                Rect::from_ltrb(-mx + ox, -my + oy, w + mx + ox, h + my + oy)
+            };
+
+            // The outgoing background stays opaque so the frame is always
+            // covered; the incoming one dissolves over it. Fading both would
+            // darken wherever only one of them reaches.
+            canvas.draw_image_rect(&img_bg_a, None, spread(bax, bay), &Paint::default());
+            let mut incoming = Paint::default();
+            incoming.set_alpha_f(t);
+            canvas.draw_image_rect(&img_bg_b, None, spread(bbx, bby), &incoming);
+        }
+        // Fixed backdrop: drawn once at rest, so a shared ambience stays
+        // continuous and the join is invisible.
+        None => {
+            canvas.draw_image(&img_bg_a, (0.0, 0.0), None);
+        }
+    }
+
+    canvas.draw_image(&img_fg_a, (out_x, out_y), None);
+    canvas.draw_image(&img_fg_b, (in_x, in_y), None);
 
     surface_to_pixels(surface, width, height)
 }

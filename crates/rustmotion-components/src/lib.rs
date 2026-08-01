@@ -153,6 +153,18 @@ pub struct ChildComponent {
     pub y: Option<f32>,
     #[serde(default, rename = "z-index")]
     pub z_index: Option<i32>,
+    /// Declares that this component's job is to extend past the frame edge
+    /// (e.g. a radial glow used as a base layer). Top-level field, not a
+    /// `style` property — `CssStyle` is `deny_unknown_fields` and belongs to
+    /// no one this wave. Defaults to `false`: no existing scenario changes
+    /// behaviour. Exempts only `viewport_overflow` and `animated_text_overflow`
+    /// (see `crates/rustmotion-cli/src/commands/geometry.rs`); it does NOT
+    /// exempt `content_overflows_box` — content larger than its own box stays
+    /// a reported defect regardless of `bleed`. Applies to this component
+    /// only: a bled container does not suppress checks on its children, since
+    /// each child is its own `ChildComponent` with its own `bleed` flag.
+    #[serde(default)]
+    pub bleed: bool,
 }
 
 impl ChildComponent {

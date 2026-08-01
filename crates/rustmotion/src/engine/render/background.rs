@@ -204,14 +204,24 @@ fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width:
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
-        // Each particle gets a unique phase and slightly different frequency
+        // Each zone gets a unique phase and slightly different frequency.
         let phase =
             (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
-        let freq = speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
+        // `speed` is shared with the scrolling presets, where it means pixels
+        // per second and defaults to 30. Used directly as an angular frequency
+        // that is 30 rad/s — a ~5 Hz strobe, not a glow. BREATH_RATE converts
+        // it into a slow ambient pulse: at the default it gives a period of
+        // roughly 10 seconds, which reads as light rather than as flicker.
+        const BREATH_RATE: f32 = 0.02;
+        let freq = speed * BREATH_RATE * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
 
-        let color = color4f_from_hex(&zone.color);
+        let mut color = color4f_from_hex(&zone.color);
+        // `opacity` multiplies whatever alpha `color` already carries (opaque
+        // by default, or hex-encoded, e.g. `#1E3A8A55`). Default 1.0 is a
+        // true no-op — it leaves the colour's own alpha untouched.
+        color.a *= zone.opacity.clamp(0.0, 1.0);
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color4f(color, None);
@@ -436,6 +446,7 @@ pub(super) fn interpolate_animated_bg(
                         x: lerp(za.x, zb.x),
                         y: lerp(za.y, zb.y),
                         radius: lerp(za.radius, zb.radius),
+                        opacity: lerp(za.opacity, zb.opacity),
                     });
                 }
                 (None, Some(zb)) => out.push(zb.clone()),
@@ -527,4 +538,118 @@ pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32,
         _ => (0.0, 0.0), // Cw/Ccw handled inside gradient_shift
     };
     (dx * speed * time, dy * speed * time)
+}
+
+#[cfg(test)]
+mod halo_opacity_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+
+    /// Render frame 0 of the first scene in a scenario JSON string.
+    fn render_first_frame(json: &str) -> Vec<u8> {
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::Normal { .. }))
+            .expect("normal task");
+        render_frame_task(&scenario.video, &scenario, task).expect("render")
+    }
+
+    /// A single centered white halo zone on a black ground, `opacity` templated in.
+    fn halo_scenario(opacity_field: &str) -> String {
+        format!(
+            r##"{{"video":{{"width":100,"height":100,"background":"#000000"}},
+                "scenes":[{{"duration":1.0,
+                    "background":{{"preset":"halo","speed":0,
+                        "zones":[{{"color":"#FFFFFF","x":0.5,"y":0.5,"radius":0.3{opacity_field}}}]}}
+                    ,"children":[]}}]}}"##
+        )
+    }
+
+    fn center_rgba(buf: &[u8], width: u32) -> (u8, u8, u8, u8) {
+        let base = (50 * width as usize + 50) * 4;
+        (buf[base], buf[base + 1], buf[base + 2], buf[base + 3])
+    }
+
+    #[test]
+    fn opacity_defaults_to_1_and_is_a_true_noop() {
+        // Explicit 1.0 and an entirely absent field must render byte-identically:
+        // multiplying an f32 alpha by 1.0 is an exact IEEE-754 identity, so this
+        // also proves the default composes as a no-op with the color's own alpha.
+        let with_field = render_first_frame(&halo_scenario(r#","opacity":1.0"#));
+        let without_field = render_first_frame(&halo_scenario(""));
+        assert_eq!(
+            with_field, without_field,
+            "default opacity must be pixel-identical to an explicit 1.0"
+        );
+    }
+
+    #[test]
+    fn opacity_scales_alpha_monotonically() {
+        let buf_1_0 = render_first_frame(&halo_scenario(r#","opacity":1.0"#));
+        let buf_0_5 = render_first_frame(&halo_scenario(r#","opacity":0.5"#));
+        let buf_0_2 = render_first_frame(&halo_scenario(r#","opacity":0.2"#));
+
+        let (r1, ..) = center_rgba(&buf_1_0, 100);
+        let (r05, ..) = center_rgba(&buf_0_5, 100);
+        let (r02, ..) = center_rgba(&buf_0_2, 100);
+
+        assert!(
+            r1 > r05 && r05 > r02,
+            "expected monotonic falloff: opacity=1.0 -> {r1}, 0.5 -> {r05}, 0.2 -> {r02}"
+        );
+        // White zone over a black ground: center pixel ≈ 255 * opacity.
+        assert_eq!(r1, 255);
+        assert!(
+            (r05 as i32 - 128).abs() <= 2,
+            "0.5 opacity center was {r05}"
+        );
+        assert!((r02 as i32 - 51).abs() <= 2, "0.2 opacity center was {r02}");
+    }
+
+    #[test]
+    fn opacity_multiplies_the_colors_own_hex_alpha() {
+        // #1E3A8A55 already carries alpha 0x55 (~0.333). opacity 0.5 must
+        // multiply through to an effective alpha of ~0.1667, not override it.
+        let bg = "#05060A";
+        let scenario = format!(
+            r##"{{"video":{{"width":100,"height":100,"background":"{bg}"}},
+                "scenes":[{{"duration":1.0,
+                    "background":{{"preset":"halo","speed":0,
+                        "zones":[{{"color":"#1E3A8A55","x":0.5,"y":0.5,"radius":0.35,"opacity":0.5}}]}}
+                    ,"children":[]}}]}}"##
+        );
+        let buf = render_first_frame(&scenario);
+        let (r, g, b, _a) = center_rgba(&buf, 100);
+
+        let effective_alpha = (0x55 as f32 / 255.0) * 0.5;
+        let expect = |fg: u8, bgc: u8| -> f32 {
+            fg as f32 * effective_alpha + bgc as f32 * (1.0 - effective_alpha)
+        };
+        let (er, eg, eb) = (expect(0x1E, 0x05), expect(0x3A, 0x06), expect(0x8A, 0x0A));
+
+        assert!((r as f32 - er).abs() <= 3.0, "r={r} expected~{er}");
+        assert!((g as f32 - eg).abs() <= 3.0, "g={g} expected~{eg}");
+        assert!((b as f32 - eb).abs() <= 3.0, "b={b} expected~{eb}");
+    }
+
+    #[test]
+    fn opacity_is_clamped_to_0_1_range() {
+        let over_one = render_first_frame(&halo_scenario(r#","opacity":2.5"#));
+        let clamped_one = render_first_frame(&halo_scenario(r#","opacity":1.0"#));
+        assert_eq!(
+            over_one, clamped_one,
+            "opacity > 1.0 must clamp to the same result as 1.0"
+        );
+
+        let negative = render_first_frame(&halo_scenario(r#","opacity":-1.0"#));
+        let (r, g, b, _a) = center_rgba(&negative, 100);
+        // Fully clamped to 0 alpha: only the black scene background shows through.
+        assert_eq!(
+            (r, g, b),
+            (0, 0, 0),
+            "negative opacity must clamp to fully transparent"
+        );
+    }
 }

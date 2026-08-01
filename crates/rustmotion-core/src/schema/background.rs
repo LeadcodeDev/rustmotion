@@ -359,7 +359,8 @@ impl JsonSchema for AnimatedBackground {
 /// A single glow zone for the "halo" animated-background preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HaloZone {
-    /// Zone color (hex string).
+    /// Zone color (hex string). May itself carry an alpha channel
+    /// (`#rrggbbaa`); see [`HaloZone::opacity`] for how the two combine.
     pub color: String,
     /// X position as fraction of width (0.0 = left, 1.0 = right).
     #[serde(default = "default_half")]
@@ -370,6 +371,15 @@ pub struct HaloZone {
     /// Radius as fraction of max(width, height).
     #[serde(default = "default_halo_radius")]
     pub radius: f32,
+    /// Zone opacity, multiplied with any alpha already encoded in `color`.
+    ///
+    /// Default `1.0` is a true no-op: it leaves `color`'s own alpha (opaque
+    /// or hex-encoded) untouched, so scenarios written before this field
+    /// existed — including ones that hid alpha inside the hex string, e.g.
+    /// `#1E3A8A55` — keep rendering identically. Values are clamped to
+    /// `0.0..=1.0`.
+    #[serde(default = "default_halo_opacity")]
+    pub opacity: f32,
 }
 
 /// Transition configuration for background interpolation between scenes.
@@ -427,6 +437,10 @@ fn default_half() -> f32 {
 
 fn default_halo_radius() -> f32 {
     0.4
+}
+
+fn default_halo_opacity() -> f32 {
+    1.0
 }
 
 fn default_bg_element_size() -> f32 {
@@ -548,4 +562,81 @@ where
     }
 
     deserializer.deserialize_any(BgVisitor)
+}
+
+#[cfg(test)]
+mod halo_zone_opacity_tests {
+    use super::*;
+
+    #[test]
+    fn halo_zone_opacity_defaults_to_1_when_omitted() {
+        let zone: HaloZone =
+            serde_json::from_value(serde_json::json!({ "color": "#1E3A8A55" })).unwrap();
+        assert_eq!(zone.opacity, 1.0);
+    }
+
+    #[test]
+    fn halo_zone_opacity_respects_explicit_value() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#1E3A8A",
+            "opacity": 0.35
+        }))
+        .unwrap();
+        assert_eq!(zone.opacity, 0.35);
+    }
+
+    #[test]
+    fn halo_zone_serializes_opacity() {
+        let zone = HaloZone {
+            color: "#1E3A8A".to_string(),
+            x: 0.5,
+            y: 0.5,
+            radius: 0.4,
+            opacity: 0.6,
+        };
+        let v = serde_json::to_value(&zone).unwrap();
+        // Compare as f64 with a tolerance: 0.6f32 widened to f64 is
+        // 0.6000000238418579, not exactly 0.6 — an f32 precision artifact,
+        // not a bug in the field itself.
+        let got = v["opacity"]
+            .as_f64()
+            .expect("opacity must serialize as a number");
+        assert!((got - 0.6).abs() < 1e-6, "got {got}");
+    }
+
+    #[test]
+    fn animated_background_new_format_halo_zone_defaults_opacity() {
+        // New nested format: {"preset":"halo","halo":{"zones":[...]}}
+        let bg: AnimatedBackground = serde_json::from_value(serde_json::json!({
+            "preset": "halo",
+            "halo": { "zones": [{ "color": "#1E3A8A55", "x": 0.5, "y": 0.5, "radius": 0.4 }] },
+            "speed": 0
+        }))
+        .unwrap();
+        match bg.preset {
+            BackgroundPreset::Halo(cfg) => {
+                assert_eq!(cfg.zones.len(), 1);
+                assert_eq!(cfg.zones[0].opacity, 1.0);
+                // Alpha-in-hex is untouched by the schema layer — it stays in `color`.
+                assert_eq!(cfg.zones[0].color, "#1E3A8A55");
+            }
+            _ => panic!("expected Halo preset"),
+        }
+    }
+
+    #[test]
+    fn animated_background_legacy_flat_format_halo_zone_defaults_opacity() {
+        // Legacy flat format: {"preset":"halo","zones":[...]} with no sub-object.
+        let bg: AnimatedBackground = serde_json::from_value(serde_json::json!({
+            "preset": "halo",
+            "zones": [{ "color": "#1E3A8A55", "x": 0.5, "y": 0.5, "radius": 0.4 }]
+        }))
+        .unwrap();
+        match bg.preset {
+            BackgroundPreset::Halo(cfg) => {
+                assert_eq!(cfg.zones[0].opacity, 1.0);
+            }
+            _ => panic!("expected Halo preset"),
+        }
+    }
 }

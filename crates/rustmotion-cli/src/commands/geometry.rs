@@ -206,7 +206,7 @@ fn walk(
         let raw_bbox = bbox_of(layout);
 
         if !is_exempted(&child.component) {
-            if !parent_clips {
+            if !parent_clips && !bleeds(child) {
                 let mut vbbox = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
                 if let Some(cam) = camera {
                     vbbox = fold_static_camera(&vbbox, cam, viewport_f);
@@ -278,6 +278,31 @@ fn bbox_of(layout: &BoxLayout) -> BBox {
 
 fn is_exempted(c: &Component) -> bool {
     matches!(c, Component::Marquee(_) | Component::Cursor(_))
+}
+
+/// Extends the exemption above with an *opt-in* declaration: a component
+/// author who sets top-level `bleed: true` (see `ChildComponent::bleed`) is
+/// asserting that extending past the frame is this component's job — a
+/// radial glow used as a base layer, the same category as `marquee`/`cursor`
+/// but not knowable from the component's *type* alone (a shape is very often
+/// real, non-bleeding content).
+///
+/// Deliberately narrower than [`is_exempted`]: that one is checked once at
+/// the top of `walk`/`walk_anim` and suppresses every check in the block
+/// below it, `content_overflows_box` included. `bleed` must NOT do that —
+/// content larger than its own box is a different defect, unrelated to
+/// whether the box itself is allowed to cross the viewport edge, and staying
+/// reported is the whole point of `content_overflows_box` existing. So this
+/// is consulted individually at each of the two call sites it's allowed to
+/// affect (`check_viewport` in `walk`, the animated-overflow check in
+/// `walk_anim`) rather than folded into `is_exempted`.
+///
+/// `bleed` lives on `ChildComponent`, one per component instance, so a
+/// parent declaring it never reaches its children: each child in a
+/// container's own `children: Vec<ChildComponent>` carries its own `bleed`
+/// (default `false`), untouched by the parent's.
+fn bleeds(child: &ChildComponent) -> bool {
+    child.bleed
 }
 
 fn container_children(c: &Component) -> Option<&[ChildComponent]> {
@@ -1011,6 +1036,7 @@ fn walk_anim(
         }
 
         if !is_exempted(&child.component)
+            && !bleeds(child)
             && !parent_clips
             && layout.width > 0.5
             && layout.height > 0.5
@@ -1998,6 +2024,168 @@ mod tests {
         assert!(violations
             .iter()
             .any(|v| v.kind == ViolationKind::UnwrappableTextOverflow));
+    }
+
+    // ─── #120: opt-in `bleed: true` exempts viewport/animated overflow only ──
+
+    fn bleeding_shape_json(bleed: bool) -> String {
+        // Identical to `shape_past_right_edge_triggers_x_overflow`'s fixture
+        // (a 400×100 shape at x=1700, spilling 180px past the 1920-wide
+        // viewport) plus the top-level `bleed` field under test — mirrors
+        // the reference films' radial-glow base layer.
+        format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "shape",
+                        "shape": "rect",
+                        "style": {{ "width": "400px", "height": "100px" }},
+                        "position": "absolute",
+                        "x": 1700, "y": 100,
+                        "fill": "#ff0000"{}
+                    }}]
+                }}]
+            }}"##,
+            if bleed { r#", "bleed": true"# } else { "" }
+        )
+    }
+
+    #[test]
+    fn bleeding_shape_with_bleed_true_validates_clean() {
+        let scenario = parse(&bleeding_shape_json(true));
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations.is_empty(),
+            "bleed: true must exempt the shape from ViewportOverflow: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn identical_fixture_without_bleed_still_errors() {
+        // Same fixture, `bleed` omitted (defaults to false) — proves the
+        // default doesn't change existing behaviour and that the exemption
+        // above is actually driven by the field, not something else in the
+        // fixture.
+        let scenario = parse(&bleeding_shape_json(false));
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ViewportOverflow && v.component == "shape"),
+            "without bleed, the identical shape must still be reported: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn bleed_true_does_not_exempt_content_overflows_box() {
+        // Exact fixture from `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
+        // (a card comfortably inside frame, wrapping a paragraph that needs
+        // ~343px but the card is fixed at 80px tall) with `bleed: true`
+        // added to the text — content larger than its own box is a
+        // different defect than crossing the viewport edge, and must stay
+        // reported regardless of `bleed` (per #120's explicit non-goal).
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":200,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text","bleed":true,
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ContentOverflowsBox && v.component == "text"),
+            "bleed: true on the text must NOT suppress ContentOverflowsBox: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn bleed_on_a_parent_does_not_suppress_a_childs_viewport_overflow() {
+        // A container declares `bleed: true` and sits entirely inside the
+        // frame itself (x=50,y=50, 200×200 — no overflow of its own). Its
+        // child shape is absolutely positioned far enough (relative to the
+        // container's own box) to spill past the 1920-wide viewport on its
+        // own merits. `bleed` lives on the child's own `ChildComponent`, one
+        // per component instance — the parent's `bleed: true` must not reach
+        // down into the child's, which was never set.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "container",
+                    "bleed": true,
+                    "position": "absolute",
+                    "x": 50, "y": 50,
+                    "style": { "width": "200px", "height": "200px" },
+                    "children": [{
+                        "type": "shape",
+                        "shape": "rect",
+                        "position": "absolute",
+                        "x": 1900, "y": 100,
+                        "style": { "width": "300px", "height": "100px" },
+                        "fill": "#ff0000"
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations.iter().all(|v| v.component != "container"),
+            "the container itself sits inside the frame and must not be reported: {:?}",
+            violations
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ViewportOverflow && v.component == "shape"),
+            "the parent's bleed:true must not suppress the child's own genuine overflow: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn bleed_true_exempts_animated_text_overflow_too() {
+        // Same animation-overflow fixture as `strict_anim_detects_slide_in_overflow`
+        // (slide_in_left pushes a resting shape at x=100 strongly negative
+        // during the first fraction of the preset) with `bleed: true` added
+        // — `--strict-anim`'s AnimatedTextOverflow must be exempted exactly
+        // like the resting-layout ViewportOverflow check.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 100, "y": 100,
+                    "bleed": true,
+                    "style": {
+                        "width": "100px", "height": "100px",
+                        "animation": [{ "name": "slide_in_left", "delay": 0, "duration": 1.0 }]
+                    },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry_animated(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::AnimatedTextOverflow),
+            "bleed: true must exempt the shape from AnimatedTextOverflow: {:?}",
+            violations
+        );
     }
 }
 

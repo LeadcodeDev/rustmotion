@@ -73,6 +73,22 @@ pub enum AnimationEffect {
     CharBounce(CharAnimationTiming),
     CharRotateIn(CharAnimationTiming),
     CharSlideUp(CharAnimationTiming),
+    /// Each word (or char) arrives blurred and settles sharp, combined with
+    /// a slight upward translate and an opacity ramp — one continuous
+    /// per-unit animation driven by the same progress value, not three
+    /// independently-timed effects. `CharAnimationTiming.blur` sets the
+    /// starting blur sigma in px (default tuned for 100px+ display type;
+    /// see `crates/rustmotion-components/src/text.rs`).
+    ///
+    /// Resolved directly off `style.animation` inside
+    /// `rustmotion_components::text::Text::paint` rather than through
+    /// `engine::animator::extract_effects`/`ResolvedCharAnimation` like its
+    /// five siblings — that resolution path lives in a file outside this
+    /// workstream's scope (chantier #117 W1). Functionally equivalent for
+    /// the documented use (a top-level `style.animation` entry); it does
+    /// not participate in container-level stagger delay shifting the way
+    /// the other char presets do when nested in a staggered list/grid.
+    CharBlurIn(CharAnimationTiming),
     // --- Non-preset effects ---
     Glow(GlowConfig),
     Wiggle(WiggleConfig),
@@ -102,7 +118,7 @@ impl AnimationEffect {
             | WipeRight(t) | Float3d(t) => t.delay += by,
             TiltIn(c) => c.delay += by,
             CharScaleIn(c) | CharFadeIn(c) | CharWave(c) | CharBounce(c) | CharRotateIn(c)
-            | CharSlideUp(c) => c.delay += by,
+            | CharSlideUp(c) | CharBlurIn(c) => c.delay += by,
             Keyframes(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
@@ -239,6 +255,14 @@ pub struct CharAnimationTiming {
     /// Overshoot intensity for char_scale_in/char_bounce (0.0 = none, default 0.08 = 8%).
     #[serde(default)]
     pub overshoot: Option<f64>,
+    /// Starting blur sigma in px for char_blur_in — the word (or char)
+    /// begins blurred by this amount and settles to sharp (sigma 0) by the
+    /// end of its unit animation. Unused by the other five char presets.
+    /// Defaults to 14px sigma, chosen to read clearly at 100px+ display
+    /// type without collapsing into a featureless blob (see render proof
+    /// in issue #118).
+    #[serde(default)]
+    pub blur: Option<f64>,
 }
 
 fn default_char_stagger_f64() -> f64 {
@@ -252,7 +276,7 @@ fn default_char_duration_f64() -> f64 {
 /// Per-character or per-word text animation configuration (legacy root-level prop).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CharAnimation {
-    /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up".
+    /// Animation preset: "scale_in", "fade_in", "wave", "bounce", "rotate_in", "slide_up", "blur_in".
     #[serde(default = "default_char_preset")]
     pub preset: CharAnimPreset,
     /// Granularity: animate per character or per word.
@@ -301,6 +325,10 @@ pub enum CharAnimPreset {
     RotateIn,
     /// Each character slides up from below.
     SlideUp,
+    /// Each character/word arrives blurred and settles sharp, with a
+    /// slight upward translate and opacity ramp driven by the same
+    /// progress value (see `AnimationEffect::CharBlurIn`).
+    BlurIn,
 }
 
 fn default_char_preset() -> CharAnimPreset {

@@ -550,6 +550,28 @@ pub struct Transition {
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
     pub easing: EasingType,
+    /// How the background behaves during a `camera_pan`. Ignored by every
+    /// other transition type, which composite two finished frames and have no
+    /// separate background layer to move.
+    #[serde(default)]
+    pub background: PanBackground,
+}
+
+/// Whether a `camera_pan` treats the background as a fixed backdrop the scenes
+/// slide across, or as part of each scene, travelling with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PanBackground {
+    /// The outgoing scene's background stays put while both foregrounds slide
+    /// over it. Keeps a shared ambience continuous, so the cut is invisible —
+    /// this is the default because it is what makes a multi-beat video read as
+    /// one shot.
+    #[default]
+    Static,
+    /// Each scene carries its own background, and both travel with their
+    /// foreground. Use this when the beats are meant to look like different
+    /// places rather than one continuous space.
+    Travel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
