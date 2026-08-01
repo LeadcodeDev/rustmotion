@@ -18,7 +18,9 @@ use rustmotion::variables;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::geometry::{validate_geometry, validate_geometry_animated, GeometryViolation};
+use super::geometry::{
+    check_legibility, validate_geometry, validate_geometry_animated, GeometryViolation,
+};
 use super::validate_schema::validate_scenario;
 
 /// Source of the scenario JSON to validate.
@@ -54,19 +56,39 @@ pub struct ValidationReport {
 }
 
 impl ValidationReport {
+    /// True when there is nothing at all to show the author — no blocking
+    /// issue *and* no advisory one. Used to decide whether `render`'s
+    /// implicit validation pass prints anything; `warnings`/`attr_warnings`
+    /// are included so a non-blocking advisory (e.g. a legibility warning,
+    /// or an attr_warning before it is known to block) is never silently
+    /// dropped just because nothing else escalated it to an error.
     pub fn is_clean(&self) -> bool {
         self.schema_errors.is_empty()
             && self.geom_violations.is_empty()
             && self.unresolved_vars.is_empty()
+            && self.warnings.is_empty()
+            && self.attr_warnings.is_empty()
     }
 
     /// Whether the report contains any issue that should block rendering.
     /// In `lenient` mode geometry violations are downgraded to warnings.
+    ///
+    /// Unknown component attributes block **unconditionally** — M5 (issue
+    /// #110 / #102, "decided at kickoff"), not gated by `lenient` (that
+    /// flag's documented scope is geometry violations) and no longer
+    /// opt-in via `--strict-attrs`. In practice they already arrive folded
+    /// into `schema_errors` (`run_checks` does this unconditionally now, so
+    /// every caller blocks on them without extra wiring); the direct
+    /// `attr_warnings` check below is defence in depth for a
+    /// `ValidationReport` assembled some other way.
     pub fn is_blocking(&self, lenient: bool) -> bool {
         if !self.schema_errors.is_empty() {
             return true;
         }
         if !self.unresolved_vars.is_empty() {
+            return true;
+        }
+        if !self.attr_warnings.is_empty() {
             return true;
         }
         if !lenient && !self.geom_violations.is_empty() {
@@ -77,14 +99,24 @@ impl ValidationReport {
 
     pub fn to_error(&self) -> RustmotionError {
         RustmotionError::ValidationFailed {
-            schema_errors: self.schema_errors.len(),
+            // `attr_warnings` is normally already empty here (`run_checks`
+            // folds it into `schema_errors` unconditionally — see there);
+            // `+ self.attr_warnings.len()` is defence in depth so this count
+            // stays honest even for a `ValidationReport` assembled another
+            // way. `RustmotionError::ValidationFailed` has no dedicated
+            // attr-warnings field of its own (out of this workstream's
+            // scope to add).
+            schema_errors: self.schema_errors.len() + self.attr_warnings.len(),
             geometry_violations: self.geom_violations.len(),
             unresolved_vars: self.unresolved_vars.len(),
         }
     }
 
-    /// `--strict-attrs`: turn unknown-attribute warnings into blocking schema
-    /// errors.
+    /// `--strict-attrs` / CLI compat only: by the time a `ValidationReport`
+    /// from `run_checks` reaches this call, `attr_warnings` is already
+    /// empty (folded into `schema_errors` there — see M5, issue #110), so
+    /// this is a no-op in practice. Kept so `--report` JSON output and any
+    /// hand-assembled `ValidationReport` still behave as documented.
     pub fn promote_attr_warnings(&mut self) {
         self.schema_errors.append(&mut self.attr_warnings);
     }
@@ -168,9 +200,24 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     }
     let (mut schema_errors, mut warnings) = validate_scenario(&loaded.scenario);
     warnings.extend(warn_misplaced_animation(&loaded.raw));
-    let (attr_errors, attr_warnings) =
+    // M4 (issue #110 / #102): legibility floor — always advisory, never
+    // blocking (see `check_legibility`'s doc comment for the threshold
+    // justification).
+    warnings.extend(check_legibility(&loaded.scenario));
+    let (attr_errors, mut attr_warnings) =
         super::validate_attrs::check_component_attrs(&loaded.scenario);
     schema_errors.extend(attr_errors);
+    // M5 (issue #110 / #102, decided at kickoff): unknown component
+    // attributes error by default now, not only under `--strict-attrs`.
+    // Folding them into `schema_errors` right here — rather than leaving
+    // them in the separate `attr_warnings` bucket for every *caller* of
+    // `run_checks` to remember to escalate — means `validate`, `render`,
+    // and `watch` all block on them uniformly with zero extra wiring, and
+    // none of their existing `!schema_errors.is_empty()` blocking checks
+    // needed to change. `attr_warnings` is left empty; `--strict-attrs` /
+    // `promote_attr_warnings` are kept as accepted, fully inert flags for
+    // CLI-surface stability (see their doc comments).
+    schema_errors.append(&mut attr_warnings);
     ValidationReport {
         schema_errors,
         geom_violations,
@@ -270,8 +317,16 @@ pub fn print_report(report: &ValidationReport, source_label: &str) {
     for w in &report.warnings {
         eprintln!("Warning: {}", w);
     }
+    // M5 (issue #110 / #102): `report.attr_warnings` is normally already
+    // empty by the time it reaches here — `run_checks` folds unknown
+    // component attributes into `schema_errors` unconditionally now, so
+    // they print below as `Error:` lines, not `Warning:` ones. Printing
+    // "Warning" right before the process exits non-zero for that exact
+    // issue was the dishonest-label pattern this workstream exists to
+    // remove. This loop stays as a fallback for a `ValidationReport`
+    // assembled another way.
     for w in &report.attr_warnings {
-        eprintln!("Warning: {}", w);
+        eprintln!("Error: {}", w);
     }
     for name in &report.unresolved_vars {
         eprintln!(
@@ -422,4 +477,19 @@ mod font_loading_wiring_tests {
             report.schema_errors
         );
     }
+}
+
+/// Notice printed when `--strict-attrs` is passed.
+///
+/// Unknown component attributes became blocking errors by default, which left
+/// this flag with nothing to promote. A flag that silently does nothing is the
+/// same failure mode this validator exists to catch — an accepted input with no
+/// observable effect — so it announces itself instead of staying mute. It is
+/// still accepted so existing scripts and CI pipelines keep working.
+pub fn warn_strict_attrs_is_now_default() {
+    eprintln!(
+        "Notice: --strict-attrs is deprecated and does nothing. Unknown \
+         component attributes have been errors by default since the attribute \
+         checker was hardened; you can drop the flag."
+    );
 }

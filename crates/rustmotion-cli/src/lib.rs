@@ -94,6 +94,12 @@ enum Commands {
         #[arg(long)]
         strict_anim: bool,
 
+        /// Deprecated. Unknown component attributes are errors by default, so
+        /// this flag no longer changes anything; it is accepted so existing
+        /// scripts keep working, and prints a notice when used.
+        #[arg(long)]
+        strict_attrs: bool,
+
         /// Load variable overrides from a JSON object file (e.g. {"color":"#f00"}).
         /// Keys must match variables declared in the scenario's `config` block.
         #[arg(long, value_name = "FILE")]
@@ -193,7 +199,9 @@ enum Commands {
         #[arg(long)]
         strict_anim: bool,
 
-        /// Treat unknown component attributes as errors instead of warnings.
+        /// Deprecated. Unknown component attributes are errors by default, so
+        /// this flag no longer changes anything; it is accepted so existing
+        /// scripts keep working, and prints a notice when used.
         #[arg(long)]
         strict_attrs: bool,
 
@@ -447,6 +455,7 @@ pub fn run() -> Result<()> {
             no_validate,
             lenient,
             strict_anim,
+            strict_attrs,
             props,
             var,
         } => {
@@ -476,6 +485,7 @@ pub fn run() -> Result<()> {
                     no_validate,
                     lenient,
                     strict_anim,
+                    strict_attrs,
                 )
             } else {
                 let source = match (file.as_ref(), json.as_deref()) {
@@ -492,7 +502,11 @@ pub fn run() -> Result<()> {
                 }
 
                 if !no_validate {
-                    let report = commands::validation::run_checks(&loaded, strict_anim);
+                    let mut report = commands::validation::run_checks(&loaded, strict_anim);
+                    if strict_attrs {
+                        commands::validation::warn_strict_attrs_is_now_default();
+                        report.promote_attr_warnings();
+                    }
                     if !report.is_clean() {
                         let label = loaded
                             .source_path
