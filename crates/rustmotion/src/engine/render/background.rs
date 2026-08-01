@@ -204,10 +204,16 @@ fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width:
         let cx = zone.x * width;
         let cy = zone.y * height;
         let base_radius = zone.radius * width.max(height);
-        // Each particle gets a unique phase and slightly different frequency
+        // Each zone gets a unique phase and slightly different frequency.
         let phase =
             (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
-        let freq = speed * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
+        // `speed` is shared with the scrolling presets, where it means pixels
+        // per second and defaults to 30. Used directly as an angular frequency
+        // that is 30 rad/s — a ~5 Hz strobe, not a glow. BREATH_RATE converts
+        // it into a slow ambient pulse: at the default it gives a period of
+        // roughly 10 seconds, which reads as light rather than as flicker.
+        const BREATH_RATE: f32 = 0.02;
+        let freq = speed * BREATH_RATE * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
         let radius = base_radius * breath;
 
