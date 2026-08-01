@@ -6,7 +6,8 @@ use skia_safe::{Canvas, Font, FontStyle, Paint, PaintStyle, Rect};
 use rustmotion_core::engine::animator::ease;
 
 use rustmotion_core::css::style::{
-    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, TextAlign as CssTextAlign,
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -365,8 +366,20 @@ impl Text {
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        // Use layout width as wrapping constraint, combined with max_width
-        let wrap_width = if layout_width.is_finite() && layout_width > 0.0 {
+        // Use layout width as wrapping constraint, combined with max_width.
+        // M1: `white-space: nowrap|pre` disables wrapping entirely — the
+        // line may then exceed `layout_width`. That's the point: it makes
+        // the property mean something, and it's exactly the condition the
+        // geometry validator's `unwrappable_text_overflow` check (which
+        // re-measures via `TextIntrinsic::from_text`, now wrap-aware too)
+        // assumes the renderer can produce.
+        let nowrap = matches!(
+            self.style.white_space,
+            Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
+        );
+        let wrap_width = if nowrap {
+            None
+        } else if layout_width.is_finite() && layout_width > 0.0 {
             match self.max_width {
                 Some(mw) => Some(mw.min(layout_width)),
                 None => Some(layout_width),
@@ -556,5 +569,141 @@ impl Painter for Text {
         ctx: &PaintCtx,
     ) {
         let _ = self.paint(canvas, layout.width, ctx.time, props, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::style::CssStyle;
+    use rustmotion_core::css::Length;
+
+    fn make_text(content: &str, white_space: Option<CssWhiteSpace>) -> Text {
+        Text {
+            content: content.into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(28.0)),
+                color: Some(rustmotion_core::css::style::Color::String("#FFFFFF".into())),
+                white_space,
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        }
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 600,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    /// Reads back the full alpha channel of the surface as a `width × height`
+    /// row-major byte grid.
+    fn alpha_grid(surface: &mut skia_safe::Surface, width: i32, height: i32) -> Vec<u8> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (width * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        (0..(width * height) as usize)
+            .map(|i| buf[i * 4 + 3])
+            .collect()
+    }
+
+    /// Does any pixel in `[x0, x1) × [y0, y1)` have non-zero alpha? Scanning
+    /// a region rather than a single exact pixel avoids flaking on the gap
+    /// between two glyphs or on a space character.
+    fn has_ink_in(grid: &[u8], surface_width: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn nowrap_paints_a_single_line_past_the_layout_width() {
+        // M1 render-level proof: a `white-space: nowrap` line stays on one
+        // line and its glyphs visibly extend past `layout_width` — the box
+        // it was allocated.
+        let text = make_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 600;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, 80.0, 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+
+        // Far past the 80px box, on the first line's height band: nowrap
+        // must have painted ink there (the line didn't break at 80px).
+        assert!(
+            has_ink_in(&grid, W, 300, W, 0, 45),
+            "nowrap text must paint past its 80px box on line 1 (scanned x∈[300,600), y∈[0,45))"
+        );
+
+        // Nothing should be on a *second* line — nowrap never word-wraps
+        // (only literal newlines would start a new line, and there are
+        // none here), so all ink stays within the first line's height band.
+        assert!(
+            !has_ink_in(&grid, W, 0, W, 55, H),
+            "nowrap text must stay on a single line; found ink on what would be line 2"
+        );
+    }
+
+    #[test]
+    fn normal_white_space_wraps_within_the_layout_width() {
+        // Contrast case: default wrapping keeps ink within the box on the
+        // first line, and instead spills onto additional lines below.
+        let text = make_text("the quick brown fox jumps over the lazy dog", None);
+        const W: i32 = 600;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, 80.0, 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            !has_ink_in(&grid, W, 300, W, 0, 45),
+            "wrapped text must not reach x∈[300,600) on line 1 within an 80px box"
+        );
+        assert!(
+            has_ink_in(&grid, W, 0, W, 55, H),
+            "wrapped text must spill onto a second line within the box width"
+        );
     }
 }

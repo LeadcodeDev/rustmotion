@@ -291,6 +291,7 @@ fn build_ghosts<'a>(
             if props_has_paint_overrides(&props) {
                 apply_animated_props(&mut css, &props);
             }
+            apply_glow_effect(&mut css, &ghost_effects);
         }
         // Scale opacity: multiply the base opacity by the ghost opacity factor.
         let base_opacity = css.opacity.unwrap_or(1.0);
@@ -468,6 +469,7 @@ fn build_child<'a>(
             if props_has_paint_overrides(&props) {
                 apply_animated_props(&mut css, &props);
             }
+            apply_glow_effect(&mut css, &effects);
         }
     }
 
@@ -797,6 +799,55 @@ fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
         || p.perspective > 0.0
 }
 
+/// M3: apply the static `glow` animation effect (a coloured halo — not
+/// time-varying, see `AnimationEffect::shift_delay`'s doc comment) as a CSS
+/// `filter: drop-shadow(...)`.
+///
+/// This is deliberately *not* routed through `resolve_props_for_effects` /
+/// `AnimatedProperties::glow_radius`+`glow_intensity` even though those
+/// fields exist: `AnimatedProperties`'s public shape is frozen for this
+/// workstream (can't add a `glow_color` field), and the existing bridge that
+/// *does* consume those two fields — `css::animation::apply_animated_props`,
+/// in a file outside this workstream's scope — hardcodes `color: None` on
+/// the `DropShadow` it builds, which resolves to black. Piping the `glow`
+/// effect through that path would either still render black, or — if we did
+/// find a way to set the color fields too — double up into two stacked
+/// drop-shadows (one colourless from the frozen bridge, one coloured from
+/// here). Building the filter directly here, from the raw `GlowConfig`
+/// (found via `animator::find_glow_effect`), keeps it a single, correctly
+/// coloured shadow and needs no change to any frozen file.
+///
+/// The pre-existing `glow_radius`/`glow_intensity` numeric-property path
+/// (animating those as arbitrary `keyframes` targets, unrelated to this
+/// named `glow` effect) is untouched and still produces a colourless halo —
+/// that is `css::animation.rs`'s DropShadow-with-`color:None` bug, out of
+/// this workstream's file ownership.
+fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::AnimationEffect]) {
+    use rustmotion_core::css::style::{Color, FilterFn};
+    use rustmotion_core::css::units::Length;
+    use rustmotion_core::engine::animator::find_glow_effect;
+
+    let Some(glow) = find_glow_effect(effects) else {
+        return;
+    };
+
+    let (r, g, b, a) = rustmotion_core::engine::renderer::parse_css_color(&glow.color)
+        .unwrap_or((255, 255, 255, 255));
+    let alpha = ((a as f32 / 255.0) * glow.intensity.max(0.0)).clamp(0.0, 1.0);
+    let radius = glow.radius.max(0.0);
+    if radius <= 0.0 || alpha <= 0.0 {
+        return;
+    }
+
+    let shadow = FilterFn::DropShadow {
+        offset_x: Length::Px(0.0),
+        offset_y: Length::Px(0.0),
+        blur: Some(Length::Px(radius)),
+        color: Some(Color::Rgba { r, g, b, a: alpha }),
+    };
+    css.filter.get_or_insert_with(Vec::new).push(shadow);
+}
+
 /// Build an [`IntrinsicMeasure`] for components whose box size depends on
 /// their content (text, codeblock, terminal, etc.). Returns `None` for
 /// components with explicit dimensions or pure containers.
@@ -823,6 +874,12 @@ fn component_intrinsic(
         Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
         Codeblock(c) => Some(Arc::new(
             crate::intrinsic::CodeblockIntrinsic::from_codeblock(c),
+        )),
+        // M2: rich_text had no intrinsic measurer at all, so it laid out
+        // 0×0 and rendered nothing unless the author guessed an explicit
+        // width/height.
+        RichText(rt) => Some(Arc::new(
+            crate::intrinsic::RichTextIntrinsic::from_rich_text(rt),
         )),
         _ => None,
     }
@@ -945,6 +1002,62 @@ fn apply_default_display(component: &Component, css: &mut CssStyle) {
 fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
     use Component::*;
     match component {
+        Text(t) => {
+            // M1: `white-space: nowrap|pre` must style the *content*, not
+            // silently resize the *box*. Without this, CSS's "automatic
+            // minimum size" (min-width: auto + the default overflow:
+            // visible) lets a nowrap text's own auto-width box grow to its
+            // full natural width inside a flex container — which can push
+            // or resize flex siblings the author never touched, a
+            // surprising failure mode for a tool whose whole model is
+            // authors declaring explicit positions/sizes. Forcing
+            // `min-width: 0` (only when the author hasn't set their own)
+            // keeps the box within whatever space its container gives it;
+            // the painter (`text.rs`) still draws the full unwrapped line
+            // regardless of that box width, so the text visibly bleeds past
+            // it exactly as `white-space: nowrap` should — it's the box
+            // that stays put, not the content.
+            let nowrap = matches!(
+                t.style.white_space,
+                Some(
+                    rustmotion_core::css::style::WhiteSpace::Nowrap
+                        | rustmotion_core::css::style::WhiteSpace::Pre
+                )
+            );
+            if nowrap && css.min_width.is_none() {
+                css.min_width = Some(CSize::Length(CLP::Px(0.0)));
+            }
+        }
+        // M1 follow-up: same reasoning as the `Text` arm above — now that
+        // `gradient_text.rs` and `caption.rs` word-wrap and respect
+        // `white-space: nowrap|pre` too (see `intrinsic.rs`'s
+        // `GradientTextIntrinsic`/`CaptionIntrinsic`), their auto-width
+        // boxes can hit the same CSS automatic-minimum-size growth when
+        // nowrap/pre is set with no explicit width.
+        GradientText(t) => {
+            let nowrap = matches!(
+                t.style.white_space,
+                Some(
+                    rustmotion_core::css::style::WhiteSpace::Nowrap
+                        | rustmotion_core::css::style::WhiteSpace::Pre
+                )
+            );
+            if nowrap && css.min_width.is_none() {
+                css.min_width = Some(CSize::Length(CLP::Px(0.0)));
+            }
+        }
+        Caption(c) => {
+            let nowrap = matches!(
+                c.style.white_space,
+                Some(
+                    rustmotion_core::css::style::WhiteSpace::Nowrap
+                        | rustmotion_core::css::style::WhiteSpace::Pre
+                )
+            );
+            if nowrap && css.min_width.is_none() {
+                css.min_width = Some(CSize::Length(CLP::Px(0.0)));
+            }
+        }
         Divider(d) => match d.direction {
             DividerDirection::Horizontal => {
                 // Stretch horizontally in flex row/column parents (cross-axis
@@ -1758,5 +1871,173 @@ mod tests {
         let l = layout.get(id).expect("line laid out");
         assert_eq!(l.width, 100.0);
         assert_eq!(l.height, 60.0);
+    }
+
+    // ─── M2: rich_text intrinsic wired into component_intrinsic ─────────────
+
+    #[test]
+    fn rich_text_child_gets_a_non_zero_intrinsic_size() {
+        // Before the fix: rich_text had no `component_intrinsic` entry, so
+        // an auto-sized rich_text laid out at 0×0 and was invisible.
+        use crate::rich_text::{RichText, RichTextSpan};
+        use rustmotion_core::css::units::Length;
+
+        let rich_text = ChildComponent {
+            component: Component::RichText(RichText {
+                spans: vec![
+                    RichTextSpan {
+                        text: "Save ".into(),
+                        color: None,
+                        font_size: None,
+                        font_weight: None,
+                        font_family: None,
+                        font_style: None,
+                        letter_spacing: None,
+                    },
+                    RichTextSpan {
+                        text: "40%".into(),
+                        color: Some("#5C39EE".into()),
+                        font_size: None,
+                        font_weight: None,
+                        font_family: None,
+                        font_style: None,
+                        letter_spacing: None,
+                    },
+                ],
+                max_width: None,
+                timing: Default::default(),
+                style: CssStyle {
+                    font_size: Some(Length::Px(40.0)),
+                    ..Default::default()
+                },
+                timeline: Vec::new(),
+                stagger: None,
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+        };
+        let scene = vec![rich_text];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let layout = run_layout(&built.root, (800.0, 600.0), &ConversionContext::default());
+        let id = built.root.children[0].id;
+        let l = layout.get(id).expect("rich_text laid out");
+        assert!(
+            l.width > 0.0,
+            "rich_text width should be > 0, got {}",
+            l.width
+        );
+        assert!(
+            l.height > 0.0,
+            "rich_text height should be > 0, got {}",
+            l.height
+        );
+    }
+
+    // ─── M3: the `glow` effect renders as a coloured drop-shadow ────────────
+
+    #[test]
+    fn glow_effect_adds_a_coloured_drop_shadow_filter() {
+        use rustmotion_core::css::style::{Color, FilterFn};
+        use rustmotion_core::css::units::Length as CLength;
+        use rustmotion_core::schema::{AnimationEffect, GlowConfig};
+
+        let mut shape = make_shape(100.0, 100.0);
+        if let Component::Shape(ref mut s) = shape.component {
+            s.style.animation = vec![AnimationEffect::Glow(GlowConfig {
+                color: "#5C39EE".to_string(),
+                radius: 12.0,
+                intensity: 1.0,
+            })];
+        }
+        let anim = BuildAnimationCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let scene = [shape];
+        let built = build_scene_with_anim(&scene, (400.0, 400.0), anim);
+        let filters = built.root.children[0]
+            .css
+            .filter
+            .as_ref()
+            .expect("glow must add a filter list");
+        let shadow = filters
+            .iter()
+            .find(|f| matches!(f, FilterFn::DropShadow { .. }))
+            .expect("a DropShadow filter must be present");
+        let FilterFn::DropShadow { blur, color, .. } = shadow else {
+            unreachable!()
+        };
+        match blur {
+            Some(CLength::Px(px)) => {
+                assert_eq!(*px, 12.0, "blur radius must match GlowConfig.radius")
+            }
+            other => panic!("expected Some(Length::Px(12.0)) blur, got {:?}", other),
+        }
+        // The defect this fixes: `color: None` resolves to black downstream
+        // (see `paint_pass.rs`'s `unwrap_or(SColor::BLACK)`). The colour must
+        // be `Some` and must match the configured glow colour, not black.
+        match color {
+            Some(Color::Rgba { r, g, b, a }) => {
+                assert_eq!(*r, 0x5C);
+                assert_eq!(*g, 0x39);
+                assert_eq!(*b, 0xEE);
+                assert!(*a > 0.0, "alpha must be > 0 for the glow to be visible");
+            }
+            other => panic!("expected Some(Color::Rgba{{..}}), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn glow_effect_scales_alpha_by_intensity() {
+        use rustmotion_core::css::style::{Color, FilterFn};
+        use rustmotion_core::schema::{AnimationEffect, GlowConfig};
+
+        let mut shape = make_shape(100.0, 100.0);
+        if let Component::Shape(ref mut s) = shape.component {
+            s.style.animation = vec![AnimationEffect::Glow(GlowConfig {
+                color: "#FFFFFFFF".to_string(), // opaque white
+                radius: 10.0,
+                intensity: 0.5,
+            })];
+        }
+        let anim = BuildAnimationCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let scene = [shape];
+        let built = build_scene_with_anim(&scene, (400.0, 400.0), anim);
+        let filters = built.root.children[0].css.filter.as_ref().unwrap();
+        let FilterFn::DropShadow { color, .. } = filters
+            .iter()
+            .find(|f| matches!(f, FilterFn::DropShadow { .. }))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let Some(Color::Rgba { a, .. }) = color else {
+            panic!("expected Rgba color");
+        };
+        assert!(
+            (*a - 0.5).abs() < 1e-4,
+            "intensity 0.5 on an opaque colour must scale alpha to ~0.5, got {}",
+            a
+        );
+    }
+
+    #[test]
+    fn no_glow_effect_leaves_filter_untouched() {
+        let shape = make_shape(100.0, 100.0);
+        let anim = BuildAnimationCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            fps: 30,
+        };
+        let scene = [shape];
+        let built = build_scene_with_anim(&scene, (400.0, 400.0), anim);
+        assert!(built.root.children[0].css.filter.is_none());
     }
 }
