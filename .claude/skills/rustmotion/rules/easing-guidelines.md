@@ -14,7 +14,11 @@ Entrance presets already use appropriate easing internally.
 
 ## Available Easing Functions
 
-`linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `spring`
+17 named easings, plus `cubic_bezier` for a custom curve — 18 total:
+
+`linear`, `ease_in`, `ease_out`, `ease_in_out`, `ease_in_quad`, `ease_out_quad`, `ease_in_cubic`, `ease_out_cubic`, `ease_in_expo`, `ease_out_expo`, `ease_in_out_quad`, `ease_in_out_expo`, `ease_in_back`, `ease_out_back`, `ease_out_elastic`, `bounce`, `spring`
+
+`cubic_bezier` takes a parameter object instead of a bare string — `{ "cubic_bezier": { "x1": 0.4, "y1": 0.0, "x2": 0.2, "y2": 1.0 } }` — anywhere an `easing` value is accepted (top-level `animation.easing`, per-keyframe `easing`).
 
 ### Spring Physics
 

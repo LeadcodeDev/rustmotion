@@ -236,10 +236,11 @@ La bordure et l'ombre reprennent la teinte accent — le verre a une couleur.
 
 ```json
 {
-  "video": { "background": "#0f172a" },
+  "video": { "width": 1080, "height": 1920, "fps": 30, "background": "#0f172a" },
   "scenes": [{
+    "duration": 3.0,
     "children": [
-      { "type": "card", "style": { "backdrop-filter": [{ "fn": "blur", "radius": 24 }], "background": "#FFFFFF18" } }
+      { "type": "card", "style": { "width": 800, "height": 400, "backdrop-filter": [{ "fn": "blur", "radius": 24 }], "background": "#FFFFFF18" } }
     ]
   }]
 }
@@ -252,6 +253,6 @@ Fond uni `#0f172a` + verre → on ne voit rien à travers le flou, la carte est 
 `backdrop-filter` floute ce qui est **derrière le composant dans le viewport**, pas ce qui est dans le parent. Si appliqué à un `text` ou `icon` enfant d'une carte opaque, il n'a aucun effet visible.
 
 ```json
-{ "type": "text", "style": { "backdrop-filter": [{ "fn": "blur", "radius": 20 }], "color": "#fff" } }
+{ "type": "text", "content": "Label", "style": { "backdrop-filter": [{ "fn": "blur", "radius": 20 }], "color": "#fff" } }
 ```
 Aucun effet — `backdrop-filter` est uniquement pertinent sur les éléments directement superposés à une texture/image/blob de fond. ✗

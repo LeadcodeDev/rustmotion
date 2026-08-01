@@ -11,7 +11,7 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 
 Aucun contenu textuel ne doit dépasser du device. Trois propriétés contrôlent ce comportement :
 
-- `style.wrap` (default `true`) sur `text` : laisse-le à `true` pour wrapper sur la largeur du parent. `wrap: false` est légitime uniquement si un `max-width` finit + `font-size` raisonnable garantissent que la ligne tient. Le validateur émet `unwrappable_text_overflow` sinon.
+- `style.white-space` (default `normal`, donc wrap actif) sur `text` : le texte wrap sur la largeur du parent par défaut. `white-space: "nowrap"` (ou `"pre"`) est légitime uniquement si un `max-width` fini + `font-size` raisonnable garantissent que la ligne tient. Le validateur émet `unwrappable_text_overflow` sinon. Il n'existe pas de champ `style.wrap` — c'est un vocabulaire hérité de l'ancien modèle de style, supprimé de `CssStyle`. Voir [rules/geometry-safety.md](.claude/skills/rustmotion/rules/geometry-safety.md).
 - `auto_scroll` (default `true`) sur `codeblock` et `terminal` : quand le contenu dépasse la hauteur du `size`, le moteur scrolle (clip + translate) sans réduire la `font-size`. `auto_scroll: false` → `auto_scroll_disabled_overflow`.
 - `style.overflow` (default `visible`) sur les conteneurs : sémantique CSS. `hidden` clippe au bord du parent. Le validateur ne se plaint que si le contenu sort du **viewport**, pas d'un parent `visible`.
 
@@ -19,9 +19,9 @@ Aucun contenu textuel ne doit dépasser du device. Trois propriétés contrôlen
 
 CLI :
 - `rustmotion validate -f file.json` — schema + geometry
-- `--fix` — auto-fix sûr (`wrap: true`, `auto_scroll: true`)
+- `--fix` — auto-fix sûr : `auto_scroll: true` sur `auto_scroll_disabled_overflow`, et retrait de `style.white-space` sur `unwrappable_text_overflow` (retour au défaut `normal`, donc au wrapping). Les débordements de viewport et de boîte ne sont jamais corrigés automatiquement : ils demandent un arbitrage de mise en page.
 - `--report r.json` — rapport JSON
-- `--strict-anim` — vérification frame par frame
+- `--strict-anim` — vérification frame par frame ; ajoute la détection `animated_text_overflow` (transform animé qui sort du viewport à un instant échantillonné)
 - `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
 - `--lenient` — warnings au lieu d'errors
 
@@ -31,7 +31,7 @@ CLI :
 - Sans ffmpeg, le fallback openh264 intégré encode en 8-bit
 - Pour les vidéos avec des gradients sombres, recommander `--codec prores` pour une qualité maximale
 
-## Composants disponibles (51)
+## Composants disponibles (57)
 
 ### Basiques
 `text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
@@ -81,7 +81,13 @@ CLI :
 `arrow`, `connector`, `timeline`, `line`
 
 ### Média
-`mockup`, `lottie`, `cursor`, `particle`, `qrcode`
+`mockup`, `lottie`, `cursor`, `particle`, `qr_code`
+
+### Audio
+- `waveform` — visualisation d'onde audio réactive au volume de la piste
+- `audio_spectrum` — barres de spectre audio réactives (FFT)
+
+> Voir [rules/audio-reactive.md](.claude/skills/rustmotion/rules/audio-reactive.md) pour lier un composant à une piste `audio` via `style.audio-reactive`.
 
 ## Architecture
 
