@@ -65,8 +65,7 @@ fn build_schema() -> serde_json::Value {
 
     // Point `Scene.children` at `Component` instead of the untyped
     // `serde_json::Value` ("items: true").
-    if let Some(children) = scenario_schema.pointer_mut("/definitions/Scene/properties/children")
-    {
+    if let Some(children) = scenario_schema.pointer_mut("/definitions/Scene/properties/children") {
         *children = serde_json::json!({
             "type": "array",
             "items": { "$ref": "#/definitions/Component" }

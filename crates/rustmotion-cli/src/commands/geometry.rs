@@ -113,7 +113,10 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
             let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
 
-            let camera = scene.camera.as_ref().filter(|_| !scene_uses_depth(&children));
+            let camera = scene
+                .camera
+                .as_ref()
+                .filter(|_| !scene_uses_depth(&children));
 
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             walk(
@@ -128,7 +131,8 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 // Nothing clips top-level scene children but the viewport
                 // frame itself — and that's exactly what check_viewport
                 // tests, so top level must not be pre-suppressed.
-                /*parent_clips=*/ false,
+                /*parent_clips=*/
+                false,
                 camera,
                 &mut violations,
             );
@@ -209,15 +213,39 @@ fn walk(
                 }
                 check_viewport(&child.component, &child_path, &vbbox, viewport, vi, si, out);
             }
-            check_unwrappable_text(&child.component, &child_path, &raw_bbox, viewport, vi, si, out);
-            check_auto_scroll(&child.component, &child_path, &raw_bbox, viewport, vi, si, out);
+            check_unwrappable_text(
+                &child.component,
+                &child_path,
+                &raw_bbox,
+                viewport,
+                vi,
+                si,
+                out,
+            );
+            check_auto_scroll(
+                &child.component,
+                &child_path,
+                &raw_bbox,
+                viewport,
+                vi,
+                si,
+                out,
+            );
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
             // scroll/auto BEFORE painting its own content, at step 4 —
             // self-clipping is real, not just a container->children thing).
             if !parent_clips && !container_clips(&child.component) {
-                check_content_overflows_box(&child.component, &child_path, layout, viewport, vi, si, out);
+                check_content_overflows_box(
+                    &child.component,
+                    &child_path,
+                    layout,
+                    viewport,
+                    vi,
+                    si,
+                    out,
+                );
             }
         }
 
@@ -764,7 +792,10 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
             let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
 
-            let camera = scene.camera.as_ref().filter(|_| !scene_uses_depth(&children));
+            let camera = scene
+                .camera
+                .as_ref()
+                .filter(|_| !scene_uses_depth(&children));
 
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             let scene_duration = scene.duration;
@@ -1585,7 +1616,10 @@ mod tests {
             (short.last().copied().unwrap() - 0.5).abs() < 1e-9,
             "must include the scene end"
         );
-        assert!(long.len() <= ANIM_MAX_SAMPLES, "sample count must stay bounded");
+        assert!(
+            long.len() <= ANIM_MAX_SAMPLES,
+            "sample count must stay bounded"
+        );
     }
 
     // ─── H4 (second half): content larger than its own content box ───────────
@@ -1695,8 +1729,18 @@ mod tests {
         let v = violations
             .iter()
             .find(|v| v.kind == ViolationKind::ContentOverflowsBox)
-            .unwrap_or_else(|| panic!("expected ContentOverflowsBox for an unbreakable long token: {:?}", violations));
-        assert_eq!(v.axis, Axis::X, "the 600px-tall box rules out a height overflow: {:?}", v);
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsBox for an unbreakable long token: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(
+            v.axis,
+            Axis::X,
+            "the 600px-tall box rules out a height overflow: {:?}",
+            v
+        );
     }
 
     #[test]

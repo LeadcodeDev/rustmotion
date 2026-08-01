@@ -707,9 +707,21 @@ mod tests {
 
         assert_ne!(x1, x2, "columns 1 and 2 must not share an x-offset");
         assert_ne!(x2, x3, "columns 2 and 3 must not share an x-offset");
-        assert!((x1 - 0.0).abs() < 0.5, "column 1 should start at x=0, got {x1}");
-        assert!((x2 - 300.0).abs() < 1.0, "column 2 should start at ~300px, got {x2}");
-        assert!((x3 - 600.0).abs() < 1.0, "column 3 should start at ~600px, got {x3}");
-        assert!((w1 - 300.0).abs() < 1.0, "each 1fr column should be ~300px wide, got {w1}");
+        assert!(
+            (x1 - 0.0).abs() < 0.5,
+            "column 1 should start at x=0, got {x1}"
+        );
+        assert!(
+            (x2 - 300.0).abs() < 1.0,
+            "column 2 should start at ~300px, got {x2}"
+        );
+        assert!(
+            (x3 - 600.0).abs() < 1.0,
+            "column 3 should start at ~600px, got {x3}"
+        );
+        assert!(
+            (w1 - 300.0).abs() < 1.0,
+            "each 1fr column should be ~300px wide, got {w1}"
+        );
     }
 }

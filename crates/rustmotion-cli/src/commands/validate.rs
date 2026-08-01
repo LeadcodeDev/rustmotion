@@ -194,8 +194,8 @@ fn parse_segments(path: &str) -> Vec<(String, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::geometry::{validate_geometry, Axis, BBox};
+    use super::*;
     use rustmotion::components::Component;
     use rustmotion::engine::render;
     use rustmotion::loader::load_scenario_from_source;
@@ -274,7 +274,10 @@ mod tests {
             Component::Card(c) => c.children.len() == 1,
             _ => false,
         };
-        assert!(text_survived, "text child must survive the fix, not be dropped");
+        assert!(
+            text_survived,
+            "text child must survive the fix, not be dropped"
+        );
 
         // The fix must also clear the geometry violation it targeted.
         let after = validate_geometry(&scenario);

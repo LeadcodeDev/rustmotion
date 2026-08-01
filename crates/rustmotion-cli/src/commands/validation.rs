@@ -416,6 +416,10 @@ mod font_loading_wiring_tests {
         let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
         assert!(loaded.scenario.fonts.is_empty());
         let report = run_checks(&loaded, false);
-        assert!(report.schema_errors.is_empty(), "{:?}", report.schema_errors);
+        assert!(
+            report.schema_errors.is_empty(),
+            "{:?}",
+            report.schema_errors
+        );
     }
 }

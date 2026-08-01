@@ -503,7 +503,10 @@ mod tests {
 
     #[test]
     fn rgb_function_white() {
-        assert_eq!(parse_css_color("rgb(255,255,255)"), Some((255, 255, 255, 255)));
+        assert_eq!(
+            parse_css_color("rgb(255,255,255)"),
+            Some((255, 255, 255, 255))
+        );
         assert_eq!(
             parse_css_color("rgb(255, 255, 255)"),
             Some((255, 255, 255, 255))
@@ -512,7 +515,10 @@ mod tests {
 
     #[test]
     fn rgb_function_space_syntax() {
-        assert_eq!(parse_css_color("rgb(255 255 255)"), Some((255, 255, 255, 255)));
+        assert_eq!(
+            parse_css_color("rgb(255 255 255)"),
+            Some((255, 255, 255, 255))
+        );
     }
 
     #[test]
@@ -573,10 +579,7 @@ mod tests {
 
     #[test]
     fn hsl_function_space_syntax() {
-        assert_eq!(
-            parse_css_color("hsl(0 100% 50%)"),
-            Some((255, 0, 0, 255))
-        );
+        assert_eq!(parse_css_color("hsl(0 100% 50%)"), Some((255, 0, 0, 255)));
     }
 
     // ---- named colors ----
@@ -596,8 +599,14 @@ mod tests {
     #[test]
     fn named_color_extended_set_sample() {
         // Spot-check a handful outside the old 11-name table.
-        assert_eq!(parse_css_color("rebeccapurple"), Some((0x66, 0x33, 0x99, 255)));
-        assert_eq!(parse_css_color("cornflowerblue"), Some((0x64, 0x95, 0xED, 255)));
+        assert_eq!(
+            parse_css_color("rebeccapurple"),
+            Some((0x66, 0x33, 0x99, 255))
+        );
+        assert_eq!(
+            parse_css_color("cornflowerblue"),
+            Some((0x64, 0x95, 0xED, 255))
+        );
         assert_eq!(parse_css_color("tomato"), Some((0xFF, 0x63, 0x47, 255)));
         assert_eq!(parse_css_color("dodgerblue"), Some((0x1E, 0x90, 0xFF, 255)));
     }
@@ -613,10 +622,7 @@ mod tests {
     #[test]
     fn tolerates_surrounding_and_internal_whitespace() {
         assert_eq!(parse_css_color("  #fff  "), Some((255, 255, 255, 255)));
-        assert_eq!(
-            parse_css_color("  white  "),
-            Some((255, 255, 255, 255))
-        );
+        assert_eq!(parse_css_color("  white  "), Some((255, 255, 255, 255)));
         assert_eq!(
             parse_css_color("rgb( 10 , 20 , 30 )"),
             Some((10, 20, 30, 255))
