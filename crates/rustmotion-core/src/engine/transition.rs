@@ -427,11 +427,41 @@ pub fn camera_pan_transition(
     let (in_x, in_y) = (dx * (1.0 - t), dy * (1.0 - t));
 
     match bg_b.and_then(|b| frame_to_image(b, width, height)) {
-        // Travelling: each background is locked to its own foreground, so a
-        // beat moves as one plane.
+        // Travelling: each background moves with its own scene, but at a
+        // fraction of the foreground's distance and fading across the pan.
+        //
+        // Two reasons for the fraction. It is how parallax actually works —
+        // what is far away moves less — and it makes the two backgrounds
+        // overlap across most of the frame instead of meeting edge to edge.
+        // Opaque images laid side by side join on a hard line no crossfade can
+        // hide; overlapping ones dissolve into each other.
         Some(img_bg_b) => {
-            canvas.draw_image(&img_bg_a, (out_x, out_y), None);
-            canvas.draw_image(&img_bg_b, (in_x, in_y), None);
+            // Backgrounds drift at a fraction of the foreground's distance —
+            // that is how parallax works, and it keeps them overlapping
+            // instead of meeting edge to edge, where two opaque images join on
+            // a line no fade can hide.
+            const BG_PARALLAX: f32 = 0.12;
+            let (bax, bay) = (out_x * BG_PARALLAX, out_y * BG_PARALLAX);
+            let (bbx, bby) = (in_x * BG_PARALLAX, in_y * BG_PARALLAX);
+
+            // Translating an opaque image uncovers a strip on the opposite
+            // side, and that strip reads as a hard edge just as much as a
+            // join would. Overscaling by the largest drift either background
+            // can take means neither ever exposes one.
+            let mx = (dx * BG_PARALLAX).abs();
+            let my = (dy * BG_PARALLAX).abs();
+            let w = width as f32;
+            let h = height as f32;
+            let spread =
+                |ox: f32, oy: f32| Rect::from_ltrb(-mx + ox, -my + oy, w + mx + ox, h + my + oy);
+
+            // The outgoing background stays opaque so the frame is always
+            // covered; the incoming one dissolves over it. Fading both would
+            // darken wherever only one of them reaches.
+            canvas.draw_image_rect(&img_bg_a, None, spread(bax, bay), &Paint::default());
+            let mut incoming = Paint::default();
+            incoming.set_alpha_f(t);
+            canvas.draw_image_rect(&img_bg_b, None, spread(bbx, bby), &incoming);
         }
         // Fixed backdrop: drawn once at rest, so a shared ambience stays
         // continuous and the join is invisible.
