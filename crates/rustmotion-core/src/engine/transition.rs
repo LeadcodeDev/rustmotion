@@ -446,14 +446,23 @@ pub fn camera_pan_transition(
 
             // Translating an opaque image uncovers a strip on the opposite
             // side, and that strip reads as a hard edge just as much as a
-            // join would. Overscaling by the largest drift either background
-            // can take means neither ever exposes one.
-            let mx = (dx * BG_PARALLAX).abs();
-            let my = (dy * BG_PARALLAX).abs();
+            // join would. Each layer is therefore overscaled by exactly its
+            // own current displacement — just enough to cover, never more.
+            //
+            // Sizing it on the *maximum* drift instead makes the margin
+            // constant across the transition, including at both ends where the
+            // displacement is zero. The background then jumps between a normal
+            // frame and an enlarged one at every junction — measured at up to
+            // 128px of halo movement in a single frame, an order of magnitude
+            // beyond the drift itself. Tying the margin to the current offset
+            // makes it vanish exactly where a transition meets a normal frame,
+            // so the two are continuous.
             let w = width as f32;
             let h = height as f32;
-            let spread =
-                |ox: f32, oy: f32| Rect::from_ltrb(-mx + ox, -my + oy, w + mx + ox, h + my + oy);
+            let spread = |ox: f32, oy: f32| {
+                let (mx, my) = (ox.abs(), oy.abs());
+                Rect::from_ltrb(-mx + ox, -my + oy, w + mx + ox, h + my + oy)
+            };
 
             // The outgoing background stays opaque so the frame is always
             // covered; the incoming one dissolves over it. Fading both would
