@@ -10,6 +10,7 @@
 //!   6. Schema-level checks (file existence, dimensions, durations, etc.)
 //!   7. Geometry checks (viewport overflow, wrap, auto_scroll)
 
+use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::include::{self, IncludeSource};
 use rustmotion::schema::{ResolvedScenario, Scenario};
@@ -151,7 +152,16 @@ pub fn load_with_vars(
 /// Run all validation checks against a loaded scenario. When `strict_anim`
 /// is true, also sample animation frames and check that no widget's
 /// transformed bbox leaves the viewport.
+///
+/// Registers any custom/Google fonts declared on the scenario *before*
+/// running geometry checks, so text is measured with the same typeface the
+/// render path will use. Without this, geometry checks measure through the
+/// Helvetica → Arial → OS fallback chain regardless of what the scenario
+/// declares — a systematic false-negative/false-positive source (issue #106).
 pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationReport {
+    if !loaded.scenario.fonts.is_empty() {
+        engine::renderer::load_custom_fonts(&loaded.scenario.fonts);
+    }
     let mut geom_violations = validate_geometry(&loaded.scenario);
     if strict_anim {
         geom_violations.extend(validate_geometry_animated(&loaded.scenario));
@@ -347,5 +357,69 @@ mod misplaced_animation_tests {
             "only the top-level animation should warn: {w:?}"
         );
         assert!(w[0].contains("style.animation"));
+    }
+}
+
+#[cfg(test)]
+mod font_loading_wiring_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// H5 (issue #106): `run_checks` must register the scenario's declared
+    /// fonts before running geometry checks — matching what the render path
+    /// already does at `render.rs:47` — so validation and render resolve
+    /// fonts through the same call order instead of validation always
+    /// measuring through the fallback chain. A missing/unreadable font path
+    /// only warns (see `engine::renderer::fonts::register_font_file`); it
+    /// must not turn into a blocking validation error.
+    #[test]
+    fn run_checks_does_not_block_on_a_declared_font() {
+        let json = json!({
+            "video": { "width": 200, "height": 200 },
+            "fonts": [
+                { "family": "DoesNotExist", "path": "does/not/exist.ttf" }
+            ],
+            "scenes": [{
+                "duration": 1.0,
+                "children": [
+                    { "type": "text", "content": "hi", "style": { "color": "#fff" } }
+                ]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.is_empty(),
+            "declared fonts must not block validation: {:?}",
+            report.schema_errors
+        );
+        assert!(!report.is_blocking(false));
+    }
+
+    /// A scenario with no `fonts` entries must not attempt any font I/O
+    /// (the `!loaded.scenario.fonts.is_empty()` guard in `run_checks`).
+    #[test]
+    fn run_checks_skips_font_loading_when_no_fonts_declared() {
+        let json = json!({
+            "video": { "width": 200, "height": 200 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [
+                    { "type": "text", "content": "hi", "style": { "color": "#fff" } }
+                ]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+        assert!(loaded.scenario.fonts.is_empty());
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.is_empty(),
+            "{:?}",
+            report.schema_errors
+        );
     }
 }

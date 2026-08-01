@@ -100,19 +100,28 @@ Each card is 230px = 77px CSS → icon and text completely unreadable.
 
 ## GOOD: 2×2 grid on mobile
 
+`grid-template-columns` takes an array (`["1fr", "1fr"]`), never a raw CSS shorthand string like `"1fr 1fr"` — a bare string fails to deserialize (`Vec<GridTrack>` expected) and drops the card. Grid containers also need an explicit `height` (not `"auto"`) — see [rules/grid-card-height.md](grid-card-height.md).
+
 ```json
 {
   "type": "card",
-  "style": { "width": 984, "display": "grid", "grid-template-columns": "1fr 1fr", "gap": 24 },
+  "style": {
+    "width": 984,
+    "height": 640,
+    "display": "grid",
+    "grid-template-columns": ["1fr", "1fr"],
+    "grid-template-rows": ["1fr", "1fr"],
+    "gap": 24
+  },
   "children": [
-    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
-    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
-    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] },
-    { "type": "card", "style": { "width": 480, "padding": 40 }, "children": [...] }
+    { "type": "card", "style": { "padding": 40 }, "children": [] },
+    { "type": "card", "style": { "padding": 40 }, "children": [] },
+    { "type": "card", "style": { "padding": 40 }, "children": [] },
+    { "type": "card", "style": { "padding": 40 }, "children": [] }
   ]
 }
 ```
-480px per card = 160px CSS → readable content. 24px gap. ✓
+Each cell fills its grid track (~480px wide here) = 160px CSS → readable content. 24px gap. ✓
 
 ## BAD: Icon inconsistency across scenes
 

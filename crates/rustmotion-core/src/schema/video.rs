@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig, SpringConfig};
 use super::style::{FontWeight, TextAlign, VerticalAlign};
 
-// --- Animation effects (nested inside LayerStyle as typed array) ---
+// --- Animation effects (nested inside CssStyle as typed array) ---
 
 /// A single animation effect. Discriminated by `"type"` in JSON.
 /// Each preset name is a valid type, plus special types: glow, wiggle, keyframes, motion_blur.
@@ -473,23 +473,6 @@ pub struct WiggleConfig {
 
 // --- Supporting types ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct Size {
-    #[serde(default = "default_size_dim")]
-    pub width: f32,
-    #[serde(default = "default_size_dim")]
-    pub height: f32,
-}
-
-impl Default for Size {
-    fn default() -> Self {
-        Self {
-            width: 100.0,
-            height: 100.0,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ShapeType {
@@ -735,27 +718,6 @@ fn default_glow_intensity() -> f32 {
     1.0
 }
 
-/// Blend mode for layer compositing
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum BlendMode {
-    Multiply,
-    Screen,
-    Overlay,
-    Darken,
-    Lighten,
-    ColorDodge,
-    ColorBurn,
-    HardLight,
-    SoftLight,
-    Difference,
-    Exclusion,
-    Hue,
-    Saturation,
-    Color,
-    Luminosity,
-}
-
 /// Gradient fill for text
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TextGradient {
@@ -776,10 +738,6 @@ fn default_color() -> String {
 
 fn default_font_family() -> String {
     "Inter".to_string()
-}
-
-fn default_size_dim() -> f32 {
-    100.0
 }
 
 fn default_stroke_width() -> f32 {

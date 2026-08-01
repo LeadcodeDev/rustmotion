@@ -95,27 +95,28 @@ Pick the palette in Phase 2. Every scene, every card, every text element uses co
 
 ### Rule P2: Use $ref for backgrounds
 
-If the same gradient background appears in multiple scenes, define it once and reference it:
+If the same gradient background appears in multiple scenes, define it once and reference it. Entries under the top-level `backgrounds` map are stored as raw JSON and only get type-checked when a scene actually resolves the `$ref` — at that point they must deserialize as an `AnimatedBackground`, which **requires a `preset`** (`gradient_shift`, `grid_dots`, `concentric_circles`, `halo`, or `heropattern`) plus that preset's config nested under its own name key. A template shaped like `{ "type": "gradient", "gradient": {...} }` is not an `AnimatedBackground` at all — `rustmotion validate` does not catch this (the `backgrounds` map and `background.$ref` overrides are permissive `serde_json::Value`s at the schema level), so the file validates clean but **renders a flat, ungra­dient background** at render time:
 
 ```json
 {
   "backgrounds": {
     "dark_radial": {
-      "type": "gradient",
-      "gradient": {
-        "type": "radial",
+      "preset": "gradient_shift",
+      "gradient_shift": {
         "colors": ["#1e1b4b", "#0f172a"],
-        "center_x": 0.5,
-        "center_y": 0.4
-      }
+        "gradient_type": "radial"
+      },
+      "speed": 10
     }
   },
   "scenes": [
-    { "background": { "$ref": "dark_radial" }, ... },
-    { "background": { "$ref": "dark_radial" }, ... }
+    { "background": { "$ref": "dark_radial" }, "duration": 3.0, "children": [] },
+    { "background": { "$ref": "dark_radial" }, "duration": 3.0, "children": [] }
   ]
 }
 ```
+
+`speed` defaults to `0` (static) if omitted — set it low for a near-static gradient, higher for a visibly rotating one (degrees/sec for `gradient_shift`). Per-scene overrides merge on top of the template (e.g. `{ "$ref": "dark_radial", "gradient_shift": { "colors": [...] } }` swaps just the colors) — everything except `$ref` and `transition` deep-merges into the referenced template.
 
 ### Rule P3: Accent color as the single highlight
 

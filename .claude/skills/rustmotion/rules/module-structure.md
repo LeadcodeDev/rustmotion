@@ -7,7 +7,7 @@ The workspace is split into three crates:
 | Crate | Role |
 |---|---|
 | `rustmotion-core` | Engine, CSS model, schema types, Painter trait |
-| `rustmotion-components` | 51 component structs + Painter impls + box builder |
+| `rustmotion-components` | 57 component structs + Painter impls + box builder |
 | `rustmotion-cli` | CLI commands (render, validate, schema, info) |
 
 ---

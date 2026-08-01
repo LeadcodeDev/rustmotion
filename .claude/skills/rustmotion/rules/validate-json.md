@@ -9,10 +9,12 @@ Every generated JSON scenario MUST be validated with `rustmotion validate` befor
 
 ## Geometry violations
 
-The validator detects three viewport-overflow conditions:
+The validator detects five overflow conditions:
 - `viewport_overflow` — absolute bbox crosses the device edge
-- `unwrappable_text_overflow` — `style.wrap: false` but natural width > box
+- `unwrappable_text_overflow` — `style.white-space: "nowrap"`/`"pre"` but natural width > box (there is no `wrap` field)
+- `content_overflows_box` — wrapping text needs more room than its own box, e.g. a paragraph in a fixed-height card. Fires even when the box stays inside the frame
 - `auto_scroll_disabled_overflow` — `auto_scroll: false` on a codeblock/terminal with content > box
+- `animated_text_overflow` — an animated transform pushes the bbox out of the viewport at some sampled time (`--strict-anim` only)
 
 See [rules/geometry-safety.md](geometry-safety.md) for the underlying mechanisms.
 
@@ -25,6 +27,6 @@ rustmotion validate -f /tmp/scenario.json --strict-anim     # per-frame checks
 rustmotion validate -f /tmp/scenario.json --lenient         # warnings only
 ```
 
-`--fix` may set `wrap: true` and `auto_scroll: true` automatically. Position/size issues are never auto-fixed.
+`--fix` handles the two mechanical cases: it sets `auto_scroll: true` on `auto_scroll_disabled_overflow`, and removes `style.white-space` on `unwrappable_text_overflow` (falling back to the `normal` default, i.e. wrapping). Viewport and content-box overflows are never auto-fixed — they need a layout decision only you can make.
 
 **FORBIDDEN:** Presenting JSON that has not been validated by `rustmotion validate`.

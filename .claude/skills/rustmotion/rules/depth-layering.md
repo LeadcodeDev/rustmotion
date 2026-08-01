@@ -102,15 +102,17 @@ Background elements feel farther away when slightly blurred. Use `backdrop-filte
 
 ## Scale + opacity gradient across siblings
 
-When cards or icons are in a row, give back-row items a smaller scale and lower opacity to simulate perspective receding.
+When cards or icons are in a row, give back-row items a smaller scale and lower opacity to simulate perspective receding. `transform` is an **array of tagged transform functions** (`{ "fn": "scale", "x": ..., "y": ... }`), never a CSS string like `"scale(0.82)"` — a string fails to deserialize and drops the component.
 
 ```json
 [
-  { "type": "card", "style": { "opacity": 0.4, "transform": "scale(0.82)" }, "..." : "back" },
-  { "type": "card", "style": { "opacity": 0.7, "transform": "scale(0.91)" }, "..." : "mid" },
-  { "type": "card", "style": { "opacity": 1.0, "transform": "scale(1.00)" }, "..." : "front" }
+  { "type": "card", "style": { "opacity": 0.4, "transform": [{ "fn": "scale", "x": 0.82, "y": 0.82 }] } },
+  { "type": "card", "style": { "opacity": 0.7, "transform": [{ "fn": "scale", "x": 0.91, "y": 0.91 }] } },
+  { "type": "card", "style": { "opacity": 1.0, "transform": [{ "fn": "scale", "x": 1.00, "y": 1.00 }] } }
 ]
 ```
+
+(Back/mid/front comment above each entry omitted here for brevity — each object above is a separate sibling `card`, e.g. inside a `div` with `flex-direction: "row"`.)
 
 Use `scale` steps of ~0.08–0.12 between planes. More than 3 planes starts looking mechanical.
 

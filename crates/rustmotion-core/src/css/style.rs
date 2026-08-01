@@ -563,12 +563,27 @@ pub enum Gap {
 
 // ---- Grid ----
 
+/// A single grid track (column or row) sizing function.
+///
+/// Variant order matters here: this is `#[serde(untagged)]`, and serde tries
+/// each variant in declaration order, keeping the first that deserializes
+/// successfully. `Length(LengthPercentage)` accepts *any* JSON number or
+/// string (its own `String` fallback variant is a catch-all), so it must be
+/// tried last — otherwise it silently swallows bare numbers (meant to be
+/// `Fr`, matching the `flex-grow` convention) and keyword strings like
+/// `"auto"` (meant to be `Keyword`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GridTrack {
-    Length(LengthPercentage),
+    /// Bare JSON number, e.g. `1` — a flex fraction, same convention as
+    /// `flex-grow`. Equivalent to the string form `"1fr"`.
     Fr(f32),
+    /// `"auto"` / `"min-content"` / `"max-content"`.
     Keyword(GridTrackKeyword),
+    /// Any other length/percentage, including the explicit string form of a
+    /// flex fraction (`"1fr"`), which `LengthPercentage::parse()` resolves
+    /// to the same `ParsedLength::Fr` as the bare-number form above.
+    Length(LengthPercentage),
     /// `minmax(min, max)`
     Minmax {
         min: Box<GridTrack>,
@@ -1181,5 +1196,79 @@ mod tests {
         assert_eq!(parsed.display, Some(Display::Flex));
         assert_eq!(parsed.opacity, Some(0.5));
         assert_eq!(parsed.z_index, Some(10));
+    }
+
+    // ---- Grid track deserialization (issue #105) ----
+    //
+    // `GridTrack` is `#[serde(untagged)]`; these lock in which variant a
+    // given JSON shape resolves to, since that resolution previously
+    // silently swallowed both `Fr` and `Keyword` into `Length`.
+
+    #[test]
+    fn grid_track_bare_number_is_fr() {
+        let json = r#"{ "grid-template-columns": [1, 1, 1] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let tracks = s.grid_template_columns.expect("tracks set");
+        assert_eq!(tracks.len(), 3);
+        for t in &tracks {
+            assert!(matches!(t, GridTrack::Fr(n) if (*n - 1.0).abs() < f32::EPSILON));
+        }
+    }
+
+    #[test]
+    fn grid_track_string_fr_is_length_parsed_as_fr() {
+        let json = r#"{ "grid-template-columns": ["1fr", "2fr"] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let tracks = s.grid_template_columns.expect("tracks set");
+        match &tracks[0] {
+            GridTrack::Length(lp) => {
+                assert_eq!(lp.parse(), crate::css::units::ParsedLength::Fr(1.0))
+            }
+            other => panic!("expected Length(\"1fr\"), got {other:?}"),
+        }
+        match &tracks[1] {
+            GridTrack::Length(lp) => {
+                assert_eq!(lp.parse(), crate::css::units::ParsedLength::Fr(2.0))
+            }
+            other => panic!("expected Length(\"2fr\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn grid_track_keyword_strings() {
+        let json = r#"{ "grid-template-columns": ["auto", "min-content", "max-content"] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let tracks = s.grid_template_columns.expect("tracks set");
+        assert!(matches!(
+            tracks[0],
+            GridTrack::Keyword(GridTrackKeyword::Auto)
+        ));
+        assert!(matches!(
+            tracks[1],
+            GridTrack::Keyword(GridTrackKeyword::MinContent)
+        ));
+        assert!(matches!(
+            tracks[2],
+            GridTrack::Keyword(GridTrackKeyword::MaxContent)
+        ));
+    }
+
+    #[test]
+    fn grid_track_px_string_is_length() {
+        let json = r#"{ "grid-template-columns": ["200px", "50%"] }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        let tracks = s.grid_template_columns.expect("tracks set");
+        match &tracks[0] {
+            GridTrack::Length(lp) => {
+                assert_eq!(lp.parse(), crate::css::units::ParsedLength::Px(200.0))
+            }
+            other => panic!("expected Length(200px), got {other:?}"),
+        }
+        match &tracks[1] {
+            GridTrack::Length(lp) => {
+                assert_eq!(lp.parse(), crate::css::units::ParsedLength::Percent(50.0))
+            }
+            other => panic!("expected Length(50%), got {other:?}"),
+        }
     }
 }

@@ -2,20 +2,22 @@
 
 `text-background` adds a colored rectangle behind text content. The background is positioned to tightly wrap the text glyphs with configurable padding and corner radius.
 
+`text-background` is a **root field** on `text` — a sibling of `style`, not nested inside it. `CssStyle` has no `text-background` key (`deny_unknown_fields`); putting it in `style` silently drops the whole `text` component.
+
 **GOOD:**
 ```json
 {
   "type": "text",
   "content": " Highlighted text ",
+  "text-background": {
+    "color": "#6366F1",
+    "padding": 12,
+    "corner_radius": 8
+  },
   "style": {
     "font-size": 36,
     "color": "#FFFFFF",
-    "text-align": "center",
-    "text-background": {
-      "color": "#6366F1",
-      "padding": 12,
-      "corner_radius": 8
-    }
+    "text-align": "center"
   }
 }
 ```

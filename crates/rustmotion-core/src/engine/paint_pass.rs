@@ -1130,7 +1130,7 @@ fn paint_gradient_border(
     let colors: Vec<SColor> = gb
         .colors
         .iter()
-        .map(|c| parse_color_string(c).unwrap_or(SColor::BLACK))
+        .map(|c| parse_color_string(c).unwrap_or_else(|| unresolved_color(c)))
         .collect();
     let n = colors.len();
     let positions: Vec<f32> = (0..n)
@@ -1297,6 +1297,21 @@ fn paint_box_shadow(
 }
 
 // ---- Color parsing ----
+//
+// Both functions below route through `renderer::parse_css_color` — the
+// single frozen entry point (see `renderer/colors.rs`) — rather than
+// duplicating hex/rgb/hsl/named-colour parsing here. That parser accepts
+// every common CSS colour form (3/4/6/8-digit hex, rgb()/rgba(), hsl()/
+// hsla(), the full CSS named-colour set) and returns `None` for anything
+// else.
+//
+// A `Color::String` that fails to parse is a real authoring bug — the
+// previous behaviour (`unwrap_or(SColor::BLACK)`) rendered it as invisible
+// text on this tool's dark-background target style. It now falls back to
+// `renderer::UNRESOLVED_COLOR` (opaque magenta) and logs a warning instead,
+// so the failure is visible on screen and in the render logs. Wiring a
+// hard validation-time error for this is out of scope here (sibling
+// workstream); this only stops the render path from lying.
 
 pub fn parse_color(c: &Color) -> SColor {
     match c {
@@ -1304,77 +1319,23 @@ pub fn parse_color(c: &Color) -> SColor {
             let alpha = (a.clamp(0.0, 1.0) * 255.0) as u8;
             SColor::from_argb(alpha, *r, *g, *b)
         }
-        Color::String(s) => parse_color_string(s).unwrap_or(SColor::BLACK),
+        Color::String(s) => parse_color_string(s).unwrap_or_else(|| unresolved_color(s)),
     }
 }
 
 fn parse_color_string(s: &str) -> Option<SColor> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        return parse_hex(hex);
-    }
-    if let Some(inner) = s.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<_> = inner.split(',').map(|s| s.trim()).collect();
-        if parts.len() == 3 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            return Some(SColor::from_argb(255, r, g, b));
-        }
-    }
-    if let Some(inner) = s.strip_prefix("rgba(").and_then(|s| s.strip_suffix(')')) {
-        let parts: Vec<_> = inner.split(',').map(|s| s.trim()).collect();
-        if parts.len() == 4 {
-            let r = parts[0].parse::<u8>().ok()?;
-            let g = parts[1].parse::<u8>().ok()?;
-            let b = parts[2].parse::<u8>().ok()?;
-            let a = parts[3].parse::<f32>().ok()?;
-            return Some(SColor::from_argb(
-                (a.clamp(0.0, 1.0) * 255.0) as u8,
-                r,
-                g,
-                b,
-            ));
-        }
-    }
-    match s.to_ascii_lowercase().as_str() {
-        "black" => Some(SColor::BLACK),
-        "white" => Some(SColor::WHITE),
-        "transparent" => Some(SColor::TRANSPARENT),
-        "red" => Some(SColor::RED),
-        "green" => Some(SColor::GREEN),
-        "blue" => Some(SColor::BLUE),
-        "yellow" => Some(SColor::YELLOW),
-        "magenta" | "fuchsia" => Some(SColor::MAGENTA),
-        "cyan" | "aqua" => Some(SColor::CYAN),
-        "gray" | "grey" => Some(SColor::GRAY),
-        _ => None,
-    }
+    crate::engine::renderer::parse_css_color(s).map(|(r, g, b, a)| SColor::from_argb(a, r, g, b))
 }
 
-fn parse_hex(hex: &str) -> Option<SColor> {
-    match hex.len() {
-        3 => {
-            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-            Some(SColor::from_argb(255, r, g, b))
-        }
-        6 => {
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            Some(SColor::from_argb(255, r, g, b))
-        }
-        8 => {
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
-            Some(SColor::from_argb(a, r, g, b))
-        }
-        _ => None,
-    }
+/// Loud, non-black fallback for a colour string that couldn't be resolved.
+/// See the module note above `parse_color`.
+fn unresolved_color(original: &str) -> SColor {
+    eprintln!(
+        "Warning: unrecognized color '{original}' — rendering as opaque magenta instead of \
+         silently falling back to black"
+    );
+    let (r, g, b, a) = crate::engine::renderer::UNRESOLVED_COLOR;
+    SColor::from_argb(a, r, g, b)
 }
 
 // Suppress unused import warnings for items only used in trait-bound paths.
@@ -2462,7 +2423,7 @@ mod tests {
     fn parse_rgba_string() {
         let c = parse_color_string("rgba(10, 20, 30, 0.5)").unwrap();
         assert_eq!(c.r(), 10);
-        assert_eq!(c.a(), 127);
+        assert_eq!(c.a(), 128);
     }
 
     #[test]
@@ -2472,5 +2433,44 @@ mod tests {
             parse_color_string("transparent").unwrap(),
             SColor::TRANSPARENT
         );
+    }
+
+    #[test]
+    fn parse_white_forms_all_agree() {
+        // Regression test for the C2 audit finding: `#fff`, `#FFF`, `white`
+        // and `rgb(255,255,255)` must all resolve to the same opaque white,
+        // never to black.
+        let white = SColor::from_argb(255, 255, 255, 255);
+        assert_eq!(parse_color_string("#fff").unwrap(), white);
+        assert_eq!(parse_color_string("#FFF").unwrap(), white);
+        assert_eq!(parse_color_string("white").unwrap(), white);
+        assert_eq!(parse_color_string("WHITE").unwrap(), white);
+        assert_eq!(parse_color_string("rgb(255,255,255)").unwrap(), white);
+        assert_eq!(parse_color_string("rgb(255, 255, 255)").unwrap(), white);
+    }
+
+    #[test]
+    fn parse_color_string_supports_extended_named_set() {
+        // Only 11 names were hardcoded before; spot-check a few outside
+        // that set to prove it now routes through the full CSS keyword
+        // table in `renderer::colors`.
+        assert!(parse_color_string("rebeccapurple").is_some());
+        assert!(parse_color_string("cornflowerblue").is_some());
+        assert!(parse_color_string("dodgerblue").is_some());
+    }
+
+    #[test]
+    fn parse_color_string_supports_hsl() {
+        assert_eq!(
+            parse_color_string("hsl(0, 100%, 50%)").unwrap(),
+            SColor::from_argb(255, 255, 0, 0)
+        );
+    }
+
+    #[test]
+    fn parse_color_unresolvable_string_is_not_black() {
+        let c = parse_color(&Color::String("not-a-color".to_string()));
+        assert_ne!(c, SColor::BLACK);
+        assert_eq!(c, SColor::from_argb(255, 255, 0, 255));
     }
 }

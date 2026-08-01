@@ -129,9 +129,9 @@ Reference: Tailwind CSS default spacing (4px base unit).
 
 Sizing rules above are guidelines — `rustmotion validate` is the source of truth. It refuses any scenario whose layout tree leaves the device viewport. See [geometry-safety.md](geometry-safety.md):
 
-- `text` wraps automatically at the parent's max width — leave `style.wrap` at its default (`true`) unless you have a finite `max-width`.
+- `text` wraps automatically at the parent's max width — leave `style.white-space` unset (default wraps) unless you have a finite `max-width`.
 - `codeblock` / `terminal` auto-scroll when content exceeds their `size` — leave `auto_scroll: true` (default).
-- Long single-line content that should bleed must use `marquee`, never `text` with `wrap: false`.
+- Long single-line content that should bleed must use `marquee`, never `text` with `white-space: "nowrap"`.
 
 ## BAD: Using desktop sizes on mobile
 

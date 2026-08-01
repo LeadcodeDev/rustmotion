@@ -10,7 +10,8 @@ use taffy::prelude as tf;
 
 use super::style::{
     AlignContent, AlignItems, AlignSelf, CssStyle, Display, Edges, FlexDirection, FlexWrap, Gap,
-    JustifyContent, Overflow, Position, Size,
+    GridAutoFlow, GridLine, GridLineEnd, GridTrack, GridTrackKeyword, JustifyContent, Overflow,
+    Position, Size,
 };
 use super::units::{LengthContext, LengthPercentage, ParsedLength};
 
@@ -124,6 +125,34 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
             width: col,
             height: row,
         };
+    }
+
+    // Grid
+    if let Some(tracks) = css.grid_template_columns.as_ref() {
+        style.grid_template_columns = tracks
+            .iter()
+            .map(|t| tf::GridTemplateComponent::Single(grid_track_sizing(t, ctx)))
+            .collect();
+    }
+    if let Some(tracks) = css.grid_template_rows.as_ref() {
+        style.grid_template_rows = tracks
+            .iter()
+            .map(|t| tf::GridTemplateComponent::Single(grid_track_sizing(t, ctx)))
+            .collect();
+    }
+    if let Some(flow) = css.grid_auto_flow {
+        style.grid_auto_flow = match flow {
+            GridAutoFlow::Row => tf::GridAutoFlow::Row,
+            GridAutoFlow::Column => tf::GridAutoFlow::Column,
+            GridAutoFlow::RowDense => tf::GridAutoFlow::RowDense,
+            GridAutoFlow::ColumnDense => tf::GridAutoFlow::ColumnDense,
+        };
+    }
+    if let Some(gc) = css.grid_column.as_ref() {
+        style.grid_column = grid_placement_line(gc);
+    }
+    if let Some(gr) = css.grid_row.as_ref() {
+        style.grid_row = grid_placement_line(gr);
     }
 
     // Overflow
@@ -324,6 +353,132 @@ fn border_widths(
     }
 }
 
+/// Convert a [`GridTrack`] into a taffy `TrackSizingFunction` (used for both
+/// the min and max sizing function, except `fr` which uses taffy's `flex()`
+/// helper — `minmax(0, Nfr)`. This gives *exactly* evenly-sized tracks
+/// regardless of child content, matching the `flex-direction: row` control
+/// (`flex-grow: 1` siblings) rather than CSS's stricter `minmax(auto, Nfr)`
+/// default, which lets content push a track wider than its fair share.
+fn grid_track_sizing(t: &GridTrack, ctx: &ConversionContext) -> tf::TrackSizingFunction {
+    match t {
+        GridTrack::Fr(n) => tf::flex(*n),
+        GridTrack::Keyword(k) => grid_keyword_sizing(*k),
+        GridTrack::Length(lp) => grid_length_sizing(lp, ctx),
+        GridTrack::Minmax { min, max } => {
+            tf::minmax(grid_track_min(min, ctx), grid_track_max(max, ctx))
+        }
+    }
+}
+
+fn grid_keyword_sizing(k: GridTrackKeyword) -> tf::TrackSizingFunction {
+    match k {
+        GridTrackKeyword::Auto => tf::auto(),
+        GridTrackKeyword::MinContent => tf::min_content(),
+        GridTrackKeyword::MaxContent => tf::max_content(),
+    }
+}
+
+fn grid_length_sizing(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::TrackSizingFunction {
+    match lp.parse() {
+        ParsedLength::Fr(n) => tf::flex(n),
+        ParsedLength::Auto => tf::auto(),
+        ParsedLength::Px(p) => tf::length(p),
+        ParsedLength::Percent(p) => tf::percent(p / 100.0),
+        ParsedLength::Em(em) => tf::length(em * ctx.length.font_size),
+        ParsedLength::Rem(r) => tf::length(r * ctx.length.root_font_size),
+        ParsedLength::Vw(p) => tf::length(p / 100.0 * ctx.length.viewport_width),
+        ParsedLength::Vh(p) => tf::length(p / 100.0 * ctx.length.viewport_height),
+    }
+}
+
+/// `min` side of an explicit `minmax(min, max)`. `fr` is not a valid CSS
+/// minimum sizing function, so it falls back to `auto` (matches taffy's own
+/// `MaxTrackSizingFunction -> MinTrackSizingFunction` conversion for `fr`).
+fn grid_track_min(t: &GridTrack, ctx: &ConversionContext) -> tf::MinTrackSizingFunction {
+    match t {
+        GridTrack::Fr(_) => tf::auto(),
+        GridTrack::Keyword(GridTrackKeyword::Auto) => tf::auto(),
+        GridTrack::Keyword(GridTrackKeyword::MinContent) => tf::min_content(),
+        GridTrack::Keyword(GridTrackKeyword::MaxContent) => tf::max_content(),
+        GridTrack::Length(lp) => grid_length_min(lp, ctx),
+        // A `minmax` nested inside a `minmax` isn't valid CSS; degrade
+        // gracefully by taking the inner track's own min side.
+        GridTrack::Minmax { min, .. } => grid_track_min(min, ctx),
+    }
+}
+
+fn grid_length_min(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::MinTrackSizingFunction {
+    match lp.parse() {
+        ParsedLength::Fr(_) | ParsedLength::Auto => tf::auto(),
+        ParsedLength::Px(p) => tf::length(p),
+        ParsedLength::Percent(p) => tf::percent(p / 100.0),
+        ParsedLength::Em(em) => tf::length(em * ctx.length.font_size),
+        ParsedLength::Rem(r) => tf::length(r * ctx.length.root_font_size),
+        ParsedLength::Vw(p) => tf::length(p / 100.0 * ctx.length.viewport_width),
+        ParsedLength::Vh(p) => tf::length(p / 100.0 * ctx.length.viewport_height),
+    }
+}
+
+/// `max` side of an explicit `minmax(min, max)`.
+fn grid_track_max(t: &GridTrack, ctx: &ConversionContext) -> tf::MaxTrackSizingFunction {
+    match t {
+        GridTrack::Fr(n) => tf::fr(*n),
+        GridTrack::Keyword(GridTrackKeyword::Auto) => tf::auto(),
+        GridTrack::Keyword(GridTrackKeyword::MinContent) => tf::min_content(),
+        GridTrack::Keyword(GridTrackKeyword::MaxContent) => tf::max_content(),
+        GridTrack::Length(lp) => grid_length_max(lp, ctx),
+        GridTrack::Minmax { max, .. } => grid_track_max(max, ctx),
+    }
+}
+
+fn grid_length_max(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::MaxTrackSizingFunction {
+    match lp.parse() {
+        ParsedLength::Fr(n) => tf::fr(n),
+        ParsedLength::Auto => tf::auto(),
+        ParsedLength::Px(p) => tf::length(p),
+        ParsedLength::Percent(p) => tf::percent(p / 100.0),
+        ParsedLength::Em(em) => tf::length(em * ctx.length.font_size),
+        ParsedLength::Rem(r) => tf::length(r * ctx.length.root_font_size),
+        ParsedLength::Vw(p) => tf::length(p / 100.0 * ctx.length.viewport_width),
+        ParsedLength::Vh(p) => tf::length(p / 100.0 * ctx.length.viewport_height),
+    }
+}
+
+/// Convert a `grid-column` / `grid-row` placement (`{ start, end, span }`)
+/// into a taffy `Line<GridPlacement>`. Named lines / grid areas are out of
+/// scope (issue #105) — only numeric line indices and spans are supported.
+fn grid_placement_line(g: &GridLine) -> tf::Line<tf::GridPlacement> {
+    let start = g.start.map(|GridLineEnd::Index(i)| i as i16);
+    let end = g.end.map(|GridLineEnd::Index(i)| i as i16);
+    match (start, end, g.span) {
+        (Some(s), Some(e), _) => tf::Line {
+            start: tf::line(s),
+            end: tf::line(e),
+        },
+        (Some(s), None, Some(n)) => tf::Line {
+            start: tf::line(s),
+            end: tf::span(n),
+        },
+        (Some(s), None, None) => tf::Line {
+            start: tf::line(s),
+            end: tf::auto(),
+        },
+        (None, Some(e), Some(n)) => tf::Line {
+            start: tf::span(n),
+            end: tf::line(e),
+        },
+        (None, Some(e), None) => tf::Line {
+            start: tf::auto(),
+            end: tf::line(e),
+        },
+        (None, None, Some(n)) => tf::Line {
+            start: tf::span(n),
+            end: tf::auto(),
+        },
+        (None, None, None) => tf::Line::auto(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +570,158 @@ mod tests {
         let s = to_taffy_style(&css, &ctx());
         assert_eq!(s.overflow.x, taffy::Overflow::Hidden);
         assert_eq!(s.overflow.y, taffy::Overflow::Hidden);
+    }
+
+    // ---- Grid (issue #105) ----
+
+    #[test]
+    fn grid_display_translated() {
+        let css = CssStyle {
+            display: Some(Display::Grid),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.display, tf::Display::Grid);
+    }
+
+    #[test]
+    fn grid_template_columns_fr_tracks_translated() {
+        let css = CssStyle {
+            grid_template_columns: Some(vec![GridTrack::Fr(1.0), GridTrack::Fr(2.0)]),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.grid_template_columns.len(), 2);
+    }
+
+    #[test]
+    fn grid_template_rows_string_fr_tracks_translated() {
+        // Same string-encoded form used by examples/mega-showcase.json.
+        let css = CssStyle {
+            grid_template_rows: Some(vec![
+                GridTrack::Length(LengthPercentage::String("1fr".into())),
+                GridTrack::Length(LengthPercentage::String("1fr".into())),
+            ]),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.grid_template_rows.len(), 2);
+    }
+
+    #[test]
+    fn grid_auto_flow_column_translated() {
+        let css = CssStyle {
+            grid_auto_flow: Some(GridAutoFlow::Column),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.grid_auto_flow, tf::GridAutoFlow::Column);
+    }
+
+    #[test]
+    fn grid_column_start_and_span_translated() {
+        let css = CssStyle {
+            grid_column: Some(GridLine {
+                start: Some(GridLineEnd::Index(2)),
+                span: Some(3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert!(matches!(s.grid_column.start, tf::GridPlacement::Line(_)));
+        assert!(matches!(s.grid_column.end, tf::GridPlacement::Span(3)));
+    }
+
+    #[test]
+    fn grid_row_start_end_translated() {
+        let css = CssStyle {
+            grid_row: Some(GridLine {
+                start: Some(GridLineEnd::Index(1)),
+                end: Some(GridLineEnd::Index(3)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert!(matches!(s.grid_row.start, tf::GridPlacement::Line(_)));
+        assert!(matches!(s.grid_row.end, tf::GridPlacement::Line(_)));
+    }
+
+    #[test]
+    fn grid_gap_applies_to_both_axes() {
+        let css = CssStyle {
+            display: Some(Display::Grid),
+            gap: Some(Gap::Uniform(LengthPercentage::Px(24.0))),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.gap.width, tf::LengthPercentage::length(24.0));
+        assert_eq!(s.gap.height, tf::LengthPercentage::length(24.0));
+    }
+
+    /// The audit's core repro: a grid with three `1fr` columns must lay its
+    /// children out side-by-side (distinct x-offsets), matching a
+    /// `flex-direction: row` control — NOT stacked as three full-width rows,
+    /// which is what the engine did before `grid-template-columns` was wired
+    /// through to taffy (grid fell back to taffy's single-implicit-column
+    /// default because it never received any track definitions).
+    #[test]
+    fn grid_three_fr_columns_produce_distinct_x_offsets() {
+        let root_css = CssStyle {
+            display: Some(Display::Grid),
+            // The grid container needs a definite size: an `auto`-sized root
+            // (the CssStyle default) has no intrinsic content of its own, so
+            // it collapses to 0×0 and every column ends up at x=0.
+            width: Some(Size::Length(LengthPercentage::Px(900.0))),
+            height: Some(Size::Length(LengthPercentage::Px(300.0))),
+            grid_template_columns: Some(vec![
+                GridTrack::Fr(1.0),
+                GridTrack::Fr(1.0),
+                GridTrack::Fr(1.0),
+            ]),
+            ..Default::default()
+        };
+        let root_style = to_taffy_style(&root_css, &ctx());
+        let leaf_style = to_taffy_style(&CssStyle::default(), &ctx());
+
+        let mut tree: tf::TaffyTree = tf::TaffyTree::new();
+        let c1 = tree.new_leaf(leaf_style.clone()).unwrap();
+        let c2 = tree.new_leaf(leaf_style.clone()).unwrap();
+        let c3 = tree.new_leaf(leaf_style).unwrap();
+        let root = tree.new_with_children(root_style, &[c1, c2, c3]).unwrap();
+
+        tree.compute_layout(
+            root,
+            tf::Size {
+                width: tf::AvailableSpace::Definite(900.0),
+                height: tf::AvailableSpace::Definite(300.0),
+            },
+        )
+        .unwrap();
+
+        let x1 = tree.layout(c1).unwrap().location.x;
+        let x2 = tree.layout(c2).unwrap().location.x;
+        let x3 = tree.layout(c3).unwrap().location.x;
+        let w1 = tree.layout(c1).unwrap().size.width;
+
+        assert_ne!(x1, x2, "columns 1 and 2 must not share an x-offset");
+        assert_ne!(x2, x3, "columns 2 and 3 must not share an x-offset");
+        assert!(
+            (x1 - 0.0).abs() < 0.5,
+            "column 1 should start at x=0, got {x1}"
+        );
+        assert!(
+            (x2 - 300.0).abs() < 1.0,
+            "column 2 should start at ~300px, got {x2}"
+        );
+        assert!(
+            (x3 - 600.0).abs() < 1.0,
+            "column 3 should start at ~600px, got {x3}"
+        );
+        assert!(
+            (w1 - 300.0).abs() < 1.0,
+            "each 1fr column should be ~300px wide, got {w1}"
+        );
     }
 }

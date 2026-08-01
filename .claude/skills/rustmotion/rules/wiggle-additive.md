@@ -24,7 +24,8 @@ Wiggle offsets apply additively on top of keyframe animations and presets. Combi
   "type": "icon",
   "icon": "lucide:phone-off",
   "style": {
-    "size": 64,
+    "width": 64,
+    "height": 64,
     "color": "#FFFFFF",
     "animation": [
       { "name": "scale_in" },

@@ -1,6 +1,6 @@
 # Rule: Prefer Presets Over Manual Keyframes
 
-Presets are simpler, less error-prone, and produce consistent motion design. Only use `keyframes` animation effects for custom behavior not covered by the 31 built-in presets.
+Presets are simpler, less error-prone, and produce consistent motion design. Only use `keyframes` animation effects for custom behavior not covered by the 40 built-in presets (+ 6 char-only presets on `text`).
 
 **GOOD:**
 ```json

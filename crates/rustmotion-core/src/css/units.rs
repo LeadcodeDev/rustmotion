@@ -136,10 +136,28 @@ pub fn parse_length(s: &str) -> Option<ParsedLength> {
 }
 
 impl Length {
+    /// Parse into a resolved unit. Falls back to `Px(0.0)` on unparseable
+    /// input, for the many existing call sites across the codebase that
+    /// expect an infallible result — but unlike the previous behaviour,
+    /// this now logs a warning so the fallback is a detectable signal
+    /// instead of a silent, indistinguishable zero. Callers that can
+    /// surface the failure themselves (e.g. a validator) should prefer
+    /// [`Length::try_parse`], which returns `None` instead of guessing.
     pub fn parse(&self) -> ParsedLength {
         match self {
             Length::Px(v) => ParsedLength::Px(*v),
-            Length::String(s) => parse_length(s).unwrap_or(ParsedLength::Px(0.0)),
+            Length::String(s) => parse_length_or_warn(s),
+        }
+    }
+
+    /// Fallible counterpart of [`Length::parse`]: `None` on unparseable
+    /// input rather than a silent `Px(0.0)`, and never logs. Prefer this
+    /// when the failure can be reported to the caller (e.g. schema
+    /// validation) instead of swallowed.
+    pub fn try_parse(&self) -> Option<ParsedLength> {
+        match self {
+            Length::Px(v) => Some(ParsedLength::Px(*v)),
+            Length::String(s) => parse_length(s),
         }
     }
 
@@ -158,10 +176,19 @@ impl Length {
 }
 
 impl LengthPercentage {
+    /// See [`Length::parse`] — same infallible-with-a-warning contract.
     pub fn parse(&self) -> ParsedLength {
         match self {
             LengthPercentage::Px(v) => ParsedLength::Px(*v),
-            LengthPercentage::String(s) => parse_length(s).unwrap_or(ParsedLength::Px(0.0)),
+            LengthPercentage::String(s) => parse_length_or_warn(s),
+        }
+    }
+
+    /// See [`Length::try_parse`] — fallible, silent, `None` on failure.
+    pub fn try_parse(&self) -> Option<ParsedLength> {
+        match self {
+            LengthPercentage::Px(v) => Some(ParsedLength::Px(*v)),
+            LengthPercentage::String(s) => parse_length(s),
         }
     }
 
@@ -175,6 +202,25 @@ impl LengthPercentage {
         match self.parse() {
             ParsedLength::Px(v) => v,
             _ => 0.0,
+        }
+    }
+}
+
+/// Shared fallback used by both `Length::parse` and `LengthPercentage::parse`:
+/// parse `s`, or log a warning and return `Px(0.0)` if it doesn't match any
+/// known length form. This is what closes the "silently fold into 0px with
+/// no signal" gap — the previous `unwrap_or(ParsedLength::Px(0.0))` produced
+/// an indistinguishable, unreported zero for a typo'd unit exactly like a
+/// deliberate `0px`.
+fn parse_length_or_warn(s: &str) -> ParsedLength {
+    match parse_length(s) {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "Warning: unparseable length '{s}' — falling back to 0px instead of silently \
+                 resolving with no signal"
+            );
+            ParsedLength::Px(0.0)
         }
     }
 }
@@ -267,5 +313,44 @@ mod tests {
     fn length_struct_resolves_bare_px() {
         let l = Length::Px(10.0);
         assert_eq!(l.resolve(&LengthContext::default()), 10.0);
+    }
+
+    // ---- unparseable length: detectable signal, not a silent 0px ----
+
+    #[test]
+    fn length_try_parse_returns_none_for_garbage() {
+        let l = Length::String("not-a-length".into());
+        assert_eq!(l.try_parse(), None);
+    }
+
+    #[test]
+    fn length_percentage_try_parse_returns_none_for_garbage() {
+        let l = LengthPercentage::String("wat".into());
+        assert_eq!(l.try_parse(), None);
+    }
+
+    #[test]
+    fn length_try_parse_agrees_with_parse_on_valid_input() {
+        let l = Length::String("24px".into());
+        assert_eq!(l.try_parse(), Some(ParsedLength::Px(24.0)));
+        assert_eq!(l.parse(), ParsedLength::Px(24.0));
+    }
+
+    #[test]
+    fn length_parse_still_infallible_fallback_for_garbage() {
+        // `.parse()` keeps its infallible signature (existing call sites
+        // across the codebase depend on it) — it still resolves to 0px for
+        // unparseable input, but `try_parse` above proves the failure is
+        // now independently detectable rather than indistinguishable from
+        // a deliberate `0px`.
+        let l = Length::String("not-a-length".into());
+        assert_eq!(l.parse(), ParsedLength::Px(0.0));
+        assert_eq!(l.resolve(&LengthContext::default()), 0.0);
+    }
+
+    #[test]
+    fn length_percentage_parse_still_infallible_fallback_for_garbage() {
+        let l = LengthPercentage::String("wat".into());
+        assert_eq!(l.parse(), ParsedLength::Px(0.0));
     }
 }

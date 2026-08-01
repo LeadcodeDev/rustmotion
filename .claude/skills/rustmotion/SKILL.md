@@ -216,7 +216,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 
 - [rules/html-css-mental-model.md](rules/html-css-mental-model.md) - **CRITICAL:** Think HTML/CSS — flow layout first, absolute only for decorative/overlay elements
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
-- [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `wrap`, `auto_scroll`, `overflow` semantics + violation kinds
+- [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
 - [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
@@ -228,7 +228,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/icon-format.md](rules/icon-format.md) - Icons use Iconify (200k+ icons), format "prefix:name" (e.g. "lucide:home")
 - [rules/grid-card-height.md](rules/grid-card-height.md) - Grid containers need explicit height (not "auto") to prevent row stretching
 - [rules/wiggle-additive.md](rules/wiggle-additive.md) - Wiggle is additive on top of presets and keyframes
-- [rules/prefer-presets.md](rules/prefer-presets.md) - Prefer presets over manual keyframes (39 built-in presets)
+- [rules/prefer-presets.md](rules/prefer-presets.md) - Prefer presets over manual keyframes (40 built-in presets + 6 char-only)
 - [rules/hex-colors.md](rules/hex-colors.md) - Colors in hex format only (#RRGGBB or #RRGGBBAA)
 - [rules/easing-guidelines.md](rules/easing-guidelines.md) - Easing guidelines for motion design
 - [rules/text-background.md](rules/text-background.md) - text-background renders a colored rectangle behind text
@@ -253,17 +253,32 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/icon-sizing-hierarchy.md](rules/icon-sizing-hierarchy.md) - Icon sizing (hero/card/inline roles), card spacing minimums, row layout by device
 - [rules/depth-layering.md](rules/depth-layering.md) - **NEW:** Visual depth — 3 planes (bg/mid/fg), z-index, blur, shadow hierarchy, scale gradient, 3D tilt
 - [rules/dynamic-depth.md](rules/dynamic-depth.md) - **NEW:** Multi-element parallax — wiggle seeds, float_3d preset, camera zoom, orbit phases, frequency hierarchy
-- [rules/component-field-placement.md](rules/component-field-placement.md) - **CRITICAL:** Field placement (root vs style) — `animation`, `fill`, `stroke` at root; `box-shadow` as array; silently-dropped component pitfalls
+- [rules/component-field-placement.md](rules/component-field-placement.md) - **CRITICAL:** Field placement (root vs style) — `width`/`height`/`animation` inside `style`; `fill`/`stroke`/`timeline`/`stagger` at root; `box-shadow` as array; silently-dropped component pitfalls
 - [rules/badge-video-sizing.md](rules/badge-video-sizing.md) - Badge sizing for video resolution — `badge_size` sm/md/lg is too small at 1080px; use `style.font-size` to override (40px recommended for 1080×1920)
+- [rules/glassmorphism.md](rules/glassmorphism.md) - Frosted-glass card recipe: `backdrop-filter: blur`, translucent background, subtle border, layered over a colorful background
+- [rules/audio-reactive.md](rules/audio-reactive.md) - Bind `style.audio-reactive` to an `audio` track — drives `waveform`/`audio_spectrum` and reactive scale/opacity on any component
+- [rules/captions-workflow.md](rules/captions-workflow.md) - Generating `caption` word timings from a transcript/audio track
+- [rules/time-remapping.md](rules/time-remapping.md) - `time_scale`/`time_offset` on containers — slow-motion, freeze-frame, and time-shifted children
 
 ### Architecture (pour contribuer au code)
 
 - [rules/paint-context.md](rules/paint-context.md) - Painter trait API: paint_content(canvas, layout, props, ctx) — remplace l'ancien Widget
-- [rules/module-structure.md](rules/module-structure.md) - Structure des crates: rustmotion-core (css/, engine/, traits/) + rustmotion-components (51 composants)
+- [rules/module-structure.md](rules/module-structure.md) - Structure des crates: rustmotion-core (css/, engine/, traits/) + rustmotion-components (57 composants)
 
 ---
 
 ## Complete Examples
+
+The two examples below are short excerpts. For full, validated, end-to-end scenarios to study or copy from, see the `examples/` directory at the repo root — these are ahead of this prose (they use `fill`/`stroke`/`timeline`/`stagger` at root, correct `grid-template-columns` syntax, etc.) and are re-validated on every change:
+
+| File | Resolution | Scenes | What it demonstrates |
+|---|---|---|---|
+| `examples/demo.json` | 1080×1920 | 6 | Minimal skeleton — just `video` + solid-color scenes |
+| `examples/component-showcase.json` | 1920×1080 | 4 | Broad tour of basic + data-viz + UI components |
+| `examples/dynamic-glass.json` | 1920×1080 | 3 | Glassmorphism, `backdrop-filter`, depth layering |
+| `examples/rustmotion-promo.json` | 1920×1080 | 6 | Product promo pacing, stagger, char animations |
+| `examples/ferriskey-presentation.json` | 1920×1080 | 6 | Slide-deck style presentation, heavy char/word stagger |
+| `examples/mega-showcase.json` | 1920×1080 | 9 | Largest example — grid layout, timeline component, most component types in one file |
 
 ### Example 1: Marketing Card (Portrait)
 
@@ -278,14 +293,14 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
         {
           "type": "shape",
           "shape": "rounded_rect",
+          "fill": {
+            "type": "linear",
+            "colors": ["#6366f1", "#8b5cf6"],
+            "angle": 135
+          },
           "style": {
             "width": 900,
             "height": 520,
-            "fill": {
-              "type": "linear",
-              "colors": ["#6366f1", "#8b5cf6"],
-              "angle": 135
-            },
             "border-radius": 32,
             "animation": [{ "name": "scale_in", "duration": 0.6 }]
           }
@@ -418,7 +433,6 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
           "separator": ",",
           "easing": "ease_out",
           "start_at": 0.3,
-          "end_at": 3.5,
           "style": { "font-size": 96, "color": "#38BDF8", "font-weight": "bold", "text-align": "center" }
         },
         {
@@ -722,7 +736,7 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 
 | Effect name | Fields | Description |
 | --- | --- | --- |
-| *preset name* | `delay`, `duration`, `loop`, `overshoot` | Any of the 39 presets (e.g. `fade_in_up`, `scale_in`) |
+| *preset name* | `delay`, `duration`, `loop`, `overshoot` | Any of the 40 presets (e.g. `fade_in_up`, `scale_in`) |
 | *char preset* | `delay`, `duration`, `stagger`, `granularity`, `easing`, `overshoot` | Per-char/word animation: `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` |
 | `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
 | `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
@@ -768,7 +782,15 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 }
 ```
 
-**Root fields:** `content` (required), `max_width`
+**Root fields:** `content` (required), `max_width`, `stroke`, `text-shadow`, `text-background`
+
+| Root field         | Type     | Default    |
+| ------------------ | -------- | ---------- |
+| `stroke`           | object   | `null` — `{ "color": "#000", "width": 2 }` (snake_case has no inner fields to worry about) |
+| `text-shadow`       | object   | `null` — single shadow, snake_case keys: `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
+| `text-background`  | object   | `null` — `{ "color": "#000", "padding": 4, "corner_radius": 4 }`. See [rules/text-background.md](rules/text-background.md). |
+
+`stroke`, `text-shadow`, and `text-background` are fields on the `text` component itself (siblings of `style`) — `CssStyle` doesn't have `stroke` or `text-background` at all, so nesting them inside `style` drops the whole component (`deny_unknown_fields`). Confusingly, `CssStyle` *does* separately define its own `text-shadow` — but as an **array** with **kebab-case** inner keys (`[{ "color": "#000", "offset-x": 2, "offset-y": 2, "blur": 4 }]`), for multi-layer shadows. Prefer the root single-shadow form shown above unless you need more than one shadow layer.
 
 | Style field       | Type     | Default    |
 | ----------------- | -------- | ---------- |
@@ -780,10 +802,7 @@ All components are discriminated by `"type"`. Rendered in array order (first = b
 | `text-align`      | enum     | `"left"` — `"left"`, `"center"`, `"right"` |
 | `line-height`     | f32      | `null`     |
 | `letter-spacing`  | f32      | `null`     |
-| `text-shadow`     | object   | `null` — `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
-| `stroke`          | object   | `null` — `{ "color": "#000", "width": 2 }` |
-| `text-background` | object   | `null` — `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
-| `wrap`            | bool     | `true` — when `true`, text wraps to parent's max width or `max_width`, whichever is smaller. Set `false` only when a finite `max-width` + small enough `font-size` guarantee a single line. The validator emits `unwrappable_text_overflow` otherwise. See [rules/geometry-safety.md](rules/geometry-safety.md). |
+| `white-space`     | enum     | unset (wraps) — set `"nowrap"`/`"pre"` for single-line text. There is no `wrap` field. The validator emits `unwrappable_text_overflow` if the natural width exceeds the box. See [rules/geometry-safety.md](rules/geometry-safety.md). |
 | `overflow`        | enum     | `"visible"` — CSS-like: `"visible"` (default, children may bleed) or `"hidden"` (clip at the box). Validator only checks the **viewport**, never a `visible` parent. |
 
 **Per-character / per-word animation (char animation presets):**
@@ -831,29 +850,36 @@ Animates each character or word independently with staggered timing. Use `char_*
 {
   "type": "shape",
   "shape": "rounded_rect",
+  "fill": "#FF5733",
+  "stroke": { "color": "#FFFFFF", "width": 2 },
   "style": {
     "width": 200,
     "height": 100,
-    "fill": "#FF5733",
-    "border-radius": 16,
-    "stroke": { "color": "#FFFFFF", "width": 2 }
+    "border-radius": 16
   }
 }
 ```
 
-**Root fields:** `shape` (required), `text`
+`fill` and `stroke` are **root fields**, not CSS — placing them inside `style` fails with `unknown field` (`CssStyle` is `deny_unknown_fields`) and the shape is silently dropped. See [rules/component-field-placement.md](rules/component-field-placement.md).
 
-| Style field     | Type               | Default     |
+**Root fields:** `shape` (required), `text`, `fill`, `stroke`
+
+| Root field | Type               | Default     |
 | --------------- | ------------------ | ----------- |
 | `fill`          | string or gradient | `null`      |
 | `stroke`        | `{color, width}`   | `null`      |
+
+| Style field     | Type               | Default     |
+| --------------- | ------------------ | ----------- |
 | `border-radius` | f32                | `null`      |
 
 **Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
 
-**Gradient fill:**
+**Gradient fill (root field):**
 ```json
 {
+  "type": "shape",
+  "shape": "circle",
   "fill": {
     "type": "linear",
     "colors": ["#FF0000", "#0000FF"],
@@ -1025,10 +1051,11 @@ Animated number counter. See Rule 4: must be standalone.
   "suffix": "€",
   "easing": "ease_out",
   "start_at": 0.5,
-  "end_at": 2.5,
   "style": { "font-size": 72, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" }
 }
 ```
+
+`end_at` is a visibility toggle, not an animation-completion boundary — setting it on a `counter` makes the number **disappear** once that time passes, since the counter's own animation is driven by `ctx.time / scene_duration`, not by `start_at`/`end_at`. Use `start_at` only.
 
 **Root fields:** `from`, `to`, `decimals`, `separator`, `prefix`, `suffix`, `easing`
 
@@ -1045,7 +1072,7 @@ To place children at fixed absolute coordinates, use a `card` with transparent b
   "type": "card",
   "style": { "width": 1920, "height": 1080, "background": "#00000000", "padding": 0 },
   "children": [
-    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "style": { "width": 400, "height": 300, "fill": "#1E293B", "border-radius": 16 } },
+    { "type": "shape", "shape": "rect", "fill": "#1E293B", "position": { "x": 0, "y": 0 }, "style": { "width": 400, "height": 300, "border-radius": 16 } },
     { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "width": 64, "height": 64, "color": "#FFFFFF" } }
   ]
 }
@@ -1063,14 +1090,14 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
   "type": "card",
   "style": { "width": 800, "height": 100, "flex-direction": "row", "gap": 16 },
   "children": [
-    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#FF0000" } },
-    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#00FF00", "flex-grow": 1 } },
-    { "type": "shape", "shape": "rect", "style": { "width": 100, "height": 100, "fill": "#0000FF" } }
+    { "type": "shape", "shape": "rect", "fill": "#FF0000", "style": { "width": 100, "height": 100 } },
+    { "type": "shape", "shape": "rect", "fill": "#00FF00", "style": { "width": 100, "height": 100, "flex-grow": 1 } },
+    { "type": "shape", "shape": "rect", "fill": "#0000FF", "style": { "width": 100, "height": 100 } }
   ]
 }
 ```
 
-**Grid example (2x2):** Note: grid containers need explicit `height` (not `"auto"`) — see [rules/grid-card-height.md](rules/grid-card-height.md).
+**Grid example (2x2):** Note: grid containers need explicit `height` (not `"auto"`) — see [rules/grid-card-height.md](rules/grid-card-height.md). `grid-template-columns`/`grid-template-rows` is `Vec<GridTrack>`, an **untagged** enum: a bare number means px, a quoted string like `"1fr"` carries the unit, `"auto"` is the keyword. The object forms `{"fr": N}` / `{"px": N}` shown in older docs do **not** match any variant and drop the whole component.
 ```json
 {
   "type": "card",
@@ -1078,8 +1105,8 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
     "width": 600,
     "height": 400,
     "display": "grid",
-    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
-    "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+    "grid-template-columns": ["1fr", "1fr"],
+    "grid-template-rows": ["1fr", "1fr"],
     "gap": 16,
     "padding": 24,
     "background": "#1a1a2e"
@@ -1101,14 +1128,14 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 | `background`             | string      | `null`     |
 | `border-radius`          | f32         | `12.0`     |
 | `border`                 | object      | `null` — `{ "color": "#E5E7EB", "width": 1 }` |
-| `box-shadow`             | object      | `null` — `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
+| `box-shadow`             | array       | `null` — `[{ "color": "#00000040", "offset-x": 0, "offset-y": 4, "blur": 12 }]` (kebab-case keys, always an array — see [rules/component-field-placement.md](rules/component-field-placement.md)) |
 | `padding`                | f32 or obj  | `null`     |
-| `flex-direction`         | enum        | `"column"` — `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
-| `flex-wrap`              | bool        | `false`    |
-| `align-items`            | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"stretch"` |
-| `justify-content`        | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
+| `flex-direction`         | enum        | `"column"` — `"row"`, `"row-reverse"`, `"column"`, `"column-reverse"` (kebab-case) |
+| `flex-wrap`              | enum        | `"nowrap"` — `"nowrap"`, `"wrap"`, `"wrap-reverse"` (NOT a bool) |
+| `align-items`            | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"stretch"`, `"flex-start"`, `"flex-end"`, `"baseline"` |
+| `justify-content`        | enum        | `"start"` — `"start"`, `"center"`, `"end"`, `"space-between"`, `"space-around"`, `"space-evenly"` (kebab-case) |
 | `gap`                    | f32         | `0`        |
-| `grid-template-columns`  | array       | `null` — `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid-template-columns`  | array       | `null` — `["1fr", 200, "auto"]` (bare number = px, quoted `"Nfr"` = fr, `"auto"` = keyword) |
 | `grid-template-rows`     | array       | `null`     |
 
 **Per-child layout properties** (in child `"style"`):
@@ -1119,7 +1146,7 @@ Each dimension (`width`/`height` in `style`) can be a number or `"auto"`.
 - `grid-column` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 - `grid-row` (object) — `{ "start": 1, "span": 2 }` (1-indexed)
 
-`position` is only valid inside `positioned` containers. Card children are laid out using flex/grid style properties.
+`position: "absolute"` (root field, sibling of `style`) works on a child of **any** container — `card`, `div`, `grid`, `positioned`, or the scene root — not just inside `positioned`. `positioned` is simply a semantic Stack-like container with no visual decoration; it does not unlock `position` — every container already supports it. Children without `position` are laid out using flex/grid style properties.
 
 ### 12. `div`
 
@@ -1133,14 +1160,14 @@ Utiliser `div` quand il faut grouper des éléments sans décoration visuelle (e
   "style": {
     "flex-direction": "column",
     "align-items": "center",
-    "gap": 36,
-    "timeline": [
-      { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
-        { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
-        { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
-      ]}]}
-    ]
+    "gap": 36
   },
+  "timeline": [
+    { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
+      { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
+      { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
+    ]}]}
+  ],
   "children": [
     { "type": "icon", "icon": "lucide:zap", "style": { "width": 80, "height": 80, "color": "#25D366" } },
     { "type": "text", "content": "Grouped content", "style": { "font-size": 48, "color": "#FFFFFF" } }
@@ -1148,7 +1175,7 @@ Utiliser `div` quand il faut grouper des éléments sans décoration visuelle (e
 }
 ```
 
-Supporte toutes les propriétés CSS flex/grid (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`, `display: "grid"`, `grid-template-columns`) et toutes les propriétés d'animation/timeline. Préférer `div` à `card` avec fond transparent pour tout layout sans styling visuel.
+`timeline` and `stagger` are **root fields**, not `style` — `CssStyle` has no `timeline` key and `deny_unknown_fields` drops the whole component if you nest it there. Supporte toutes les propriétés CSS flex/grid (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`, `display: "grid"`, `grid-template-columns`) dans `style`, plus `timeline`/`stagger` au niveau racine. Préférer `div` à `card` avec fond transparent pour tout layout sans styling visuel.
 
 ### 12. `codeblock`
 
@@ -2248,9 +2275,8 @@ New style fields available on all components:
 | Style field       | Type   | Default | Description                                              |
 | ----------------- | ------ | ------- | -------------------------------------------------------- |
 | `gradient-border` | object | `null`  | `{ "colors": ["#f00", "#00f"], "width": 2, "angle": 0 }` — gradient-colored border ring, border-radius aware, painted instead of `border` when both are set |
-| `motion-path`     | string | `null`  | SVG path string that the element follows during animation |
-| `stagger`         | f32    | `null`  | Auto-delay offset per child in a container (seconds)     |
-| `timeline`        | array  | `[]`    | Intra-scene timeline steps — sequential animation phases |
+
+`stagger` and `timeline` are **root fields** (siblings of `style`), not style fields — see [rules/component-field-placement.md](rules/component-field-placement.md). `motion-path` does not exist in the current schema (leftover from the pre-CSS `LayerStyle` model) — there is no motion-path-following mechanism today.
 
 **Deprecated (accepted but never rendered — the validator warns):**
 
@@ -2282,7 +2308,7 @@ Any component can be rendered with true 3D perspective using keyframe animations
     "border-radius": 24,
     "backdrop-filter": [{ "fn": "blur", "radius": 15 }],
     "border": { "color": "#FFFFFF14", "width": 1 },
-    "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
+    "box-shadow": [{ "color": "#00000060", "offset-x": 0, "offset-y": 20, "blur": 60 }],
     "animation": [{
       "name": "keyframes",
       "keyframes": [
@@ -2302,24 +2328,24 @@ Any component can be rendered with true 3D perspective using keyframe animations
 
 ### Timeline Sequencing
 
-The `timeline` field on any component's style allows defining sequential animation phases within a single scene. Each step triggers at a specific time and applies its own animation effects relative to that time.
+The `timeline` field — a **root field**, sibling of `style`, not nested inside it — allows defining sequential animation phases within a single scene. Each step triggers at a specific time and applies its own animation effects relative to that time.
 
 ```json
 {
   "type": "card",
   "style": {
-    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
-    "timeline": [
-      {
-        "at": 2.0,
-        "animation": [{ "name": "shake", "duration": 0.5 }]
-      },
-      {
-        "at": 4.0,
-        "animation": [{ "name": "fade_out", "duration": 0.8 }]
-      }
-    ]
-  }
+    "animation": [{ "name": "fade_in_up", "duration": 0.6 }]
+  },
+  "timeline": [
+    {
+      "at": 2.0,
+      "animation": [{ "name": "shake", "duration": 0.5 }]
+    },
+    {
+      "at": 4.0,
+      "animation": [{ "name": "fade_out", "duration": 0.8 }]
+    }
+  ]
 }
 ```
 
@@ -2395,7 +2421,7 @@ See Rule 13 for usage guidance.
 }
 ```
 
-**39 presets:**
+**40 presets (+ 6 char-only presets, text component only):**
 
 | Category   | Presets                                                                                                                                                                                                    |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2521,6 +2547,6 @@ Before presenting a generated scenario to the user, verify:
 - [ ] All scenes have `"layout": {"align_items": "center", "justify_content": "center"}` for centered composition
 - [ ] `concentric_circles` animated-background on at least 4 scenes for visual depth
 - [ ] No `end_at` on counters (makes them disappear — use `start_at` only)
-- [ ] No text uses `style.wrap: false` unless a finite `max-width` keeps it inside the viewport (use `marquee` for intentional bleeding)
+- [ ] No text uses `style.white-space: "nowrap"`/`"pre"` unless a finite `max-width` keeps it inside the viewport (use `marquee` for intentional bleeding) — see [rules/geometry-safety.md](rules/geometry-safety.md)
 - [ ] Long codeblocks/terminals leave `auto_scroll` at its default (`true`) — never set `false` unless content is guaranteed to fit
 - [ ] `rustmotion validate -f scenario.json` passes (zero schema **and** geometry violations) before presenting
