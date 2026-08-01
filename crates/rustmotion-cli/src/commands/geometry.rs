@@ -677,6 +677,152 @@ fn check_auto_scroll(
     }
 }
 
+// ─── M4: legibility floor (issue #110 / #102) ──────────────────────────────
+//
+// "Fits in the frame" (checked above) is not "readable in a video". A table
+// column, a badge, a codeblock line — any of them can validate perfectly
+// clean while rendering at a font size nobody could read once the video is
+// scaled down from its native resolution, which is how video is normally
+// watched (embedded players, mobile feeds, thumbnails) unlike a web page,
+// which is usually viewed close to 1:1.
+//
+// Threshold justification (rendered evidence, not a guess): a 1920×1080
+// scenario was rendered with the same sample line at 8/10/11/12/13/14/16/18/
+// 20/22/24/28px, then the frame was scaled down 50% (a realistic "not
+// full-native" viewing size) to inspect. 8–13px degraded to an illegible
+// grey smear at that scale; 14px was the first size that stayed readable.
+// 0.012 (1.2% of output height) sits between those two bands — it equals
+// ~13px on a 1080p frame — and clears every built-in component default
+// already shipped (table/terminal/codeblock/pill_nav = 14px, badge `md` =
+// 14px, kbd = 14px, tooltip = 13px), so it does not fire on scenarios that
+// already validate clean today. Expressing it as a fraction of output
+// height (rather than an absolute px count) makes the same *visual* size
+// get flagged on a 4K or vertical-format canvas too.
+const MIN_LEGIBLE_FONT_RATIO: f32 = 0.012;
+
+/// Check every text-bearing component's effective font size against
+/// [`MIN_LEGIBLE_FONT_RATIO`] of the output height. Always advisory (a
+/// warning, never a blocking error) — this is a legibility floor, not a
+/// geometry correctness check, and the "right" size is ultimately an
+/// authorial call.
+///
+/// Coverage: every component whose `Painter` resolves its rendered font
+/// size from `style.font-size` (falling back to that component's own
+/// documented default when unset) — text, rich_text, gradient_text,
+/// caption, counter, table, terminal, codeblock, callout, list,
+/// notification (title + message), pill_nav, badge, kbd, tooltip, marquee.
+/// Not covered: components whose text sizing isn't a simple
+/// `style.font-size`-or-default resolution (chart axis/labels, gauge, stat,
+/// sparkline, heatmap, treemap, dot_map, avatar initials, progress label,
+/// rating, countdown, comparison, stepper, timeline, tag_cloud) — see the
+/// workstream report for the full list.
+pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let video_h = scenario.video.height as f32;
+    if video_h <= 0.0 {
+        return warnings;
+    }
+    let min_px = MIN_LEGIBLE_FONT_RATIO * video_h;
+
+    for (vi, view) in scenario.views.iter().enumerate() {
+        for (si, scene) in view.scenes.iter().enumerate() {
+            let indexed = deserialize_children_indexed(scene);
+            let path_root = format!("views[{}].scenes[{}]", vi, si);
+            for (json_idx, child) in &indexed {
+                let path = format!("{}.children[{}]", path_root, json_idx);
+                walk_legibility(&child.component, &path, min_px, video_h, &mut warnings);
+            }
+        }
+    }
+    warnings
+}
+
+fn walk_legibility(
+    component: &Component,
+    path: &str,
+    min_px: f32,
+    video_h: f32,
+    out: &mut Vec<String>,
+) {
+    for (label, effective_px) in text_sizes(component) {
+        // 0.05px tolerance for float rounding; not a meaningful visual gap.
+        if effective_px < min_px - 0.05 {
+            out.push(format!(
+                "{path}: {label} renders at ~{effective_px:.0}px on a {video_h:.0}px-tall frame \
+                 ({:.2}% of height) — likely illegible once the video is viewed at anything less \
+                 than native resolution. Raise the effective font size to at least {min_px:.0}px \
+                 (~{:.1}% of height).",
+                effective_px / video_h * 100.0,
+                MIN_LEGIBLE_FONT_RATIO * 100.0,
+            ));
+        }
+    }
+
+    if let Some(children) = container_children(component) {
+        for (i, child) in children.iter().enumerate() {
+            walk_legibility(
+                &child.component,
+                &format!("{path}.children[{i}]"),
+                min_px,
+                video_h,
+                out,
+            );
+        }
+    }
+}
+
+/// Effective rendered font size(s) for a component, mirroring exactly the
+/// default each `Painter` falls back to when `style.font-size` is unset
+/// (see the file/line citations below — kept in sync by hand since these
+/// defaults live in `rustmotion-components`, out of this workstream's
+/// scope). A component can report more than one size (e.g. a notification's
+/// title and message use different sizes).
+fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
+    match component {
+        // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
+        Component::Text(t) => vec![("text", t.style.font_size_px_or(48.0))],
+        Component::RichText(t) => vec![("rich_text", t.style.font_size_px_or(48.0))],
+        Component::GradientText(t) => vec![("gradient_text", t.style.font_size_px_or(48.0))],
+        Component::Caption(t) => vec![("caption", t.style.font_size_px_or(48.0))],
+        Component::Counter(c) => vec![("counter", c.style.font_size_px_or(48.0))],
+        // table.rs, terminal.rs, codeblock/{dimensions,render}.rs, pill_nav.rs: 14.0
+        Component::Table(t) => vec![("table", t.style.font_size_px_or(14.0))],
+        Component::Terminal(t) => vec![("terminal", t.style.font_size_px_or(14.0))],
+        Component::Codeblock(c) => vec![("codeblock", c.style.font_size_px_or(14.0))],
+        Component::PillNav(p) => vec![("pill_nav", p.style.font_size_px_or(14.0))],
+        // callout.rs, list.rs, notification.rs (title): 16.0
+        Component::Callout(c) => vec![("callout", c.style.font_size_px_or(16.0))],
+        Component::List(l) => vec![("list", l.style.font_size_px_or(16.0))],
+        Component::Notification(n) => {
+            let title = n.style.font_size_px_or(16.0);
+            let mut sizes = vec![("notification title", title)];
+            if n.message.is_some() {
+                // notification.rs: message_font_size() = title_font_size() * 0.85
+                sizes.push(("notification message", title * 0.85));
+            }
+            sizes
+        }
+        // These carry their own `font_size` field (already serde-resolved
+        // to its component default when absent from JSON), overridable by
+        // `style.font-size` exactly like the rest — kbd.rs, tooltip.rs,
+        // marquee.rs.
+        Component::Kbd(k) => vec![("kbd", k.style.font_size_px_or(k.font_size))],
+        Component::Tooltip(t) => vec![("tooltip", t.style.font_size_px_or(t.font_size))],
+        Component::Marquee(m) => vec![("marquee", m.style.font_size_px_or(m.font_size))],
+        // badge.rs: BadgeSize::{Sm,Md,Lg}.params().0 = {12.0, 14.0, 18.0}.
+        // `params()` is private to badge.rs, so the table is duplicated here.
+        Component::Badge(b) => {
+            let default_fs = match b.badge_size {
+                rustmotion::components::badge::BadgeSize::Sm => 12.0,
+                rustmotion::components::badge::BadgeSize::Md => 14.0,
+                rustmotion::components::badge::BadgeSize::Lg => 18.0,
+            };
+            vec![("badge", b.style.font_size_px_or(default_fs))]
+        }
+        _ => vec![],
+    }
+}
+
 fn component_kind(c: &Component) -> &'static str {
     match c {
         Component::Text(_) => "text",
@@ -1852,5 +1998,171 @@ mod tests {
         assert!(violations
             .iter()
             .any(|v| v.kind == ViolationKind::UnwrappableTextOverflow));
+    }
+}
+
+/// M4 (issue #110 / #102): legibility floor tests.
+#[cfg(test)]
+mod legibility_tests {
+    use super::*;
+    use rustmotion::loader::load_scenario_from_source;
+
+    fn parse(json: &str) -> rustmotion::schema::ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("scenario parses")
+    }
+
+    #[test]
+    fn tiny_font_on_1080p_warns() {
+        // 11px on a 1080p frame is the audit's own worked example of
+        // unreadable text (~1.0% of height, well under the 1.2% floor).
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "fine print",
+                    "style": { "color": "#ffffff", "font-size": "11px" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert_eq!(warnings.len(), 1, "expected one warning: {warnings:?}");
+        assert!(warnings[0].contains("11px"), "got: {}", warnings[0]);
+        assert!(
+            warnings[0].contains("views[0].scenes[0].children[0]"),
+            "got: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn default_sized_text_on_1080p_has_no_legibility_warning() {
+        // No style.font-size override: falls back to text's own 48px
+        // default, comfortably above the floor.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "headline",
+                    "style": { "color": "#ffffff" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn default_table_terminal_codeblock_on_1080p_do_not_warn() {
+        // 14px defaults must clear the floor so this check doesn't spam
+        // every scenario that never touched style.font-size.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [
+                    { "type": "table", "headers": ["a"], "rows": [["1"]] },
+                    { "type": "terminal", "lines": [{ "text": "$ ok", "type": "input" }] },
+                    { "type": "codeblock", "code": "fn main() {}" }
+                ]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn same_absolute_px_warns_more_readily_on_a_taller_frame() {
+        // The floor is a fraction of output height, so the same 20px text
+        // that's fine on 1080p (1.85%) should warn on a much taller canvas
+        // where 20px is proportionally tiny.
+        let json = r##"{
+            "video": { "width": 1080, "height": 4000 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "small on a huge canvas",
+                    "style": { "color": "#ffffff", "font-size": "20px" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert_eq!(warnings.len(), 1, "expected one warning: {warnings:?}");
+    }
+
+    #[test]
+    fn small_badge_size_warns_using_its_own_default() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "badge",
+                    "text": "new",
+                    "badge_size": "sm"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert_eq!(warnings.len(), 1, "expected one warning: {warnings:?}");
+        assert!(warnings[0].contains("badge"), "got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn legibility_never_blocks_validation() {
+        use crate::commands::validate_schema::validate_scenario;
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "fine print",
+                    "style": { "color": "#ffffff", "font-size": "6px" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        assert!(!check_legibility(&scenario).is_empty());
+        let (errors, _warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.is_empty(),
+            "legibility must never surface as a schema error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_card_child_gets_a_nested_path() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "card",
+                    "children": [{
+                        "type": "text",
+                        "content": "fine print",
+                        "style": { "color": "#ffffff", "font-size": "8px" }
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let warnings = check_legibility(&scenario);
+        assert_eq!(warnings.len(), 1, "expected one warning: {warnings:?}");
+        assert!(
+            warnings[0].contains("views[0].scenes[0].children[0].children[0]"),
+            "got: {}",
+            warnings[0]
+        );
     }
 }

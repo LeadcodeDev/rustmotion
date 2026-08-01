@@ -584,13 +584,6 @@ pub enum CaptionStyle {
     KaraokePop,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CardBorder {
-    pub color: String,
-    #[serde(default = "default_card_border_width")]
-    pub width: f32,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GradientBorder {
     pub colors: Vec<String>,
@@ -602,17 +595,6 @@ pub struct GradientBorder {
 
 fn default_gradient_border_width() -> f32 {
     2.0
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CardShadow {
-    pub color: String,
-    #[serde(default)]
-    pub offset_x: f32,
-    #[serde(default)]
-    pub offset_y: f32,
-    #[serde(default)]
-    pub blur: f32,
 }
 
 /// Inner shadow configuration (inset shadow).
@@ -654,44 +636,6 @@ pub struct TextBackground {
 
 // --- Visual Effect Types ---
 
-/// CSS-like color filter configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FilterConfig {
-    #[serde(default)]
-    pub brightness: Option<f32>,
-    #[serde(default)]
-    pub contrast: Option<f32>,
-    #[serde(default)]
-    pub grayscale: Option<f32>,
-    #[serde(default)]
-    pub hue_rotate: Option<f32>,
-    #[serde(default)]
-    pub saturate: Option<f32>,
-    #[serde(default)]
-    pub sepia: Option<f32>,
-}
-
-/// Universal drop shadow
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DropShadow {
-    #[serde(default)]
-    pub dx: f32,
-    #[serde(default)]
-    pub dy: f32,
-    #[serde(default = "default_drop_shadow_blur")]
-    pub blur: f32,
-    #[serde(default = "default_drop_shadow_color")]
-    pub color: String,
-}
-
-fn default_drop_shadow_blur() -> f32 {
-    4.0
-}
-
-fn default_drop_shadow_color() -> String {
-    "#00000080".to_string()
-}
-
 /// Glow effect (colored luminous halo around the element)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct GlowConfig {
@@ -716,14 +660,6 @@ fn default_glow_radius() -> f32 {
 
 fn default_glow_intensity() -> f32 {
     1.0
-}
-
-/// Gradient fill for text
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TextGradient {
-    pub colors: Vec<String>,
-    #[serde(default)]
-    pub angle: Option<f32>,
 }
 
 // --- Default functions ---
@@ -766,8 +702,4 @@ fn default_shadow_blur() -> f32 {
 
 fn default_text_bg_padding() -> f32 {
     8.0
-}
-
-fn default_card_border_width() -> f32 {
-    1.0
 }

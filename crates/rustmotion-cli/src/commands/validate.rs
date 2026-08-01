@@ -23,6 +23,7 @@ pub fn cmd_validate(
 
     let mut report_out = validation::run_checks(&loaded, strict_anim);
     if strict_attrs {
+        validation::warn_strict_attrs_is_now_default();
         report_out.promote_attr_warnings();
     }
 

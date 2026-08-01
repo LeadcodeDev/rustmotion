@@ -1,15 +1,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, Point, TextBlob};
+use skia_safe::{Canvas, Font, FontStyle, Point};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, paint_from_hex, parse_hex_color, typeface_with_fallback,
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    parse_hex_color, typeface_with_fallback, wrap_text_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -81,20 +83,45 @@ impl GradientText {
 }
 
 impl GradientText {
-    fn paint(&self, canvas: &Canvas, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
         if self.content.is_empty() || self.colors.is_empty() {
             return;
         }
 
-        let Some((font, _emoji_font)) = self.resolve_font() else {
+        let Some((font, emoji_font)) = self.resolve_font() else {
             return;
         };
-        let _font_size = self.style.font_size_px_or(48.0);
+        let font_size = self.style.font_size_px_or(48.0);
+        let line_height_val = self.style.line_height_for(font_size);
 
-        // Measure text
+        // M1: `white-space: nowrap|pre` keeps the whole content on one line
+        // even past `layout_width` (it bleeds); anything else word-wraps at
+        // the box width — same rule `text.rs` uses.
+        let nowrap = matches!(
+            self.style.white_space,
+            Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
+        );
+        let wrap_at = if nowrap {
+            None
+        } else if layout_width.is_finite() && layout_width > 0.0 {
+            Some(layout_width)
+        } else {
+            None
+        };
+        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, wrap_at);
+
+        // Measure the overall (possibly multi-line) bounding box. The
+        // gradient is defined once across this whole block rather than
+        // per-line, so wrapping reflows the text without fragmenting the
+        // colour transition.
         let (_, metrics) = font.metrics();
-        let text_w = font.measure_str(&self.content, None).0;
-        let text_h = -metrics.ascent + metrics.descent;
+        let ascent = -metrics.ascent;
+        let descent = metrics.descent;
+        let text_w = lines
+            .iter()
+            .map(|l| measure_text_with_fallback(l, &font, &emoji_font, 0.0))
+            .fold(0.0f32, f32::max);
+        let text_h = (lines.len().max(1) - 1) as f32 * line_height_val + ascent + descent;
 
         // Compute angle (possibly animated)
         let angle = if self.animate_angle {
@@ -103,7 +130,7 @@ impl GradientText {
             self.angle
         };
 
-        // Compute gradient endpoints from angle
+        // Compute gradient endpoints from angle, spanning the full block.
         let angle_rad = angle * std::f32::consts::PI / 180.0;
         let cx = text_w / 2.0;
         let cy = text_h / 2.0;
@@ -138,26 +165,27 @@ impl GradientText {
             None,
         );
 
-        if let Some(shader) = shader {
-            // Create paint with gradient shader
-            let mut gradient_paint = skia_safe::Paint::default();
-            gradient_paint.set_anti_alias(true);
-            gradient_paint.set_shader(shader);
-
-            // Create text blob and draw
-            if let Some(blob) = TextBlob::new(&self.content, &font) {
-                let y = -metrics.ascent;
-                canvas.draw_text_blob(&blob, Point::new(0.0, y), &gradient_paint);
+        let fill_paint = match shader {
+            Some(shader) => {
+                let mut p = skia_safe::Paint::default();
+                p.set_anti_alias(true);
+                p.set_shader(shader);
+                p
             }
-        } else {
-            // Fallback: draw with first color
-            let mut paint = paint_from_hex(&self.colors[0]);
-            paint.set_anti_alias(true);
-
-            if let Some(blob) = TextBlob::new(&self.content, &font) {
-                let y = -metrics.ascent;
-                canvas.draw_text_blob(&blob, Point::new(0.0, y), &paint);
+            None => {
+                // Fallback: draw with the first color, no gradient.
+                let mut p = paint_from_hex(&self.colors[0]);
+                p.set_anti_alias(true);
+                p
             }
+        };
+
+        for (i, line) in lines.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let y = i as f32 * line_height_val + ascent;
+            draw_text_with_fallback(canvas, line, &font, &emoji_font, 0.0, 0.0, y, &fill_paint);
         }
     }
 }
@@ -166,10 +194,113 @@ impl Painter for GradientText {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, ctx.time);
+        self.paint(canvas, layout.width, ctx.time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::style::CssStyle;
+    use rustmotion_core::css::Length;
+
+    fn make_gradient_text(content: &str, white_space: Option<CssWhiteSpace>) -> GradientText {
+        GradientText {
+            content: content.into(),
+            colors: default_colors(),
+            angle: default_angle(),
+            animate_angle: false,
+            speed: default_speed(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(28.0)),
+                white_space,
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn alpha_grid(surface: &mut skia_safe::Surface, width: i32, height: i32) -> Vec<u8> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (width * height * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (width * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        (0..(width * height) as usize)
+            .map(|i| buf[i * 4 + 3])
+            .collect()
+    }
+
+    fn has_ink_in(grid: &[u8], surface_width: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn nowrap_paints_a_single_line_past_the_layout_width() {
+        // M1 render-level proof, gradient_text: `white-space: nowrap` stays
+        // on one line and bleeds past `layout_width`.
+        let gt = make_gradient_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 600;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        gt.paint(canvas, 80.0, 0.0);
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            has_ink_in(&grid, W, 300, W, 0, 45),
+            "nowrap gradient_text must paint past its 80px box on line 1"
+        );
+        assert!(
+            !has_ink_in(&grid, W, 0, W, 55, H),
+            "nowrap gradient_text must stay on a single line"
+        );
+    }
+
+    #[test]
+    fn normal_white_space_wraps_within_the_layout_width() {
+        let gt = make_gradient_text("the quick brown fox jumps over the lazy dog", None);
+        const W: i32 = 600;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        gt.paint(canvas, 80.0, 0.0);
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            !has_ink_in(&grid, W, 300, W, 0, 45),
+            "wrapped gradient_text must not reach x∈[300,600) on line 1 within an 80px box"
+        );
+        assert!(
+            has_ink_in(&grid, W, 0, W, 55, H),
+            "wrapped gradient_text must spill onto a second line within the box width"
+        );
     }
 }

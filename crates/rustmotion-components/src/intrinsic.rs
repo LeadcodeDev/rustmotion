@@ -9,6 +9,7 @@ use skia_safe::{Font, FontStyle as SkFontStyle};
 
 use rustmotion_core::css::style::{
     CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, LineHeight,
+    WhiteSpace,
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::renderer::{
@@ -37,10 +38,25 @@ pub struct TextIntrinsic {
 }
 
 impl TextIntrinsic {
+    /// M1: `white-space: nowrap|pre` disables wrapping — the geometry
+    /// validator's `unwrappable_text_overflow`/`ContentOverflowsBox` checks
+    /// (crates/rustmotion-cli/src/commands/geometry.rs) already branch on
+    /// exactly this pair of variants and re-measure via this same
+    /// `TextIntrinsic`, so the wrap decision here must match theirs exactly
+    /// or the validator's assumption about what the renderer produces is
+    /// false.
     pub fn from_text(text: &Text) -> Self {
-        Self::from_parts(&text.content, &text.style, text.max_width)
+        let wrap = !matches!(
+            text.style.white_space,
+            Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
+        );
+        Self::from_parts_with_wrap(&text.content, &text.style, text.max_width, wrap)
     }
 
+    /// Generic constructor shared by [`GradientText`]/[`Caption`] intrinsics,
+    /// whose painters don't (yet) implement `white-space: nowrap` — kept
+    /// wrap:true unconditionally so their measured size still matches what
+    /// those painters actually draw.
     pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
         let font_size = style.font_size_px_or(48.0);
         let line_height_resolved = style.line_height_for(font_size);
@@ -53,8 +69,6 @@ impl TextIntrinsic {
             italic: matches!(style.font_style, Some(CssFontStyle::Italic)),
             letter_spacing: style.letter_spacing_px(),
             max_width,
-            // CssStyle has no `wrap` field — use white-space/overflow-wrap heuristics.
-            // For now, default to true (CSS default).
             wrap: true,
         }
     }
@@ -152,7 +166,16 @@ impl GradientTextIntrinsic {
             Some(CSize::Length(LengthPercentage::Px(v))) => Some(*v),
             _ => None,
         };
-        Self(TextIntrinsic::from_parts(&t.content, &t.style, max_width))
+        // M1 follow-up (issue #109 review): gradient_text now word-wraps
+        // like `text` (see `gradient_text.rs::paint`) — mirror the same
+        // white-space: nowrap|pre rule here so measure and paint agree.
+        let wrap = !matches!(
+            t.style.white_space,
+            Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
+        );
+        Self(TextIntrinsic::from_parts_with_wrap(
+            &t.content, &t.style, max_width, wrap,
+        ))
     }
 }
 
@@ -178,7 +201,22 @@ impl CaptionIntrinsic {
             .map(|w| w.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        Self(TextIntrinsic::from_parts(&joined, &c.style, c.max_width))
+        // M1 follow-up: `Highlight`/`Karaoke`/`KaraokePop` word-wrap all
+        // words (see `caption.rs::paint`); `white-space: nowrap|pre` now
+        // forces them onto one line there too — mirror it here. (`WordByWord`
+        // /`WordPop` show one word at a time; wrapping is moot for those,
+        // same as the existing kbd/counter/badge "atomic, never wraps"
+        // components, so this doesn't need a mode-specific branch.)
+        let wrap = !matches!(
+            c.style.white_space,
+            Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
+        );
+        Self(TextIntrinsic::from_parts_with_wrap(
+            &joined,
+            &c.style,
+            c.max_width,
+            wrap,
+        ))
     }
 }
 
@@ -593,6 +631,67 @@ impl IntrinsicMeasure for CodeblockIntrinsic {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RichText intrinsic measurer
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::rich_text::{RichText, RichTextSpan};
+
+/// Intrinsic measurer for [`RichText`].
+///
+/// M2: previously absent from `component_intrinsic` entirely, so a
+/// `rich_text` with no explicit `width`/`height` laid out 0×0 and rendered
+/// nothing. Reuses `RichText::compute_layout` — the exact same word-wrapped
+/// line-breaking algorithm the painter uses — so the box taffy reserves
+/// always matches what gets painted (same measure/paint-parity rationale as
+/// [`TextIntrinsic`]).
+///
+/// Always measures the full (untruncated) content — a `visible_chars`
+/// typewriter animation must not reflow layout as it plays.
+pub struct RichTextIntrinsic {
+    spans: Vec<RichTextSpan>,
+    style: CssStyle,
+    max_width: Option<f32>,
+}
+
+impl RichTextIntrinsic {
+    pub fn from_rich_text(rt: &RichText) -> Self {
+        Self {
+            spans: rt.spans.clone(),
+            style: rt.style.clone(),
+            max_width: rt.max_width,
+        }
+    }
+}
+
+impl IntrinsicMeasure for RichTextIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        let max_width = if let Some(w) = known.0 {
+            Some(w)
+        } else {
+            let avail_w = match available.0 {
+                AvailableSpace::Definite(w) => Some(w),
+                AvailableSpace::MaxContent => None,
+                AvailableSpace::MinContent => Some(0.0),
+            };
+            match (self.max_width, avail_w) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        };
+
+        let layout = RichText::compute_layout(&self.spans, &self.style, max_width, -1.0);
+        let line_count = layout.lines.len().max(1) as f32;
+        (layout.max_width, line_count * layout.line_height)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,5 +784,289 @@ mod tests {
         );
         assert_eq!(w, 0.0);
         assert!(h > 0.0);
+    }
+
+    // ─── M1: white-space: nowrap/pre ────────────────────────────────────────
+
+    fn nowrap_text(content: &str, white_space: Option<WhiteSpace>) -> Text {
+        Text {
+            content: content.into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                white_space,
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        }
+    }
+
+    #[test]
+    fn nowrap_ignores_a_constrained_width_and_stays_one_line() {
+        let text = nowrap_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(WhiteSpace::Nowrap),
+        );
+        let m = TextIntrinsic::from_text(&text);
+        let (w_unconstrained, h_unconstrained) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let (w_constrained, h_constrained) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w_constrained > 80.0,
+            "nowrap must ignore the 80px constraint, got width {}",
+            w_constrained
+        );
+        assert_eq!(
+            w_constrained, w_unconstrained,
+            "nowrap width must equal the natural (unconstrained) width regardless of available space"
+        );
+        assert_eq!(
+            h_constrained, h_unconstrained,
+            "nowrap must always report a single line's height, constrained or not"
+        );
+    }
+
+    #[test]
+    fn pre_disables_wrap_exactly_like_nowrap() {
+        let text = nowrap_text("this string is too long to fit", Some(WhiteSpace::Pre));
+        let m = TextIntrinsic::from_text(&text);
+        let (w, _h) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w > 80.0,
+            "white-space: pre must also ignore the width constraint, got {}",
+            w
+        );
+    }
+
+    #[test]
+    fn normal_white_space_still_wraps_at_a_constrained_width() {
+        // Regression guard: making `nowrap`/`pre` real must not touch the
+        // default (`normal`/unset) wrapping path.
+        let wrapped = nowrap_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(WhiteSpace::Normal),
+        );
+        let unset = nowrap_text("the quick brown fox jumps over the lazy dog", None);
+        for text in [wrapped, unset] {
+            let m = TextIntrinsic::from_text(&text);
+            let (w, _h) = m.measure(
+                (None, None),
+                (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+            );
+            assert!(
+                w <= 80.0 + 0.5,
+                "white-space: normal (or unset) must still wrap at an 80px constraint, got {}",
+                w
+            );
+        }
+    }
+
+    // ─── M2: rich_text intrinsic ─────────────────────────────────────────────
+
+    fn span(text: &str) -> RichTextSpan {
+        RichTextSpan {
+            text: text.into(),
+            color: None,
+            font_size: None,
+            font_weight: None,
+            font_family: None,
+            font_style: None,
+            letter_spacing: None,
+        }
+    }
+
+    #[test]
+    fn rich_text_intrinsic_is_non_zero_without_explicit_size() {
+        // M2's core defect: rich_text had no `component_intrinsic` entry at
+        // all, so it measured 0×0 unless the author guessed a width/height.
+        let spans = vec![span("Hello "), span("world")];
+        let style = CssStyle {
+            font_size: Some(Length::Px(32.0)),
+            ..Default::default()
+        };
+        let intrinsic = RichTextIntrinsic {
+            spans,
+            style,
+            max_width: None,
+        };
+        let (w, h) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert!(w > 0.0, "rich_text natural width must be > 0, got {}", w);
+        assert!(h > 0.0, "rich_text natural height must be > 0, got {}", h);
+    }
+
+    #[test]
+    fn rich_text_intrinsic_wraps_a_single_long_span_internally() {
+        // M2's second ask: a long single span must wrap like any other text,
+        // not just break at span boundaries (there is only one span here).
+        let spans = vec![span(
+            "the quick brown fox jumps over the lazy dog and keeps going",
+        )];
+        let style = CssStyle {
+            font_size: Some(Length::Px(24.0)),
+            ..Default::default()
+        };
+        let intrinsic = RichTextIntrinsic {
+            spans,
+            style,
+            max_width: None,
+        };
+        let (_w_unconstrained, h_unconstrained) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let (w_constrained, h_constrained) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::Definite(150.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w_constrained <= 150.0 + 0.5,
+            "wrapped width must fit the 150px constraint, got {}",
+            w_constrained
+        );
+        assert!(
+            h_constrained > h_unconstrained,
+            "constraining width must add lines (wrap within the single span): {} vs {}",
+            h_constrained,
+            h_unconstrained
+        );
+    }
+
+    #[test]
+    fn rich_text_intrinsic_matches_compute_layout_used_by_the_painter() {
+        // Measure/paint parity: the intrinsic must reuse the exact same
+        // layout algorithm the painter does, or taffy could reserve a box
+        // that doesn't match what gets drawn.
+        let spans = vec![span("Total: "), span("42"), span(" items")];
+        let style = CssStyle::default();
+        let intrinsic = RichTextIntrinsic {
+            spans: spans.clone(),
+            style: style.clone(),
+            max_width: None,
+        };
+        let (w, h) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let layout = RichText::compute_layout(&spans, &style, None, -1.0);
+        assert_eq!(w, layout.max_width);
+        assert_eq!(h, layout.lines.len().max(1) as f32 * layout.line_height);
+    }
+
+    // ─── M1 follow-up: gradient_text / caption honor white-space too ───────
+
+    #[test]
+    fn gradient_text_intrinsic_ignores_constrained_width_when_nowrap() {
+        let gt = GradientText {
+            content: "the quick brown fox jumps over the lazy dog".into(),
+            colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            angle: 90.0,
+            animate_angle: false,
+            speed: 0.5,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                white_space: Some(WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let m = GradientTextIntrinsic::from_gradient_text(&gt);
+        let (w, h) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w > 80.0,
+            "nowrap gradient_text must ignore the 80px constraint, got {}",
+            w
+        );
+        // Single line: height should be one line, not several.
+        let (_, h_unconstrained) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert_eq!(h, h_unconstrained);
+    }
+
+    #[test]
+    fn gradient_text_intrinsic_wraps_by_default() {
+        let gt = GradientText {
+            content: "the quick brown fox jumps over the lazy dog".into(),
+            colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            angle: 90.0,
+            animate_angle: false,
+            speed: 0.5,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let m = GradientTextIntrinsic::from_gradient_text(&gt);
+        let (_w, h_unconstrained) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let (w_constrained, h_constrained) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+        );
+        assert!(w_constrained <= 80.0 + 0.5);
+        assert!(h_constrained > h_unconstrained);
+    }
+
+    #[test]
+    fn caption_intrinsic_ignores_constrained_width_when_nowrap() {
+        let caption = Caption {
+            words: "the quick brown fox jumps over the lazy dog"
+                .split_whitespace()
+                .map(|w| rustmotion_core::schema::CaptionWord {
+                    text: w.to_string(),
+                    start: 0.0,
+                    end: 10.0,
+                })
+                .collect(),
+            active_color: "#FFFF00".into(),
+            mode: Default::default(),
+            max_width: Some(80.0),
+            pill_color: None,
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                white_space: Some(WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timing: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let m = CaptionIntrinsic::from_caption(&caption);
+        let (w, _h) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(80.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w > 80.0,
+            "nowrap caption intrinsic must ignore the 80px constraint, got {}",
+            w
+        );
     }
 }

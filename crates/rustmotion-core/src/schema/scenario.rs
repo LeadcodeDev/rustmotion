@@ -33,6 +33,7 @@ pub enum VariableType {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Scenario {
     #[serde(default = "default_version")]
     pub version: String,
@@ -41,7 +42,7 @@ pub struct Scenario {
     pub audio: Vec<AudioTrack>,
     #[serde(default)]
     pub fonts: Vec<FontEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_entries")]
     pub scenes: Vec<SceneEntry>,
     /// Composition: a sequence of views (slide or world). Mutually exclusive with top-level `scenes`.
     #[serde(default)]
@@ -119,10 +120,11 @@ fn default_camera_pan_duration() -> f64 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct View {
     #[serde(rename = "type", default = "default_view_type")]
     pub view_type: ViewType,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_entries")]
     pub scenes: Vec<SceneEntry>,
     /// Transition entering this view (between views).
     #[serde(default)]
@@ -181,6 +183,13 @@ pub struct ResolvedView {
 }
 
 /// An entry in the `scenes` array: either a concrete scene or an include directive.
+///
+/// `#[serde(untagged)]` is kept so [`schemars`] still emits the correct
+/// (flat, non-wrapped) JSON Schema for this enum, and so a direct
+/// `SceneEntry::deserialize` call elsewhere keeps working. It is **not**
+/// how `Scenario.scenes` / `View.scenes` actually deserialize an entry from
+/// JSON, though: those two fields use [`deserialize_scene_entries`] instead
+/// (see its doc comment for why — M6, issue #110).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)] // untagged serde enum; boxing Scene would break all match arms
@@ -191,8 +200,54 @@ pub enum SceneEntry {
     Include(IncludeDirective),
 }
 
+/// Deserializer for `Scenario.scenes` / `View.scenes`, used in place of
+/// `SceneEntry`'s derived `#[serde(untagged)]` deserialization (M6, issue
+/// #110 / #102).
+///
+/// `#[serde(untagged)]` deserializes by trying each variant in declaration
+/// order and keeping the first one that succeeds; when *all* variants fail
+/// (e.g. a scene missing its required `duration`, or a `transition.type`
+/// typo three levels down) serde discards every per-variant error and
+/// reports only `data did not match any variant of untagged enum
+/// SceneEntry` — no scene index, no field name. The wave-2 audit called
+/// this the worst diagnostic in the product.
+///
+/// The two variants are unambiguous by shape — `IncludeDirective`'s only
+/// required field is `include`; a `Scene` never has that key — so this
+/// classifies each entry explicitly instead of trying-and-discarding, then
+/// deserializes it as its concrete type and reports *that* type's real
+/// error, prefixed with the entry's index in the `scenes` array.
+///
+/// Note on precision: this still deserializes from an already-parsed
+/// [`serde_json::Value`] (as the untagged path did too), which has no
+/// source line/column to report — the fix here is naming the scene index
+/// and field, not a source position that doesn't exist at this layer.
+fn deserialize_scene_entries<'de, D>(deserializer: D) -> Result<Vec<SceneEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let raw: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for (i, entry) in raw.into_iter().enumerate() {
+        let is_include = entry.get("include").is_some();
+        if is_include {
+            let directive: IncludeDirective = serde_json::from_value(entry)
+                .map_err(|e| D::Error::custom(format!("scenes[{i}] (include directive): {e}")))?;
+            out.push(SceneEntry::Include(directive));
+        } else {
+            let scene: Scene = serde_json::from_value(entry)
+                .map_err(|e| D::Error::custom(format!("scenes[{i}]: {e}")))?;
+            out.push(SceneEntry::Scene(scene));
+        }
+    }
+    Ok(out)
+}
+
 /// Directive to inject scenes from an external scenario file.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IncludeDirective {
     /// Path (relative to parent file) or URL (http/https) to a scenario JSON file.
     pub include: String,
@@ -259,6 +314,7 @@ fn default_volume() -> f32 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VideoConfig {
     pub width: u32,
     pub height: u32,
@@ -281,6 +337,7 @@ pub struct WorldPosition {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Scene {
     pub duration: f64,
     /// Unified background: color string, animated entry (with optional $ref), or array.
@@ -324,6 +381,7 @@ pub struct Scene {
 
 /// Virtual camera for pan/zoom/rotation effects at the scene level.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Camera {
     /// Camera center X offset from scene center (pixels). Default: 0.
     #[serde(default)]
@@ -349,6 +407,7 @@ pub struct Camera {
 
 /// Focal point of the camera in frame pixels.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CameraOrigin {
     #[serde(default)]
     pub x: f32,
@@ -358,6 +417,7 @@ pub struct CameraOrigin {
 
 /// A keyframe for a camera property.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CameraKeyframe {
     /// The camera property to animate: "x", "y", "zoom", "rotation",
     /// "origin.x", "origin.y" (dotted form, matching the component keyframe
@@ -372,6 +432,7 @@ pub struct CameraKeyframe {
 
 /// A single time-value point in a camera keyframe.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CameraKeyframePoint {
     /// Time in seconds (relative to scene start).
     pub time: f64,
@@ -466,6 +527,7 @@ fn default_blur_max_radius() -> f32 {
 
 /// Scene-level flex layout configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SceneLayout {
     #[serde(default)]
     pub direction: Option<CardDirection>,
@@ -480,6 +542,7 @@ pub struct SceneLayout {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Transition {
     #[serde(rename = "type")]
     pub transition_type: TransitionType,
@@ -610,5 +673,216 @@ mod annotation_tests {
         assert_eq!(s.annotations[0].target.kind, None);
         assert_eq!(s.annotations[0].target.rect, None);
         assert_eq!(s.annotations[0].frame, None);
+    }
+}
+
+/// M6 (issue #110 / #102): `SceneEntry` used to be a bare `#[serde(untagged)]`
+/// enum, so a bad `scenes[]` entry collapsed to "data did not match any
+/// variant of untagged enum SceneEntry" — no scene index, no field name.
+/// `deserialize_scene_entries` replaces the auto-try-each-variant behaviour
+/// with an explicit classify-then-deserialize pass that keeps the real
+/// per-scene error and prefixes it with the entry's index.
+#[cfg(test)]
+mod scene_entry_error_tests {
+    use super::*;
+
+    #[test]
+    fn missing_duration_names_the_scene_index_and_field_not_the_untagged_message() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "children": [] }
+            ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("missing duration must fail");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("did not match any variant of untagged enum"),
+            "must not regress to the opaque untagged message: {msg}"
+        );
+        assert!(
+            msg.contains("scenes[1]"),
+            "must name the offending scene index: {msg}"
+        );
+        assert!(
+            msg.contains("duration"),
+            "must name the missing field: {msg}"
+        );
+    }
+
+    #[test]
+    fn misspelled_transition_type_names_itself() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [
+                {
+                    "duration": 1.0,
+                    "children": [],
+                    "transition": { "type": "wip_left" }
+                }
+            ]
+        }"#;
+        let err =
+            serde_json::from_str::<Scenario>(json).expect_err("bad transition type must fail");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("did not match any variant of untagged enum"),
+            "must not regress to the opaque untagged message: {msg}"
+        );
+        assert!(
+            msg.contains("scenes[0]"),
+            "must name the offending scene index: {msg}"
+        );
+        assert!(
+            msg.contains("wip_left"),
+            "must echo the bad value so the author can spot the typo: {msg}"
+        );
+    }
+
+    #[test]
+    fn include_directive_still_works() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [
+                { "include": "does/not/matter.json" }
+            ]
+        }"#;
+        let s: Scenario = serde_json::from_str(json).expect("include entry must parse");
+        assert!(matches!(s.scenes[0], SceneEntry::Include(_)));
+    }
+
+    #[test]
+    fn broken_include_directive_names_itself() {
+        // `scenes` on IncludeDirective must be an array of indices — a typo'd
+        // shape should not silently be mistaken for a Scene.
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [
+                { "include": "x.json", "scenes": "not-an-array" }
+            ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("scenes[0]"), "got: {msg}");
+        assert!(msg.contains("include directive"), "got: {msg}");
+    }
+
+    #[test]
+    fn view_scenes_field_uses_the_same_precise_errors() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "composition": [
+                { "type": "slide", "scenes": [ { "children": [] } ] }
+            ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("did not match any variant of untagged enum"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("scenes[0]"), "got: {msg}");
+        assert!(msg.contains("duration"), "got: {msg}");
+    }
+}
+
+/// M5 (issue #110 / #102): the unknown-attribute checker only ever inspected
+/// the top level of each *component*; a typo in `Scenario`/`Scene`/`View`/
+/// `VideoConfig`/`SceneLayout`/`Transition`/`Camera` (e.g. `durration` on a
+/// scene, `framerate` on `video`) passed silently because nothing checked
+/// those structs at all. `deny_unknown_fields` closes that gap directly at
+/// parse time, for every one of them.
+#[cfg(test)]
+mod strict_schema_tests {
+    use super::*;
+
+    #[test]
+    fn misspelled_scene_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [ { "durration": 3.0, "children": [] } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("durration"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_video_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100, "framerate": 30 },
+            "scenes": [ { "duration": 1.0, "children": [] } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("framerate"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_top_level_scenario_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [ { "duration": 1.0, "children": [] } ],
+            "titel": "typo"
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("titel"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_camera_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [ {
+                "duration": 1.0,
+                "children": [],
+                "camera": { "zooom": 1.5 }
+            } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("zooom"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_scene_layout_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [ {
+                "duration": 1.0,
+                "children": [],
+                "layout": { "gapp": 10 }
+            } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("gapp"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_view_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "composition": [ { "typ": "slide", "scenes": [] } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("typ"), "got: {err}");
+    }
+
+    #[test]
+    fn valid_scenario_with_every_covered_struct_still_parses() {
+        // Regression guard: deny_unknown_fields must not reject any
+        // currently-valid field across Scenario/Scene/View/VideoConfig/
+        // SceneLayout/Transition/Camera.
+        let json = r##"{
+            "version": "1.0",
+            "video": { "width": 100, "height": 100, "fps": 30, "background": "#000000" },
+            "scenes": [ {
+                "duration": 1.0,
+                "children": [],
+                "layout": { "direction": "column", "gap": 10, "align_items": "center", "justify_content": "center", "padding": 5 },
+                "transition": { "type": "fade", "duration": 0.5, "easing": "ease_in_out" },
+                "camera": { "x": 0, "y": 0, "zoom": 1.0, "rotation": 0, "origin": { "x": 1, "y": 2 }, "keyframes": [ { "property": "zoom", "values": [ { "time": 0.0, "value": 1.0 } ], "easing": "linear" } ] }
+            } ]
+        }"##;
+        let s: Scenario = serde_json::from_str(json).expect("valid scenario must still parse");
+        assert_eq!(s.scenes.len(), 1);
     }
 }

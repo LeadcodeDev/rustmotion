@@ -10,15 +10,26 @@ use crate::commands::validation::{self, ValidationSource};
 
 /// Load + validate a scenario for watch mode. On validation failure prints the
 /// report and returns the typed error so the caller can decide how to handle it.
+///
+/// `strict_attrs` is accepted for CLI-surface parity with `validate` (M5,
+/// issue #110) but is a no-op in practice: unknown component attributes
+/// block by default now (`ValidationReport::is_blocking`), and `--watch`
+/// mode never writes a `--report` JSON file, so there is no bucket left for
+/// `promote_attr_warnings` to affect.
+#[allow(clippy::too_many_arguments)]
 fn load_for_watch(
     input: &Path,
     no_validate: bool,
     lenient: bool,
     strict_anim: bool,
+    strict_attrs: bool,
 ) -> Result<ResolvedScenario> {
     let loaded = validation::load(ValidationSource::File(input))?;
     if !no_validate {
-        let report = validation::run_checks(&loaded, strict_anim);
+        let mut report = validation::run_checks(&loaded, strict_anim);
+        if strict_attrs {
+            report.promote_attr_warnings();
+        }
         if !report.is_clean() {
             validation::print_report(&report, &input.display().to_string());
         }
@@ -204,6 +215,7 @@ pub fn cmd_render(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_watch(
     input: &PathBuf,
     output: &Path,
@@ -217,6 +229,7 @@ pub fn cmd_watch(
     no_validate: bool,
     lenient: bool,
     strict_anim: bool,
+    strict_attrs: bool,
 ) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
@@ -250,7 +263,7 @@ pub fn cmd_watch(
     let mut initial_includes: Vec<PathBuf> = Vec::new();
 
     // Initial render
-    match load_for_watch(input, no_validate, lenient, strict_anim) {
+    match load_for_watch(input, no_validate, lenient, strict_anim, strict_attrs) {
         Ok(scenario) => {
             initial_includes = scenario.included_paths.clone();
 
@@ -367,7 +380,7 @@ pub fn cmd_watch(
         std::thread::sleep(std::time::Duration::from_millis(100));
         while rx.try_recv().is_ok() {}
 
-        match load_for_watch(input, no_validate, lenient, strict_anim) {
+        match load_for_watch(input, no_validate, lenient, strict_anim, strict_attrs) {
             Ok(scenario) => {
                 // Reset error backoff on a successful load
                 if consecutive_err_count > 0 && suppressed {

@@ -5,7 +5,17 @@
 //! typo'd attribute like `<rm-counter typo-attr="x">` silently disappears at
 //! typed load. This module rebuilds the set of known top-level properties per
 //! component from the schemars JSON Schema of `Component` and reports any
-//! unknown key as a warning (promoted to an error by `--strict-attrs`).
+//! unknown key into `attr_warnings`.
+//!
+//! M5 (issue #110 / #102, decided at kickoff): unknown attributes error
+//! **by default** now, not only under `--strict-attrs` as before. This
+//! module still returns them separately as `(errors, warnings)` — callers
+//! outside `run_checks` (e.g. this module's own tests) can inspect them
+//! independently — but `validation::run_checks` folds the warnings straight
+//! into `schema_errors` unconditionally before anyone sees a
+//! `ValidationReport`, so `validate`/`render`/`watch` all block on them with
+//! no extra wiring. `--strict-attrs` / `ValidationReport::promote_attr_warnings`
+//! still exist, purely for CLI-surface stability — see their doc comments.
 //!
 //! It also surfaces typed-deserialization failures (e.g. an unknown CSS
 //! property, rejected by `CssStyle`'s `deny_unknown_fields`, or a missing
@@ -208,7 +218,41 @@ mod tests {
     }
 
     #[test]
-    fn strict_attrs_promotes_warnings_to_errors() {
+    fn unknown_attr_blocks_by_default_without_strict_attrs() {
+        // M5 (issue #110): unknown attributes error by default — no
+        // `--strict-attrs` needed. `render` used to exit 0 here, having
+        // silently used default styling. `run_checks` folds them straight
+        // into `schema_errors` (see its doc comment), so every caller
+        // (`validate`, `render`, `watch`) blocks uniformly with zero extra
+        // wiring — `report.attr_warnings` itself is already empty by the
+        // time `run_checks` returns.
+        let json = serde_json::json!({
+            "video": { "width": 100, "height": 100 },
+            "scenes": [{ "duration": 2.0, "children": [
+                { "type": "counter", "from": 0, "to": 100, "typo-attr": "x" }
+            ]}]
+        })
+        .to_string();
+        let loaded = load(ValidationSource::Inline(&json)).unwrap();
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.iter().any(|e| e.contains("typo-attr")),
+            "expected the unknown attribute in schema_errors: {:?}",
+            report.schema_errors
+        );
+        assert!(report.attr_warnings.is_empty(), "already folded in");
+        assert!(
+            report.is_blocking(false),
+            "unknown attributes must block by default, with no flag"
+        );
+    }
+
+    #[test]
+    fn strict_attrs_promotion_is_a_harmless_no_op_post_m5() {
+        // `--strict-attrs` / `promote_attr_warnings` are kept for CLI-surface
+        // stability, but since M5 there is nothing left for them to do by
+        // the time `run_checks` has already run: `attr_warnings` is already
+        // empty, so promoting it is a no-op, and the report already blocked.
         let json = serde_json::json!({
             "video": { "width": 100, "height": 100 },
             "scenes": [{ "duration": 2.0, "children": [
@@ -218,17 +262,19 @@ mod tests {
         .to_string();
         let loaded = load(ValidationSource::Inline(&json)).unwrap();
         let mut report = run_checks(&loaded, false);
-        assert!(!report.attr_warnings.is_empty(), "expected attr warnings");
-        assert!(!report.is_blocking(false), "warnings must not block");
+        let before = report.schema_errors.clone();
+        assert!(
+            report.is_blocking(false),
+            "must already block pre-promotion"
+        );
 
         report.promote_attr_warnings();
         assert!(report.attr_warnings.is_empty());
-        assert!(
-            report.schema_errors.iter().any(|e| e.contains("typo-attr")),
-            "promoted error missing: {:?}",
-            report.schema_errors
+        assert_eq!(
+            report.schema_errors, before,
+            "promotion must not change schema_errors when attr_warnings is already empty"
         );
-        assert!(report.is_blocking(false), "strict attrs must block");
+        assert!(report.is_blocking(false), "must still block post-promotion");
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //! Returns (errors, warnings); errors block rendering, warnings are advisory only.
 
 use rustmotion::components::{ChildComponent, Component};
-use rustmotion::core::css::style::Display as CssDisplay;
+use rustmotion::core::css::style::{
+    Background, BackgroundLayer, Color, CssStyle, Display as CssDisplay,
+};
 use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario};
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
@@ -89,6 +91,13 @@ fn validate_children(
                 p
             ));
         }
+
+        // C2 completion (issue #110 / #102): a colour that `parse_css_color`
+        // can't resolve used to fall back to black silently; wave 1 made
+        // that loud at render time (opaque magenta + stderr warning) via the
+        // same frozen `parse_css_color` entry point. This closes the loop by
+        // catching it before anyone renders.
+        check_style_colors(style, &p, errors);
 
         if let Some(timed) = child.component.as_timed() {
             let (start, end) = timed.timing();
@@ -227,6 +236,114 @@ fn validate_children(
             }
             _ => {}
         }
+    }
+}
+
+/// C2 completion: walk every colour reachable from a component's `style`
+/// (foreground `color`, `background` fills/gradient stops, box/text shadow
+/// colours, border colours, gradient-border colours) and report any
+/// `Color::String` that `parse_css_color` — the single frozen colour-parsing
+/// entry point (`engine/renderer/colors.rs`) — cannot resolve. At render
+/// time an unresolved colour already falls back to opaque magenta with a
+/// stderr warning (wave 1); this makes the same failure a blocking
+/// validation error so it's caught before anyone renders.
+///
+/// Scope: only `CssStyle`'s `Color`-typed fields, which is exactly the
+/// surface `paint_pass::parse_color` resolves through `parse_css_color` for
+/// every component. Component-specific plain-`String` colour fields (e.g.
+/// `Kbd.background_color`, `Table.header_color`, `Marquee.color`,
+/// `Notification.accent_color`) go through a different, more lenient path
+/// (`parse_hex_color`'s bare-hex retry) and are deliberately not covered
+/// here — see the workstream report for the full list.
+fn check_style_colors(style: &CssStyle, path: &str, errors: &mut Vec<String>) {
+    if let Some(c) = &style.color {
+        check_color(c, "color", path, errors);
+    }
+    if let Some(bg) = &style.background {
+        check_background_colors(bg, path, errors);
+    }
+    if let Some(shadows) = &style.box_shadow {
+        for (i, s) in shadows.iter().enumerate() {
+            if let Some(c) = &s.color {
+                check_color(c, &format!("box-shadow[{i}].color"), path, errors);
+            }
+        }
+    }
+    if let Some(shadows) = &style.text_shadow {
+        for (i, s) in shadows.iter().enumerate() {
+            if let Some(c) = &s.color {
+                check_color(c, &format!("text-shadow[{i}].color"), path, errors);
+            }
+        }
+    }
+    if let Some(border) = &style.border {
+        if let Some(c) = &border.color {
+            check_color(c, "border.color", path, errors);
+        }
+        for (name, side) in [
+            ("top", &border.top),
+            ("right", &border.right),
+            ("bottom", &border.bottom),
+            ("left", &border.left),
+        ] {
+            if let Some(side) = side {
+                if let Some(c) = &side.color {
+                    check_color(c, &format!("border.{name}.color"), path, errors);
+                }
+            }
+        }
+    }
+    if let Some(gb) = &style.gradient_border {
+        for (i, s) in gb.colors.iter().enumerate() {
+            check_color_str(s, &format!("gradient-border.colors[{i}]"), path, errors);
+        }
+    }
+}
+
+fn check_background_colors(bg: &Background, path: &str, errors: &mut Vec<String>) {
+    match bg {
+        Background::Color(c) => check_color(c, "background", path, errors),
+        Background::Single(layer) => check_background_layer_colors(layer, path, errors),
+        Background::Layers(layers) => {
+            for layer in layers {
+                check_background_layer_colors(layer, path, errors);
+            }
+        }
+    }
+}
+
+fn check_background_layer_colors(layer: &BackgroundLayer, path: &str, errors: &mut Vec<String>) {
+    match layer {
+        BackgroundLayer::Color { color } => check_color(color, "background", path, errors),
+        BackgroundLayer::LinearGradient { stops, .. }
+        | BackgroundLayer::RadialGradient { stops, .. }
+        | BackgroundLayer::ConicGradient { stops, .. } => {
+            for (i, stop) in stops.iter().enumerate() {
+                check_color(
+                    &stop.color,
+                    &format!("background gradient stop[{i}]"),
+                    path,
+                    errors,
+                );
+            }
+        }
+        BackgroundLayer::Image { .. } => {}
+    }
+}
+
+fn check_color(color: &Color, label: &str, path: &str, errors: &mut Vec<String>) {
+    if let Color::String(s) = color {
+        check_color_str(s, label, path, errors);
+    }
+}
+
+fn check_color_str(s: &str, label: &str, path: &str, errors: &mut Vec<String>) {
+    if rustmotion::engine::renderer::parse_css_color(s).is_none() {
+        errors.push(format!(
+            "{path}: {label} '{s}' is not a recognized CSS color (expected hex #rgb/#rrggbb[aa], \
+             rgb()/rgba(...), hsl()/hsla(...), or a CSS named color) — it would render as opaque \
+             magenta instead of {label}",
+        ));
     }
 }
 
@@ -443,6 +560,113 @@ mod style_warning_tests {
             "time_scale": 0.5,
             "time_offset": 1.0,
             "children": [{ "type": "text", "content": "hi" }]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+}
+
+/// C2 completion (issue #110 / #102): an unresolved colour must fail
+/// validation, not just render as opaque magenta with a stderr warning.
+#[cfg(test)]
+mod color_validation_tests {
+    use super::*;
+
+    #[test]
+    fn unresolvable_text_color_is_a_blocking_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": { "color": "not-a-real-color" }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("not-a-real-color") && e.contains("color")),
+            "expected an unresolved-color error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn valid_colors_of_every_recognized_form_do_not_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "color": "#fff",
+                "background": "rgba(10, 20, 30, 0.5)",
+                "box-shadow": [{ "offset-x": 0, "offset-y": 2, "color": "hsl(200, 50%, 50%)" }],
+                "text-shadow": [{ "offset-x": 0, "offset-y": 1, "color": "cornflowerblue" }],
+                "border": { "color": "rebeccapurple" }
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn unresolvable_background_gradient_stop_color_is_reported() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "card",
+            "style": {
+                "background": {
+                    "kind": "linear-gradient",
+                    "angle": 45,
+                    "stops": [
+                        { "color": "#111111", "offset": 0.0 },
+                        { "color": "totally-bogus", "offset": 1.0 }
+                    ]
+                }
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("totally-bogus")),
+            "expected the bad gradient-stop color to be reported: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn unresolvable_border_color_is_reported_with_side() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "card",
+            "style": {
+                "border": { "top": { "color": "bogus-border-color" } }
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("bogus-border-color") && e.contains("border.top")),
+            "expected a border.top-labelled error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn rgba_object_color_form_never_errors() {
+        // Color::Rgba{r,g,b,a} is always valid by construction — only
+        // Color::String can fail to parse.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": { "color": { "r": 10, "g": 20, "b": 30, "a": 0.5 } }
         }))
         .unwrap();
         let mut errors = Vec::new();

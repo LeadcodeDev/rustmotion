@@ -52,6 +52,23 @@ pub struct ExtractedEffects<'a> {
     pub char_animation: Option<ResolvedCharAnimation>,
 }
 
+/// M3: find the first `glow` effect in a list, if present.
+///
+/// `glow` is a static (non-time-varying) coloured halo — unlike every other
+/// effect `resolve_props_for_effects` resolves, it deliberately is *not*
+/// folded into `AnimatedProperties`: `GlowConfig.color` has no corresponding
+/// field there, and extending `AnimatedProperties`'s public shape is out of
+/// scope for this workstream. Callers apply the returned config directly as
+/// a CSS `filter: drop-shadow(...)` (see
+/// `rustmotion_components::box_builder::apply_glow_effect`), which is the
+/// only place that needs the raw colour string.
+pub fn find_glow_effect(effects: &[AnimationEffect]) -> Option<&GlowConfig> {
+    effects.iter().find_map(|e| match e {
+        AnimationEffect::Glow(cfg) => Some(cfg),
+        _ => None,
+    })
+}
+
 /// Split a slice of AnimationEffect into categorized buckets for the renderer.
 pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
     let mut result = ExtractedEffects {
@@ -1683,5 +1700,64 @@ mod spring_preset_tests {
             panic!("wrong variant");
         };
         assert!(t.spring.is_none());
+    }
+}
+
+#[cfg(test)]
+mod glow_tests {
+    //! M3: `find_glow_effect` extraction (issue #109). The colour/filter
+    //! side of the fix lives in
+    //! `rustmotion_components::box_builder::apply_glow_effect`, which is
+    //! covered in that crate's own tests since it needs `CssStyle`/`FilterFn`
+    //! (not available to this crate).
+
+    use super::*;
+    use crate::schema::{AnimationEffect, AnimationTiming, GlowConfig};
+
+    fn glow(color: &str, radius: f32, intensity: f32) -> AnimationEffect {
+        AnimationEffect::Glow(GlowConfig {
+            color: color.to_string(),
+            radius,
+            intensity,
+        })
+    }
+
+    #[test]
+    fn finds_glow_among_other_effects() {
+        let effects = vec![
+            AnimationEffect::FadeIn(AnimationTiming::default()),
+            glow("#5C39EE", 12.0, 1.0),
+        ];
+        let found = find_glow_effect(&effects).expect("glow effect present");
+        assert_eq!(found.color, "#5C39EE");
+        assert_eq!(found.radius, 12.0);
+    }
+
+    #[test]
+    fn returns_none_without_a_glow_effect() {
+        let effects = vec![AnimationEffect::FadeIn(AnimationTiming::default())];
+        assert!(find_glow_effect(&effects).is_none());
+    }
+
+    #[test]
+    fn resolve_props_for_effects_does_not_touch_glow_radius_or_intensity() {
+        // Deliberate: the named `glow` effect is applied directly as a CSS
+        // filter by `box_builder::apply_glow_effect` (using the raw
+        // `GlowConfig.color`, which `AnimatedProperties` has no field for),
+        // not through this resolver. This guards against a future change
+        // accidentally routing it through `AnimatedProperties` too, which
+        // would double up into two stacked drop-shadows (see the doc comment
+        // on `apply_glow_effect`).
+        let effects = vec![glow("#5C39EE", 12.0, 1.0)];
+        let props = resolve_props_for_effects(&effects, 0.0, 1.0);
+        assert_eq!(
+            props.glow_radius,
+            AnimatedProperties::default().glow_radius,
+            "glow_radius must stay at its sentinel; the named `glow` effect must not set it"
+        );
+        assert_eq!(
+            props.glow_intensity,
+            AnimatedProperties::default().glow_intensity
+        );
     }
 }

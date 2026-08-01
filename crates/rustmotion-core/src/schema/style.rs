@@ -47,48 +47,6 @@ pub enum CardJustify {
     SpaceEvenly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum Spacing {
-    Uniform(f32),
-    Sides {
-        top: f32,
-        right: f32,
-        bottom: f32,
-        left: f32,
-    },
-}
-
-impl Spacing {
-    pub fn resolve(&self) -> (f32, f32, f32, f32) {
-        match self {
-            Spacing::Uniform(v) => (*v, *v, *v, *v),
-            Spacing::Sides {
-                top,
-                right,
-                bottom,
-                left,
-            } => (*top, *right, *bottom, *left),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum GridTrack {
-    Px(f32),
-    Fr(f32),
-    Auto,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GridPlacement {
-    #[serde(default)]
-    pub start: Option<i32>,
-    #[serde(default)]
-    pub span: Option<u32>,
-}
-
 /// A single step in a component's animation timeline.
 /// Triggers a set of animations at a specific time within the scene.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
