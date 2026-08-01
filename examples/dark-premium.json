@@ -14,23 +14,16 @@
         "zones": [
           {
             "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
+            "x": 0.14,
+            "y": 0.16,
             "radius": 0.26,
             "opacity": 0.3
           },
           {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
-            "radius": 0.2,
-            "opacity": 0.16
-          },
-          {
             "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
+            "x": 0.78,
+            "y": 0.72,
+            "radius": 0.18,
             "opacity": 0.1
           }
         ]
@@ -40,38 +33,6 @@
         "y": 0
       },
       "children": [
-        {
-          "type": "shape",
-          "shape": "circle",
-          "fill": "#1E3A8A",
-          "bleed": true,
-          "position": "absolute",
-          "x": -260,
-          "y": -220,
-          "style": {
-            "width": 900,
-            "height": 900,
-            "opacity": 0.28,
-            "filter": [
-              {
-                "fn": "blur",
-                "radius": 90
-              }
-            ],
-            "animation": [
-              {
-                "name": "fade_in",
-                "delay": 0.0,
-                "duration": 0.8
-              },
-              {
-                "name": "float_3d",
-                "loop": true,
-                "duration": 9.0
-              }
-            ]
-          }
-        },
         {
           "type": "text",
           "content": "Vos équipes",
@@ -174,25 +135,25 @@
         "preset": "halo",
         "zones": [
           {
+            "color": "#3A1E6E",
+            "x": 0.22,
+            "y": 0.2,
+            "radius": 0.22,
+            "opacity": 0.26
+          },
+          {
             "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
-            "radius": 0.26,
-            "opacity": 0.3
-          },
-          {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
+            "x": 0.72,
+            "y": 0.68,
             "radius": 0.2,
-            "opacity": 0.16
+            "opacity": 0.18
           },
           {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
+            "color": "#5B2A8A",
+            "x": 0.52,
+            "y": 0.42,
             "radius": 0.16,
-            "opacity": 0.1
+            "opacity": 0.12
           }
         ]
       },
@@ -425,7 +386,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     },
     {
@@ -434,25 +396,18 @@
         "preset": "halo",
         "zones": [
           {
-            "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
-            "radius": 0.26,
-            "opacity": 0.3
+            "color": "#1E4FBF",
+            "x": 0.18,
+            "y": 0.22,
+            "radius": 0.3,
+            "opacity": 0.38
           },
           {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
-            "radius": 0.2,
+            "color": "#5A8CFF",
+            "x": 0.8,
+            "y": 0.7,
+            "radius": 0.22,
             "opacity": 0.16
-          },
-          {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
-            "opacity": 0.1
           }
         ]
       },
@@ -461,38 +416,6 @@
         "y": 1080
       },
       "children": [
-        {
-          "type": "shape",
-          "shape": "circle",
-          "fill": "#E8409A",
-          "bleed": true,
-          "position": "absolute",
-          "x": 1500,
-          "y": 700,
-          "style": {
-            "width": 950,
-            "height": 950,
-            "opacity": 0.28,
-            "filter": [
-              {
-                "fn": "blur",
-                "radius": 90
-              }
-            ],
-            "animation": [
-              {
-                "name": "fade_in",
-                "delay": 0.1,
-                "duration": 0.8
-              },
-              {
-                "name": "float_3d",
-                "loop": true,
-                "duration": 9.0
-              }
-            ]
-          }
-        },
         {
           "type": "text",
           "content": "Une seule",
@@ -591,7 +514,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     },
     {
@@ -600,25 +524,18 @@
         "preset": "halo",
         "zones": [
           {
-            "color": "#1E3A8A",
+            "color": "#12326E",
             "x": 0.12,
-            "y": 0.14,
-            "radius": 0.26,
-            "opacity": 0.3
+            "y": 0.18,
+            "radius": 0.28,
+            "opacity": 0.28
           },
           {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
+            "color": "#2F6BCF",
+            "x": 0.84,
+            "y": 0.76,
             "radius": 0.2,
-            "opacity": 0.16
-          },
-          {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
-            "opacity": 0.1
+            "opacity": 0.14
           }
         ]
       },
@@ -774,7 +691,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     },
     {
@@ -783,25 +701,18 @@
         "preset": "halo",
         "zones": [
           {
+            "color": "#7A1A55",
+            "x": 0.8,
+            "y": 0.72,
+            "radius": 0.28,
+            "opacity": 0.34
+          },
+          {
             "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
-            "radius": 0.26,
-            "opacity": 0.3
-          },
-          {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
-            "radius": 0.2,
-            "opacity": 0.16
-          },
-          {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
-            "opacity": 0.1
+            "x": 0.16,
+            "y": 0.24,
+            "radius": 0.22,
+            "opacity": 0.2
           }
         ]
       },
@@ -810,38 +721,6 @@
         "y": 1080
       },
       "children": [
-        {
-          "type": "shape",
-          "shape": "circle",
-          "fill": "#E8409A",
-          "bleed": true,
-          "position": "absolute",
-          "x": 1620,
-          "y": 760,
-          "style": {
-            "width": 1000,
-            "height": 1000,
-            "opacity": 0.28,
-            "filter": [
-              {
-                "fn": "blur",
-                "radius": 90
-              }
-            ],
-            "animation": [
-              {
-                "name": "fade_in",
-                "delay": 0.05,
-                "duration": 0.8
-              },
-              {
-                "name": "float_3d",
-                "loop": true,
-                "duration": 9.0
-              }
-            ]
-          }
-        },
         {
           "type": "text",
           "content": "-85%",
@@ -941,7 +820,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     },
     {
@@ -950,25 +830,18 @@
         "preset": "halo",
         "zones": [
           {
-            "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
+            "color": "#16386E",
+            "x": 0.2,
+            "y": 0.24,
             "radius": 0.26,
-            "opacity": 0.3
+            "opacity": 0.26
           },
           {
-            "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
+            "color": "#8A2A66",
+            "x": 0.82,
+            "y": 0.74,
             "radius": 0.2,
-            "opacity": 0.16
-          },
-          {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
-            "opacity": 0.1
+            "opacity": 0.18
           }
         ]
       },
@@ -1171,7 +1044,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     },
     {
@@ -1181,24 +1055,17 @@
         "zones": [
           {
             "color": "#1E3A8A",
-            "x": 0.12,
-            "y": 0.14,
-            "radius": 0.26,
-            "opacity": 0.3
+            "x": 0.14,
+            "y": 0.18,
+            "radius": 0.28,
+            "opacity": 0.34
           },
           {
             "color": "#E8409A",
-            "x": 0.88,
-            "y": 0.84,
-            "radius": 0.2,
-            "opacity": 0.16
-          },
-          {
-            "color": "#2A4FBF",
-            "x": 0.62,
-            "y": 0.55,
-            "radius": 0.16,
-            "opacity": 0.1
+            "x": 0.84,
+            "y": 0.8,
+            "radius": 0.24,
+            "opacity": 0.24
           }
         ]
       },
@@ -1207,70 +1074,6 @@
         "y": 0
       },
       "children": [
-        {
-          "type": "shape",
-          "shape": "circle",
-          "fill": "#1E3A8A",
-          "bleed": true,
-          "position": "absolute",
-          "x": -200,
-          "y": -160,
-          "style": {
-            "width": 950,
-            "height": 950,
-            "opacity": 0.28,
-            "filter": [
-              {
-                "fn": "blur",
-                "radius": 90
-              }
-            ],
-            "animation": [
-              {
-                "name": "fade_in",
-                "delay": 0.0,
-                "duration": 0.8
-              },
-              {
-                "name": "float_3d",
-                "loop": true,
-                "duration": 9.0
-              }
-            ]
-          }
-        },
-        {
-          "type": "shape",
-          "shape": "circle",
-          "fill": "#E8409A",
-          "bleed": true,
-          "position": "absolute",
-          "x": 1650,
-          "y": 820,
-          "style": {
-            "width": 800,
-            "height": 800,
-            "opacity": 0.28,
-            "filter": [
-              {
-                "fn": "blur",
-                "radius": 90
-              }
-            ],
-            "animation": [
-              {
-                "name": "fade_in",
-                "delay": 0.2,
-                "duration": 0.8
-              },
-              {
-                "name": "float_3d",
-                "loop": true,
-                "duration": 9.0
-              }
-            ]
-          }
-        },
         {
           "type": "text",
           "content": "On commence ?",
@@ -1369,7 +1172,8 @@
       "transition": {
         "type": "camera_pan",
         "duration": 0.75,
-        "easing": "ease_in_out_expo"
+        "easing": "ease_in_out_expo",
+        "background": "travel"
       }
     }
   ]
