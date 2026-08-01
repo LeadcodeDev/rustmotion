@@ -380,8 +380,17 @@ fn dissolve_transition(
 /// Camera pan transition: static background + sliding foreground children.
 /// `bg` is the static background, `fg_a`/`fg_b` are children-only (transparent).
 /// fg_a slides out by (-dx*t, -dy*t), fg_b slides in from (dx*(1-t), dy*(1-t)).
+/// Composite a camera pan between two scenes.
+///
+/// `bg_b` is `None` when the backgrounds stay put: `bg_a` is then drawn once as
+/// a fixed backdrop and only the foregrounds slide, which is what keeps a
+/// shared ambience continuous across a beat. When `Some`, each background
+/// travels locked to its own foreground, so the two beats read as different
+/// places rather than one space.
+#[allow(clippy::too_many_arguments)]
 pub fn camera_pan_transition(
-    bg: &[u8],
+    bg_a: &[u8],
+    bg_b: Option<&[u8]>,
     fg_a: &[u8],
     fg_b: &[u8],
     width: u32,
@@ -395,30 +404,44 @@ pub fn camera_pan_transition(
 
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
-    let img_bg = match frame_to_image(bg, width, height) {
+    let img_bg_a = match frame_to_image(bg_a, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
     let img_fg_a = match frame_to_image(fg_a, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
     let img_fg_b = match frame_to_image(fg_b, width, height) {
         Some(i) => i,
-        None => return bg.to_vec(),
+        None => return bg_a.to_vec(),
     };
 
     let canvas = surface.canvas();
 
-    // Static background
-    canvas.draw_image(&img_bg, (0.0, 0.0), None);
+    // Offsets: the outgoing plane exits, the incoming one arrives. They tile
+    // exactly, so together they always cover the frame.
+    let (out_x, out_y) = (-dx * t, -dy * t);
+    let (in_x, in_y) = (dx * (1.0 - t), dy * (1.0 - t));
 
-    // fg_a slides out
-    canvas.draw_image(&img_fg_a, (-dx * t, -dy * t), None);
-    // fg_b slides in
-    canvas.draw_image(&img_fg_b, (dx * (1.0 - t), dy * (1.0 - t)), None);
+    match bg_b.and_then(|b| frame_to_image(b, width, height)) {
+        // Travelling: each background is locked to its own foreground, so a
+        // beat moves as one plane.
+        Some(img_bg_b) => {
+            canvas.draw_image(&img_bg_a, (out_x, out_y), None);
+            canvas.draw_image(&img_bg_b, (in_x, in_y), None);
+        }
+        // Fixed backdrop: drawn once at rest, so a shared ambience stays
+        // continuous and the join is invisible.
+        None => {
+            canvas.draw_image(&img_bg_a, (0.0, 0.0), None);
+        }
+    }
+
+    canvas.draw_image(&img_fg_a, (out_x, out_y), None);
+    canvas.draw_image(&img_fg_b, (in_x, in_y), None);
 
     surface_to_pixels(surface, width, height)
 }
