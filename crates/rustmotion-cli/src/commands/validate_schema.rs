@@ -421,7 +421,8 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::CharWave(t)
         | AnimationEffect::CharBounce(t)
         | AnimationEffect::CharRotateIn(t)
-        | AnimationEffect::CharSlideUp(t) => char_budget(t),
+        | AnimationEffect::CharSlideUp(t)
+        | AnimationEffect::CharBlurIn(t) => char_budget(t),
 
         // Custom keyframes
         AnimationEffect::Keyframes(k) => {

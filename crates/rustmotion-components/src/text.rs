@@ -17,10 +17,18 @@ use rustmotion_core::engine::renderer::{
     typeface_with_fallback, wrap_text_with_fallback,
 };
 use rustmotion_core::schema::{
-    CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
+    AnimationEffect, CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
     TextAnimGranularity, TextBackground, TextShadow, TimelineStep,
 };
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
+
+/// Default starting blur sigma (px) for `char_blur_in` when
+/// `CharAnimationTiming.blur` is not set. Tuned against rendered output at
+/// 120px display type (see issue #118's render proof): low enough that
+/// individual letterforms stay ghost-legible at the start of a unit's
+/// reveal (this is a *reveal*, not a smoke effect), high enough that the
+/// blur is unmistakable next to the settled, sharp frame.
+const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
@@ -66,6 +74,7 @@ fn apply_text_anim_preset(
     unit_idx: usize,
     font_size: f32,
     overshoot: f32,
+    blur_radius: f32,
 ) {
     let center_x = cursor_x + unit_width / 2.0;
     let center_y = line_y;
@@ -150,6 +159,36 @@ fn apply_text_anim_preset(
                 &p,
             );
         }
+        CharAnimPreset::BlurIn => {
+            // One continuous progress value `t` drives all three
+            // components at once (blur settle, upward drift, opacity
+            // ramp) rather than sequencing them as separate effects.
+            let tt = t.clamp(0.0, 1.0);
+            let offset_y = (1.0 - tt) * font_size * 0.12;
+            let sigma = ((1.0 - tt) * blur_radius).max(0.0);
+            let mut p = paint.clone();
+            p.set_alpha_f(tt * paint.alpha_f());
+            if sigma > 0.05 {
+                if let Some(filter) = skia_safe::image_filters::blur(
+                    (sigma, sigma),
+                    skia_safe::TileMode::Clamp,
+                    None,
+                    None,
+                ) {
+                    p.set_image_filter(filter);
+                }
+            }
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                0.0,
+                cursor_x,
+                line_y + offset_y,
+                &p,
+            );
+        }
     }
 }
 
@@ -169,6 +208,7 @@ fn render_char_animation(
     char_anim: &CharAnimation,
     time: f64,
     overshoot: f32,
+    blur_radius: f32,
 ) {
     let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
     let mut global_unit_idx = 0usize;
@@ -257,6 +297,7 @@ fn render_char_animation(
                     global_unit_idx,
                     font.size(),
                     overshoot,
+                    blur_radius,
                 );
                 canvas.restore();
 
@@ -299,6 +340,7 @@ fn render_char_animation(
                     global_unit_idx,
                     font.size(),
                     overshoot,
+                    blur_radius,
                 );
                 canvas.restore();
 
@@ -486,6 +528,50 @@ impl Text {
                 &char_anim,
                 time,
                 resolved.overshoot,
+                0.0, // blur is only meaningful for char_blur_in, handled below
+            );
+            return Ok(());
+        }
+
+        // `char_blur_in` is read directly off `style.animation` rather than
+        // through `engine::animator::extract_effects` → `props.char_animation`
+        // like its five siblings above: that resolution path lives outside
+        // this workstream's file scope (schema/video.rs + text.rs only, see
+        // issue #118 / chantier #117 W1). This is a top-level
+        // `style.animation` entry lookup, so — unlike the branch above — it
+        // does not pick up container-level stagger delay shifting or
+        // `timeline`-step-embedded copies.
+        if let Some(timing) = self.style.animation.iter().find_map(|effect| match effect {
+            AnimationEffect::CharBlurIn(t) => Some(t),
+            _ => None,
+        }) {
+            let char_anim = CharAnimation {
+                preset: CharAnimPreset::BlurIn,
+                granularity: timing.granularity.clone(),
+                stagger: timing.stagger as f32,
+                duration: timing.duration as f32,
+                easing: timing.easing.clone(),
+                delay: timing.delay as f32,
+            };
+            render_char_animation(
+                canvas,
+                &content,
+                &font,
+                &emoji_font,
+                &paint,
+                letter_spacing,
+                align,
+                align_width,
+                line_height_val,
+                baseline_offset,
+                &lines,
+                &char_anim,
+                time,
+                timing.overshoot.unwrap_or(0.08) as f32,
+                timing
+                    .blur
+                    .map(|b| b as f32)
+                    .unwrap_or(DEFAULT_CHAR_BLUR_SIGMA),
             );
             return Ok(());
         }
@@ -577,6 +663,7 @@ mod tests {
     use super::*;
     use rustmotion_core::css::style::CssStyle;
     use rustmotion_core::css::Length;
+    use rustmotion_core::schema::{CharAnimationTiming, EasingType};
 
     fn make_text(content: &str, white_space: Option<CssWhiteSpace>) -> Text {
         Text {
@@ -704,6 +791,236 @@ mod tests {
         assert!(
             has_ink_in(&grid, W, 0, W, 55, H),
             "wrapped text must spill onto a second line within the box width"
+        );
+    }
+
+    // ─── char_blur_in ───────────────────────────────────────────────────
+
+    /// Fraction of "inked" pixels (alpha > 0) in the region that are
+    /// partially transparent (0 < alpha < 250) rather than solid. A sharp
+    /// glyph is mostly solid fill with a thin antialiased edge, so this
+    /// fraction is low. A heavily blurred glyph is a soft gradient
+    /// wherever it has any ink at all, so this fraction is high.
+    fn soft_pixel_fraction(
+        grid: &[u8],
+        surface_width: i32,
+        x0: i32,
+        x1: i32,
+        y0: i32,
+        y1: i32,
+    ) -> f32 {
+        let mut inked = 0u32;
+        let mut soft = 0u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let a = grid[(y * surface_width + x) as usize];
+                if a > 0 {
+                    inked += 1;
+                    if a < 250 {
+                        soft += 1;
+                    }
+                }
+            }
+        }
+        if inked == 0 {
+            return 0.0;
+        }
+        soft as f32 / inked as f32
+    }
+
+    /// Build the same `Font` the renderer would build for `family`/`px`, so
+    /// tests can measure exact word boundaries instead of guessing pixel
+    /// coordinates.
+    fn inter_font(px: f32) -> Font {
+        let style = FontStyle::new(
+            skia_safe::font_style::Weight::NORMAL,
+            skia_safe::font_style::Width::NORMAL,
+            skia_safe::font_style::Slant::Upright,
+        );
+        let typeface = typeface_with_fallback("Inter", style).expect("typeface resolves");
+        Font::from_typeface(typeface, px)
+    }
+
+    #[test]
+    fn char_blur_in_word_is_blurred_mid_reveal_and_sharp_when_settled() {
+        // Render-level proof that char_blur_in actually blurs: a single
+        // word must read as measurably softer mid-reveal than once
+        // settled. Also exercises the DEFAULT_CHAR_BLUR_SIGMA fallback
+        // (`blur: None`).
+        let mut text = make_text("BLUR", None);
+        text.style.font_size = Some(Length::Px(100.0));
+        text.style.white_space = Some(CssWhiteSpace::Nowrap);
+        text.style.animation = vec![AnimationEffect::CharBlurIn(CharAnimationTiming {
+            delay: 0.0,
+            duration: 0.5,
+            stagger: 0.03,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            overshoot: None,
+            blur: None,
+        })];
+
+        const W: i32 = 700;
+        const H: i32 = 220;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let render_at = |t: f64| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                text.paint(canvas, W as f32, t, &props, &ctx)
+                    .expect("paint succeeds");
+            }
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let early = render_at(0.15); // raw progress 0.15/0.5 = 0.3 into the reveal
+        let settled = render_at(1.0); // long past duration: sigma → 0, alpha → 1
+
+        assert!(
+            has_ink_in(&early, W, 0, W, 0, H),
+            "the word must have started painting by t=0.15"
+        );
+
+        let early_soft = soft_pixel_fraction(&early, W, 0, W, 0, H);
+        let settled_soft = soft_pixel_fraction(&settled, W, 0, W, 0, H);
+
+        assert!(
+            early_soft > settled_soft + 0.15,
+            "mid-reveal soft-pixel fraction ({early_soft:.3}) must be clearly higher than the \
+             settled fraction ({settled_soft:.3}) — the word should read as blurred while \
+             animating and sharp at rest"
+        );
+        assert!(
+            settled_soft < 0.25,
+            "settled frame should read as sharp text, not blur (soft fraction {settled_soft:.3})"
+        );
+    }
+
+    #[test]
+    fn char_blur_in_whitespace_gap_stays_empty_while_words_animate() {
+        // The word-mode char path draws inter-word whitespace unanimated
+        // at full opacity (see render_char_animation) — harmless for the
+        // six existing opacity-only presets since a space glyph has no
+        // ink. Pin down that this holds for char_blur_in too: each word's
+        // blur filter is scoped to that word's own draw call, so it must
+        // never smear ink into the gap between words.
+        //
+        // Note this is *not* the same as "a blurred word's own halo never
+        // reaches near the gap" — a Gaussian blur legitimately spreads a
+        // word's own ink a few sigma past its sharp glyph edge, which is
+        // correct behaviour, not smearing into whitespace. So this checks
+        // the gap's true center (rendering evidence: crates/.../issue-118
+        // render proof measured the same distinction against real render
+        // output — a word's halo fades to background well within a third
+        // of a multi-space gap).
+        const FONT_PX: f32 = 90.0;
+        let mut text = make_text("FIRST               SECOND", None); // 15 spaces
+        text.style.font_size = Some(Length::Px(FONT_PX));
+        text.style.white_space = Some(CssWhiteSpace::Nowrap);
+        text.style.animation = vec![AnimationEffect::CharBlurIn(CharAnimationTiming {
+            delay: 0.0,
+            duration: 0.4,
+            stagger: 0.2,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            overshoot: None,
+            blur: Some(18.0),
+        })];
+
+        const W: i32 = 1400;
+        const H: i32 = 180;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let font = inter_font(FONT_PX);
+        let first_w = measure_text_with_fallback("FIRST", &font, &None, 0.0);
+        let gap_w = measure_text_with_fallback("               ", &font, &None, 0.0);
+        let margin = (gap_w / 3.0).max(40.0);
+        let gap_x0 = (first_w + margin) as i32;
+        let gap_x1 = (first_w + gap_w - margin) as i32;
+        assert!(
+            gap_x1 > gap_x0,
+            "test setup: the space run must measure to a real gap (got [{gap_x0},{gap_x1}))"
+        );
+
+        for &t in &[0.05_f64, 0.35, 1.0] {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                text.paint(canvas, W as f32, t, &props, &ctx)
+                    .expect("paint succeeds");
+            }
+            let grid = alpha_grid(&mut surface, W, H);
+            assert!(
+                !has_ink_in(&grid, W, gap_x0, gap_x1, 0, H),
+                "inter-word gap [{gap_x0},{gap_x1}) must stay empty at t={t}"
+            );
+        }
+    }
+
+    #[test]
+    fn char_blur_in_honors_word_delay_and_stagger() {
+        // With a stagger larger than the per-word duration, word 2 must
+        // not have started at all while word 1 is mid-reveal, and nothing
+        // should paint before `delay` has elapsed either.
+        const FONT_PX: f32 = 90.0;
+        let mut text = make_text("ONE TWO", None);
+        text.style.font_size = Some(Length::Px(FONT_PX));
+        text.style.white_space = Some(CssWhiteSpace::Nowrap);
+        text.style.animation = vec![AnimationEffect::CharBlurIn(CharAnimationTiming {
+            delay: 0.5,
+            duration: 0.3,
+            stagger: 0.6,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            overshoot: None,
+            blur: Some(16.0),
+        })];
+
+        const W: i32 = 900;
+        const H: i32 = 180;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        let font = inter_font(FONT_PX);
+        let word1_end = measure_text_with_fallback("ONE", &font, &None, 0.0) as i32;
+
+        // Before `delay`, nothing should paint at all.
+        let mut before = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = before.canvas();
+            text.paint(canvas, W as f32, 0.1, &props, &ctx)
+                .expect("paint succeeds");
+        }
+        let before_grid = alpha_grid(&mut before, W, H);
+        assert!(
+            !has_ink_in(&before_grid, W, 0, W, 0, H),
+            "nothing should paint before `delay` has elapsed"
+        );
+
+        // t=0.65s: word 1's local progress is (0.65-0.5)/0.3 = 0.5 (mid
+        // reveal), word 2 only starts at delay+stagger=1.1s.
+        let mut mid = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = mid.canvas();
+            text.paint(canvas, W as f32, 0.65, &props, &ctx)
+                .expect("paint succeeds");
+        }
+        let mid_grid = alpha_grid(&mut mid, W, H);
+        assert!(
+            has_ink_in(&mid_grid, W, 0, word1_end, 0, H),
+            "word 1 should show ink by t=0.65 (mid-reveal)"
+        );
+        // Leave enough clearance past word 1's sharp-edge measurement for
+        // its *own* Gaussian halo (a real, expected effect of blurring
+        // that word — see the analogous note in the whitespace-gap test
+        // above), so this only catches an actual word-2 leak.
+        assert!(
+            !has_ink_in(&mid_grid, W, word1_end + 70, W, 0, H),
+            "word 2 (starts at delay+stagger=1.1s) must still be fully invisible at t=0.65"
         );
     }
 }
