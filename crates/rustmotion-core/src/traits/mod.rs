@@ -23,7 +23,7 @@ pub use animatable::Animatable;
 pub use backgrounded::{Backgrounded, BackgroundedMut};
 pub use bordered::{Border, Bordered, BorderedMut};
 pub use clipped::Clipped;
-pub use container::{Align, Direction, GridTrack, Justify};
+pub use container::{Align, Direction, Justify};
 pub use painter::{AvailableSize, MeasureCtx, PaintCtx, Painter};
 pub use rounded::{Rounded, RoundedMut};
 pub use shadowed::{Shadow, Shadowed, ShadowedMut};
