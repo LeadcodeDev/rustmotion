@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use skia_safe::{FontMgr, FontStyle, Typeface};
 
 use crate::error::{Result, RustmotionError};
@@ -8,10 +12,56 @@ use super::google_fonts::{font_cache_dir, resolve_google_font};
 // Thread-local FontMgr instance, created once per thread and reused
 thread_local! {
     static THREAD_FONT_MGR: FontMgr = FontMgr::default();
+    // Per-thread cache of Typefaces built from the global custom-font bytes,
+    // so each render thread builds each custom face at most once.
+    static CUSTOM_TYPEFACES: RefCell<HashMap<String, Typeface>> = RefCell::new(HashMap::new());
 }
 
 pub fn font_mgr() -> FontMgr {
     THREAD_FONT_MGR.with(|mgr| mgr.clone())
+}
+
+/// Global registry of custom/Google-font bytes, keyed by family name. Filled
+/// once by [`load_custom_fonts`] on the main thread; read by every render
+/// thread through [`custom_typeface`]. A family maps to the first file
+/// registered for it (one weight per custom family via this path — sufficient
+/// for accent display faces; multi-weight custom families are future work).
+fn custom_font_registry() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    static REG: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Store a custom font's bytes under `family` (first registration wins).
+pub fn register_custom_font_bytes(family: &str, data: Vec<u8>) {
+    let mut reg = custom_font_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    reg.entry(family.to_string()).or_insert(data);
+}
+
+/// The raw bytes registered for `family`, if any (test/introspection helper).
+pub fn custom_font_bytes(family: &str) -> Option<Vec<u8>> {
+    custom_font_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(family)
+        .cloned()
+}
+
+/// Resolve a registered custom font to a Typeface, building it from the global
+/// bytes on first use per thread and caching it thereafter. `None` when no
+/// custom font is registered under `family`.
+fn custom_typeface(family: &str) -> Option<Typeface> {
+    CUSTOM_TYPEFACES.with(|cache| {
+        if let Some(tf) = cache.borrow().get(family) {
+            return Some(tf.clone());
+        }
+        let data = custom_font_bytes(family)?;
+        let sk_data = skia_safe::Data::new_copy(&data);
+        let tf = font_mgr().new_from_data(&sk_data, None)?;
+        cache.borrow_mut().insert(family.to_string(), tf.clone());
+        Some(tf)
+    })
 }
 
 /// Validate a `FontEntry` and resolve it to a list of TTF file paths.
@@ -88,7 +138,14 @@ fn register_font_file(font_mgr: &FontMgr, family: &str, path: &std::path::Path) 
                     family,
                     path.display()
                 );
+                return;
             }
+            // Skia's default FontMgr can build a Typeface from `new_from_data`
+            // but never exposes it to `match_family_style` (name lookup only
+            // sees installed system fonts). So keep the raw bytes in a global
+            // registry; `typeface_with_fallback` builds and caches a Typeface
+            // from them per thread, ahead of the system match.
+            register_custom_font_bytes(family, data);
         }
         Err(e) => {
             eprintln!(
@@ -107,6 +164,12 @@ fn register_font_file(font_mgr: &FontMgr, family: &str, path: &std::path::Path) 
 /// supported platform). Use this instead of `.expect("FontNotFound")` so we
 /// never panic from a `paint` callback.
 pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface> {
+    // Custom/Google fonts declared in the scenario win over system fonts:
+    // they are not visible to `match_family_style`, so resolve them from the
+    // registry first.
+    if let Some(t) = custom_typeface(family) {
+        return Ok(t);
+    }
     let fm = font_mgr();
     if let Some(t) = fm.match_family_style(family, style) {
         return Ok(t);
@@ -185,6 +248,40 @@ mod tests {
         let paths = resolve_font_entry(&entry).unwrap();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].to_str().unwrap(), "fonts/Inter.ttf");
+    }
+
+    #[test]
+    fn custom_font_registry_stores_first_and_serves_bytes() {
+        register_custom_font_bytes("RmProbeRegistryFamily", vec![1, 2, 3]);
+        // First registration wins (a later weight must not clobber it).
+        register_custom_font_bytes("RmProbeRegistryFamily", vec![9, 9]);
+        assert_eq!(
+            custom_font_bytes("RmProbeRegistryFamily"),
+            Some(vec![1, 2, 3])
+        );
+        assert!(custom_font_bytes("RmProbeUnregistered").is_none());
+    }
+
+    /// The bug this fix targets: a registered custom family must resolve to the
+    /// custom typeface, not the Helvetica/Arial fallback. Uses the cached Anton
+    /// TTF when present (Google-font path); skips on a cold cache so CI without
+    /// network still passes — the render QA is the visual counterpart.
+    #[test]
+    fn registered_custom_font_resolves_over_system_fallback() {
+        let path = format!(
+            "{}/.cache/rustmotion/fonts/anton-400.ttf",
+            std::env::var("HOME").unwrap_or_default()
+        );
+        let Ok(bytes) = std::fs::read(&path) else {
+            return; // cold font cache → skip (render QA covers it)
+        };
+        register_custom_font_bytes("Anton", bytes);
+        let tf = typeface_with_fallback("Anton", FontStyle::normal()).unwrap();
+        assert_eq!(
+            tf.family_name(),
+            "Anton",
+            "must resolve the custom face, not a system fallback"
+        );
     }
 
     #[test]
