@@ -189,6 +189,7 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         }
     }
 
@@ -276,6 +277,7 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
 
         let card = ChildComponent {
@@ -297,6 +299,7 @@ mod tests {
             x: None,
             y: None,
             z_index: None,
+            bleed: false,
         };
 
         let scene = vec![card];
@@ -390,6 +393,7 @@ mod tests {
                 x: None,
                 y: None,
                 z_index: None,
+                bleed: false,
             };
             vec![shape]
         };
