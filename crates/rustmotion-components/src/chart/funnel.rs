@@ -27,10 +27,11 @@ impl Chart {
 
     fn render_funnel_vertical(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let n = self.data.len();
+        // Clamp negatives: a negative ratio flipped the trapezoid inside out.
         let max_val = self
             .data
             .iter()
-            .map(|d| d.value)
+            .map(|d| d.value.max(0.0))
             .fold(0.0_f64, f64::max)
             .max(0.001);
 
@@ -47,9 +48,9 @@ impl Chart {
         let ascent = -metrics.ascent;
 
         for (i, dp) in self.data.iter().enumerate() {
-            let ratio = (dp.value / max_val) as f32 * progress;
+            let ratio = (dp.value.max(0.0) / max_val) as f32 * progress;
             let next_ratio = if i + 1 < n {
-                (self.data[i + 1].value / max_val) as f32 * progress
+                (self.data[i + 1].value.max(0.0) / max_val) as f32 * progress
             } else {
                 ratio * 0.6
             };
@@ -107,10 +108,11 @@ impl Chart {
         progress: f32,
     ) -> Result<()> {
         let n = self.data.len();
+        // Clamp negatives: a negative ratio flipped the trapezoid inside out.
         let max_val = self
             .data
             .iter()
-            .map(|d| d.value)
+            .map(|d| d.value.max(0.0))
             .fold(0.0_f64, f64::max)
             .max(0.001);
 
@@ -127,9 +129,9 @@ impl Chart {
         let ascent = -metrics.ascent;
 
         for (i, dp) in self.data.iter().enumerate() {
-            let ratio = (dp.value / max_val) as f32 * progress;
+            let ratio = (dp.value.max(0.0) / max_val) as f32 * progress;
             let next_ratio = if i + 1 < n {
-                (self.data[i + 1].value / max_val) as f32 * progress
+                (self.data[i + 1].value.max(0.0) / max_val) as f32 * progress
             } else {
                 ratio * 0.6
             };

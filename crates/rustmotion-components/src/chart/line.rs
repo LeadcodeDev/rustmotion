@@ -5,37 +5,70 @@ use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 
 use super::Chart;
 
+/// `(min, max, normalize)` for a min–max scaled series.
+///
+/// `normalize` maps a value to `0.0..=1.0` (0 = bottom of the plot area).
+/// When every value is identical the series is centred rather than pinned to
+/// the axis: dividing by a `max(0.001)` floor mapped a constant series to 0,
+/// so a flat line at, say, 7 rendered sitting exactly on the zero gridline and
+/// read as a series of zeroes.
+pub(super) fn series_scale(
+    values: impl Iterator<Item = f64> + Clone,
+) -> (f64, f64, impl Fn(f64) -> f32) {
+    let min_val = values.clone().fold(f64::INFINITY, f64::min);
+    let max_val = values.fold(f64::NEG_INFINITY, f64::max);
+    let (min_val, max_val) = if min_val.is_finite() && max_val.is_finite() {
+        (min_val, max_val)
+    } else {
+        (0.0, 0.0)
+    };
+    let span = max_val - min_val;
+    let flat = span.abs() < f64::EPSILON;
+    let range = if flat { 1.0 } else { span };
+    (min_val, max_val, move |v: f64| {
+        if flat {
+            0.5
+        } else {
+            ((v - min_val) / range) as f32
+        }
+    })
+}
+
 impl Chart {
     pub(super) fn render_line(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let (mt, mr, mb, ml) = self.chart_margins();
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        let max_val = self
-            .data
-            .iter()
-            .map(|d| d.value)
-            .fold(0.0_f64, f64::max)
-            .max(0.001);
-        let min_val = self.data.iter().map(|d| d.value).fold(f64::MAX, f64::min);
-        let range = (max_val - min_val).max(0.001);
+        let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
 
         let n = self.data.len();
-        if n < 2 {
-            return Ok(());
-        }
-
         let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
         self.draw_axes(
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );
+        if n < 2 {
+            // A one-point series has no line to draw, but returning before the
+            // axes were painted made the whole component render nothing at all
+            // (measured: 0 ink pixels, and `validate` clean). Plot the point.
+            if let Some(dp) = self.data.first() {
+                let x = ml + chart_w / 2.0;
+                let y = mt + chart_h - norm(dp.value) * chart_h;
+                let color = dp.color.as_deref().unwrap_or_else(|| self.get_color(0));
+                let mut dot_paint = paint_from_hex(color);
+                dot_paint.set_style(PaintStyle::Fill);
+                dot_paint.set_anti_alias(true);
+                canvas.draw_circle((x, y), 4.0, &dot_paint);
+            }
+            return Ok(());
+        }
 
         let mut path = Path::new();
         let mut fill_path = Path::new();
 
         for (i, dp) in self.data.iter().enumerate() {
             let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
-            let y = mt + chart_h - ((dp.value - min_val) / range) as f32 * chart_h;
+            let y = mt + chart_h - norm(dp.value) * chart_h;
 
             if i == 0 {
                 path.move_to((x, y));
@@ -77,7 +110,7 @@ impl Chart {
         // Dots
         for (i, dp) in self.data.iter().enumerate() {
             let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
-            let y = mt + chart_h - ((dp.value - min_val) / range) as f32 * chart_h;
+            let y = mt + chart_h - norm(dp.value) * chart_h;
 
             let dot_color = dp.color.as_deref().unwrap_or(line_color);
             let mut dot_paint = paint_from_hex(dot_color);
@@ -95,24 +128,25 @@ impl Chart {
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        let max_val = self
-            .data
-            .iter()
-            .map(|d| d.value)
-            .fold(0.0_f64, f64::max)
-            .max(0.001);
-        let min_val = self.data.iter().map(|d| d.value).fold(f64::MAX, f64::min);
-        let range = (max_val - min_val).max(0.001);
+        let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
 
         let n = self.data.len();
-        if n < 2 {
-            return Ok(());
-        }
-
         let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
         self.draw_axes(
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );
+        if n < 2 {
+            // See `render_line`: draw the lone point rather than nothing.
+            if let Some(dp) = self.data.first() {
+                let x = ml + chart_w / 2.0;
+                let y = mt + chart_h - norm(dp.value) * chart_h;
+                let mut dot_paint = paint_from_hex(self.get_color(0));
+                dot_paint.set_style(PaintStyle::Fill);
+                dot_paint.set_anti_alias(true);
+                canvas.draw_circle((x, y), 4.0, &dot_paint);
+            }
+            return Ok(());
+        }
 
         // Compute points
         let pts: Vec<(f32, f32)> = self
@@ -121,7 +155,7 @@ impl Chart {
             .enumerate()
             .map(|(i, dp)| {
                 let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
-                let y = mt + chart_h - ((dp.value - min_val) / range) as f32 * chart_h;
+                let y = mt + chart_h - norm(dp.value) * chart_h;
                 (x, y)
             })
             .collect();

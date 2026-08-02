@@ -20,10 +20,13 @@ impl Chart {
         let track_width = (max_radius / (n as f32 * 1.5)).clamp(6.0, 20.0);
         let ring_gap = track_width * 0.5;
 
+        // Negative values are clamped: an arc can only sweep forward, so a
+        // negative one drew a ring backwards from 12 o'clock and read as a
+        // large positive value.
         let max_val = self
             .data
             .iter()
-            .map(|d| d.value)
+            .map(|d| d.value.max(0.0))
             .fold(0.0_f64, f64::max)
             .max(0.001);
 
@@ -46,7 +49,7 @@ impl Chart {
 
             // Fill arc
             let color = dp.color.as_deref().unwrap_or_else(|| self.get_color(i));
-            let sweep = (dp.value / max_val) as f32 * 360.0 * progress;
+            let sweep = (dp.value.max(0.0) / max_val) as f32 * 360.0 * progress;
 
             let mut fill_paint = paint_from_hex(color);
             fill_paint.set_style(PaintStyle::Stroke);

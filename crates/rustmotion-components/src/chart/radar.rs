@@ -83,23 +83,46 @@ impl Chart {
             let mut label_paint = paint_from_hex(&self.label_color);
             label_paint.set_anti_alias(true);
             let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
-            let lx = px - label_w / 2.0;
+            // Anchor by side — centring every label pushed the east/west ones
+            // out of the component box (measured: 389 ink pixels outside a
+            // 400x400 box, reaching 28px left and 45px right of it). Labels on
+            // the right start at the vertex, labels on the left end at it, and
+            // the result is clamped into the box as a backstop.
+            let cos = angle.cos();
+            let anchored = if cos > 0.15 {
+                px
+            } else if cos < -0.15 {
+                px - label_w
+            } else {
+                px - label_w / 2.0
+            };
+            let lx = anchored.clamp(0.0, (w - label_w).max(0.0));
             let ly = py + ascent / 2.0;
             draw_text_with_fallback(canvas, label, &font, &emoji_font, 0.0, lx, ly, &label_paint);
         }
+
+        // One scale for every series. Normalising each polygon by its own max
+        // made a [3, 2, 1, 2] series fill nearly the same area as a [10, 8, 6,
+        // 9] one, so overlaid series could not be compared at all — the single
+        // thing a radar chart exists to do.
+        let global_max = self
+            .radar_data
+            .iter()
+            .flat_map(|rd| rd.values.iter().copied())
+            .fold(0.0_f64, f64::max)
+            .max(0.001);
 
         // Draw data polygons
         for (di, rd) in self.radar_data.iter().enumerate() {
             if rd.values.len() != n_axes {
                 continue;
             }
-            let max_val = rd.values.iter().fold(0.0_f64, |a, &b| a.max(b)).max(0.001);
 
             let color_str = rd.color.as_deref().unwrap_or_else(|| self.get_color(di));
 
             let mut data_path = Path::new();
             for (i, &val) in rd.values.iter().enumerate() {
-                let norm = (val / max_val) as f32 * progress;
+                let norm = (val.max(0.0) / global_max) as f32 * progress;
                 let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * angle_step;
                 let r = radius * norm;
                 let px = cx + r * angle.cos();
