@@ -1,0 +1,8 @@
+{
+  "video": { "width": 1920, "height": 1080, "background": "#0f172a" },
+  "scenes": [
+    { "duration": 3.0, "children": [
+      { "type": "text", "content": "New scenario", "style": { "font-size": 64, "color": "#ffffff", "text-align": "center" } }
+    ] }
+  ]
+}

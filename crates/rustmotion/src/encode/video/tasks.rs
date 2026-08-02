@@ -1,8 +1,8 @@
 use crate::engine::transition::{apply_transition, camera_pan_transition};
 use crate::error::Result;
 use crate::schema::{
-    EasingType, PanBackground, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType,
-    VideoConfig, ViewType,
+    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType, VideoConfig,
+    ViewType,
 };
 
 /// Description of what to render for a specific frame
@@ -132,7 +132,7 @@ pub fn render_frame_task_scaled(
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
-            let progress = *frame_in_transition as f64 / (transition_duration * fps as f64);
+            let progress = transition_progress(*frame_in_transition, *transition_duration, fps);
             let frame_a_idx = scene_a_frame_offset + frame_in_transition;
 
             if matches!(transition_type, TransitionType::CameraPan) {
@@ -148,7 +148,7 @@ pub fn render_frame_task_scaled(
                     .unwrap_or((0.0, 0.0));
                 let dx = bx - ax;
                 let dy = by - ay;
-                let bg = render_scene_bg_scaled(
+                let bg_a = render_scene_bg_scaled(
                     config,
                     &scenes[*scene_a_idx],
                     frame_a_idx,
@@ -161,17 +161,15 @@ pub fn render_frame_task_scaled(
                     .as_ref()
                     .map(|t| t.background)
                     .unwrap_or_default();
-                // Only rendered when the backgrounds travel — otherwise scene A's
-                // is a fixed backdrop and rendering B's would be wasted work.
-                let bg_b = match pan_bg {
-                    PanBackground::Travel => Some(render_scene_bg_scaled(
-                        config,
-                        &scenes[*scene_b_idx],
-                        *frame_in_transition,
-                        scale_factor,
-                    )?),
-                    PanBackground::Static => None,
-                };
+                // Rendered in both modes: `Static` now crossfades in place too
+                // (see camera_pan_transition's doc), so it needs scene B's
+                // background just as `Travel` does.
+                let bg_b = render_scene_bg_scaled(
+                    config,
+                    &scenes[*scene_b_idx],
+                    *frame_in_transition,
+                    scale_factor,
+                )?;
                 let fg_a = render_scene_fg_scaled(
                     config,
                     &scenes[*scene_a_idx],
@@ -188,8 +186,8 @@ pub fn render_frame_task_scaled(
                 )?;
                 // CameraPan composites two scenes; apply scene_b effects to the composited result.
                 let mut composited = camera_pan_transition(
-                    &bg,
-                    bg_b.as_deref(),
+                    &bg_a,
+                    &bg_b,
                     &fg_a,
                     &fg_b,
                     scaled_w,
@@ -198,6 +196,7 @@ pub fn render_frame_task_scaled(
                     dx * scale_factor,
                     dy * scale_factor,
                     easing,
+                    pan_bg,
                 );
                 apply_post_effects(
                     &mut composited,
@@ -289,7 +288,7 @@ pub fn render_frame_task_scaled(
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
-            let progress = *frame_in_transition as f64 / (transition_duration * fps as f64);
+            let progress = transition_progress(*frame_in_transition, *transition_duration, fps);
 
             let view_a = &scenario.views[*view_a_idx];
             let view_b = &scenario.views[*view_b_idx];
@@ -307,6 +306,24 @@ pub fn render_frame_task_scaled(
             ))
         }
     }
+}
+
+/// Frame index within a transition → progress in `[0.0, 1.0]`.
+///
+/// `build_frame_tasks` emits exactly `(transition_duration * fps).round()`
+/// frames for a transition (`frame_in_transition` in `0..transition_frames`).
+/// Dividing by the raw, unrounded `transition_duration * fps` instead of by
+/// that same emitted frame count can disagree once rounding is involved —
+/// e.g. 23 emitted frames for a 22.5-frame duration — which left `progress`
+/// maxing out at 22/22.5 ≈ 0.978 on the last emitted frame and discharging
+/// the residual as a snap in the very next (non-transition) frame: measured
+/// at 22.6px of foreground displacement in one frame with linear easing.
+/// Dividing by `transition_frames - 1` instead makes `frame_in_transition ==
+/// transition_frames - 1` land on exactly `1.0`, so the transition's last
+/// frame is the fully-completed state and there is nothing left to snap.
+fn transition_progress(frame_in_transition: u32, transition_duration: f64, fps: u32) -> f64 {
+    let transition_frames = (transition_duration * fps as f64).round() as u32;
+    frame_in_transition as f64 / transition_frames.saturating_sub(1).max(1) as f64
 }
 
 fn render_last_frame_of_view(
@@ -732,6 +749,68 @@ pub fn hash_video_config(config: &VideoConfig) -> u64 {
     let mut hasher = DefaultHasher::new();
     json.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod transition_progress_tests {
+    use super::*;
+
+    // The audit's own reproduction case: a 0.75s transition at 30fps rounds
+    // up to 23 emitted frames (0.75*30 = 22.5), so frame_in_transition runs
+    // 0..=22. The old code divided by the raw 22.5 instead of by the
+    // (frame_count - 1) = 22 those indices actually span.
+    #[test]
+    fn last_emitted_frame_reaches_exactly_one() {
+        let p = transition_progress(22, 0.75, 30);
+        assert_eq!(
+            p, 1.0,
+            "last frame of a 23-frame/22.5-raw transition must be exactly 1.0, got {p}"
+        );
+        // The old formula's value, for contrast: 22.0 / 22.5 ≈ 0.9778 — this
+        // is what used to be discharged as a snap in the next normal frame.
+        assert!((22.0 / 22.5 - p).abs() > 0.02);
+    }
+
+    #[test]
+    fn first_frame_is_zero() {
+        assert_eq!(transition_progress(0, 0.75, 30), 0.0);
+    }
+
+    #[test]
+    fn progress_is_monotonic_and_bounded() {
+        let frames = (0.75_f64 * 30.0).round() as u32; // 23
+        let mut prev = -1.0;
+        for f in 0..frames {
+            let p = transition_progress(f, 0.75, 30);
+            assert!(
+                (0.0..=1.0).contains(&p),
+                "progress {p} out of range at frame {f}"
+            );
+            assert!(
+                p > prev,
+                "progress must be strictly increasing: {prev} -> {p} at frame {f}"
+            );
+            prev = p;
+        }
+        assert_eq!(prev, 1.0);
+    }
+
+    // Frame counts that are already exact multiples of fps had the same bug,
+    // just a smaller residual: dividing by N instead of N-1 never reaches 1.0
+    // on the last frame either.
+    #[test]
+    fn exact_integer_duration_still_reaches_one() {
+        // 0.5s @ 30fps = 15 frames exactly, indices 0..=14.
+        let p = transition_progress(14, 0.5, 30);
+        assert_eq!(p, 1.0);
+    }
+
+    // A single-frame transition must not divide by zero.
+    #[test]
+    fn single_frame_transition_does_not_panic() {
+        let p = transition_progress(0, 1.0 / 60.0, 30);
+        assert!(p.is_finite());
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use crate::engine::animator::ease;
-use crate::schema::{EasingType, TransitionType};
+use crate::schema::{EasingType, PanBackground, TransitionType};
 use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
 
 /// Composite two RGBA frames during a transition.
@@ -377,20 +377,32 @@ fn dissolve_transition(
     blend_fade(frame_a, frame_b, progress)
 }
 
-/// Camera pan transition: static background + sliding foreground children.
-/// `bg` is the static background, `fg_a`/`fg_b` are children-only (transparent).
-/// fg_a slides out by (-dx*t, -dy*t), fg_b slides in from (dx*(1-t), dy*(1-t)).
-/// Composite a camera pan between two scenes.
+/// Camera pan transition: composited background + sliding foreground children.
+/// `bg_a`/`bg_b` are the outgoing/incoming backgrounds, `fg_a`/`fg_b` are
+/// children-only (transparent). fg_a slides out by (-dx*t, -dy*t), fg_b
+/// slides in from (dx*(1-t), dy*(1-t)).
 ///
-/// `bg_b` is `None` when the backgrounds stay put: `bg_a` is then drawn once as
-/// a fixed backdrop and only the foregrounds slide, which is what keeps a
-/// shared ambience continuous across a beat. When `Some`, each background
-/// travels locked to its own foreground, so the two beats read as different
-/// places rather than one space.
+/// `pan_background` controls how the two backgrounds combine:
+/// - `Static`: neither travels nor scales — the backdrop holds its position,
+///   which is what keeps a shared ambience continuous across a beat when both
+///   scenes actually share the same background (the crossfade below is then
+///   a no-op, since blending a frame with itself returns that frame).
+/// - `Travel`: each background moves locked to its own foreground, so the
+///   two beats read as different places rather than one space.
+///
+/// Both modes crossfade the two background layers in f32 rather than through
+/// Skia's `Paint` alpha, which quantizes to an 8-bit byte: while the byte
+/// climbs, the premultiplied blend truncates ~1 LSB per channel across the
+/// whole frame, and the instant it reaches 255 Skia takes the opaque fast
+/// path and every pixel regains that level in a single frame — a visible
+/// step at 40-80x the local per-frame rate. `blend_fade` already does this
+/// crossfade correctly (see its doc); we render each background into its own
+/// full-frame layer first (needed for `Travel`'s scale + translate), then
+/// hand both raw buffers to it.
 #[allow(clippy::too_many_arguments)]
 pub fn camera_pan_transition(
     bg_a: &[u8],
-    bg_b: Option<&[u8]>,
+    bg_b: &[u8],
     fg_a: &[u8],
     fg_b: &[u8],
     width: u32,
@@ -399,15 +411,12 @@ pub fn camera_pan_transition(
     dx: f32,
     dy: f32,
     easing: &EasingType,
+    pan_background: PanBackground,
 ) -> Vec<u8> {
     let t = ease(progress, easing) as f32;
 
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
-        None => return bg_a.to_vec(),
-    };
-    let img_bg_a = match frame_to_image(bg_a, width, height) {
-        Some(i) => i,
         None => return bg_a.to_vec(),
     };
     let img_fg_a = match frame_to_image(fg_a, width, height) {
@@ -419,14 +428,12 @@ pub fn camera_pan_transition(
         None => return bg_a.to_vec(),
     };
 
-    let canvas = surface.canvas();
-
     // Offsets: the outgoing plane exits, the incoming one arrives. They tile
     // exactly, so together they always cover the frame.
     let (out_x, out_y) = (-dx * t, -dy * t);
     let (in_x, in_y) = (dx * (1.0 - t), dy * (1.0 - t));
 
-    match bg_b.and_then(|b| frame_to_image(b, width, height)) {
+    let blended_bg = match pan_background {
         // Travelling: each background moves with its own scene, but at a
         // fraction of the foreground's distance and fading across the pan.
         //
@@ -435,7 +442,16 @@ pub fn camera_pan_transition(
         // overlap across most of the frame instead of meeting edge to edge.
         // Opaque images laid side by side join on a hard line no crossfade can
         // hide; overlapping ones dissolve into each other.
-        Some(img_bg_b) => {
+        PanBackground::Travel => {
+            let img_bg_a = match frame_to_image(bg_a, width, height) {
+                Some(i) => i,
+                None => return bg_a.to_vec(),
+            };
+            let img_bg_b = match frame_to_image(bg_b, width, height) {
+                Some(i) => i,
+                None => return bg_a.to_vec(),
+            };
+
             // Backgrounds drift at a fraction of the foreground's distance —
             // that is how parallax works, and it keeps them overlapping
             // instead of meeting edge to edge, where two opaque images join on
@@ -464,23 +480,156 @@ pub fn camera_pan_transition(
                 Rect::from_ltrb(-mx + ox, -my + oy, w + mx + ox, h + my + oy)
             };
 
-            // The outgoing background stays opaque so the frame is always
-            // covered; the incoming one dissolves over it. Fading both would
-            // darken wherever only one of them reaches.
-            canvas.draw_image_rect(&img_bg_a, None, spread(bax, bay), &Paint::default());
-            let mut incoming = Paint::default();
-            incoming.set_alpha_f(t);
-            canvas.draw_image_rect(&img_bg_b, None, spread(bbx, bby), &incoming);
+            let layer_a = match render_layer(&img_bg_a, spread(bax, bay), width, height) {
+                Some(p) => p,
+                None => return bg_a.to_vec(),
+            };
+            let layer_b = match render_layer(&img_bg_b, spread(bbx, bby), width, height) {
+                Some(p) => p,
+                None => return bg_a.to_vec(),
+            };
+            blend_fade(&layer_a, &layer_b, t)
         }
-        // Fixed backdrop: drawn once at rest, so a shared ambience stays
-        // continuous and the join is invisible.
-        None => {
-            canvas.draw_image(&img_bg_a, (0.0, 0.0), None);
-        }
-    }
+        // Static: no spatial movement, but still crossfaded in place. When
+        // both scenes share the same background this is a no-op — blending a
+        // frame with itself is that frame, so it stays visually frozen, which
+        // is what makes the junction invisible. When they don't, holding A
+        // for the whole pan and jump-cutting to B on the first normal frame
+        // afterward measured +8.25 mean luminance in a single frame (385x the
+        // local rate) — a hard cut. Crossfading spreads that change across
+        // the whole pan instead of concentrating it at the boundary.
+        PanBackground::Static => blend_fade(bg_a, bg_b, t),
+    };
+    let img_bg = match frame_to_image(&blended_bg, width, height) {
+        Some(i) => i,
+        None => return bg_a.to_vec(),
+    };
 
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_bg, (0.0, 0.0), None);
     canvas.draw_image(&img_fg_a, (out_x, out_y), None);
     canvas.draw_image(&img_fg_b, (in_x, in_y), None);
 
     surface_to_pixels(surface, width, height)
+}
+
+/// Draw `img` into `dest` on a fresh full-frame surface and read back the raw
+/// pixels. Used to pre-render a background plane (with its `Travel` scale +
+/// translate applied) before crossfading it against its counterpart in f32.
+fn render_layer(img: &skia_safe::Image, dest: Rect, width: u32, height: u32) -> Option<Vec<u8>> {
+    let mut surface = create_skia_surface(width, height)?;
+    surface
+        .canvas()
+        .draw_image_rect(img, None, dest, &Paint::default());
+    Some(surface_to_pixels(surface, width, height))
+}
+
+#[cfg(test)]
+mod camera_pan_tests {
+    use super::*;
+
+    fn solid(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
+        (0..width * height).flat_map(|_| [r, g, b, a]).collect()
+    }
+
+    // Fully transparent so the foreground planes never contribute — isolates
+    // the background compositing under test.
+    fn transparent(width: u32, height: u32) -> Vec<u8> {
+        solid(width, height, 0, 0, 0, 0)
+    }
+
+    // Issue #124 item 2: `Static` used to hold bg_a for the entire pan and
+    // hard-cut to bg_b afterward. It must now crossfade in place instead —
+    // a mid-pan frame should show a genuine blend of both, not either one
+    // alone.
+    #[test]
+    fn static_background_crossfades_instead_of_freezing() {
+        let (w, h) = (4, 4);
+        let bg_a = solid(w, h, 10, 10, 10, 255);
+        let bg_b = solid(w, h, 200, 200, 200, 255);
+        let fg = transparent(w, h);
+
+        let out = camera_pan_transition(
+            &bg_a,
+            &bg_b,
+            &fg,
+            &fg,
+            w,
+            h,
+            0.5,
+            0.0,
+            0.0,
+            &EasingType::Linear,
+            PanBackground::Static,
+        );
+
+        // blend_fade(10, 200, 0.5) = (10*0.5 + 200*0.5 + 0.5) as u8 = 105.
+        for px in out.chunks_exact(4) {
+            assert_eq!(
+                px,
+                [105, 105, 105, 255],
+                "mid-pan Static frame must be a blend of bg_a and bg_b, not a copy of either"
+            );
+        }
+        assert_ne!(out, bg_a, "must have moved away from bg_a by the midpoint");
+        assert_ne!(
+            out, bg_b,
+            "must not have already reached bg_b at the midpoint"
+        );
+    }
+
+    // Issue #124 item 1 + 3: the crossfade must be exact float math with no
+    // residual once progress reaches 1.0 — no Skia alpha-byte quantization
+    // left over from an `Option`-based alpha blend.
+    #[test]
+    fn static_background_reaches_bg_b_exactly_at_full_progress() {
+        let (w, h) = (4, 4);
+        let bg_a = solid(w, h, 10, 10, 10, 255);
+        let bg_b = solid(w, h, 200, 200, 200, 255);
+        let fg = transparent(w, h);
+
+        let out = camera_pan_transition(
+            &bg_a,
+            &bg_b,
+            &fg,
+            &fg,
+            w,
+            h,
+            1.0,
+            0.0,
+            0.0,
+            &EasingType::Linear,
+            PanBackground::Static,
+        );
+        assert_eq!(out, bg_b, "progress=1.0 must land exactly on bg_b");
+    }
+
+    // Travel mode's incoming layer has zero offset at t=1 (in_x = dx*(1-t) =
+    // 0), so it is drawn 1:1 with no resampling — the crossfade should still
+    // land exactly on bg_b there too.
+    #[test]
+    fn travel_background_reaches_bg_b_exactly_at_full_progress() {
+        let (w, h) = (4, 4);
+        let bg_a = solid(w, h, 10, 10, 10, 255);
+        let bg_b = solid(w, h, 200, 200, 200, 255);
+        let fg = transparent(w, h);
+
+        let out = camera_pan_transition(
+            &bg_a,
+            &bg_b,
+            &fg,
+            &fg,
+            w,
+            h,
+            1.0,
+            100.0,
+            0.0,
+            &EasingType::Linear,
+            PanBackground::Travel,
+        );
+        assert_eq!(
+            out, bg_b,
+            "progress=1.0 must land exactly on bg_b under Travel too"
+        );
+    }
 }
