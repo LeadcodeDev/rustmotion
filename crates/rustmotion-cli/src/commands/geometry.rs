@@ -3,11 +3,18 @@
 //!
 //! Scope:
 //!   * detect absolute positions placed past the viewport edge, folding in
-//!     static `style.transform` and a static (non-keyframed) `scene.camera`
-//!     pan/zoom (H5, partial: rotation/skew/3D and keyframed camera motion
-//!     are not modeled)
-//!   * detect text components whose unwrapped natural width exceeds the
+//!     static `style.transform` (including rotation/skew, via the four
+//!     transformed corners — #128 item 3) and a static (non-keyframed)
+//!     `scene.camera` pan/zoom (H5; still partial: 3D transform functions
+//!     and keyframed camera motion are not modeled)
+//!   * detect components whose unwrapped natural width exceeds the
 //!     allocated width when `white-space: nowrap`/`pre` is set
+//!     (`text`/`gradient_text`/`caption`)
+//!   * detect wrapping content whose natural size exceeds its own resolved
+//!     box (`text`/`gradient_text`/`caption`/`rich_text`/`table` — #128
+//!     item 1: originally `text`-only)
+//!   * detect a component's own box extending past the nearest ancestor
+//!     `card` that contains it, for every component type (#128 item 2)
 //!   * detect terminal/codeblock content that overflows their box when
 //!     `auto_scroll: false`
 //!   * exempt `marquee` and `cursor` (designed to bleed)
@@ -28,9 +35,11 @@
 use std::collections::HashSet;
 
 use rustmotion::components::box_builder::{build_scene_from_refs, effective_effects};
-use rustmotion::components::intrinsic::TextIntrinsic;
+use rustmotion::components::intrinsic::{
+    CaptionIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic, TextIntrinsic,
+};
 use rustmotion::components::{ChildComponent, Component};
-use rustmotion::core::css::style::{CssStyle, TransformFn};
+use rustmotion::core::css::style::{CssStyle, TransformFn, WhiteSpace};
 use rustmotion::core::css::taffy_bridge::ConversionContext;
 use rustmotion::core::css::units::LengthContext;
 use rustmotion::core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
@@ -85,6 +94,14 @@ pub enum ViolationKind {
     /// painters never clip themselves, so this paints outside its box
     /// regardless of where that box sits relative to the viewport.
     ContentOverflowsBox,
+    /// A component's own (resolved, post-layout) box extends past the
+    /// nearest ancestor `card` that contains it — distinct from
+    /// [`ViolationKind::ViewportOverflow`] (box vs frame) and
+    /// [`ViolationKind::ContentOverflowsBox`] (content vs its OWN box): this
+    /// is box vs the panel that's supposed to contain it (#128 item 2). A
+    /// panel-based style relies on every graphic element staying inside its
+    /// card, so this is the blind spot that matters most for it.
+    ContentOverflowsCard,
     /// Animated transform (scale/translate/wiggle/orbit) pushes the bbox out
     /// of the viewport at some sampled time. Only emitted with `--strict-anim`.
     AnimatedTextOverflow,
@@ -134,6 +151,9 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 /*parent_clips=*/
                 false,
                 camera,
+                // No ancestor card at the top of a scene.
+                /*nearest_card=*/
+                None,
                 &mut violations,
             );
         }
@@ -193,6 +213,14 @@ fn walk(
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
+    // Bbox of the nearest ancestor `card`, in the same raw layout space as
+    // `raw_bbox` below — `None` when no card encloses this level yet. Only
+    // `Component::Card` updates this for its own children (see the
+    // recursion below); every other container (`flex`/`grid`/`positioned`/
+    // `container`) is layout-only per CLAUDE.md and passes it through
+    // unchanged, so the check always compares against the panel actually
+    // responsible for containing the content, not an incidental layout box.
+    nearest_card: Option<BBox>,
     out: &mut Vec<GeometryViolation>,
 ) {
     let viewport_f = (viewport.0 as f32, viewport.1 as f32);
@@ -247,9 +275,35 @@ fn walk(
                     out,
                 );
             }
+            // #128 item 2: box vs the containing card. Suppressed under a
+            // clipping ancestor exactly like check_viewport (content clipped
+            // by the card itself, or by something between here and the
+            // card, genuinely never paints past it). Deliberately NOT
+            // suppressed by `bleed` — bleed is an assertion about crossing
+            // the *frame* edge on purpose, not about disowning whatever a
+            // component paints inside its own panel (see `bleeds`'s doc
+            // comment; the same reasoning `check_content_overflows_box`
+            // already applies).
+            if !parent_clips {
+                check_overflows_card(
+                    &child.component,
+                    &child_path,
+                    &raw_bbox,
+                    nearest_card,
+                    viewport,
+                    vi,
+                    si,
+                    out,
+                );
+            }
         }
 
         if let Some(grandchildren) = container_children(&child.component) {
+            let child_nearest_card = if matches!(child.component, Component::Card(_)) {
+                Some(raw_bbox)
+            } else {
+                nearest_card
+            };
             walk(
                 grandchildren,
                 &box_node.children,
@@ -261,6 +315,7 @@ fn walk(
                 None,
                 parent_clips || container_clips(&child.component),
                 camera,
+                child_nearest_card,
                 out,
             );
         }
@@ -337,13 +392,25 @@ fn container_clips(c: &Component) -> bool {
     )
 }
 
-/// Static (build-time, non-animated) CSS `transform` fold (H5, partial) —
-/// approximates the paint pass's `apply_transform` for the axis-aligned
-/// subset (translate + scale around the bbox center). Rotation/skew/3D are
-/// intentionally ignored: an exact AABB under rotation needs the four
-/// transformed corners, out of scope for a partial fix. Animated
-/// transform-producing presets are folded separately in `walk_anim`; this
-/// only handles what a component declares directly in `style.transform`.
+/// Static (build-time, non-animated) CSS `transform` fold (H5; #128 item 3
+/// closes the rotation/skew gap) — maps the box's four corners through the
+/// same ordered transform-function chain the paint pass's 2D fast path
+/// applies (`canvas.translate/scale/rotate/skew`, called once per function
+/// in `style.transform` order, pivoted at the box centre), then takes the
+/// AABB of the four transformed corners. This is what makes rotation/skew
+/// contribute correctly: an exact AABB under rotation needs the four
+/// corners, not a translate/scale-only shortcut.
+///
+/// 3D transform functions (`RotateX`/`RotateY`/`Rotate3d`/`TranslateZ`/
+/// `Translate3d`'s z component/`ScaleZ`/`Scale3d`/`Perspective`/
+/// `Matrix3d`) and the general 2D `Matrix` are intentionally still not
+/// modeled (identity for that function) — an exact AABB there needs
+/// projecting through the full 3D pipeline `apply_transform` uses for that
+/// path, out of scope for this fix. Also still assumes the pivot is the box
+/// centre (no `transform-origin` support), matching the prior partial
+/// behaviour. Animated transform-producing presets are folded separately in
+/// `walk_anim`; this only handles what a component declares directly in
+/// `style.transform`.
 fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)) -> BBox {
     let transform = match css.transform.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -356,39 +423,80 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
         font_size: 16.0,
         root_font_size: 16.0,
     };
-    let mut tx = 0.0f32;
-    let mut ty = 0.0f32;
-    let mut sx = 1.0f32;
-    let mut sy = 1.0f32;
-    for f in transform {
-        match f {
-            TransformFn::Translate { x, y } => {
-                tx += x.resolve(&ctx);
-                ty += y.resolve(&ctx);
-            }
-            TransformFn::TranslateX { x } => tx += x.resolve(&ctx),
-            TransformFn::TranslateY { y } => ty += y.resolve(&ctx),
-            TransformFn::Scale { x, y } => {
-                sx *= x;
-                sy *= y;
-            }
-            TransformFn::ScaleX { x } => sx *= x,
-            TransformFn::ScaleY { y } => sy *= y,
-            // Rotate/Skew/3D/Z: doesn't fold cleanly into an axis-aligned
-            // bbox delta — left untransformed (H5 is explicitly partial).
-            _ => {}
-        }
+    let pivot_x = bbox.x + bbox.w / 2.0;
+    let pivot_y = bbox.y + bbox.h / 2.0;
+    let corners = [
+        (bbox.x, bbox.y),
+        (bbox.x + bbox.w, bbox.y),
+        (bbox.x, bbox.y + bbox.h),
+        (bbox.x + bbox.w, bbox.y + bbox.h),
+    ];
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (cx, cy) in corners {
+        let (tx, ty) = apply_transform_chain(transform, cx - pivot_x, cy - pivot_y, &ctx);
+        let (wx, wy) = (pivot_x + tx, pivot_y + ty);
+        min_x = min_x.min(wx);
+        max_x = max_x.max(wx);
+        min_y = min_y.min(wy);
+        max_y = max_y.max(wy);
     }
-    let cx = bbox.x + bbox.w / 2.0;
-    let cy = bbox.y + bbox.h / 2.0;
-    let new_w = bbox.w * sx.abs();
-    let new_h = bbox.h * sy.abs();
+
     BBox {
-        x: cx - new_w / 2.0 + tx,
-        y: cy - new_h / 2.0 + ty,
-        w: new_w,
-        h: new_h,
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x,
+        h: max_y - min_y,
     }
+}
+
+/// Apply a `style.transform` function list to a point already expressed
+/// relative to the pivot, in the same order `apply_transform`'s 2D fast path
+/// composes them: `canvas.translate/scale/rotate/skew` are called once per
+/// function in list order, and each subsequent canvas call operates in the
+/// coordinate frame the previous ones established. Concretely: the *last*
+/// function in the list is the one closest to the box (applied to the point
+/// first), the *first* function is outermost (applied last) — standard CSS
+/// transform-list composition — so this iterates `list` in reverse.
+///
+/// Matches each 2D function's exact canvas semantics: `Rotate`/`RotateZ` use
+/// the same signed-angle convention as `Canvas::rotate` (positive = visually
+/// clockwise on a y-down canvas, i.e. `x' = x·cosθ − y·sinθ`,
+/// `y' = x·sinθ + y·cosθ`); `Skew`/`SkewX`/`SkewY` match `Canvas::skew`
+/// (`x' = x + y·tan(skew_x)`, `y' = y + x·tan(skew_y)`).
+fn apply_transform_chain(list: &[TransformFn], x: f32, y: f32, ctx: &LengthContext) -> (f32, f32) {
+    let (mut x, mut y) = (x, y);
+    for f in list.iter().rev() {
+        let (nx, ny) = match f {
+            TransformFn::Translate { x: tx, y: ty } => (x + tx.resolve(ctx), y + ty.resolve(ctx)),
+            TransformFn::TranslateX { x: tx } => (x + tx.resolve(ctx), y),
+            TransformFn::TranslateY { y: ty } => (x, y + ty.resolve(ctx)),
+            TransformFn::Translate3d { x: tx, y: ty, .. } => {
+                (x + tx.resolve(ctx), y + ty.resolve(ctx))
+            }
+            TransformFn::Scale { x: sx, y: sy } => (x * sx, y * sy),
+            TransformFn::ScaleX { x: sx } => (x * sx, y),
+            TransformFn::ScaleY { y: sy } => (x, y * sy),
+            TransformFn::Rotate { deg } | TransformFn::RotateZ { deg } => {
+                let (sin, cos) = deg.to_radians().sin_cos();
+                (x * cos - y * sin, x * sin + y * cos)
+            }
+            TransformFn::Skew { x: sx, y: sy } => {
+                (x + y * sx.to_radians().tan(), y + x * sy.to_radians().tan())
+            }
+            TransformFn::SkewX { x: sx } => (x + y * sx.to_radians().tan(), y),
+            TransformFn::SkewY { y: sy } => (x, y + x * sy.to_radians().tan()),
+            // 3D functions and the general Matrix: not modeled (see the
+            // caller's doc comment) — identity for this point.
+            _ => (x, y),
+        };
+        x = nx;
+        y = ny;
+    }
+    (x, y)
 }
 
 /// Static (non-keyframed) global scene-camera fold (H5, partial) — mirrors
@@ -487,6 +595,50 @@ fn hint_for_viewport(component: &Component, axis: Axis, bbox: &BBox, vp: (u32, u
     }
 }
 
+/// #128 item 1: this component's `IntrinsicMeasure`, if it has one, plus
+/// whether `white-space: nowrap|pre` disables its wrapping. Shared by
+/// `check_unwrappable_text` (nowrap-only: natural width vs available width)
+/// and `check_content_overflows_box` (wrapped content vs the box's own
+/// assigned size) — the two checks this generalizes beyond `text` alone.
+///
+/// `nowrap` is only meaningful for the text-family types whose *painters*
+/// actually honor `white-space` the same way `text` does — `gradient_text`
+/// and `caption` both mirror `text`'s wrap/nowrap rule exactly (see
+/// `intrinsic.rs`'s "M1 follow-up" doc comments), so their measured size
+/// agrees with what gets painted; always `false` for the rest.
+///
+/// Deliberately excludes `codeblock`/`terminal`: both have an `auto_scroll`
+/// escape hatch (default `true`) that makes "natural content taller than
+/// the assigned box" an *intentional*, painter-handled clip+scroll rather
+/// than a defect — `check_auto_scroll` already covers the `auto_scroll:
+/// false` case correctly. A blanket natural-vs-own-box comparison here would
+/// false-positive on every ordinary `auto_scroll: true` codeblock/terminal
+/// that's deliberately given a smaller-than-natural box to scroll within.
+/// Also excludes atomic single-line components (`badge`/`kbd`/`counter`) —
+/// out of scope for this pass, see the workstream report.
+fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasure>, bool)> {
+    fn is_nowrap(ws: &Option<WhiteSpace>) -> bool {
+        matches!(ws, Some(WhiteSpace::Nowrap | WhiteSpace::Pre))
+    }
+    match component {
+        Component::Text(t) => Some((
+            Box::new(TextIntrinsic::from_text(t)),
+            is_nowrap(&t.style.white_space),
+        )),
+        Component::GradientText(t) => Some((
+            Box::new(GradientTextIntrinsic::from_gradient_text(t)),
+            is_nowrap(&t.style.white_space),
+        )),
+        Component::Caption(c) => Some((
+            Box::new(CaptionIntrinsic::from_caption(c)),
+            is_nowrap(&c.style.white_space),
+        )),
+        Component::RichText(rt) => Some((Box::new(RichTextIntrinsic::from_rich_text(rt)), false)),
+        Component::Table(t) => Some((Box::new(TableIntrinsic::from_table(t)), false)),
+        _ => None,
+    }
+}
+
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
@@ -496,54 +648,52 @@ fn check_unwrappable_text(
     si: usize,
     out: &mut Vec<GeometryViolation>,
 ) {
-    // Only meaningful for components whose intrinsic natural width can exceed
-    // the allocated width when wrap is disabled. (Text only — other components
-    // either wrap or use fixed dimensions.)
-    if let Component::Text(t) = component {
-        let nowrap = matches!(
-            t.style.white_space,
-            Some(
-                rustmotion::core::css::style::WhiteSpace::Nowrap
-                    | rustmotion::core::css::style::WhiteSpace::Pre
-            )
-        );
-        if !nowrap {
-            return;
-        }
-        // Measure the text at its natural (unbounded) width via the same
-        // cosmic-text–backed intrinsic the layout engine uses.
-        let intrinsic = TextIntrinsic::from_text(t);
-        let (natural_w, _) = intrinsic.measure(
-            (None, None),
-            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
-        );
-        if natural_w > bbox.w + 0.5 {
-            out.push(GeometryViolation {
-                view_index: vi,
-                scene_index: si,
-                path: path.to_string(),
-                component: "text".to_string(),
-                axis: Axis::X,
-                kind: ViolationKind::UnwrappableTextOverflow,
-                bbox: *bbox,
-                viewport,
-                hint: format!(
-                    "text natural width is {:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
-                    natural_w, bbox.w
-                ),
-            });
-        }
+    let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
+        return;
+    };
+    if !nowrap {
+        return;
+    }
+    // Measure at the natural (unbounded) width via the same cosmic-text–
+    // backed intrinsic the layout engine uses.
+    let (natural_w, _) = intrinsic.measure(
+        (None, None),
+        (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+    );
+    if natural_w > bbox.w + 0.5 {
+        let kind = component_kind(component);
+        out.push(GeometryViolation {
+            view_index: vi,
+            scene_index: si,
+            path: path.to_string(),
+            component: kind.to_string(),
+            axis: Axis::X,
+            kind: ViolationKind::UnwrappableTextOverflow,
+            bbox: *bbox,
+            viewport,
+            hint: format!(
+                "{kind} natural width is {natural_w:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
+                bbox.w
+            ),
+        });
     }
 }
 
-/// H4 (second half): content larger than its *own* content box, independent
-/// of where that box sits relative to the viewport. `check_viewport` only
-/// catches a box escaping the *frame*; it says nothing about a box whose
-/// declared size is simply too small for what's inside it — e.g. a card with
-/// a fixed `height` shorter than the paragraph it wraps. Text painters never
-/// clip themselves and `overflow: visible` (the CSS default) applies no
-/// clip in the paint pass, so that paragraph paints straight out of the
-/// card with zero signal from any other check.
+/// H4 (second half) / #128 item 1: content larger than its *own* content
+/// box, independent of where that box sits relative to the viewport.
+/// `check_viewport` only catches a box escaping the *frame*; it says
+/// nothing about a box whose declared size is simply too small for what's
+/// inside it — e.g. a card with a fixed `height` shorter than the paragraph
+/// it wraps. These painters never clip themselves and `overflow: visible`
+/// (the CSS default) applies no clip in the paint pass, so that content
+/// paints straight out of its box with zero signal from any other check.
+///
+/// Originally `text`-only (#128 item 1: "content overflow is checked for
+/// text only"); now covers every component with an `IntrinsicMeasure` whose
+/// natural size can legitimately be smaller than what layout assigned it —
+/// see `measurer_and_nowrap`'s doc comment for exactly which types and why
+/// (`codeblock`/`terminal` are deliberately excluded: their `auto_scroll`
+/// escape hatch makes a smaller-than-natural box intentional).
 ///
 /// Complementary to `check_unwrappable_text`, not overlapping with it:
 /// that one covers `white-space: nowrap`/`pre` (single unwrapped line, width
@@ -562,79 +712,134 @@ fn check_content_overflows_box(
     si: usize,
     out: &mut Vec<GeometryViolation>,
 ) {
-    if let Component::Text(t) = component {
-        let nowrap = matches!(
-            t.style.white_space,
-            Some(
-                rustmotion::core::css::style::WhiteSpace::Nowrap
-                    | rustmotion::core::css::style::WhiteSpace::Pre
-            )
-        );
-        // nowrap/pre is check_unwrappable_text's territory: re-measuring it
-        // here at a constrained width would wrap text that will actually
-        // paint as one (too-wide) line, producing a height number that
-        // doesn't correspond to anything that gets painted.
-        if nowrap {
-            return;
-        }
-
-        let (cx, cy, cw, ch) = layout.content_box();
-        if cw <= 0.0 || ch <= 0.0 {
-            return;
-        }
-
-        let intrinsic = TextIntrinsic::from_text(t);
-        let (measured_w, measured_h) = intrinsic.measure(
-            (None, None),
-            (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
-        );
-
-        let eps = 0.5;
-        let x_over = measured_w > cw + eps;
-        let y_over = measured_h > ch + eps;
-        if !x_over && !y_over {
-            return;
-        }
-        let axis = match (x_over, y_over) {
-            (true, true) => Axis::Both,
-            (true, false) => Axis::X,
-            (false, true) => Axis::Y,
-            (false, false) => return,
-        };
-        let content_bbox = BBox {
-            x: cx,
-            y: cy,
-            w: cw,
-            h: ch,
-        };
-        let hint = if y_over && !x_over {
-            format!(
-                "text wraps to {:.0}px tall at this width but its box is only {:.0}px tall — increase style.height (or the parent's), reduce style.font-size, or shorten the content",
-                measured_h, ch
-            )
-        } else if x_over && !y_over {
-            format!(
-                "an unbreakable word/token needs {:.0}px but the box is only {:.0}px wide — widen the box, reduce style.font-size, or insert a break (e.g. a space) in the long token",
-                measured_w, cw
-            )
-        } else {
-            format!(
-                "content needs {:.0}×{:.0}px but its box is only {:.0}×{:.0}px — widen/heighten the box or reduce style.font-size",
-                measured_w, measured_h, cw, ch
-            )
-        };
-        out.push(GeometryViolation {
-            view_index: vi,
-            scene_index: si,
-            path: path.to_string(),
-            component: "text".to_string(),
-            axis,
-            kind: ViolationKind::ContentOverflowsBox,
-            bbox: content_bbox,
-            viewport,
-            hint,
-        });
+    let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
+        return;
+    };
+    // nowrap/pre is check_unwrappable_text's territory: re-measuring it
+    // here at a constrained width would wrap text that will actually
+    // paint as one (too-wide) line, producing a height number that
+    // doesn't correspond to anything that gets painted.
+    if nowrap {
+        return;
     }
+
+    let (cx, cy, cw, ch) = layout.content_box();
+    if cw <= 0.0 || ch <= 0.0 {
+        return;
+    }
+
+    let (measured_w, measured_h) = intrinsic.measure(
+        (None, None),
+        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
+    );
+
+    let eps = 0.5;
+    let x_over = measured_w > cw + eps;
+    let y_over = measured_h > ch + eps;
+    if !x_over && !y_over {
+        return;
+    }
+    let axis = match (x_over, y_over) {
+        (true, true) => Axis::Both,
+        (true, false) => Axis::X,
+        (false, true) => Axis::Y,
+        (false, false) => return,
+    };
+    let content_bbox = BBox {
+        x: cx,
+        y: cy,
+        w: cw,
+        h: ch,
+    };
+    let kind = component_kind(component);
+    let hint = if y_over && !x_over {
+        format!(
+            "{kind} wraps to {:.0}px tall at this width but its box is only {:.0}px tall — increase style.height (or the parent's), reduce style.font-size, or shorten the content",
+            measured_h, ch
+        )
+    } else if x_over && !y_over {
+        format!(
+            "{kind} content needs {:.0}px but the box is only {:.0}px wide — widen the box, reduce style.font-size, or (for text) insert a break (e.g. a space) in a long token",
+            measured_w, cw
+        )
+    } else {
+        format!(
+            "{kind} content needs {:.0}×{:.0}px but its box is only {:.0}×{:.0}px — widen/heighten the box or reduce style.font-size",
+            measured_w, measured_h, cw, ch
+        )
+    };
+    out.push(GeometryViolation {
+        view_index: vi,
+        scene_index: si,
+        path: path.to_string(),
+        component: kind.to_string(),
+        axis,
+        kind: ViolationKind::ContentOverflowsBox,
+        bbox: content_bbox,
+        viewport,
+        hint,
+    });
+}
+
+/// #128 item 2: does this component's own (resolved) box extend past the
+/// nearest ancestor `card`'s own box? Complementary to `check_viewport`
+/// (box vs frame) and `check_content_overflows_box` (content vs its OWN
+/// box) — this is the missing third comparison: box vs the panel it's
+/// supposed to live inside. Operates purely in layout space (no camera/
+/// css-transform folding), matching `check_content_overflows_box`'s scope:
+/// "does this content structurally fit inside its card as laid out",
+/// independent of wherever the camera happens to be pointing at paint time.
+fn check_overflows_card(
+    component: &Component,
+    path: &str,
+    bbox: &BBox,
+    nearest_card: Option<BBox>,
+    viewport: (u32, u32),
+    vi: usize,
+    si: usize,
+    out: &mut Vec<GeometryViolation>,
+) {
+    let Some(card) = nearest_card else {
+        return;
+    };
+    let eps = 0.5;
+    let card_right = card.x + card.w;
+    let card_bottom = card.y + card.h;
+    let right = bbox.x + bbox.w;
+    let bottom = bbox.y + bbox.h;
+    let x_over = bbox.x < card.x - eps || right > card_right + eps;
+    let y_over = bbox.y < card.y - eps || bottom > card_bottom + eps;
+    if !x_over && !y_over {
+        return;
+    }
+    let axis = match (x_over, y_over) {
+        (true, true) => Axis::Both,
+        (true, false) => Axis::X,
+        (false, true) => Axis::Y,
+        (false, false) => return,
+    };
+    out.push(GeometryViolation {
+        view_index: vi,
+        scene_index: si,
+        path: path.to_string(),
+        component: component_kind(component).to_string(),
+        axis,
+        kind: ViolationKind::ContentOverflowsCard,
+        bbox: *bbox,
+        viewport,
+        hint: format!(
+            "{} at [{:.0},{:.0}]→[{:.0},{:.0}] extends past its containing card [{:.0},{:.0}]→[{:.0},{:.0}] — grow the card, shrink/reflow the content, or set overflow: hidden on the card if the bleed is intentional",
+            component_kind(component),
+            bbox.x,
+            bbox.y,
+            right,
+            bottom,
+            card.x,
+            card.y,
+            card_right,
+            card_bottom,
+        ),
+    });
 }
 
 fn check_auto_scroll(
@@ -1187,6 +1392,7 @@ pub fn format_violation(v: &GeometryViolation) -> String {
         ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
         ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
         ViolationKind::ContentOverflowsBox => "wrapped content exceeds its own box",
+        ViolationKind::ContentOverflowsCard => "component extends past its containing card",
         ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
     };
     format!(
@@ -2024,6 +2230,580 @@ mod tests {
         assert!(violations
             .iter()
             .any(|v| v.kind == ViolationKind::UnwrappableTextOverflow));
+    }
+
+    // ─── #128 item 3: rotation/skew fold into the bbox ────────────────────────
+
+    #[test]
+    fn static_rotation_is_folded_into_the_viewport_check() {
+        // 100×100 shape at (1810, 490) in a 1920×1080 viewport: at rest the
+        // box spans x=[1810,1910], comfortably inside (10px margin). A
+        // static 45° rotation about the box centre grows the AABB to a
+        // half-diagonal of 100/√2*√2 ≈ 70.7px on every side (a square
+        // rotated 45° has an AABB side of w·√2), pushing the right edge to
+        // ~1930.7 — past the 1920 frame. Before #128 item 3, Rotate/RotateZ
+        // were silently dropped by `apply_static_node_transform`, so this
+        // validated clean.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 1810, "y": 490,
+                    "style": {
+                        "width": "100px", "height": "100px",
+                        "transform": [{ "fn": "rotate", "deg": 45 }]
+                    },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.component == "shape" && v.kind == ViolationKind::ViewportOverflow)
+            .unwrap_or_else(|| {
+                panic!(
+                    "45° rotation should push the shape's AABB past the right edge: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::X, "only the x-axis should overflow: {:?}", v);
+    }
+
+    #[test]
+    fn static_skew_is_folded_into_the_viewport_check() {
+        // 50×200 shape at (1850, 400): at rest x=[1850,1900], well inside
+        // 1920. `skew-x: 45deg` (tan 45° = 1) shifts each corner's x by its
+        // y-offset-from-centre: the bottom-right corner (x-offset +25,
+        // y-offset +100) moves to +125, landing at world x = 1875+125 = 2000
+        // — past the frame. Before #128 item 3, Skew/SkewX/SkewY were
+        // silently dropped, so this validated clean.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 1850, "y": 400,
+                    "style": {
+                        "width": "50px", "height": "200px",
+                        "transform": [{ "fn": "skew-x", "x": 45 }]
+                    },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.component == "shape" && v.kind == ViolationKind::ViewportOverflow)
+            .unwrap_or_else(|| {
+                panic!(
+                    "45° skew-x should push the shape's AABB past the right edge: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::X, "only the x-axis should overflow: {:?}", v);
+    }
+
+    #[test]
+    fn unrotated_transform_folding_is_unchanged_by_the_corner_based_rewrite() {
+        // Regression guard for the H5 rewrite: a translate-only transform
+        // (no rotation/skew involved) must still behave exactly like the
+        // old translate/scale-only formula — same fixture as
+        // `static_css_transform_is_folded_into_the_viewport_check`.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 1700, "y": 100,
+                    "style": {
+                        "width": "100px", "height": "100px",
+                        "transform": [{ "fn": "translate-x", "x": "200px" }]
+                    },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.component == "shape" && v.kind == ViolationKind::ViewportOverflow),
+            "translate-only folding must still work: {:?}",
+            violations
+        );
+    }
+
+    // ─── #128 item 1: content-overflows-box generalized beyond `text` ────────
+
+    #[test]
+    fn gradient_text_taller_than_its_fixed_height_card_is_flagged() {
+        // Same exact repro as `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
+        // but for `gradient_text` — proves `check_content_overflows_box` no
+        // longer only matches `Component::Text` (#128 item 1: "content
+        // overflow is checked for text only").
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":200,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"gradient_text",
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsBox)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsBox for gradient_text taller than its fixed-height card, got: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.component, "gradient_text");
+        assert_eq!(v.axis, Axis::Y);
+    }
+
+    // ─── #128 item 2: component overflowing its containing card ──────────────
+
+    #[test]
+    fn absolutely_positioned_text_spilling_past_its_card_is_flagged() {
+        // The audit's headline repro: a text with no fixed height, inside a
+        // card, grows to its natural (unclamped) size because it's taken
+        // out of flex flow (`position: absolute`) — its OWN box already
+        // matches its OWN content exactly (so `ContentOverflowsBox` must NOT
+        // fire), yet that box spills well past the 80px-tall card it lives
+        // in. Before #128 item 2, nothing ever compared a component to the
+        // card containing it, so this validated clean.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":100,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text","position":"absolute","x":0,"y":0,
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff","width":"300px"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ContentOverflowsBox),
+            "the text's own box already matches its own (unclamped) content — must not also fire ContentOverflowsBox: {:?}",
+            violations
+        );
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ViewportOverflow),
+            "fixture should stay inside the 540px-tall frame by construction: {:?}",
+            violations
+        );
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsCard)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsCard for text spilling past its 80px card: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.component, "text");
+        assert_eq!(
+            v.axis,
+            Axis::Y,
+            "card is wide enough — only height should overflow: {:?}",
+            v
+        );
+        assert!(
+            v.hint.contains("card"),
+            "hint should mention the card: {}",
+            v.hint
+        );
+    }
+
+    #[test]
+    fn in_flow_codeblock_shrunk_by_its_card_is_caught_by_auto_scroll_check() {
+        // Sanity/regression guard establishing the baseline this workstream
+        // found empirically: an ordinary in-flow codeblock (single child,
+        // no explicit height) inside a card with an *explicit* fixed height
+        // gets its own box shrunk to that height by flex layout (same
+        // shrink-to-fit behaviour already established for `text`/`table`),
+        // so `check_auto_scroll`'s existing natural-vs-own-box comparison
+        // already catches it correctly here. The genuinely uncaught case —
+        // an *unclamped* codeblock whose own box already matches its own
+        // (natural) content but still spills past its card — is the next
+        // test, `absolutely_positioned_codeblock_spilling_past_its_card_is_flagged`.
+        let code_lines: String = (1..=30)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let json = format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "card",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {{ "width": "600px", "height": "300px", "background": "#111111" }},
+                        "children": [{{
+                            "type": "codeblock",
+                            "code": "{code_lines}",
+                            "auto_scroll": false
+                        }}]
+                    }}]
+                }}]
+            }}"##
+        );
+        let scenario = parse(&json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| {
+                v.kind == ViolationKind::AutoScrollDisabledOverflow && v.component == "codeblock"
+            })
+            .unwrap_or_else(|| panic!("expected AutoScrollDisabledOverflow: {:?}", violations));
+        assert_eq!(v.axis, Axis::Y);
+    }
+
+    #[test]
+    fn absolutely_positioned_codeblock_spilling_past_its_card_is_flagged() {
+        // #128 item 1's first repro ("a codeblock painting 578px inside a
+        // 300px card"): taken out of flex flow (`position: absolute`, like
+        // the analogous text/table tests above) so its own box is NOT
+        // shrunk to fit the card — it stays at its natural, unscrolled
+        // content height regardless of `auto_scroll`. `auto_scroll: true`
+        // (the default) is used deliberately here: `check_auto_scroll` only
+        // ever fires for `auto_scroll: false`, so this proves the
+        // card-relative check is a genuinely independent, complementary
+        // mechanism, not a duplicate of it.
+        let code_lines: String = (1..=30)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let json = format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "card",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {{ "width": "600px", "height": "300px", "background": "#111111" }},
+                        "children": [{{
+                            "type": "codeblock",
+                            "position": "absolute",
+                            "x": 0, "y": 0,
+                            "code": "{code_lines}"
+                        }}]
+                    }}]
+                }}]
+            }}"##
+        );
+        let scenario = parse(&json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::AutoScrollDisabledOverflow),
+            "auto_scroll defaults to true — that check must stay quiet: {:?}",
+            violations
+        );
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ViewportOverflow),
+            "fixture should stay inside the 1080px-tall frame by construction: {:?}",
+            violations
+        );
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsCard && v.component == "codeblock")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsCard for a 30-line codeblock spilling past its 300px card: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::Y);
+    }
+
+    #[test]
+    fn in_flow_table_taller_than_its_card_is_flagged_via_content_overflows_box() {
+        // #128 item 1's third repro: a table with enough rows that its
+        // natural (header + rows) height exceeds a small fixed-height card.
+        // As an ordinary in-flow flex child, taffy shrinks the table's own
+        // assigned box down to the card's 60px (same shrink-to-fit behaviour
+        // already established for `text`), so this surfaces via the
+        // generalized `ContentOverflowsBox` (own box too small for own
+        // content) rather than the card check — see
+        // `absolutely_positioned_table_spilling_past_its_card_is_flagged`
+        // below for the complementary (unclamped, card-relative) case.
+        let rows: String = (1..=15)
+            .map(|i| format!(r#"["{i}a","{i}b","{i}c"]"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "card",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {{ "width": "600px", "height": "60px", "background": "#111111" }},
+                        "children": [{{
+                            "type": "table",
+                            "headers": ["a", "b", "c"],
+                            "rows": [{rows}]
+                        }}]
+                    }}]
+                }}]
+            }}"##
+        );
+        let scenario = parse(&json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsBox && v.component == "table")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsBox for a 16-row table in a 60px card: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::Y);
+    }
+
+    #[test]
+    fn absolutely_positioned_table_spilling_past_its_card_is_flagged() {
+        // Same table, but taken out of flex flow (`position: absolute`) so
+        // its own box isn't shrunk to fit the card — mirrors
+        // `absolutely_positioned_text_spilling_past_its_card_is_flagged`,
+        // isolating the card-relative check (item 2) from the own-box check
+        // (item 1) exercised above.
+        let rows: String = (1..=15)
+            .map(|i| format!(r#"["{i}a","{i}b","{i}c"]"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "card",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {{ "width": "600px", "height": "60px", "background": "#111111" }},
+                        "children": [{{
+                            "type": "table",
+                            "position": "absolute",
+                            "x": 0, "y": 0,
+                            "headers": ["a", "b", "c"],
+                            "rows": [{rows}]
+                        }}]
+                    }}]
+                }}]
+            }}"##
+        );
+        let scenario = parse(&json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsCard && v.component == "table")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsCard for an absolutely positioned table spilling past its 60px card: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::Y);
+    }
+
+    #[test]
+    fn nested_non_card_container_still_compares_its_descendant_to_the_outer_card() {
+        // A `container` (layout-only, no decoration per CLAUDE.md) sits
+        // between the card and the codeblock. `container`/`flex`/`grid`/
+        // `positioned` must NOT update `nearest_card` — only `Component::Card`
+        // does — so the codeblock two levels down must still be compared
+        // against the *outer* card, not silently un-checked.
+        let code_lines: String = (1..=30)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let json = format!(
+            r##"{{
+                "video": {{ "width": 1920, "height": 1080 }},
+                "scenes": [{{
+                    "duration": 1.0,
+                    "children": [{{
+                        "type": "card",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {{ "width": "600px", "height": "300px", "background": "#111111" }},
+                        "children": [{{
+                            "type": "container",
+                            "children": [{{
+                                "type": "codeblock",
+                                "position": "absolute",
+                                "x": 0, "y": 0,
+                                "code": "{code_lines}"
+                            }}]
+                        }}]
+                    }}]
+                }}]
+            }}"##
+        );
+        let scenario = parse(&json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsCard && v.component == "codeblock")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsCard through the non-card `container` wrapper: {:?}",
+                    violations
+                )
+            });
+        assert!(
+            v.path.contains("children[0].children[0].children[0]"),
+            "path should reach through card -> container -> codeblock: {}",
+            v.path
+        );
+    }
+
+    #[test]
+    fn nested_card_bigger_than_its_outer_card_is_flagged() {
+        // A card nested inside another card, itself bigger than the outer
+        // one it lives in — the inner card's own box (not just its
+        // descendants') must be checked against the outer card too.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "card",
+                    "position": "absolute",
+                    "x": 100, "y": 100,
+                    "style": { "width": "200px", "height": "200px", "background": "#111111" },
+                    "children": [{
+                        "type": "card",
+                        "style": { "width": "500px", "height": "500px", "background": "#222222" },
+                        "children": []
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ContentOverflowsCard && v.component == "card"),
+            "the inner card's own box must be checked against the outer card: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn content_overflowing_its_card_is_suppressed_under_a_clipping_card() {
+        // Same headline repro as `absolutely_positioned_text_spilling_past_its_card_is_flagged`,
+        // but the card clips (`overflow: hidden`) — the text genuinely gets
+        // clipped at paint time, so ContentOverflowsCard must not fire,
+        // consistent with the `parent_clips` suppression already applied to
+        // check_viewport/check_content_overflows_box.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":100,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"hidden"},
+    "children":[{"type":"text","position":"absolute","x":0,"y":0,
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff","width":"300px"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ContentOverflowsCard),
+            "content clipped by its own card must not be flagged: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn bleed_true_does_not_exempt_content_overflows_card() {
+        // Same headline repro, `bleed: true` added to the text. Per the
+        // frozen `bleed` contract (see `bleeds`'s doc comment): a component
+        // may leave the *frame* on purpose and still be responsible for its
+        // own contents relative to its card — `bleed` must not exempt this
+        // check any more than it exempts ContentOverflowsBox.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":100,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text","position":"absolute","x":0,"y":0,"bleed":true,
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff","width":"300px"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ContentOverflowsCard && v.component == "text"),
+            "bleed: true must NOT suppress ContentOverflowsCard: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn component_that_fits_its_card_is_not_flagged() {
+        // Passing-case guard: same shape as the codeblock repro, but the
+        // card is tall enough to hold it — must not fire.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "card",
+                    "position": "absolute",
+                    "x": 100, "y": 100,
+                    "style": { "width": "600px", "height": "200px", "background": "#111111" },
+                    "children": [{
+                        "type": "codeblock",
+                        "code": "fn main() {\n    println!(\"hi\");\n}",
+                        "auto_scroll": false
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ContentOverflowsCard),
+            "a codeblock that fits its card must not be flagged: {:?}",
+            violations
+        );
     }
 
     // ─── #120: opt-in `bleed: true` exempts viewport/animated overflow only ──
