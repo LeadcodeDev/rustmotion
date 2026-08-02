@@ -1,0 +1,2771 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#05060B"
+  },
+  "scenes": [
+    {
+      "duration": 1.95,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#1B1F3A",
+            "x": 0.16,
+            "y": 0.18,
+            "radius": 0.26,
+            "opacity": 0.28
+          },
+          {
+            "color": "#2A2350",
+            "x": 0.82,
+            "y": 0.78,
+            "radius": 0.18,
+            "opacity": 0.12
+          }
+        ]
+      },
+      "world-position": {
+        "x": 0,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Reliable TypeScript",
+          "position": "absolute",
+          "x": 175,
+          "y": 375,
+          "style": {
+            "font-size": 130,
+            "color": "#F6F8FC",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.12,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "for the AI era",
+          "position": "absolute",
+          "x": 175,
+          "y": 520,
+          "style": {
+            "font-size": 130,
+            "color": "#7C6BFF",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.42,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.03
+              },
+              {
+                "time": 1.95,
+                "value": 1.15
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.95,
+                "value": 1070.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.95,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      }
+    },
+    {
+      "duration": 1.95,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#241B4A",
+            "x": 0.2,
+            "y": 0.22,
+            "radius": 0.24,
+            "opacity": 0.32
+          },
+          {
+            "color": "#7C6BFF",
+            "x": 0.8,
+            "y": 0.74,
+            "radius": 0.18,
+            "opacity": 0.14
+          }
+        ]
+      },
+      "world-position": {
+        "x": 1920,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 140,
+          "y": 195,
+          "style": {
+            "width": 545,
+            "height": 145,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.08,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -6
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Errors that hide in types",
+              "style": {
+                "font-size": 35,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 770,
+          "y": 320,
+          "style": {
+            "width": 585,
+            "height": 145,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.2,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 5
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Dependencies passed by hand",
+              "style": {
+                "font-size": 35,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 310,
+          "y": 460,
+          "style": {
+            "width": 560,
+            "height": 145,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.32,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 7
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Retries written five times",
+              "style": {
+                "font-size": 35,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Complexity, quietly",
+          "position": "absolute",
+          "x": 175,
+          "y": 745,
+          "style": {
+            "font-size": 82,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.55,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.14
+              },
+              {
+                "time": 1.95,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.95,
+                "value": 865.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.95,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#7C6BFF",
+            "x": 0.14,
+            "y": 0.2,
+            "radius": 0.26,
+            "opacity": 0.28
+          },
+          {
+            "color": "#1B2A4A",
+            "x": 0.84,
+            "y": 0.76,
+            "radius": 0.2,
+            "opacity": 0.16
+          }
+        ]
+      },
+      "world-position": {
+        "x": 1920,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "One system",
+          "position": "absolute",
+          "x": 175,
+          "y": 355,
+          "style": {
+            "font-size": 158,
+            "color": "#F6F8FC",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.1,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "for the whole surface",
+          "position": "absolute",
+          "x": 175,
+          "y": 520,
+          "style": {
+            "font-size": 158,
+            "color": "#7C6BFF",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.34,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.87,
+                "value": 1.14
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1045.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 600.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#1B2A4A",
+            "x": 0.18,
+            "y": 0.16,
+            "radius": 0.28,
+            "opacity": 0.28
+          },
+          {
+            "color": "#3DD6C6",
+            "x": 0.84,
+            "y": 0.8,
+            "radius": 0.16,
+            "opacity": 0.12
+          }
+        ]
+      },
+      "world-position": {
+        "x": 3840,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 150,
+          "y": 400,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.1,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -4
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Typed Errors",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "Effect<A, E, R>",
+              "theme": "catppuccin-frappe",
+              "style": {
+                "font-size": 21,
+                "width": 420,
+                "height": 70,
+                "background": "#303446",
+                "border-radius": 8
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 695,
+          "y": 400,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.19,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Dependency Injection",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "const db = yield* Database",
+              "theme": "catppuccin-frappe",
+              "style": {
+                "font-size": 21,
+                "width": 420,
+                "height": 70,
+                "background": "#303446",
+                "border-radius": 8
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 1240,
+          "y": 400,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.28,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 4
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Structured Concurrency",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "text",
+              "content": "Fibers that cancel together",
+              "style": {
+                "font-size": 27,
+                "color": "#8B95AC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Six things, built in",
+          "position": "absolute",
+          "x": 175,
+          "y": 230,
+          "style": {
+            "font-size": 74,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.12
+              },
+              {
+                "time": 1.87,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 890.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#3DD6C6",
+            "x": 0.16,
+            "y": 0.78,
+            "radius": 0.2,
+            "opacity": 0.16
+          },
+          {
+            "color": "#7C6BFF",
+            "x": 0.84,
+            "y": 0.2,
+            "radius": 0.24,
+            "opacity": 0.28
+          }
+        ]
+      },
+      "world-position": {
+        "x": 5760,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 150,
+          "y": 450,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.1,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -4
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Scheduling",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "Effect.retry(policy)",
+              "theme": "catppuccin-frappe",
+              "style": {
+                "font-size": 21,
+                "width": 420,
+                "height": 70,
+                "background": "#303446",
+                "border-radius": 8
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 695,
+          "y": 450,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.19,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Built-in Tracing",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "Effect.withSpan(\"fetch\")",
+              "theme": "catppuccin-frappe",
+              "style": {
+                "font-size": 21,
+                "width": 420,
+                "height": 70,
+                "background": "#303446",
+                "border-radius": 8
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 1240,
+          "y": 450,
+          "style": {
+            "width": 480,
+            "height": 265,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.28,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 4
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Unified Schema",
+              "style": {
+                "font-size": 42,
+                "color": "#F6F8FC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "Schema.decode(User)",
+              "theme": "catppuccin-frappe",
+              "style": {
+                "font-size": 21,
+                "width": 420,
+                "height": 70,
+                "background": "#303446",
+                "border-radius": 8
+              }
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.87,
+                "value": 1.13
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1030.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#141A30",
+            "x": 0.5,
+            "y": 0.5,
+            "radius": 0.3,
+            "opacity": 0.22
+          },
+          {
+            "color": "#7C6BFF",
+            "x": 0.12,
+            "y": 0.16,
+            "radius": 0.2,
+            "opacity": 0.18
+          }
+        ]
+      },
+      "world-position": {
+        "x": 5760,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Errors in the type",
+          "position": "absolute",
+          "x": 175,
+          "y": 175,
+          "style": {
+            "font-size": 76,
+            "color": "#F6F8FC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 175,
+          "y": 300,
+          "style": {
+            "width": 1560,
+            "height": 500,
+            "background": "#232634",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 0,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.12,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -1
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "const parse = (s: string) =>\n  Effect.try({\n    try: () => JSON.parse(s),\n    catch: () => new ParseError(),\n  })\n//    ^ Effect<unknown, ParseError>",
+              "style": {
+                "font-size": 32,
+                "width": 1440,
+                "height": 380,
+                "background": "#303446",
+                "border-radius": 10
+              },
+              "theme": "catppuccin-frappe"
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.11
+              },
+              {
+                "time": 1.87,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1070.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 495.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#7C6BFF",
+            "x": 0.82,
+            "y": 0.24,
+            "radius": 0.26,
+            "opacity": 0.32
+          },
+          {
+            "color": "#1B1F3A",
+            "x": 0.16,
+            "y": 0.76,
+            "radius": 0.22,
+            "opacity": 0.18
+          }
+        ]
+      },
+      "world-position": {
+        "x": 7680,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Retries you declare",
+          "position": "absolute",
+          "x": 175,
+          "y": 175,
+          "style": {
+            "font-size": 76,
+            "color": "#3DD6C6",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 175,
+          "y": 300,
+          "style": {
+            "width": 1560,
+            "height": 500,
+            "background": "#232634",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 0,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.12,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 1
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "fetchUser(id).pipe(\n  Effect.retry(\n    Schedule.exponential('100 millis')\n      .pipe(Schedule.upTo('10 seconds'))\n  ),\n  Effect.timeout('2 seconds'),\n)",
+              "style": {
+                "font-size": 32,
+                "width": 1440,
+                "height": 380,
+                "background": "#303446",
+                "border-radius": 10
+              },
+              "theme": "catppuccin-frappe"
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.87,
+                "value": 1.12
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1040.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 2.18,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#1B2A4A",
+            "x": 0.16,
+            "y": 0.2,
+            "radius": 0.26,
+            "opacity": 0.26
+          },
+          {
+            "color": "#3DD6C6",
+            "x": 0.84,
+            "y": 0.78,
+            "radius": 0.2,
+            "opacity": 0.18
+          }
+        ]
+      },
+      "world-position": {
+        "x": 7680,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Same job",
+          "position": "absolute",
+          "x": 175,
+          "y": 150,
+          "style": {
+            "font-size": 72,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 150,
+          "y": 265,
+          "style": {
+            "width": 790,
+            "height": 620,
+            "background": "#232634",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.12,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -2
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Native TypeScript",
+              "style": {
+                "font-size": 34,
+                "color": "#8B95AC"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "try {\n  const r = await fetch(url)\n  if (!r.ok) throw new Error()\n  return await r.json()\n} catch (e) {\n  // which error? retry how?\n  throw e\n}",
+              "style": {
+                "font-size": 26,
+                "width": 700,
+                "height": 440,
+                "background": "#303446",
+                "border-radius": 10
+              },
+              "theme": "catppuccin-frappe"
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 990,
+          "y": 265,
+          "style": {
+            "width": 790,
+            "height": 620,
+            "background": "#232634",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.26,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 2
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Effect",
+              "style": {
+                "font-size": 34,
+                "color": "#7C6BFF"
+              }
+            },
+            {
+              "type": "codeblock",
+              "language": "javascript",
+              "code": "fetchJson(url).pipe(\n  Effect.retry(policy),\n  Effect.timeout('2 seconds'),\n)\n// errors, retries and timeout\n// are in the type",
+              "style": {
+                "font-size": 26,
+                "width": 700,
+                "height": 440,
+                "background": "#303446",
+                "border-radius": 10
+              },
+              "theme": "catppuccin-frappe"
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.12
+              },
+              {
+                "time": 2.18,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 2.18,
+                "value": 890.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 2.18,
+                "value": 590.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#7C6BFF",
+            "x": 0.2,
+            "y": 0.74,
+            "radius": 0.24,
+            "opacity": 0.26
+          },
+          {
+            "color": "#3DD6C6",
+            "x": 0.8,
+            "y": 0.24,
+            "radius": 0.2,
+            "opacity": 0.18
+          }
+        ]
+      },
+      "world-position": {
+        "x": 9600,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Concerns you implement yourself",
+          "position": "absolute",
+          "x": 175,
+          "y": 165,
+          "style": {
+            "font-size": 62,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 175,
+          "y": 300,
+          "style": {
+            "width": 740,
+            "height": 480,
+            "background": "#0B0F1C",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 4,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.14,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -2
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Native TypeScript",
+              "style": {
+                "font-size": 36,
+                "color": "#8B95AC"
+              }
+            },
+            {
+              "type": "text",
+              "content": "6",
+              "style": {
+                "font-size": 210,
+                "color": "#8B95AC",
+                "line-height": 1.0
+              }
+            },
+            {
+              "type": "text",
+              "content": "hand-rolled, every project",
+              "style": {
+                "font-size": 30,
+                "color": "#8B95AC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 995,
+          "y": 300,
+          "style": {
+            "width": 740,
+            "height": 480,
+            "background": "#0B0F1C",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 4,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.3,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 2
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Effect",
+              "style": {
+                "font-size": 36,
+                "color": "#7C6BFF"
+              }
+            },
+            {
+              "type": "text",
+              "content": "0",
+              "style": {
+                "font-size": 210,
+                "color": "#7C6BFF",
+                "line-height": 1.0
+              }
+            },
+            {
+              "type": "text",
+              "content": "the six are built in",
+              "style": {
+                "font-size": 30,
+                "color": "#8B95AC"
+              }
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.87,
+                "value": 1.12
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1030.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#7C6BFF",
+            "x": 0.16,
+            "y": 0.2,
+            "radius": 0.3,
+            "opacity": 0.36
+          },
+          {
+            "color": "#3DD6C6",
+            "x": 0.84,
+            "y": 0.8,
+            "radius": 0.22,
+            "opacity": 0.22
+          }
+        ]
+      },
+      "world-position": {
+        "x": 9600,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "LLMs ❤️ Effect",
+          "position": "absolute",
+          "x": 175,
+          "y": 340,
+          "style": {
+            "font-size": 138,
+            "color": "#F6F8FC",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.1,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "Declarative structure an agent can reason about",
+          "position": "absolute",
+          "x": 175,
+          "y": 530,
+          "style": {
+            "font-size": 62,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.38,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.87,
+                "value": 1.13
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 1050.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.87,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#3DD6C6",
+            "x": 0.2,
+            "y": 0.22,
+            "radius": 0.22,
+            "opacity": 0.2
+          },
+          {
+            "color": "#7C6BFF",
+            "x": 0.8,
+            "y": 0.78,
+            "radius": 0.22,
+            "opacity": 0.24
+          }
+        ]
+      },
+      "world-position": {
+        "x": 11520,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "In production at",
+          "position": "absolute",
+          "x": 175,
+          "y": 265,
+          "style": {
+            "font-size": 70,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.05,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 165,
+          "y": 400,
+          "style": {
+            "width": 420,
+            "height": 175,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.18,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -4
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "Cloudflare",
+              "style": {
+                "font-size": 54,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 655,
+          "y": 450,
+          "style": {
+            "width": 420,
+            "height": 175,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.3,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": 3
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "MasterClass",
+              "style": {
+                "font-size": 54,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 1145,
+          "y": 400,
+          "style": {
+            "width": 420,
+            "height": 175,
+            "background": "#111524",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.42,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ],
+            "transform": [
+              {
+                "fn": "rotate",
+                "deg": -3
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "X",
+              "style": {
+                "font-size": 54,
+                "color": "#F6F8FC"
+              }
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.13
+              },
+              {
+                "time": 1.87,
+                "value": 1.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.87,
+                "value": 900.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.87,
+                "value": 595.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 1.79,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#1B2A4A",
+            "x": 0.5,
+            "y": 0.3,
+            "radius": 0.28,
+            "opacity": 0.24
+          },
+          {
+            "color": "#7C6BFF",
+            "x": 0.18,
+            "y": 0.78,
+            "radius": 0.2,
+            "opacity": 0.2
+          }
+        ]
+      },
+      "world-position": {
+        "x": 13440,
+        "y": 1080
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Effect 4.0",
+          "position": "absolute",
+          "x": 175,
+          "y": 360,
+          "style": {
+            "font-size": 168,
+            "color": "#3DD6C6",
+            "line-height": 0.96,
+            "letter-spacing": -2,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.1,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "content": "now in beta",
+          "position": "absolute",
+          "x": 175,
+          "y": 545,
+          "style": {
+            "font-size": 96,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": -1,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.36,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.0
+              },
+              {
+                "time": 1.79,
+                "value": 1.14
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 1.79,
+                "value": 1035.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 1.79,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    },
+    {
+      "duration": 2.03,
+      "background": {
+        "preset": "halo",
+        "zones": [
+          {
+            "color": "#7C6BFF",
+            "x": 0.78,
+            "y": 0.22,
+            "radius": 0.24,
+            "opacity": 0.28
+          },
+          {
+            "color": "#3DD6C6",
+            "x": 0.2,
+            "y": 0.76,
+            "radius": 0.2,
+            "opacity": 0.18
+          }
+        ]
+      },
+      "world-position": {
+        "x": 13440,
+        "y": 0
+      },
+      "children": [
+        {
+          "type": "text",
+          "content": "Start in one line",
+          "position": "absolute",
+          "x": 175,
+          "y": 320,
+          "style": {
+            "font-size": 120,
+            "color": "#F6F8FC",
+            "line-height": 0.96,
+            "letter-spacing": -1,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.12,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        },
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 175,
+          "y": 520,
+          "style": {
+            "width": 800,
+            "height": 160,
+            "background": "#0A0E1C",
+            "border-radius": 16,
+            "border": {
+              "width": 1,
+              "color": "#272E48"
+            },
+            "padding": 26,
+            "flex-direction": "column",
+            "gap": 8,
+            "box-shadow": [
+              {
+                "offset-x": 0,
+                "offset-y": 24,
+                "blur": 60,
+                "color": "#000000AA"
+              }
+            ],
+            "animation": [
+              {
+                "name": "scale_in",
+                "delay": 0.36,
+                "duration": 0.4,
+                "easing": "ease_out_back",
+                "overshoot": 0.18
+              },
+              {
+                "name": "float_3d",
+                "loop": true,
+                "duration": 6.5
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "npm install effect",
+              "style": {
+                "font-size": 56,
+                "color": "#3DD6C6"
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "effect.website",
+          "position": "absolute",
+          "x": 175,
+          "y": 780,
+          "style": {
+            "font-size": 50,
+            "color": "#8B95AC",
+            "line-height": 0.96,
+            "letter-spacing": 0,
+            "width": 1520,
+            "animation": [
+              {
+                "name": "char_blur_in",
+                "granularity": "word",
+                "delay": 0.62,
+                "stagger": 0.055,
+                "duration": 0.45,
+                "easing": "ease_out_expo"
+              }
+            ]
+          }
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "property": "zoom",
+            "values": [
+              {
+                "time": 0,
+                "value": 1.12
+              },
+              {
+                "time": 2.03,
+                "value": 1.01
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.x",
+            "values": [
+              {
+                "time": 0,
+                "value": 960.0
+              },
+              {
+                "time": 2.03,
+                "value": 905.0
+              }
+            ],
+            "easing": "ease_in_out"
+          },
+          {
+            "property": "origin.y",
+            "values": [
+              {
+                "time": 0,
+                "value": 540.0
+              },
+              {
+                "time": 2.03,
+                "value": 475.0
+              }
+            ],
+            "easing": "ease_in_out"
+          }
+        ]
+      },
+      "transition": {
+        "type": "camera_pan",
+        "duration": 0.55,
+        "easing": "ease_in_out_expo",
+        "background": "travel"
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": "an_18c7f639b9997248",
+      "note": "Ajoutes la signature du pattern Result",
+      "status": "resolved",
+      "frame": 152,
+      "view": 0,
+      "scene": 3,
+      "target": {
+        "pointer": "/scenes/3/children/0",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f63dbec8f938",
+      "note": "Donne un exemple de consommation d’un service injecté",
+      "status": "resolved",
+      "frame": 152,
+      "view": 0,
+      "scene": 3,
+      "target": {
+        "pointer": "/scenes/3/children/1",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f63ff901a0a8",
+      "note": "Décrit ce que tu veux dire",
+      "status": "resolved",
+      "frame": 152,
+      "view": 0,
+      "scene": 3,
+      "target": {
+        "pointer": "/scenes/3/children/2/children/1",
+        "kind": "text"
+      }
+    },
+    {
+      "id": "an_18c7f64371d6a4a8",
+      "note": "Donne un exemple",
+      "status": "resolved",
+      "frame": 200,
+      "view": 0,
+      "scene": 4,
+      "target": {
+        "pointer": "/scenes/4/children/0",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f644f7be5128",
+      "note": "Donne un exemple",
+      "status": "resolved",
+      "frame": 200,
+      "view": 0,
+      "scene": 4,
+      "target": {
+        "pointer": "/scenes/4/children/1",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f6463d1caca0",
+      "note": "Pareil",
+      "status": "resolved",
+      "frame": 200,
+      "view": 0,
+      "scene": 4,
+      "target": {
+        "pointer": "/scenes/4/children/2",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f64c27b66be8",
+      "note": "Il n’y a aucune coloration syntaxique, je veux le thème catpuccin frappé",
+      "status": "resolved",
+      "frame": 235,
+      "view": 0,
+      "scene": 5,
+      "target": {
+        "pointer": "/scenes/5/children/1",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f64fe7ee7a10",
+      "note": "Pareil ici (thème)",
+      "status": "resolved",
+      "frame": 273,
+      "view": 0,
+      "scene": 6,
+      "target": {
+        "pointer": "/scenes/6/children/1",
+        "kind": "card"
+      }
+    },
+    {
+      "id": "an_18c7f65228c1aec0",
+      "note": "Pareil ici (thème)",
+      "status": "resolved",
+      "frame": 318,
+      "view": 0,
+      "scene": 7,
+      "target": {
+        "pointer": "/scenes/7/children/1",
+        "kind": "card"
+      }
+    }
+  ]
+}
