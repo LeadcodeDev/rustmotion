@@ -507,8 +507,26 @@ pub fn camera_pan_transition(
 
     let canvas = surface.canvas();
     canvas.draw_image(&img_bg, (0.0, 0.0), None);
-    canvas.draw_image(&img_fg_a, (out_x, out_y), None);
-    canvas.draw_image(&img_fg_b, (in_x, in_y), None);
+
+    // The scene being left behind dissolves rather than sliding off as a solid
+    // slab, and the arriving one materialises. Drift alone gives the two planes
+    // different speeds; letting them also come and go is what reads as depth
+    // instead of a sheet of paper being pulled sideways.
+    //
+    // Both curves are pinned at their own end — `fg_a` is fully opaque at t=0,
+    // `fg_b` fully opaque at t=1 — because a transition frame sits directly
+    // against a normal frame at each junction and any alpha short of 1 there is
+    // a visible step. Mirrored exponents (rather than a plain crossfade) keep
+    // both planes at 67% through the middle instead of 50%, so the frame never
+    // washes out to near-empty half way through.
+    const FG_DISSOLVE: f32 = 1.6;
+    let mut fg_paint = Paint::default();
+
+    fg_paint.set_alpha_f(1.0 - t.powf(FG_DISSOLVE));
+    canvas.draw_image(&img_fg_a, (out_x, out_y), Some(&fg_paint));
+
+    fg_paint.set_alpha_f(1.0 - (1.0 - t).powf(FG_DISSOLVE));
+    canvas.draw_image(&img_fg_b, (in_x, in_y), Some(&fg_paint));
 
     surface_to_pixels(surface, width, height)
 }
@@ -527,6 +545,50 @@ fn render_layer(img: &skia_safe::Image, dest: Rect, width: u32, height: u32) -> 
 #[cfg(test)]
 mod camera_pan_tests {
     use super::*;
+
+    // The junction invariant. A transition frame sits directly against a
+    // normal frame at each end, so the dissolve must be a no-op exactly there:
+    // at progress 0 the outgoing scene is untouched, at progress 1 the
+    // incoming one is. Any alpha short of 1 at an endpoint is a visible step,
+    // which is the class of bug that produced the halo jumps.
+    #[test]
+    fn the_foreground_dissolve_is_a_noop_at_both_junctions() {
+        let (w, h) = (8u32, 4u32);
+        let bg = solid(w, h, 0, 0, 0, 255);
+        let fg_a = solid(w, h, 255, 0, 0, 255);
+        let fg_b = solid(w, h, 0, 0, 255, 255);
+
+        for (progress, expected) in [(0.0, [255u8, 0, 0]), (1.0, [0, 0, 255])] {
+            let out = camera_pan_transition(
+                &bg, &bg, &fg_a, &fg_b, w, h, progress, 8.0, 0.0,
+                &EasingType::Linear, PanBackground::Static,
+            );
+            assert_eq!(
+                &out[0..3], &expected,
+                "at progress {progress} the adjacent scene must render untouched",
+            );
+        }
+    }
+
+    // Mid-pan both planes are partly transparent — that is the effect — but
+    // neither may collapse to near-nothing or the frame reads as empty.
+    #[test]
+    fn mid_pan_both_planes_stay_substantially_visible() {
+        let (w, h) = (8u32, 4u32);
+        let bg = solid(w, h, 0, 0, 0, 255);
+        let fg_a = solid(w, h, 255, 0, 0, 255);
+        let fg_b = solid(w, h, 0, 0, 255, 255);
+
+        let out = camera_pan_transition(
+            &bg, &bg, &fg_a, &fg_b, w, h, 0.5, 8.0, 0.0,
+            &EasingType::Linear, PanBackground::Static,
+        );
+        // Left half carries the outgoing plane, right half the incoming one.
+        let left_red = out[0];
+        let right_blue = out[((w - 1) * 4 + 2) as usize];
+        assert!(left_red > 128, "outgoing plane faded too far: {left_red}");
+        assert!(right_blue > 128, "incoming plane still too faint: {right_blue}");
+    }
 
     fn solid(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
         (0..width * height).flat_map(|_| [r, g, b, a]).collect()
