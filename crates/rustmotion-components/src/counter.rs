@@ -32,6 +32,14 @@ pub struct Counter {
     pub suffix: Option<String>,
     #[serde(default)]
     pub easing: EasingType,
+    /// Seconds the count takes to run, measured from `start_at`.
+    ///
+    /// Left unset the count stretches over whatever remains of the scene, so it
+    /// only reaches `to` on the very last frame and the viewer never gets to
+    /// read the figure they were counting towards. Setting this shorter than
+    /// the scene makes the count land early and hold.
+    #[serde(default)]
+    pub duration: Option<f64>,
     #[serde(flatten)]
     pub timing: TimingConfig,
     #[serde(default)]
@@ -53,6 +61,24 @@ rustmotion_core::impl_traits!(Counter {
 });
 
 impl Counter {
+    /// Where the count sits on its 0..1 ramp at `time`, before easing.
+    ///
+    /// The ramp starts at `start_at` and runs for `duration`, falling back to
+    /// the rest of the scene when no duration is given.
+    fn ramp_progress(&self, time: f64, scene_duration: f64) -> f64 {
+        let start = self.timing.start_at.unwrap_or(0.0);
+        let elapsed = (time - start).max(0.0);
+        let ramp = match self.duration {
+            Some(d) if d > 0.0 => d,
+            _ => scene_duration - start,
+        };
+        if ramp > 0.0 {
+            (elapsed / ramp).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
     fn paint(
         &self,
         canvas: &Canvas,
@@ -91,16 +117,7 @@ impl Counter {
             _ => TextAlign::Left,
         };
 
-        let start = self.timing.start_at.unwrap_or(0.0);
-        let elapsed = (time - start).max(0.0);
-        let remaining_duration = scene_duration - start;
-        let t = if remaining_duration > 0.0 {
-            (elapsed / remaining_duration).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-
-        let progress = ease(t, &self.easing);
+        let progress = ease(self.ramp_progress(time, scene_duration), &self.easing);
         let value = self.from + (self.to - self.from) * progress;
         let content = format_counter_value(
             value,
@@ -261,5 +278,69 @@ impl Painter for Counter {
             props,
             ctx,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counter(duration: Option<f64>, start_at: Option<f64>) -> Counter {
+        Counter {
+            from: 0.0,
+            to: 100.0,
+            decimals: 0,
+            separator: None,
+            prefix: None,
+            suffix: None,
+            easing: EasingType::default(),
+            duration,
+            timing: TimingConfig { start_at, end_at: None },
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+        }
+    }
+
+    #[test]
+    fn without_duration_the_count_only_lands_on_the_last_frame() {
+        // The behaviour that made counters unreadable: nothing settles early,
+        // so the figure is still moving when the scene cuts away.
+        let c = counter(None, None);
+        assert!(c.ramp_progress(3.9, 4.0) < 1.0);
+        assert_eq!(c.ramp_progress(4.0, 4.0), 1.0);
+    }
+
+    #[test]
+    fn duration_makes_the_count_land_early_and_hold() {
+        let c = counter(Some(1.5), None);
+        assert_eq!(c.ramp_progress(1.5, 4.0), 1.0);
+        // Held for the rest of the scene, which is the point.
+        assert_eq!(c.ramp_progress(3.0, 4.0), 1.0);
+        assert!((c.ramp_progress(0.75, 4.0) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn duration_is_measured_from_start_at() {
+        let c = counter(Some(2.0), Some(1.0));
+        assert_eq!(c.ramp_progress(1.0, 6.0), 0.0);
+        assert!((c.ramp_progress(2.0, 6.0) - 0.5).abs() < 1e-9);
+        assert_eq!(c.ramp_progress(3.0, 6.0), 1.0);
+    }
+
+    #[test]
+    fn a_duration_outlasting_the_scene_is_honoured_not_clamped() {
+        // Deliberate: the author asked for a slow count, and silently speeding
+        // it up would be a surprise. It simply never reaches `to`.
+        let c = counter(Some(10.0), None);
+        assert!(c.ramp_progress(4.0, 4.0) < 0.5);
+    }
+
+    #[test]
+    fn a_zero_or_negative_duration_falls_back_to_the_scene() {
+        let c = counter(Some(0.0), None);
+        assert!((c.ramp_progress(2.0, 4.0) - 0.5).abs() < 1e-9);
     }
 }
