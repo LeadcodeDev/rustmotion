@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     build_shape_path, color4f_from_hex, draw_shape_path, draw_text_with_fallback, emoji_typeface,
-    measure_text_with_fallback, paint_from_hex, typeface_with_fallback, wrap_text_with_fallback,
+    measure_text_with_fallback, paint_from_hex, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
     Fill, FontWeight, GradientType, ShapeText, ShapeType, Stroke, TextAlign, TimelineStep,
@@ -187,7 +187,19 @@ fn render_shape_text(
     };
     let letter_spacing = text.letter_spacing.unwrap_or(0.0);
 
-    let lines = wrap_text_with_fallback(&text.content, &font, &emoji_font, Some(area_w));
+    // Tracking-aware wrap (issue #125 §1): the fit test measures with the
+    // same `letter_spacing` used below for `line_width`/`draw_text_with_
+    // fallback`, so the wrap decision agrees with what's actually painted.
+    // `ShapeText`'s `font_size`/`letter_spacing`/`line_height` are plain
+    // `f32` (not `CssStyle`/`Length`), so issue #125 §2's relative-unit gap
+    // doesn't apply here — there is no unit string to resolve.
+    let lines = wrap_text_with_tracking(
+        &text.content,
+        &font,
+        &emoji_font,
+        Some(area_w),
+        letter_spacing,
+    );
     let descent = metrics.descent;
     let total_h = if lines.len() > 1 {
         (lines.len() - 1) as f32 * line_height + ascent + descent

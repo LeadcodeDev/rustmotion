@@ -14,7 +14,7 @@ use rustmotion_core::css::style::{
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::renderer::{
     emoji_typeface, format_counter_value, measure_text_with_fallback, typeface_with_fallback,
-    wrap_text_with_fallback,
+    wrap_text_with_tracking,
 };
 
 use crate::badge::{Badge, BadgeSize};
@@ -58,6 +58,18 @@ impl TextIntrinsic {
     /// wrap:true unconditionally so their measured size still matches what
     /// those painters actually draw.
     pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
+        // No `LengthContext` is reachable here without changing this
+        // constructor's signature — its only callers are `box_builder.rs`
+        // and `rustmotion-cli/src/commands/geometry.rs`, both outside this
+        // workstream's scope (box_builder.rs is a sibling's live file this
+        // wave; the geometry validator re-measures via this exact type and
+        // must keep agreeing with it byte-for-byte, so changing what it
+        // needs to pass in is not a call to make unilaterally here). So
+        // `font_size`/`line_height` stay on the context-free accessors
+        // (issue #125 §2's `vw`/`vh`/`rem`/`%` gap is not closed for this
+        // constructor) — only `letter_spacing` below, which is used
+        // exclusively by the wrap fix in `measure()`, no signature change
+        // needed for it.
         let font_size = style.font_size_px_or(48.0);
         let line_height_resolved = style.line_height_for(font_size);
         Self {
@@ -115,7 +127,17 @@ impl IntrinsicMeasure for TextIntrinsic {
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
 
         let wrap_at = if self.wrap { max_width } else { None };
-        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, wrap_at);
+        // Tracking-aware wrap (issue #125 §1): matches the real
+        // `letter_spacing` used to measure each line's width just below, so
+        // the box this measurer reserves and what `Text::paint` (also fixed,
+        // same tracking) actually paints agree on line count.
+        let lines = wrap_text_with_tracking(
+            &self.content,
+            &font,
+            &emoji_font,
+            wrap_at,
+            self.letter_spacing,
+        );
 
         let mut max_w = 0.0f32;
         for line in &lines {
