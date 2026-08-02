@@ -43,7 +43,7 @@ rustmotion_core::impl_traits!(Caption {
 });
 
 impl Caption {
-    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, layout_height: f32, time: f64) {
         let font_size = self.style.font_size_px_or(48.0);
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
@@ -54,6 +54,37 @@ impl Caption {
 
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+
+        // Every branch below draws text with its *baseline* at local y=0 and
+        // (for the pill-background presets) a highlight box extending up to
+        // `font_size + padding/2` above that baseline. Treated as the box's
+        // own coordinate space (y=0 = box top, as every other painter
+        // assumes), that put glyphs — and pills further still — above the
+        // assigned box: `CaptionIntrinsic` sizes the box for one line's
+        // ascent+descent starting at y=0, not for a baseline sitting at 0
+        // with ascenders going negative. Shifting the whole paint down by a
+        // margin that covers the tallest pill (WordPop's `font_size*0.35`
+        // padding, ~1.175×font_size) puts the topmost ink at/after y=0
+        // without touching any of the per-preset layout math below.
+        let top_offset = font_size * 1.2;
+        canvas.save();
+        canvas.translate((0.0, top_offset));
+        // Safety net: even with the offset above, an unusually large pill
+        // padding combined with a short assigned box could still spill past
+        // the bottom edge. Clip vertically only (not horizontally) — a
+        // caption in `white-space: nowrap` mode is *meant* to bleed past
+        // its own width when `max_width` doesn't fit the line (see
+        // `box_builder.rs`'s nowrap comment and the geometry validator's
+        // `unwrappable_text_overflow`), so clipping width here would hide a
+        // condition the validator is supposed to catch instead.
+        if layout_height > 0.0 {
+            const HALF_PLANE: f32 = 1_000_000.0;
+            canvas.clip_rect(
+                Rect::from_xywh(-HALF_PLANE, -top_offset, HALF_PLANE * 2.0, layout_height),
+                skia_safe::ClipOp::Intersect,
+                true,
+            );
+        }
 
         match self.mode {
             CaptionStyle::WordByWord => {
@@ -249,6 +280,7 @@ impl Caption {
                 }
             }
         }
+        canvas.restore();
     }
 }
 
@@ -269,7 +301,7 @@ impl Painter for Caption {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, ctx.time);
+        self.paint(canvas, layout.width, layout.height, ctx.time);
     }
 }
 
@@ -365,6 +397,48 @@ mod tests {
     }
 
     #[test]
+    fn ink_never_starts_above_the_box_top() {
+        // #127: every branch drew its baseline at local y=0 (the box's own
+        // top edge) — ascenders, and pill backgrounds further still,
+        // painted *above* y=0, bleeding out of whatever box the layout
+        // gave this caption (measured: assigned box top at y=124 in a
+        // card starting at y=100, but ink started at y≈85 — above the
+        // card itself, not just the box).
+        let caption = make_caption("Hello world", None);
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            caption.paint(canvas, W as f32, H as f32, 0.5);
+        }
+        let (_minx, _maxx, miny, _maxy) =
+            ink_bounds(&mut surface, W, H).expect("caption must paint something");
+        assert!(miny >= 0, "ink starts above the box top at y={miny}");
+    }
+
+    #[test]
+    fn word_pop_pill_never_starts_above_the_box_top() {
+        // The pill-background presets pad further above the baseline than
+        // plain text (up to `font_size * 0.35` extra) — the worst case
+        // among the four rendering modes.
+        let mut caption = make_caption("Hello", None);
+        caption.mode = CaptionStyle::WordPop;
+        caption.words[0].start = 0.0;
+        caption.words[0].end = 10.0;
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            caption.paint(canvas, W as f32, H as f32, 0.1);
+        }
+        let (_minx, _maxx, miny, _maxy) =
+            ink_bounds(&mut surface, W, H).expect("word_pop caption must paint something");
+        assert!(miny >= 0, "pill starts above the box top at y={miny}");
+    }
+
+    #[test]
     fn nowrap_paints_one_wide_line_instead_of_wrapping_at_max_width() {
         // M1 render-level proof, caption (Highlight mode): `white-space:
         // nowrap` keeps every word on one line — much wider than
@@ -379,7 +453,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((800.0, 250.0));
-            caption.paint(canvas, 80.0, 0.5);
+            caption.paint(canvas, 80.0, H as f32, 0.5);
         }
         let (minx, maxx, miny, maxy) =
             ink_bounds(&mut surface, W, H).expect("nowrap caption must paint something");
@@ -405,7 +479,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((800.0, 250.0));
-            caption.paint(canvas, 80.0, 0.5);
+            caption.paint(canvas, 80.0, H as f32, 0.5);
         }
         let (minx, maxx, miny, maxy) =
             ink_bounds(&mut surface, W, H).expect("wrapped caption must paint something");

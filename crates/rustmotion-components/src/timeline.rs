@@ -187,7 +187,27 @@ impl Timeline {
     ) {
         let total_w = self.width;
         let bar_y = r; // Center of nodes
-        let spacing = if n > 1 { total_w / (n - 1) as f32 } else { 0.0 };
+
+        // Node 0 used to sit at local x=0 and node n-1 at x=total_w, so
+        // their circles (radius `r`) bled `r` px past both edges of the
+        // assigned box — and further still wherever a step's label was
+        // wider than the node itself (issue #127 measured ink starting
+        // 33px left of the box, 9px outside the card). Insetting every
+        // node by `max(r, widest_label / 2)` keeps both the circles and
+        // their centered labels inside `[0, total_w]` regardless of which
+        // step has the longest label.
+        let max_label_half_w = self
+            .steps
+            .iter()
+            .map(|s| measure_text_with_fallback(&s.label, font, &None, 0.0) * 0.5)
+            .fold(0.0f32, f32::max);
+        let inset = r.max(max_label_half_w).min(total_w / 2.0);
+        let usable_w = (total_w - inset * 2.0).max(0.0);
+        let spacing = if n > 1 {
+            usable_w / (n - 1) as f32
+        } else {
+            0.0
+        };
 
         // Draw background bar
         let bar_rect =
@@ -226,7 +246,7 @@ impl Timeline {
         // Draw nodes and labels
         for (i, step) in self.steps.iter().enumerate() {
             let cx = if n > 1 {
-                i as f32 * spacing
+                inset + i as f32 * spacing
             } else {
                 total_w / 2.0
             };
@@ -317,10 +337,21 @@ impl Timeline {
         let spacing = 80.0;
         let bar_x = r;
         let total_h = if n > 1 { (n - 1) as f32 * spacing } else { 0.0 };
+        // Node 0 used to sit at local y=0, so its circle (radius `r`) bled
+        // `r` px above the assigned box's top edge — same class of bug as
+        // the horizontal direction's left/right overflow. Insetting every
+        // node's `cy` by `r` keeps the whole column inside `[0, box height]`
+        // (box_builder.rs already reserves `r*2 + 64` px per step, well
+        // past what this needs).
+        let top_inset = r;
 
         // Background bar
-        let bar_rect =
-            Rect::from_xywh(bar_x - self.bar_height / 2.0, 0.0, self.bar_height, total_h);
+        let bar_rect = Rect::from_xywh(
+            bar_x - self.bar_height / 2.0,
+            top_inset,
+            self.bar_height,
+            total_h,
+        );
         let mut bar_paint = paint_from_hex(&self.bar_color);
         bar_paint.set_style(PaintStyle::Fill);
         canvas.draw_round_rect(
@@ -333,8 +364,12 @@ impl Timeline {
         // Filled bar
         if fill_progress > 0.001 {
             let fill_h = total_h * fill_progress.clamp(0.0, 1.0);
-            let fill_rect =
-                Rect::from_xywh(bar_x - self.bar_height / 2.0, 0.0, self.bar_height, fill_h);
+            let fill_rect = Rect::from_xywh(
+                bar_x - self.bar_height / 2.0,
+                top_inset,
+                self.bar_height,
+                fill_h,
+            );
             let mut fill_paint = paint_from_hex(&self.bar_fill_color);
             fill_paint.set_style(PaintStyle::Fill);
             canvas.draw_round_rect(
@@ -347,7 +382,7 @@ impl Timeline {
 
         for (i, step) in self.steps.iter().enumerate() {
             let cx = bar_x;
-            let cy = if n > 1 { i as f32 * spacing } else { 0.0 };
+            let cy = top_inset + if n > 1 { i as f32 * spacing } else { 0.0 };
 
             let step_progress = if n > 1 {
                 i as f32 / (n - 1) as f32
@@ -407,5 +442,132 @@ impl Painter for Timeline {
         _ctx: &PaintCtx,
     ) {
         self.paint(canvas, props);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(label: &str) -> TimelineStep {
+        TimelineStep {
+            label: label.to_string(),
+            sublabel: None,
+            color: default_node_color(),
+            icon: None,
+        }
+    }
+
+    fn ink_bounds(
+        surface: &mut skia_safe::Surface,
+        w: i32,
+        h: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    maxx = maxx.max(x);
+                    miny = miny.min(y);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx <= maxx).then_some((minx, maxx, miny, maxy))
+    }
+
+    #[test]
+    fn horizontal_nodes_and_labels_stay_within_the_declared_width() {
+        // #127: node 0's circle used to be centered at local x=0 (and node
+        // n-1 at x=width), so the circle — and a wide first/last label —
+        // bled `node_radius` (or more) past both edges of the box the
+        // layout gave this component. A long first label and a long last
+        // label both push on the insets from either side.
+        let tl = Timeline {
+            steps: vec![
+                step("Design phase kickoff"),
+                step("Build"),
+                step("Test"),
+                step("Ship it now"),
+            ],
+            width: 512.0,
+            direction: TimelineDirection::Horizontal,
+            node_radius: default_node_radius(),
+            bar_color: default_bar_color(),
+            bar_fill_color: default_bar_fill_color(),
+            bar_height: default_bar_height(),
+            fill_progress: default_fill_progress(),
+            font_size: default_label_font_size(),
+            label_color: default_label_color(),
+            sublabel_color: default_sublabel_color(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 512;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let props = AnimatedProperties::default();
+            tl.paint(canvas, &props);
+        }
+        let (minx, maxx, _miny, _maxy) =
+            ink_bounds(&mut surface, W, H).expect("timeline must paint something");
+        assert!(minx >= 0, "ink starts left of the box at x={minx}");
+        assert!(
+            maxx < W,
+            "ink escapes the box on the right at x={maxx} (width={W})"
+        );
+    }
+
+    #[test]
+    fn single_step_stays_centered_within_the_box() {
+        let tl = Timeline {
+            steps: vec![step("Only step")],
+            width: 300.0,
+            direction: TimelineDirection::Horizontal,
+            node_radius: default_node_radius(),
+            bar_color: default_bar_color(),
+            bar_fill_color: default_bar_fill_color(),
+            bar_height: default_bar_height(),
+            fill_progress: default_fill_progress(),
+            font_size: default_label_font_size(),
+            label_color: default_label_color(),
+            sublabel_color: default_sublabel_color(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 300;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let props = AnimatedProperties::default();
+            tl.paint(canvas, &props);
+        }
+        let (minx, maxx, _miny, _maxy) =
+            ink_bounds(&mut surface, W, H).expect("timeline must paint something");
+        assert!(minx >= 0 && maxx < W);
     }
 }

@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, ColorType, ImageInfo, Paint, PaintStyle, RRect, Rect};
 
+use rustmotion_core::css::style::AlignSelf;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -65,12 +66,43 @@ pub struct Badge {
     pub count: Option<u32>,
     #[serde(flatten)]
     pub timing: TimingConfig,
-    #[serde(default)]
+    /// `align-self` defaults to `flex-start` (not the flex container's
+    /// `stretch`) — a badge is an atomic icon+label chip that must keep its
+    /// natural intrinsic width even inside a `flex`/`card` column; without
+    /// this, the default cross-axis `stretch` wins over `BadgeIntrinsic`
+    /// and the chip becomes a full-width bar. An author-specified
+    /// `align-self` in JSON is always respected (this only fills the gap
+    /// when it's absent).
+    #[serde(
+        default = "default_badge_style",
+        deserialize_with = "deserialize_no_stretch_style"
+    )]
     pub style: CssStyle,
     #[serde(default)]
     pub timeline: Vec<TimelineStep>,
     #[serde(default)]
     pub stagger: Option<f32>,
+}
+
+fn default_badge_style() -> CssStyle {
+    CssStyle {
+        align_self: Some(AlignSelf::FlexStart),
+        ..CssStyle::default()
+    }
+}
+
+/// Deserializes `style` normally, then defaults `align-self` to
+/// `flex-start` when the author didn't set it explicitly — see the doc
+/// comment on [`Badge::style`].
+fn deserialize_no_stretch_style<'de, D>(deserializer: D) -> Result<CssStyle, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut style = CssStyle::deserialize(deserializer)?;
+    if style.align_self.is_none() {
+        style.align_self = Some(AlignSelf::FlexStart);
+    }
+    Ok(style)
 }
 
 rustmotion_core::impl_traits!(Badge {
@@ -317,5 +349,41 @@ impl Painter for Badge {
         ctx: &PaintCtx,
     ) {
         self.paint(canvas, layout.width, layout.height, ctx.time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(json: &str) -> Badge {
+        serde_json::from_str(json).expect("badge should deserialize")
+    }
+
+    #[test]
+    fn style_defaults_to_flex_start_when_absent() {
+        // #127: `align-items: stretch` (the flex column default) was
+        // winning over `BadgeIntrinsic`, stretching every badge in a card
+        // to the container's full width. No `style` key at all in the
+        // JSON is the common case — this must still default away from
+        // stretch.
+        let badge = parse(r#"{"type":"badge","text":"v1"}"#);
+        assert_eq!(badge.style.align_self, Some(AlignSelf::FlexStart));
+    }
+
+    #[test]
+    fn style_defaults_to_flex_start_with_other_style_keys_present() {
+        // Same fix, but exercised through the `deserialize_with` path
+        // (some `style` object present, just not `align-self`) rather
+        // than the field-level `default` path (`style` entirely absent).
+        let badge = parse(r##"{"type":"badge","text":"v1","style":{"background":"#f00"}}"##);
+        assert_eq!(badge.style.align_self, Some(AlignSelf::FlexStart));
+        assert_eq!(badge.style.background_color_str(), Some("#f00"));
+    }
+
+    #[test]
+    fn explicit_align_self_is_respected() {
+        let badge = parse(r#"{"type":"badge","text":"v1","style":{"align-self":"center"}}"#);
+        assert_eq!(badge.style.align_self, Some(AlignSelf::Center));
     }
 }
