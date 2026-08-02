@@ -3,3 +3,10 @@
 .DS_Store
 docs/
 .claude/*.local.md
+
+# Rendered output and work-in-progress scenarios live beside the examples but
+# are not part of the repo. Three .mp4 files and one scenario were committed by
+# accident during the audit chantier; this keeps that from recurring.
+examples/*.mp4
+examples/*.mov
+examples/ferriskey-presentation.json
