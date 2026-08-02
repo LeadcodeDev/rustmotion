@@ -35,7 +35,17 @@ Key patterns:
 
 Children flow in the flexbox. Use `positioned` container for absolute positioning.
 
-**Grid height warning:** Grid containers need an explicit `height` (not `"auto"`) to prevent rows from stretching to fill all available space. See [rules/grid-card-height.md](rules/grid-card-height.md).
+**Grid sizing:** `height: "auto"` on a grid container sizes correctly to content — you don't need an explicit `height` just to avoid stretching. See [rules/grid-card-height.md](rules/grid-card-height.md).
+
+## 23 component types have no intrinsic size — they need explicit `width`/`height`
+
+Most components either measure their own content (`text`, `codeblock`, `counter`, `badge`, `table`, `terminal`, `caption`, `kbd`, `gradient_text`, `rich_text`) or get a computed fallback size from their own fields (`icon`-like shapes such as `avatar`, `divider`, `line`, `arrow`, `switch`, `slider`, `progress`, `list`, `timeline`, `notification`, `rating`, `qr_code`, `countdown`, `particle`, `cursor`, `connector`, `waveform`, `audio_spectrum`). The following **23 types have neither** (verified against `crates/rustmotion-components/src/box_builder.rs`'s `component_intrinsic` and `apply_intrinsic_overrides` — both are exhaustive `match`es and these fall through to their `_ => None` / `_ => {}` arms, and no component overrides `Painter::intrinsic_size` either):
+
+`shape`, `image`, `icon`, `svg`, `video`, `gif`, `callout`, `chart`, `comparison`, `dot_map`, `gauge`, `heatmap`, `lottie`, `marquee`, `mockup`, `pill_nav`, `skeleton`, `sparkline`, `stat`, `stepper`, `tag_cloud`, `tooltip`, `treemap`
+
+As a flex/grid child with no explicit `style.width`/`style.height`, any of these lays out at **0×0 and renders nothing** — not a smaller-than-expected box, no pixels at all. Confirmed by rendering: three `stat`s in a flex-row card with no explicit size produce a blank frame. `rustmotion validate` does not flag this (a 0×0 box doesn't overflow anything).
+
+Always give these components explicit `style.width`/`style.height` (or a fixed size via their own dedicated `size` field where one exists, e.g. `qr_code`'s `size`) wherever they're a flow child of a `card`/`flex`/`grid` — not just when the parent has `height: "auto"`. If a component silently doesn't render, check this list before assuming a schema-field-placement bug (see [rules/component-field-placement.md](rules/component-field-placement.md) for that other, more common cause of invisible components).
 
 **GOOD** (icon + text row):
 ```json
