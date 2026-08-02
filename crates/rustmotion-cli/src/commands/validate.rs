@@ -1,8 +1,31 @@
 use rustmotion::error::{Result, RustmotionError};
+use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
 
 use super::geometry::{GeometryViolation, ViolationKind};
 use super::validation::{self, ValidationReport, ValidationSource, VarOverrides};
+
+/// #128 item 4: the duration `validate` announces must match what `render`
+/// actually produces frame-for-frame. Summing `scene.duration` directly
+/// (the old behaviour) over-counts: a transition *overlaps* two adjacent
+/// scenes rather than adding sequential time — `encode/video/tasks.rs`'s
+/// frame scheduler subtracts each transition's frames from the receiving
+/// scene's own budget (`build_slide_view_tasks`'s `incoming_transition_frames`),
+/// while a *view*-level transition (`build_frame_tasks`'s `ViewTransition`)
+/// is genuinely additive on top of both views' own scenes. Re-deriving that
+/// arithmetic here would be a second implementation the frame scheduler
+/// doesn't know about and can drift from (that file belongs to a different
+/// workstream — read, not edited, here). Instead, reuse the exact frame
+/// count `render` itself schedules via `build_frame_tasks` and divide by
+/// fps: this is definitionally identical to the rendered duration, not an
+/// approximation of it.
+fn announced_duration(scenario: &ResolvedScenario) -> f64 {
+    let fps = scenario.video.fps as f64;
+    if fps <= 0.0 {
+        return 0.0;
+    }
+    rustmotion::encode::build_frame_tasks(scenario).len() as f64 / fps
+}
 
 pub fn cmd_validate(
     input: &PathBuf,
@@ -60,7 +83,7 @@ pub fn cmd_validate(
     }
 
     let all_scenes: Vec<_> = loaded.scenario.all_scenes().collect();
-    let total_duration: f64 = all_scenes.iter().map(|s| s.duration).sum();
+    let total_duration = announced_duration(&loaded.scenario);
 
     validation::print_report(&report_out, &input.display().to_string());
 
@@ -137,12 +160,14 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
             }
             ViolationKind::ViewportOverflow
             | ViolationKind::AnimatedTextOverflow
-            | ViolationKind::ContentOverflowsBox => {
+            | ViolationKind::ContentOverflowsBox
+            | ViolationKind::ContentOverflowsCard => {
                 // Position/size clamping is too risky to auto-fix without
                 // losing intent — leave it for the user. (ContentOverflowsBox
-                // specifically: growing the box, shrinking the font, or
-                // shortening the copy are all legitimate fixes with very
-                // different visual outcomes — not ours to pick.)
+                // /ContentOverflowsCard specifically: growing the box/card,
+                // shrinking the font, or shortening the copy are all
+                // legitimate fixes with very different visual outcomes — not
+                // ours to pick.)
             }
         }
     }
@@ -340,5 +365,70 @@ mod tests {
         let target = navigate(&mut json, "views[0].scenes[0].children[0].children[0]");
         assert!(target.is_some(), "must resolve into the implicit view 0");
         assert_eq!(target.unwrap()["type"], "text");
+    }
+
+    // ─── #128 item 4: announced duration matches the rendered one ────────────
+
+    #[test]
+    fn announced_duration_subtracts_the_overlapping_transition_instead_of_summing_scene_durations()
+    {
+        // Two 2.0s scenes at 30fps with a 0.5s transition entering the
+        // second one: naively summing `scene.duration` gives 4.0s (the old,
+        // wrong behaviour — reproduces #128 item 4's "22% wrong" report).
+        // The transition *overlaps* the two scenes rather than adding
+        // sequential time: scene 0 contributes 60 frames minus the 15 frames
+        // it hands off to the transition (45), the transition itself
+        // contributes 15, and scene 1 contributes 60 minus the 15 incoming
+        // frames it doesn't repeat (45) — 45 + 15 + 45 = 105 frames = 3.5s.
+        let json = r##"{
+            "video": { "width": 640, "height": 360, "fps": 30 },
+            "scenes": [
+                { "duration": 2.0, "children": [] },
+                {
+                    "duration": 2.0,
+                    "transition": { "type": "fade", "duration": 0.5 },
+                    "children": []
+                }
+            ]
+        }"##;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("scenario parses");
+
+        let naive_sum: f64 = scenario.all_scenes().map(|s| s.duration).sum();
+        assert_eq!(
+            naive_sum, 4.0,
+            "sanity check: naive summing must reproduce the old 4.0s (over-)estimate"
+        );
+
+        let duration = announced_duration(&scenario);
+        assert!(
+            (duration - 3.5).abs() < 1e-9,
+            "expected the transition-overlap-corrected 3.5s, got {duration}"
+        );
+
+        // The value must be definitionally the rendered frame count, not a
+        // hand-derived approximation of it.
+        let expected_from_frame_count =
+            rustmotion::encode::build_frame_tasks(&scenario).len() as f64 / 30.0;
+        assert_eq!(duration, expected_from_frame_count);
+    }
+
+    #[test]
+    fn announced_duration_matches_scene_duration_sum_when_there_are_no_transitions() {
+        // No transitions at all: the corrected formula must degrade back to
+        // exactly the naive sum — this is a regression guard, not a special
+        // case the fix is allowed to get wrong.
+        let json = r##"{
+            "video": { "width": 640, "height": 360, "fps": 30 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 2.0, "children": [] }
+            ]
+        }"##;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("scenario parses");
+        let duration = announced_duration(&scenario);
+        assert!(
+            (duration - 3.0).abs() < 1e-6,
+            "expected 3.0s with no transitions, got {duration}"
+        );
     }
 }
