@@ -86,6 +86,8 @@ Reference: Tailwind CSS default spacing (4px base unit).
 
 ### Desktop Landscape (1920×1080)
 
+> This table (and the Tailwind scale above, which tops out at `text-9xl` = 192px desktop) is sized for UI/dashboard-style content — cards, KPIs, subtitles. It does **not** apply to the brutalist/statement register (1600.agency / Machina, Aikido-style dark-premium), which runs hero/statement type at 200–1100px on this same 1920×1080 frame against 30–56px labels — an 6×–20× hierarchy ratio this table's progression doesn't reach. For that register, use the sizes and tracking in [1600-brutalist-style.md](1600-brutalist-style.md) and the "Statement register" section of [typography-readability.md](typography-readability.md) instead of scaling up from this table.
+
 | Element | Size | Tailwind equivalent |
 |---|---|---|
 | **Title text** | font-size: 54–72 | `text-4xl` to `text-5xl` |
@@ -162,10 +164,10 @@ Sizing rules above are guidelines — `rustmotion validate` is the source of tru
   "type": "card",
   "style": { "width": 920, "height": "auto", "flex-direction": "row" },
   "children": [
-    { "style": { "width": 180 } },
-    { "style": { "width": 180 } },
-    { "style": { "width": 180 } },
-    { "style": { "width": 180 } }
+    { "type": "div", "style": { "width": 180, "height": 180 } },
+    { "type": "div", "style": { "width": 180, "height": 180 } },
+    { "type": "div", "style": { "width": 180, "height": 180 } },
+    { "type": "div", "style": { "width": 180, "height": 180 } }
   ]
 }
 ```
@@ -182,8 +184,8 @@ Sizing rules above are guidelines — `rustmotion validate` is the source of tru
       "type": "card",
       "style": { "width": 1000, "height": "auto", "flex-direction": "row", "align-items": "center", "gap": 24 },
       "children": [
-        { "type": "icon", "style": { "width": 72, "height": 72 } },
-        { "type": "text", "style": { "font-size": 48 } }
+        { "type": "icon", "icon": "lucide:check-circle", "style": { "width": 72, "height": 72 } },
+        { "type": "text", "content": "Feature enabled", "style": { "font-size": 48 } }
       ]
     }
   ]

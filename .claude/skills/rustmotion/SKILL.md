@@ -173,7 +173,7 @@ The user validates or adjusts the plan before proceeding.
 1. All font sizes meet the floor for the target device (see [rules/typography-readability.md](rules/typography-readability.md))
 2. `start_at + delay + duration ≤ scene_duration` for every animation (see [rules/animation-completion-budget.md](rules/animation-completion-budget.md))
 3. Text color contrasts correctly with the scene/card background (dark bg → white text, light bg → dark text)
-4. No `counter` component inside a card (see [rules/counter-standalone.md](rules/counter-standalone.md))
+4. If a `counter` is inside a card (this is fine — it centers correctly), make sure the card/parent is at least as wide as the counter's worst-case digit width, since the counter box never shrinks to fit (see [rules/counter-standalone.md](rules/counter-standalone.md))
 5. Scene duration ≥ reading time of all text (`word_count ÷ 2.5`) (see [rules/scene-pacing.md](rules/scene-pacing.md))
 6. If dynamism level ≥ 2: at least one non-text element per scene has a continuous effect (`float_3d`/`wiggle`/`orbit` with `loop: true`). Never apply continuous motion to primary text. See [rules/dynamic-depth.md](rules/dynamic-depth.md).
 
@@ -197,7 +197,8 @@ For each scene in the validated plan:
 ### Design guidelines
 
 - **Scene duration:** Use `max(animation_budget + 0.5s_dwell, word_count ÷ 2.5)`. Never use "3-5s" as a flat default — text-heavy scenes need more. See [rules/scene-pacing.md](rules/scene-pacing.md) for the lookup table.
-- **Typography floor:** Title ≥ 90px (mobile) / 45px (desktop). Body ≥ 48px (mobile) / 24px (desktop). `line-height: 1.4–1.6` on multi-line text. White text on dark bg; dark text on light bg. See [rules/typography-readability.md](rules/typography-readability.md).
+- **Typography floor:** Title ≥ 90px (mobile) / 45px (desktop). Body ≥ 48px (mobile) / 24px (desktop). `line-height: 1.4–1.6` on multi-line **body copy**. White text on dark bg; dark text on light bg. See [rules/typography-readability.md](rules/typography-readability.md).
+- **Statement register** (1600.agency/Machina, Aikido-style dark-premium): display type 200–400px+ on desktop against 30–56px labels, `line-height` 0.80–1.05 (tight, deliberate — not the body-copy floor above), `letter-spacing` **positive** for brutalist/uppercase or **negative** (e.g. `-2` uniform) for the dark-premium register. See [rules/typography-readability.md](rules/typography-readability.md#statement-register-hierarchy-scale-tracking) and [rules/1600-brutalist-style.md](rules/1600-brutalist-style.md).
 - **Animation budget:** `start_at + delay + duration ≤ scene_duration` for every animated component. See [rules/animation-completion-budget.md](rules/animation-completion-budget.md).
 - **Color palette:** Pick one of the 4 pre-built palettes (Dark Tech / Corporate / Playful / Minimal) in Phase 2 and never deviate. See [rules/color-palettes.md](rules/color-palettes.md).
 - **Animation patterns:** Stagger entrances within a scene (0.1-0.3s delays). Use fade/slide transitions between scenes.
@@ -218,7 +219,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
-- [rules/counter-standalone.md](rules/counter-standalone.md) - Counter must be standalone (no baseline correction inside cards)
+- [rules/counter-standalone.md](rules/counter-standalone.md) - Counter centers correctly in a card; size the parent for its worst-case digit width or it overflows silently
 - [rules/vertical-align.md](rules/vertical-align.md) - Shape text vertical_align: use "top"/"middle"/"bottom" (NOT "center")
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
@@ -737,7 +738,9 @@ Default duration: `0.5` seconds.
 
 ---
 
-### Component Types (51 total)
+### Component Types
+
+The engine has **57** component types total (`Component` enum, `crates/rustmotion-components/src/lib.rs:194-254`). The catalog below has a dedicated write-up with a JSON example for most of them; the rest are containers (`card`/`flex`, `div`, `grid`, `positioned`) covered in the "Mental Model: Think HTML/CSS" section above, plus `waveform`/`audio_spectrum` covered in [rules/audio-reactive.md](rules/audio-reactive.md).
 
 All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
@@ -1082,7 +1085,7 @@ Style: `font-size` (48.0), `font-family`, `color` (#FFFFFF), `background`
 
 ### 9. `counter`
 
-Animated number counter. See Rule 4: must be standalone.
+Animated number counter. Works fine inside a card (centers correctly) — see checklist item 4 / [rules/counter-standalone.md](rules/counter-standalone.md) for sizing the parent to its worst-case digit width.
 
 ```json
 {
@@ -1424,7 +1427,7 @@ Data visualization with animation. Supports 12 chart types.
 
 **Root fields:** `chart_type` (required), `data` (`[{ "value", "label"?, "color"? }]`), `animated` (default true), `animation_duration` (default 1.5s), `colors` (custom palette)
 
-Style: `width`, `height` (default 300×200)
+Style: `width`, `height` — **required**. `chart` has no intrinsic sizing (no fallback in the engine — verified against `box_builder.rs`'s `component_intrinsic`/`apply_intrinsic_overrides`); omit them in a flex/grid container and the chart lays out at 0×0 and renders nothing.
 
 **Axes & grid (bar, line, area, stacked_bar, scatter, waterfall):** `show_grid`, `show_x_labels`, `show_y_labels`, `grid_color` (#FFFFFF15), `label_color` (#888888), `label_font_size` (12)
 
@@ -1795,7 +1798,7 @@ Semi-circular arc gauge for KPIs and dashboards.
 
 **Root fields:** `value` (required), `min` (0), `max` (100), `label`, `fill_color` (#3B82F6), `track_color` (#333333), `track_width` (16), `start_angle` (135), `end_angle` (405), `show_value` (true), `animated` (true), `animation_duration` (1.5s)
 
-Style: `width`, `height` (default 200×140)
+Style: `width`, `height` — **required**, same as `chart`: `gauge` has no intrinsic sizing; without explicit dimensions it lays out at 0×0.
 
 ### 31. `sparkline`
 
@@ -1815,7 +1818,7 @@ Mini inline chart without axes — ideal inside cards next to counters.
 
 **Root fields:** `data` (required — array of f64), `color` (#22C55E), `fill` (false — gradient fill under line), `fill_opacity` (0.2), `stroke_width` (2.0), `animated` (true), `animation_duration` (1.0s)
 
-Style: `width`, `height` (default 120×40)
+Style: `width`, `height` — **required**: `sparkline` has no intrinsic sizing (confirmed empirically — omitted, it renders zero pixels); always set explicit dimensions, e.g. `120×40`.
 
 ### 32. `stat`
 
@@ -1835,7 +1838,7 @@ Composite KPI card: value + label + trend arrow + sparkline.
 
 **Root fields:** `value` (required — display string), `label`, `trend` (`{ "value": string, "direction": "up"/"down"/"neutral", "color"? }`), `sparkline_data` (array of f64), `sparkline_color`, `value_font_size` (48), `label_font_size` (14), `value_color` (#FFFFFF), `label_color` (#94A3B8)
 
-Style: `width`, `height` (default 240×140)
+Style: `width`, `height` — **required**: `stat` has no intrinsic sizing. Verified empirically — three `stat`s in a flex-row card with no explicit `width`/`height` render **zero pixels** (all three collapse to 0×0). Always set explicit dimensions, e.g. `280×180`. See [rules/stat-cards.md](rules/stat-cards.md).
 
 Trend uses `lucide:trending-up` / `lucide:trending-down` icons. Direction `"down"` with a positive connotation (e.g. churn decreasing) can use `"color": "#22C55E"` to override the default red.
 
@@ -1910,7 +1913,7 @@ Continuous scrolling text — for tickers, breaking news, or decorative text ban
 
 **Root fields:** `content` (required), `speed` (100 — pixels/second), `direction` (`"left"` / `"right"`), `font_size` (24), `color` (#FFFFFF), `separator` (spacing between repeats, default 5 spaces)
 
-Style: `width`, `height` (default 800 × font_size×2)
+Style: `width`, `height` — **required**: `marquee` has no intrinsic sizing; always set explicit dimensions (it's exempt from viewport-overflow checks since its role is to bleed, but it still needs a box to scroll within).
 
 ### 37. `avatar_group`
 
@@ -2234,6 +2237,26 @@ World map in dot-pattern with data points at geographic coordinates.
 Style: `width`, `height`
 
 Points use real geographic coordinates (lat/lng). The world map is rendered as a dot grid using a 180×90 land bitmap. Points with `pulse: true` show expanding concentric rings.
+
+### 52. `qr_code`
+
+Renders a scannable QR code from arbitrary content (URL, text, etc.).
+
+```json
+{
+  "type": "qr_code",
+  "content": "https://rustmotion.dev",
+  "size": 240,
+  "foreground_color": "#0F172A",
+  "background_color": "#FFFFFF"
+}
+```
+
+**Root fields:** `content` (required), `size` (default 200 — used as both width and height unless overridden), `foreground_color` (#000000), `background_color` (#FFFFFF)
+
+Style: `width`, `height` — optional; falls back to `size` × `size` via `apply_intrinsic_overrides` if unset.
+
+The JSON `"type"` value is **`qr_code`** (snake_case of the `QrCode` enum variant), not `qrcode`.
 
 ---
 

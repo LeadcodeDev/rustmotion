@@ -8,7 +8,9 @@ Recette pour produire des vidéos dans l'esprit des studios de motion design typ
   ```json
   "fonts": [{ "family": "Anton", "source": "google", "weights": [400] }]
   ```
-  puis `"font-family": "Anton"` sur chaque texte. `line-height` serré (0.92–1.02) pour empiler les lignes, `letter-spacing` 1–2 sur les gros titres, 4–8 sur les petits kickers.
+  puis `"font-family": "Anton"` sur chaque texte. `line-height` serré (0.92–1.02, jusqu'à 0.80 pour un mot/chiffre géant qui ne wrap jamais) pour empiler les lignes, `letter-spacing` **positif** 1–2 sur les gros titres, 4–8 sur les petits kickers.
+
+  **Précédence explicite** : ce `line-height` serré prime sur la plage 1.4–1.6 de [typography-readability.md](typography-readability.md) — cette dernière régit le corps de texte / la prose multi-ligne, pas le display type de ce style. Les deux plages coexistent sans conflit dans un même scénario (un titre à 0.95 et une légende à 1.5 ne sont pas contradictoires, ce sont deux rôles différents). Voir la section "Statement register" de typography-readability.md pour le détail chiffré et l'autre registre (dark-premium, tracking **négatif**).
 - **Tailles (16:9, 1920×1080)** : hero 240–300px, titres 120–200px, chiffres 190px, kicker/label 32–56px. On cherche le texte qui remplit la largeur.
 - **Palette — blocs saturés alternés** : chaque scène est un aplat plein cadre qui bascule brutalement. Un seul aplat par scène, texte en noir `#0A0A0A` ou crème `#F5F0E8` selon le fond.
   - Jaune `#FFE500`, cobalt `#1A1AE5`, corail `#FF4A32`, vert acide `#00E676`, noir `#0A0A0A`.
