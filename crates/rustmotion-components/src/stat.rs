@@ -86,6 +86,25 @@ impl Stat {
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+
+        // Hard containment: whatever the math below computes, nothing gets
+        // to paint past the box the layout gave this component (issue
+        // #127). `stat` used to walk a `y_cursor` from a hardcoded
+        // `pad = 20.0` — label, then value, then a sparkline with a forced
+        // `.max(20.0)` minimum height — never once consulting `h`. A short
+        // box (the audit measured 512×48) still got the same ~120px stack
+        // every time, overflowing 70+px onto the next flex sibling. The
+        // clip below is the backstop; the scaling further down is what
+        // keeps it from ever needing to bite in practice.
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, 0.0, w, h),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
 
         // Background if set
         if let Some(bg) = self.style.background_color_str() {
@@ -98,18 +117,43 @@ impl Stat {
             canvas.draw_rrect(rrect, &bg_paint);
         }
 
-        let pad = 20.0;
+        // `pad` scales down with the box instead of a fixed 20px, and the
+        // label/value font sizes are scaled by `content_scale` so the
+        // label+value stack actually fits in the room `h` gives them. Both
+        // stay at their authored size (pad=20, scale=1) whenever the box is
+        // tall enough — which is every existing example — and only shrink
+        // for a box shorter than the natural stack (like #127's 512×48).
+        let pad = (h * 0.15).clamp(2.0, 20.0).min(w * 0.15).max(2.0);
+        let content_h = (h - pad * 2.0).max(0.0);
+
+        let label_natural_h = if self.label.is_some() {
+            self.label_font_size * 1.5
+        } else {
+            0.0
+        };
+        let value_natural_h = self.value_font_size * 1.2;
+        let text_natural_h = label_natural_h + value_natural_h;
+        let content_scale = if text_natural_h > 0.0 {
+            (content_h / text_natural_h).clamp(0.05, 1.0)
+        } else {
+            1.0
+        };
+
+        let eff_label_fs = self.label_font_size * content_scale;
+        let eff_value_fs = self.value_font_size * content_scale;
+
         let mut y_cursor = pad;
 
         // Label (top)
         if let Some(label) = &self.label {
             let font_style = skia_safe::FontStyle::normal();
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                canvas.restore();
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, self.label_font_size);
+            let font = skia_safe::Font::from_typeface(typeface, eff_label_fs);
             let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, eff_label_fs));
             let (_, metrics) = font.metrics();
 
             let mut label_paint = paint_from_hex(&self.label_color);
@@ -126,18 +170,19 @@ impl Stat {
                 ly,
                 &label_paint,
             );
-            y_cursor += self.label_font_size * 1.5;
+            y_cursor += eff_label_fs * 1.5;
         }
 
         // Value (large)
         {
             let font_style = skia_safe::FontStyle::bold();
             let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
+                canvas.restore();
                 return;
             };
-            let font = skia_safe::Font::from_typeface(typeface, self.value_font_size);
+            let font = skia_safe::Font::from_typeface(typeface, eff_value_fs);
             let emoji_font =
-                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.value_font_size));
+                emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, eff_value_fs));
             let (_, metrics) = font.metrics();
 
             let mut val_paint = paint_from_hex(&self.value_color);
@@ -158,9 +203,10 @@ impl Stat {
             // Trend inline after value
             if let Some(trend) = &self.trend {
                 let val_w = measure_text_with_fallback(&self.value, &font, &emoji_font, 0.0);
-                let trend_fs = self.value_font_size * 0.4;
+                let trend_fs = eff_value_fs * 0.4;
                 let bold_style = skia_safe::FontStyle::bold();
                 let Ok(trend_typeface) = typeface_with_fallback("Inter", bold_style) else {
+                    canvas.restore();
                     return;
                 };
                 let trend_font = skia_safe::Font::from_typeface(trend_typeface, trend_fs);
@@ -178,7 +224,7 @@ impl Stat {
 
                 let (_, trend_metrics) = trend_font.metrics();
                 let mut tx = pad + val_w + 12.0;
-                let ty = vy - self.value_font_size * 0.15 + trend_metrics.ascent * 0.2;
+                let ty = vy - eff_value_fs * 0.15 + trend_metrics.ascent * 0.2;
 
                 // Draw trend arrow icon
                 let icon_id = match trend.direction {
@@ -258,14 +304,22 @@ impl Stat {
                 );
             }
 
-            y_cursor += self.value_font_size * 1.2;
+            y_cursor += eff_value_fs * 1.2;
         }
 
-        // Sparkline (bottom)
-        if self.sparkline_data.len() >= 2 {
-            let spark_h = (h - y_cursor - pad).max(20.0);
+        // Sparkline (bottom) — only drawn if room is actually left. The
+        // previous `.max(20.0)` forced a sparkline into existence even when
+        // the label+value stack had already consumed the whole box, which
+        // is exactly what pushed ink onto the next flex sibling. `spark_y`
+        // itself eats 4px of gap below the value line, so that has to come
+        // out of the room budget too — the original formula measured room
+        // from `y_cursor`, not from `spark_y`, which let the sparkline's
+        // own bottom edge land 4px past `h - pad`.
+        let spark_y = y_cursor + 4.0;
+        let spark_room = (h - pad) - spark_y;
+        if self.sparkline_data.len() >= 2 && spark_room >= 8.0 {
+            let spark_h = spark_room;
             let spark_w = w - pad * 2.0;
-            let spark_y = y_cursor + 4.0;
 
             let max_v = self.sparkline_data.iter().fold(f64::MIN, |a, &b| a.max(b));
             let min_v = self.sparkline_data.iter().fold(f64::MAX, |a, &b| a.min(b));
@@ -324,6 +378,8 @@ impl Stat {
             line_paint.set_stroke_join(skia_safe::paint::Join::Round);
             canvas.draw_path(&line_path, &line_paint);
         }
+
+        canvas.restore();
     }
 }
 
@@ -336,5 +392,138 @@ impl Painter for Stat {
         _ctx: &PaintCtx,
     ) {
         self.paint(canvas, layout.width, layout.height);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full_stat() -> Stat {
+        Stat {
+            value: "98.2%".to_string(),
+            label: Some("Tests Passing".to_string()),
+            trend: Some(StatTrend {
+                value: "+2.1%".to_string(),
+                direction: TrendDirection::Up,
+                color: None,
+            }),
+            sparkline_data: vec![80.0, 84.0, 82.0, 88.0, 90.0, 94.0, 98.0],
+            sparkline_color: None,
+            value_font_size: default_value_font_size(),
+            label_font_size: default_label_font_size(),
+            value_color: default_value_color(),
+            label_color: default_label_color(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    /// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent
+    /// pixel on the surface, or `None` if nothing was painted. Mirrors the
+    /// helper `caption.rs` already uses for the same kind of proof.
+    fn ink_bounds(
+        surface: &mut skia_safe::Surface,
+        w: i32,
+        h: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    maxx = maxx.max(x);
+                    miny = miny.min(y);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx <= maxx).then_some((minx, maxx, miny, maxy))
+    }
+
+    #[test]
+    fn ink_stays_within_a_tiny_assigned_box() {
+        // #127's exact repro: a 512×48 box (the measured "assigned box" for
+        // this component in a 560×300 card) used to take ~120px of ink —
+        // label + value + a forced-minimum sparkline — 72px onto whatever
+        // sits below it in the flex column. With a solid background (the
+        // same way the audit made the assigned box visible), the painted
+        // background rect *is* the box, so no ink should land outside it.
+        let stat = full_stat();
+        const W: i32 = 512;
+        const H: i32 = 48;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            stat.paint(canvas, W as f32, H as f32);
+        }
+        let (minx, maxx, miny, maxy) =
+            ink_bounds(&mut surface, W, H).expect("stat must paint something");
+        assert!(
+            minx >= 0 && miny >= 0,
+            "ink starts outside the box: ({minx},{miny})"
+        );
+        assert!(
+            maxx < W && maxy < H,
+            "ink escaped the {W}x{H} box: max=({maxx},{maxy})"
+        );
+    }
+
+    #[test]
+    fn ink_stays_within_box_even_without_a_background() {
+        // Same box, no `style.background` — the clip still has to hold
+        // even when there's no filled rect to visually anchor it to.
+        let mut stat = full_stat();
+        stat.style = CssStyle::default();
+        const W: i32 = 512;
+        const H: i32 = 48;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            stat.paint(canvas, W as f32, H as f32);
+        }
+        if let Some((minx, maxx, miny, maxy)) = ink_bounds(&mut surface, W, H) {
+            assert!(minx >= 0 && miny >= 0 && maxx < W && maxy < H);
+        }
+    }
+
+    #[test]
+    fn generous_box_keeps_the_original_full_size_layout() {
+        // A box as tall as the existing examples use (e.g. mega-showcase's
+        // 380×220 stat cards) must not be affected by the new scaling —
+        // `content_scale` should resolve to 1.0 and the value should still
+        // render at its authored `value_font_size`.
+        let stat = full_stat();
+        const W: i32 = 380;
+        const H: i32 = 220;
+        let pad = (H as f32 * 0.15)
+            .clamp(2.0, 20.0)
+            .min(W as f32 * 0.15)
+            .max(2.0);
+        let content_h = (H as f32 - pad * 2.0).max(0.0);
+        let text_natural_h = stat.label_font_size * 1.5 + stat.value_font_size * 1.2;
+        let scale = (content_h / text_natural_h).clamp(0.05, 1.0);
+        assert_eq!(
+            scale, 1.0,
+            "a generously sized box should never shrink the text"
+        );
     }
 }
