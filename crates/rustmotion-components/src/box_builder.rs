@@ -21,8 +21,14 @@ use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedPrope
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use rustmotion_core::schema::video::{AnimationEffect, MotionBlurConfig, TrailConfig};
 
+use crate::callout::ArrowDirection as CalloutArrowDirection;
+use crate::chart::ChartType;
 use crate::divider::DividerDirection;
+use crate::mockup::MockupDevice;
+use crate::skeleton::SkeletonVariant;
+use crate::stepper::StepperOrientation;
 use crate::timeline::TimelineDirection;
+use crate::tooltip::TooltipArrow;
 use crate::{ChildComponent, Component};
 
 /// Frame-level context passed into the builder so animations can be resolved
@@ -996,6 +1002,29 @@ fn apply_default_display(component: &Component, css: &mut CssStyle) {
     };
 }
 
+/// Measure a single line of text with the exact same Skia font metrics the
+/// affected painters (`callout`, `tooltip`, `pill_nav`, `stepper`) already use
+/// to draw it (`measure_text_with_fallback`), so a size computed here matches
+/// the pixels those painters actually paint instead of guessing at an average
+/// character width. Returns `0.0` if the font family can't be resolved —
+/// matches those painters' own silent-return-on-font-load-failure behaviour.
+fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool) -> f32 {
+    use rustmotion_core::engine::renderer::{
+        emoji_typeface, measure_text_with_fallback, typeface_with_fallback,
+    };
+    let style = if bold {
+        skia_safe::FontStyle::bold()
+    } else {
+        skia_safe::FontStyle::normal()
+    };
+    let Ok(typeface) = typeface_with_fallback(family, style) else {
+        return 0.0;
+    };
+    let font = skia_safe::Font::from_typeface(typeface, font_size);
+    let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+    measure_text_with_fallback(text, &font, &emoji_font, 0.0)
+}
+
 /// Apply per-component CSS overrides for things that the legacy
 /// `Widget::measure` derived from constraints (e.g. divider stretching to its
 /// parent, line bounding box from its endpoints).
@@ -1275,6 +1304,469 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.height = Some(CSize::Length(CLP::Px(80.0)));
             }
         }
+
+        // ── #126 / W3: the 23 components with no size source ─────────────
+        //
+        // A card's default flex column gives every child its width via
+        // `align-items: stretch`, but height stays at the CSS auto-height
+        // default (0 for a leaf with no intrinsic measurer) — these 23 paint
+        // nothing. Like the arms above, every default here fires only when
+        // the author hasn't set the corresponding `style` property, so a
+        // component that already declares `width`/`height` keeps rendering
+        // exactly as before. Both width *and* height are always set (not
+        // just height) so the same defaults also work in a flex *row* (e.g.
+        // `stat` cards side by side), where width — not height — is the one
+        // that would otherwise collapse to 0.
+        //
+        // Text-bearing "bubble" components (callout/tooltip) and label-flow
+        // components (pill_nav/stepper) are measured with the exact same
+        // Skia metrics their own painters use (`measure_text_line_width`),
+        // so the box matches the ink. Everything else uses either a formula
+        // derived from the component's own fields (heatmap/skeleton/gauge/
+        // marquee) or a fixed size justified by a documented convention
+        // already established in this project's own skill docs
+        // (`.claude/skills/rustmotion/rules/*.md`) or its own example
+        // scenarios (`examples/*.json`) — never a number picked by feel.
+        Callout(t) => {
+            // Mirrors callout.rs's own `paint()`: 12px text padding, a
+            // `font_size * 1.4` line height, and the arrow eating into
+            // whichever axis it points along (width for Left/Right, height
+            // for Top/Bottom/default). Sized to a single line — since the
+            // box is fit exactly to the unwrapped text width, the painter's
+            // own `wrap_text(text, font, Some(text_area_w))` never has a
+            // reason to wrap, so painted output matches this box exactly.
+            let font_size = t.style.font_size_px_or(16.0);
+            let family = t.style.font_family_or("Inter");
+            let text_w = measure_text_line_width(&t.text, font_size, family, false);
+            let h_pad = 12.0; // callout.rs's own `let padding = 12.0;`
+            let v_pad = 16.0; // breathing room around the line, same order of magnitude as h_pad
+            let line_h = font_size * 1.4; // callout.rs's own `line_height = font_size * 1.4`
+            let (extra_w, extra_h) = match t.arrow_direction {
+                CalloutArrowDirection::Left | CalloutArrowDirection::Right => (t.arrow_size, 0.0),
+                CalloutArrowDirection::Top | CalloutArrowDirection::Bottom => (0.0, t.arrow_size),
+            };
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(text_w + h_pad * 2.0 + extra_w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(line_h + v_pad + extra_h)));
+            }
+        }
+        Tooltip(t) => {
+            // Same shape as Callout above; padding value borrowed from
+            // callout.rs since tooltip.rs's own paint() centers text in the
+            // body with no defined constant of its own.
+            let font_size = t.style.font_size_px_or(t.font_size);
+            let family = t.style.font_family_or("Inter");
+            let text_w = measure_text_line_width(&t.text, font_size, family, false);
+            let h_pad = 12.0;
+            let v_pad = 16.0;
+            let line_h = font_size * 1.4;
+            let (extra_w, extra_h) = match t.arrow {
+                TooltipArrow::Left | TooltipArrow::Right => (t.arrow_size, 0.0),
+                TooltipArrow::Top | TooltipArrow::Bottom | TooltipArrow::None => {
+                    (0.0, t.arrow_size)
+                }
+            };
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(text_w + h_pad * 2.0 + extra_w)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(line_h + v_pad + extra_h)));
+            }
+        }
+        PillNav(p) => {
+            // `height` is already a declared field on the component (like
+            // Progress/Switch/Slider above) — just promote it to CSS. Width
+            // replicates pill_nav.rs's own private `compute_tab_layout()`
+            // formula (h_pad = font_size*1.2 per side, `gap` before/after/
+            // between every pill) using the same public fields and the same
+            // `measure_text_with_fallback` call it makes internally.
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(p.height)));
+            }
+            if css.width.is_none() {
+                let font_size = p.style.font_size_px_or(14.0);
+                let family = p.style.font_family_or("Inter");
+                let h_pad = font_size * 1.2;
+                let n = p.items.len() as f32;
+                let labels_w: f32 = p
+                    .items
+                    .iter()
+                    .map(|label| {
+                        measure_text_line_width(label, font_size, family, false) + h_pad * 2.0
+                    })
+                    .sum();
+                let total_w = labels_w + p.gap * (n + 1.0).max(1.0);
+                css.width = Some(CSize::Length(CLP::Px(total_w)));
+            }
+        }
+        Marquee(m) => {
+            // Marquee's whole purpose is to scroll unbounded content, so
+            // there's no natural content width. A percentage (mirroring
+            // `Particle`'s "fills its parent" default above) would be the
+            // obvious choice, but it resolves to 0 against an indefinite
+            // parent (a card that itself has no explicit width) — the same
+            // "card with height: auto" case this issue asks to fix, so a
+            // percentage default would still paint nothing in that case. A
+            // fixed width sidesteps that: 800px matches this project's own
+            // marquee usage (examples/mega-showcase.json and SKILL.md's own
+            // example both use `style.width: 800`, or scale up from there —
+            // mega-showcase's 1700px is that same scene's marquee spanning a
+            // much wider bleed banner). Height follows the font-size-to-
+            // height ratio both of those same real usages share:
+            // `font_size: 24` paired with `style.height: 48`, i.e.
+            // `2 × font_size`.
+            let font_size = m.style.font_size_px_or(m.font_size);
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(800.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(font_size * 2.0)));
+            }
+        }
+        Stepper(s) => {
+            // Same shape as `Timeline`'s formula above (r*2 + label metrics),
+            // adapted to stepper.rs's own layout constants: `cy = r + 4.0`,
+            // label offset `r + 12.0`, description offset
+            // `label_font_size + 4.0`, and its hardcoded label/description
+            // font sizes (14px / 11px — not fields, copied from paint()).
+            let n = (s.steps.len().max(1)) as f32;
+            let has_desc = s.steps.iter().any(|st| st.description.is_some());
+            const LABEL_FS: f32 = 14.0;
+            const DESC_FS: f32 = 11.0;
+            let max_label_w = s
+                .steps
+                .iter()
+                .map(|st| measure_text_line_width(&st.label, LABEL_FS, "Inter", false))
+                .fold(0.0_f32, f32::max);
+            let max_desc_w = s
+                .steps
+                .iter()
+                .filter_map(|st| st.description.as_deref())
+                .map(|d| measure_text_line_width(d, DESC_FS, "Inter", false))
+                .fold(0.0_f32, f32::max);
+            match s.orientation {
+                StepperOrientation::Horizontal => {
+                    if css.width.is_none() {
+                        // Per-step allocation: the node needs ~3 diameters of
+                        // breathing room (a common stepper-UI spacing
+                        // convention), or enough for its longest label/desc,
+                        // whichever is larger.
+                        let per_step = (s.node_size * 3.0).max(max_label_w.max(max_desc_w) + 24.0);
+                        css.width = Some(CSize::Length(CLP::Px(per_step * n)));
+                    }
+                    if css.height.is_none() {
+                        let label_h = LABEL_FS * 1.3;
+                        let desc_h = if has_desc { DESC_FS * 1.3 + 4.0 } else { 0.0 };
+                        let h = s.node_size + 4.0 + 12.0 + label_h + desc_h;
+                        css.height = Some(CSize::Length(CLP::Px(h)));
+                    }
+                }
+                StepperOrientation::Vertical => {
+                    if css.width.is_none() {
+                        let label_w = max_label_w.max(max_desc_w);
+                        let w = s.node_size + 12.0 + label_w + 24.0;
+                        css.width = Some(CSize::Length(CLP::Px(w)));
+                    }
+                    if css.height.is_none() {
+                        let label_block = if has_desc {
+                            LABEL_FS * 1.3 + DESC_FS * 1.3 + 8.0
+                        } else {
+                            LABEL_FS * 1.3 + 8.0
+                        };
+                        let per_step = (s.node_size * 2.0).max(label_block);
+                        css.height = Some(CSize::Length(CLP::Px(per_step * n)));
+                    }
+                }
+            }
+        }
+        TagCloud(tc) => {
+            // Replicates tag_cloud.rs's own per-tag metrics (bold Inter,
+            // weight-normalized font size between min/max_font_size, its
+            // hardcoded h_gap=12/v_gap=8) to sum a single-line content width,
+            // then wraps that at a conventional card-content width (matching
+            // this project's own tag_cloud usage in
+            // examples/mega-showcase.json) to estimate a line count and
+            // hence a height — an approximation of the real flow-wrap
+            // algorithm, not a re-implementation of it.
+            let n = tc.tags.len();
+            if n > 0 {
+                let min_w = tc.tags.iter().map(|t| t.weight).fold(f64::MAX, f64::min);
+                let max_w = tc.tags.iter().map(|t| t.weight).fold(f64::MIN, f64::max);
+                let range = (max_w - min_w).max(0.001);
+                const H_GAP: f32 = 12.0;
+                const V_GAP: f32 = 8.0;
+                let total_w: f32 = tc
+                    .tags
+                    .iter()
+                    .map(|t| {
+                        let normalized = ((t.weight - min_w) / range) as f32;
+                        let fs =
+                            tc.min_font_size + normalized * (tc.max_font_size - tc.min_font_size);
+                        measure_text_line_width(&t.text, fs, "Inter", true) + H_GAP
+                    })
+                    .sum();
+                const CAP_W: f32 = 600.0;
+                let box_w = total_w.clamp(CAP_W * 0.3, CAP_W);
+                let lines = (total_w / box_w).ceil().max(1.0);
+                let line_h = tc.max_font_size * 1.3;
+                let box_h = lines * line_h + (lines - 1.0).max(0.0) * V_GAP;
+                if css.width.is_none() {
+                    css.width = Some(CSize::Length(CLP::Px(box_w)));
+                }
+                if css.height.is_none() {
+                    css.height = Some(CSize::Length(CLP::Px(box_h)));
+                }
+            }
+        }
+        Heatmap(h) => {
+            // Fully content-derived from heatmap.rs's own paint() formula:
+            // `step = cell_size + cell_gap`, cell (col,row) drawn at
+            // `(col*step, row*step)` sized `cell_size` — so the painted
+            // extent is exactly `(cols-1)*step + cell_size` per axis.
+            let rows = h.data.len();
+            let cols = h.data.iter().map(|r| r.len()).max().unwrap_or(0);
+            let step = h.cell_size + h.cell_gap;
+            if css.width.is_none() {
+                let w = (cols.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
+                css.width = Some(CSize::Length(CLP::Px(w)));
+            }
+            if css.height.is_none() {
+                let hh = (rows.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
+                css.height = Some(CSize::Length(CLP::Px(hh)));
+            }
+        }
+        Sparkline(_) => {
+            // "Sparkline: no axes, no labels, compact (120x40 default),
+            // inline use" — documented in
+            // .claude/skills/rustmotion/rules/data-viz-components.md.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(120.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(40.0)));
+            }
+        }
+        Stat(_) => {
+            // Documented default from
+            // .claude/skills/rustmotion/rules/stat-cards.md's own "GOOD"
+            // example: `style: { width: 280, height: 180 }`. This is also
+            // the fix for the issue's second bug: three `stat`s in a flex
+            // row with no explicit size rendered zero pixels because width
+            // (not just height) collapsed to 0 in a row context.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(280.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(180.0)));
+            }
+        }
+        Gauge(g) => {
+            // Square — gauge.rs's own paint() derives its ring radius from
+            // `min(w, h)/2 - track_width/2 - 4`. Solved backwards for a
+            // target radius of 88px (chosen so the value-text font-size —
+            // this same file's own `radius * 0.45` — comes out to ~40px,
+            // comfortably legible), so the box scales with the component's
+            // own `track_width` field rather than a size picked independent
+            // of it. At the default `track_width` (16px) this lands on
+            // exactly 200×200, which also matches the midpoint of the
+            // documented "hero icon" desktop range (160–200px) in
+            // icon-sizing-hierarchy.md.
+            const TARGET_RADIUS: f32 = 88.0;
+            let size = 2.0 * (TARGET_RADIUS + g.track_width / 2.0 + 4.0);
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(size)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(size)));
+            }
+        }
+        DotMap(_) => {
+            // 2:1 — the standard aspect ratio for an equirectangular world
+            // map (360° longitude : 180° latitude), the projection
+            // dot_map.rs's own `geo_to_screen` implements. dot_map.rs always
+            // paints a full-box background rect first, so any positive size
+            // shows ink even with zero points.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(640.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(320.0)));
+            }
+        }
+        Comparison(_) => {
+            // No natural intrinsic size (the painter just splits whatever
+            // box it's given at the divider) — matches this project's own
+            // reference usage in examples/mega-showcase.json's `comparison`
+            // block.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(520.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(280.0)));
+            }
+        }
+        Treemap(_) => {
+            // Slice-and-dice treemap fills whatever box it's given — matches
+            // this project's own reference usage in
+            // examples/mega-showcase.json's `treemap` block (near-square,
+            // the conventional treemap aspect since its rectangles are area-
+            // proportional in both axes).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(416.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(368.0)));
+            }
+        }
+        Chart(c) => {
+            // Pie/donut/radar/radial_bar are inherently circular — a square
+            // box avoids wasting space on one axis or clipping into an
+            // ellipse. The other 8 chart types (bar/line/area/scatter/
+            // funnel/waterfall/stacked_bar/horizontal_bar) read axis labels
+            // best in a landscape 4:3, per data-viz-components.md's guidance
+            // that charts are "larger, standalone" than a sparkline.
+            let round = matches!(
+                c.chart_type,
+                ChartType::Pie | ChartType::Donut | ChartType::Radar | ChartType::RadialBar
+            );
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(if round { 320.0 } else { 400.0 })));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(if round { 320.0 } else { 300.0 })));
+            }
+        }
+        Skeleton(s) => {
+            // `rectangle`: documented default from data-viz-components.md's
+            // own "GOOD" example (`{ "width": 400, "height": 200 }`).
+            // `circle`: matches this file's own Icon/Avatar-adjacent 64px
+            // convention (skeleton circles most commonly stand in for an
+            // avatar). `text`: fully derived from the component's own
+            // `lines`/`line_height`/`line_gap` fields, mirroring `List`'s
+            // formula above — matches skeleton.rs's own per-line paint loop
+            // (`y = i * (line_height + line_gap)`) exactly.
+            match s.variant {
+                SkeletonVariant::Rectangle => {
+                    if css.width.is_none() {
+                        css.width = Some(CSize::Length(CLP::Px(400.0)));
+                    }
+                    if css.height.is_none() {
+                        css.height = Some(CSize::Length(CLP::Px(200.0)));
+                    }
+                }
+                SkeletonVariant::Circle => {
+                    if css.width.is_none() {
+                        css.width = Some(CSize::Length(CLP::Px(64.0)));
+                    }
+                    if css.height.is_none() {
+                        css.height = Some(CSize::Length(CLP::Px(64.0)));
+                    }
+                }
+                SkeletonVariant::Text => {
+                    let n = s.lines.max(1) as f32;
+                    if css.width.is_none() {
+                        css.width = Some(CSize::Length(CLP::Px(240.0)));
+                    }
+                    if css.height.is_none() {
+                        let h = n * s.line_height + (n - 1.0).max(0.0) * s.line_gap;
+                        css.height = Some(CSize::Length(CLP::Px(h)));
+                    }
+                }
+            }
+        }
+        Mockup(m) => {
+            // Per-device aspect matches each device's real-world screen
+            // proportions: phones (iPhone/Android) ~9:19.5 (modern
+            // flagship aspect), laptop 16:10 (the common MacBook/ultrabook
+            // ratio), browser 16:9 (the standard desktop viewport ratio).
+            let (dw, dh) = match m.device {
+                MockupDevice::Iphone | MockupDevice::Android => (320.0, 690.0),
+                MockupDevice::Laptop => (640.0, 400.0),
+                MockupDevice::Browser => (640.0, 360.0),
+            };
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(dw)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(dh)));
+            }
+        }
+        Icon(_) => {
+            // 64×64 — the midpoint of the documented "card / feature icon"
+            // role across all three device classes in
+            // icon-sizing-hierarchy.md (desktop 40–56px, mobile 72–96px,
+            // square 60–80px), and a size icon asset systems near-universally
+            // ship as a default export (24/32/48/64 being the common family).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(64.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(64.0)));
+            }
+        }
+        Svg(_) => {
+            // 200×200 — square, since an arbitrary vector graphic (icon,
+            // diagram, or logo) has no single natural aspect; matches the
+            // common equal-aspect SVG viewBox convention and sits above
+            // Icon's 64px "card icon" role for the more elaborate content
+            // `svg` typically carries (illustrations/diagrams, not glyphs).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(200.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(200.0)));
+            }
+        }
+        Shape(_) => {
+            // 80×80 — matches the median of this project's own decorative
+            // (non full-bleed-background, non-divider-line) shape usages in
+            // examples/*.json, which cluster at 44–70px for accent shapes
+            // (26, 36, 44, 60, 70, 140 — median ~55, rounded up for
+            // visibility as a standalone default rather than a same-scene
+            // accent tuned against neighbours).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(80.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(80.0)));
+            }
+        }
+        Image(_) => {
+            // 4:3 (400×300) — the traditional default photo aspect ratio,
+            // distinct from Video/Gif's 16:9 below so a generic still image
+            // doesn't presume widescreen framing.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(400.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(300.0)));
+            }
+        }
+        Video(_) | Gif(_) => {
+            // 16:9 (400×225) — the industry-standard video aspect ratio
+            // (matches every render resolution this project documents:
+            // 1920×1080, 1280×720), scaled down to a card-sized default.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(400.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(225.0)));
+            }
+        }
+        Lottie(_) => {
+            // 300×300 — square, matching the aspect the vast majority of
+            // Lottie animation assets ship at (LottieFiles' own marketplace
+            // preview convention is a 1:1 canvas).
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(300.0)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(300.0)));
+            }
+        }
+
         _ => {}
     }
 }
@@ -1417,6 +1909,7 @@ mod tests {
     use rustmotion_core::css::units::LengthPercentage;
     use rustmotion_core::css::units::LengthPercentage as CLP;
     use rustmotion_core::engine::layout_pass::run_layout;
+    use serde_json::json;
 
     fn make_card(children: Vec<ChildComponent>, style: CssStyle) -> Component {
         Component::Card(crate::card::Card {
@@ -2052,5 +2545,210 @@ mod tests {
         let scene = [shape];
         let built = build_scene_with_anim(&scene, (400.0, 400.0), anim);
         assert!(built.root.children[0].css.filter.is_none());
+    }
+
+    // ─── #126 / W3: the 23 components with no size source ───────────────────
+
+    /// Build a `ChildComponent` from a JSON literal (matches the `type`-tagged
+    /// `Component` enum's own `Deserialize` impl) — much less error-prone than
+    /// a full struct literal for components with a dozen+ fields.
+    fn child_from_json(json: serde_json::Value) -> ChildComponent {
+        let component: Component =
+            serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{e}\n{json:#}"));
+        ChildComponent {
+            component,
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }
+    }
+
+    /// Lay out a single unsized child inside a card and return its final
+    /// `(width, height)`. The card itself has no explicit width or height
+    /// either, so this also exercises acceptance criterion #3 ("a card with
+    /// height: auto sizes to the component instead of collapsing to
+    /// padding").
+    fn layout_in_auto_card(child_json: serde_json::Value) -> (f32, f32) {
+        let card = make_card(vec![child_from_json(child_json)], CssStyle::default());
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+        let child_id = built.root.children[0].children[0].id;
+        let l = layout.get(child_id).expect("child laid out");
+        (l.width, l.height)
+    }
+
+    /// Every one of the 23 components #126 lists gets a positive width *and*
+    /// height with no `style` at all — before this file's fix they all laid
+    /// out at 0×0 inside a card (proven by rendering: see the workstream's
+    /// scratch `ink-measure` harness, which shows every one of these going
+    /// from 0 painted pixels to a positive count under the identical fixture).
+    /// A positive layout box is the necessary precondition for any of that
+    /// painted ink — this test is the fast, render-free regression guard.
+    #[test]
+    fn all_23_unsized_components_get_a_positive_box_in_a_card() {
+        let cases: &[(&str, serde_json::Value)] = &[
+            ("callout", json!({"type":"callout","text":"Hello"})),
+            (
+                "chart",
+                json!({"type":"chart","chart_type":"bar","data":[{"value":10}]}),
+            ),
+            ("comparison", json!({"type":"comparison"})),
+            (
+                "dot_map",
+                json!({"type":"dot_map","points":[{"lat":10.0,"lng":10.0}]}),
+            ),
+            ("gauge", json!({"type":"gauge","value":50})),
+            ("gif", json!({"type":"gif","src":"a.gif"})),
+            ("heatmap", json!({"type":"heatmap","data":[[1.0,2.0]]})),
+            ("icon", json!({"type":"icon","icon":"lucide:home"})),
+            ("image", json!({"type":"image","src":"a.png"})),
+            ("lottie", json!({"type":"lottie","data":"{}"})),
+            ("marquee", json!({"type":"marquee","content":"hi"})),
+            (
+                "mockup",
+                json!({"type":"mockup","device":"iphone","src":"a.png"}),
+            ),
+            ("pill_nav", json!({"type":"pill_nav","items":["A","B"]})),
+            ("shape", json!({"type":"shape","shape":"rect"})),
+            ("skeleton", json!({"type":"skeleton"})),
+            (
+                "skeleton_text",
+                json!({"type":"skeleton","variant":"text","lines":3}),
+            ),
+            (
+                "sparkline",
+                json!({"type":"sparkline","data":[1.0,2.0,3.0]}),
+            ),
+            ("stat", json!({"type":"stat","value":"42"})),
+            (
+                "stepper",
+                json!({"type":"stepper","steps":[{"label":"A"},{"label":"B"}]}),
+            ),
+            ("svg", json!({"type":"svg","data":"<svg></svg>"})),
+            (
+                "tag_cloud",
+                json!({"type":"tag_cloud","tags":[{"text":"rust","weight":1.0}]}),
+            ),
+            ("tooltip", json!({"type":"tooltip","text":"hi"})),
+            ("treemap", json!({"type":"treemap","data":[{"value":10.0}]})),
+            ("video", json!({"type":"video","src":"a.mp4"})),
+        ];
+        for (name, json) in cases {
+            let (w, h) = layout_in_auto_card(json.clone());
+            assert!(w > 0.0, "{name}: width should be > 0, got {w}");
+            assert!(h > 0.0, "{name}: height should be > 0, got {h}");
+        }
+    }
+
+    #[test]
+    fn heatmap_intrinsic_size_matches_cell_grid_formula() {
+        // 2 rows x 3 cols, default cell_size=14, cell_gap=3.
+        // width = (3-1)*(14+3) + 14 = 48, height = (2-1)*17 + 14 = 31.
+        let (w, h) =
+            layout_in_auto_card(json!({"type":"heatmap","data":[[1.0,2.0,3.0],[4.0,5.0,6.0]]}));
+        assert_eq!(w, 48.0);
+        assert_eq!(h, 31.0);
+    }
+
+    #[test]
+    fn sparkline_gets_the_documented_120x40_default() {
+        // .claude/skills/rustmotion/rules/data-viz-components.md: "Sparkline:
+        // ... compact (120x40 default), inline use."
+        let (w, h) = layout_in_auto_card(json!({"type":"sparkline","data":[1.0,2.0,3.0]}));
+        assert_eq!(w, 120.0);
+        assert_eq!(h, 40.0);
+    }
+
+    #[test]
+    fn stat_gets_the_documented_280x180_default() {
+        // .claude/skills/rustmotion/rules/stat-cards.md's own "GOOD" example.
+        let (w, h) = layout_in_auto_card(json!({"type":"stat","value":"42"}));
+        assert_eq!(w, 280.0);
+        assert_eq!(h, 180.0);
+    }
+
+    #[test]
+    fn gauge_default_size_is_square() {
+        let (w, h) = layout_in_auto_card(json!({"type":"gauge","value":50}));
+        assert_eq!(w, h);
+        assert!(w > 0.0);
+    }
+
+    #[test]
+    fn pill_nav_height_promotes_its_own_declared_field() {
+        // `height` is already a field on PillNav (default 44.0) — the fix
+        // just promotes it to CSS, like Progress/Switch/Slider above.
+        let (_, h) = layout_in_auto_card(json!({"type":"pill_nav","items":["Overview"]}));
+        assert_eq!(h, 44.0);
+    }
+
+    #[test]
+    fn callout_width_grows_with_its_own_text_content() {
+        // A longer text must produce a wider box (content-derived, not a
+        // fixed constant) — proves the measured-text path is actually wired
+        // up, not just a padding-only fallback.
+        let (short_w, _) = layout_in_auto_card(json!({"type":"callout","text":"Hi"}));
+        let (long_w, _) = layout_in_auto_card(
+            json!({"type":"callout","text":"This is a much longer callout message"}),
+        );
+        assert!(
+            long_w > short_w,
+            "longer text should measure a wider box: short={short_w}, long={long_w}"
+        );
+    }
+
+    #[test]
+    fn three_stats_in_a_flex_row_all_get_a_positive_width() {
+        // #126's second bug: 3 `stat`s in a flex-row card with no explicit
+        // size rendered zero pixels because *width* (not height) collapsed
+        // to 0 — align-items:stretch only helps the cross axis, which is
+        // height in a row.
+        let stats = vec![
+            child_from_json(json!({"type":"stat","value":"45.2K","label":"Users"})),
+            child_from_json(json!({"type":"stat","value":"12%","label":"Growth"})),
+            child_from_json(json!({"type":"stat","value":"$8.1M","label":"Revenue"})),
+        ];
+        let card = make_card(
+            stats,
+            CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Row),
+                gap: Some(Gap::Uniform(LengthPercentage::Px(16.0))),
+                ..Default::default()
+            },
+        );
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+        for (i, child) in built.root.children[0].children.iter().enumerate() {
+            let l = layout.get(child.id).expect("stat laid out");
+            assert!(
+                l.width > 0.0,
+                "stat #{i}: width should be > 0, got {}",
+                l.width
+            );
+            assert!(
+                l.height > 0.0,
+                "stat #{i}: height should be > 0, got {}",
+                l.height
+            );
+        }
     }
 }
