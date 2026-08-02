@@ -88,6 +88,20 @@ impl ParsedLength {
             Self::Auto => None,
         }
     }
+
+    /// True for units whose absolute pixel value depends on a
+    /// [`LengthContext`] (`%`, `em`, `rem`, `vw`, `vh`) — i.e. everything
+    /// [`Length::px`] / [`LengthPercentage::px`] cannot resolve on their own
+    /// and silently (issue #125 §2) or loudly (post-fix) fall back to `0.0`
+    /// for. `Px` needs no context; `Auto`/`Fr` are not scalar lengths at all
+    /// (the caller decides what they mean) so they are not "relative" in
+    /// this sense.
+    pub fn is_relative(&self) -> bool {
+        matches!(
+            self,
+            Self::Percent(_) | Self::Em(_) | Self::Rem(_) | Self::Vw(_) | Self::Vh(_)
+        )
+    }
 }
 
 /// Parse a CSS length/percentage string that may also contain transform-origin
@@ -165,13 +179,24 @@ impl Length {
         self.parse().resolve(ctx).unwrap_or(0.0)
     }
 
-    /// Quick px resolution without context (treats em/rem/% as 0). Used by
-    /// painters that only need the px value of an explicit length.
+    /// Quick px resolution without context (treats em/rem/%/vw/vh as 0). Used
+    /// by painters that only need the px value of an explicit length and
+    /// have no [`LengthContext`] available (see [`CssStyle::font_size_px_or`]
+    /// / `letter_spacing_px` / `line_height_for` in `css::style`, all built
+    /// on this — issue #125 §2).
+    ///
+    /// A relative unit here cannot be resolved correctly no matter what:
+    /// `em`/`rem` need a font-size base, `vw`/`vh` need the real viewport,
+    /// `%` needs a parent box — none of which this context-free accessor
+    /// has. Rather than silently returning `0.0` indistinguishably from a
+    /// deliberate `0px` (the previous behaviour — the "15.6vw renders a
+    /// completely black frame with no signal" bug), this now warns loudly
+    /// when the dropped value was a relative unit, same fail-loud contract
+    /// as [`parse_length_or_warn`] uses for genuinely unparseable input.
+    /// Callers with a real `LengthContext` should call [`Length::resolve`]
+    /// instead, which resolves these correctly.
     pub fn px(&self) -> f32 {
-        match self.parse() {
-            ParsedLength::Px(v) => v,
-            _ => 0.0,
-        }
+        px_or_warn(self.parse())
     }
 }
 
@@ -196,12 +221,36 @@ impl LengthPercentage {
         self.parse().resolve(ctx).unwrap_or(0.0)
     }
 
-    /// Quick px resolution without context (treats em/rem/% as 0). Used by
-    /// painters that only need the px value of an explicit length.
+    /// Quick px resolution without context (treats em/rem/%/vw/vh as 0). See
+    /// [`Length::px`] — same fail-loud contract.
     pub fn px(&self) -> f32 {
-        match self.parse() {
-            ParsedLength::Px(v) => v,
-            _ => 0.0,
+        px_or_warn(self.parse())
+    }
+}
+
+/// Shared by `Length::px` / `LengthPercentage::px`: return the pixel value
+/// for `Px`, or `0.0` for anything else — but if the anything-else is a
+/// *relative* unit (issue #125 §2: `%`/`em`/`rem`/`vw`/`vh`), warn loudly
+/// first, since silently returning `0.0` here is indistinguishable from a
+/// deliberate `0px` and was the exact defect reported (`font-size: "15.6vw"`
+/// rendering a fully black frame with `render` exiting 0). `Auto`/`Fr`
+/// aren't scalar lengths (the caller decides what they mean), so they don't
+/// warn — a context-free accessor asking for their "px value" is a caller
+/// bug, not a units bug, and predates this fix.
+fn px_or_warn(parsed: ParsedLength) -> f32 {
+    match parsed {
+        ParsedLength::Px(v) => v,
+        other => {
+            if other.is_relative() {
+                eprintln!(
+                    "Warning: relative unit {other:?} used where only an absolute px value is \
+                     supported (no LengthContext available here) — resolving to 0px instead of \
+                     the intended value. Use an absolute px length, or resolve through \
+                     LengthContext::resolve() / CssStyle's *_ctx accessors where a context is \
+                     available."
+                );
+            }
+            0.0
         }
     }
 }
@@ -352,5 +401,62 @@ mod tests {
     fn length_percentage_parse_still_infallible_fallback_for_garbage() {
         let l = LengthPercentage::String("wat".into());
         assert_eq!(l.parse(), ParsedLength::Px(0.0));
+    }
+
+    // ---- issue #125 §2: relative units on the context-free `.px()` path ----
+
+    #[test]
+    fn is_relative_classifies_every_variant() {
+        assert!(!ParsedLength::Px(1.0).is_relative());
+        assert!(ParsedLength::Percent(1.0).is_relative());
+        assert!(ParsedLength::Em(1.0).is_relative());
+        assert!(ParsedLength::Rem(1.0).is_relative());
+        assert!(ParsedLength::Vw(1.0).is_relative());
+        assert!(ParsedLength::Vh(1.0).is_relative());
+        assert!(!ParsedLength::Fr(1.0).is_relative());
+        assert!(!ParsedLength::Auto.is_relative());
+    }
+
+    #[test]
+    fn px_still_resolves_absolute_px_correctly() {
+        assert_eq!(Length::String("24px".into()).px(), 24.0);
+        assert_eq!(Length::Px(10.0).px(), 10.0);
+        assert_eq!(LengthPercentage::String("24px".into()).px(), 24.0);
+    }
+
+    /// `.px()` cannot correctly resolve relative units (no context is
+    /// available at this call site) — this locks in that it still falls
+    /// back to `0.0` for them post-fix, same numeric behaviour as before.
+    /// What changed is that this fallback is now loud (see
+    /// `px_or_warn`/`is_relative`): distinguishing "the value really is
+    /// relative, and got dropped" from "the value was genuinely `0px`" is
+    /// exactly what `is_relative` (tested above) exists to let a caller —
+    /// or the `px_or_warn` eprintln — detect, since asserting on stderr
+    /// text isn't practical from a unit test.
+    #[test]
+    fn px_falls_back_to_zero_for_every_relative_unit() {
+        for s in ["50%", "1.5em", "2rem", "100vw", "50vh"] {
+            assert_eq!(Length::String(s.into()).px(), 0.0, "Length::px() for {s:?}");
+            assert_eq!(
+                LengthPercentage::String(s.into()).px(),
+                0.0,
+                "LengthPercentage::px() for {s:?}"
+            );
+            // And `is_relative` on the same parsed value proves *why*: a
+            // caller (or px_or_warn) can tell this apart from a real 0px.
+            assert!(parse_length(s).unwrap().is_relative());
+        }
+    }
+
+    #[test]
+    fn px_does_not_warn_for_auto_or_fr_context_free_use() {
+        // Auto/Fr aren't scalar lengths — a context-free `.px()` call on
+        // them is a caller bug predating this fix, not a relative-unit
+        // silent-zero. They fall back to 0.0 too, but `is_relative` is
+        // false for both so `px_or_warn` does not treat them as the
+        // issue #125 §2 case.
+        assert!(!ParsedLength::Auto.is_relative());
+        assert!(!ParsedLength::Fr(2.0).is_relative());
+        assert_eq!(Length::String("auto".into()).px(), 0.0);
     }
 }

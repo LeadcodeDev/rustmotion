@@ -11,7 +11,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    parse_hex_color, typeface_with_fallback, wrap_text_with_fallback,
+    parse_hex_color, typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -83,7 +83,7 @@ impl GradientText {
 }
 
 impl GradientText {
-    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64, ctx: &PaintCtx) {
         if self.content.is_empty() || self.colors.is_empty() {
             return;
         }
@@ -91,8 +91,30 @@ impl GradientText {
         let Some((font, emoji_font)) = self.resolve_font() else {
             return;
         };
+        // `font-size` stays context-free — see the identical note in
+        // `text.rs`'s `paint`: resolving its own `em`/`%` correctly needs a
+        // cascade.rs change (parent font-size as a resolved px value, not a
+        // raw `Length`), which is out of scope here (issue #125 §2).
         let font_size = self.style.font_size_px_or(48.0);
-        let line_height_val = self.style.line_height_for(font_size);
+        // `letter-spacing`/`line-height`'s `em`/`%` are relative to this
+        // element's own font-size, no cascade dependency — a real
+        // `LengthContext` is available here, so use the context-aware
+        // resolvers (issue #125 §2: correctly handles `vw`/`vh`/`rem`/
+        // line-height-`%`). `letter_spacing` itself: this component never
+        // read `style.letter-spacing` before this fix — the wrap/measure/
+        // draw calls below always tracked at 0.0 regardless of what was
+        // set, which is the same class of measure/paint disagreement issue
+        // #125 §1 describes elsewhere. It's threaded through consistently
+        // now.
+        let type_ctx = rustmotion_core::css::units::LengthContext {
+            viewport_width: ctx.video_width as f32,
+            viewport_height: ctx.video_height as f32,
+            parent_size: layout_width.max(0.0),
+            font_size,
+            root_font_size: 16.0,
+        };
+        let line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
+        let letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
 
         // M1: `white-space: nowrap|pre` keeps the whole content on one line
         // even past `layout_width` (it bleeds); anything else word-wraps at
@@ -108,7 +130,10 @@ impl GradientText {
         } else {
             None
         };
-        let lines = wrap_text_with_fallback(&self.content, &font, &emoji_font, wrap_at);
+        // Tracking-aware wrap (issue #125 §1), consistent with the
+        // real-tracking measurement/draw below.
+        let lines =
+            wrap_text_with_tracking(&self.content, &font, &emoji_font, wrap_at, letter_spacing);
 
         // Measure the overall (possibly multi-line) bounding box. The
         // gradient is defined once across this whole block rather than
@@ -119,7 +144,7 @@ impl GradientText {
         let descent = metrics.descent;
         let text_w = lines
             .iter()
-            .map(|l| measure_text_with_fallback(l, &font, &emoji_font, 0.0))
+            .map(|l| measure_text_with_fallback(l, &font, &emoji_font, letter_spacing))
             .fold(0.0f32, f32::max);
         let text_h = (lines.len().max(1) - 1) as f32 * line_height_val + ascent + descent;
 
@@ -185,7 +210,16 @@ impl GradientText {
                 continue;
             }
             let y = i as f32 * line_height_val + ascent;
-            draw_text_with_fallback(canvas, line, &font, &emoji_font, 0.0, 0.0, y, &fill_paint);
+            draw_text_with_fallback(
+                canvas,
+                line,
+                &font,
+                &emoji_font,
+                letter_spacing,
+                0.0,
+                y,
+                &fill_paint,
+            );
         }
     }
 }
@@ -198,7 +232,7 @@ impl Painter for GradientText {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, ctx.time);
+        self.paint(canvas, layout.width, ctx.time, ctx);
     }
 }
 
@@ -248,6 +282,18 @@ mod tests {
             .collect()
     }
 
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 1920,
+            video_height: 1080,
+            stagger_offset: 0.0,
+        }
+    }
+
     fn has_ink_in(grid: &[u8], surface_width: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
         for y in y0..y1 {
             for x in x0..x1 {
@@ -271,7 +317,7 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, 0.0);
+        gt.paint(canvas, 80.0, 0.0, &test_ctx());
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -291,7 +337,7 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, 0.0);
+        gt.paint(canvas, 80.0, 0.0, &test_ctx());
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(

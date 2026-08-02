@@ -14,7 +14,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback, wrap_text_with_fallback,
+    typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
     AnimationEffect, CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
@@ -360,7 +360,27 @@ impl Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) -> Result<()> {
+        // `font-size` stays on the context-free accessor: resolving a
+        // relative unit here correctly (`em`/`%`) would need the parent's
+        // *actual computed* font-size, which `cascade.rs` doesn't provide
+        // today (it inherits `font-size` as a raw, unresolved `Length` —
+        // see the module note on `CssStyle::font_size_px_ctx`, issue #125
+        // §2). That cascade fix stays out of scope here; `vw`/`vh`/`rem`
+        // font-size still fall back to 0px with a loud warning via `.px()`.
         let font_size = self.style.font_size_px_or(48.0);
+        // `letter-spacing` and `line-height`'s `em`/`%` are relative to this
+        // element's *own* (just-resolved) font-size, which has no cascade
+        // dependency — a real `LengthContext` is available here (real
+        // viewport dims from `ctx`, `font_size` just above), so these use
+        // the context-aware resolvers and correctly handle `vw`/`vh`/`rem`/
+        // line-height-`%` (issue #125 §2).
+        let type_ctx = rustmotion_core::css::units::LengthContext {
+            viewport_width: ctx.video_width as f32,
+            viewport_height: ctx.video_height as f32,
+            parent_size: layout_width.max(0.0),
+            font_size,
+            root_font_size: 16.0,
+        };
         // Animated color (timeline style-state transitions) overrides the
         // static style color.
         let color = props
@@ -386,8 +406,8 @@ impl Text {
             Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
             _ => TextAlign::Left,
         };
-        let line_height_val = self.style.line_height_for(font_size);
-        let letter_spacing = self.style.letter_spacing_px();
+        let line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
+        let letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
 
         let slant = match font_style_type {
             FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
@@ -443,7 +463,13 @@ impl Text {
             self.content.clone()
         };
 
-        let lines = wrap_text_with_fallback(&content, &font, &emoji_font, wrap_width);
+        // Tracking-aware wrap (issue #125 §1): the fit test now measures
+        // with this element's real `letter_spacing`, matching the
+        // measurements below (`align_width`, per-line `advance_width`) that
+        // already used it — the box this wraps for and the pixels painted
+        // into it now agree.
+        let lines =
+            wrap_text_with_tracking(&content, &font, &emoji_font, wrap_width, letter_spacing);
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
         let descent = metrics.descent;
@@ -455,14 +481,7 @@ impl Text {
         let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
             vec![s.clone()]
         } else if let Some(list) = &self.style.text_shadow {
-            let lctx = rustmotion_core::css::units::LengthContext {
-                viewport_width: ctx.video_width as f32,
-                viewport_height: ctx.video_height as f32,
-                parent_size: layout_width.max(0.0),
-                font_size,
-                root_font_size: 16.0,
-            };
-            list.iter().map(|s| s.to_schema(&lctx)).collect()
+            list.iter().map(|s| s.to_schema(&type_ctx)).collect()
         } else {
             Vec::new()
         };

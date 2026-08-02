@@ -7,7 +7,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::units::{Length, LengthPercentage};
+use super::units::{Length, LengthContext, LengthPercentage, ParsedLength};
 // `GradientBorder` / `InnerShadow` are reused from the schema layer rather
 // than mirrored: same crate, same serde/JsonSchema derives, identical JSON
 // shape either way — a css-local mirror would only duplicate the struct.
@@ -268,6 +268,122 @@ impl CssStyle {
             Some(LineHeight::Length(l)) => l.px(),
             _ => font_size * 1.3,
         }
+    }
+
+    // ---- Context-aware typography resolution (issue #125 §2) ----
+    //
+    // `font_size_px_or`/`letter_spacing_px`/`line_height_for` above are the
+    // context-free accessors ~50+ call sites across the engine use; they go
+    // through `Length::px()`, which cannot resolve `%`/`em`/`rem`/`vw`/`vh`
+    // (no `LengthContext` reaches them) and — as of this fix — warns loudly
+    // instead of silently dropping to `0px` when the value actually is one
+    // of those units (see `units::px_or_warn`). That is the "fail loudly"
+    // half of issue #125 §2.
+    //
+    // The methods below are the "or work" half: given a `LengthContext`,
+    // they resolve `%`/`em`/`rem`/`vw`/`vh` correctly for these three
+    // properties specifically, honouring the CSS rule that `em` means two
+    // different things depending on which property it's on:
+    //   - on `font-size` itself, `em` is relative to the *parent's* computed
+    //     font-size — i.e. `ctx.font_size` going in.
+    //   - on `letter-spacing` / `line-height`, `em` is relative to the
+    //     element's *own* (just-computed) font-size, not the parent's.
+    // `typography_px_ctx` below resolves all three together and gets this
+    // right by re-deriving the context between steps; the three individual
+    // methods are the building blocks for callers that need only one value,
+    // or that already have the right `ctx.font_size` for what they're
+    // resolving.
+    //
+    // What is NOT fixed by this, and is explicitly out of scope for this
+    // workstream (file allowlist: renderer/text.rs, css/units.rs,
+    // css/style.rs — not css/cascade.rs): `cascade::inherit_from` copies an
+    // inherited `font-size` down the tree as the raw, unresolved `Length` —
+    // not a resolved px value. So today nothing walks the tree computing
+    // "the actual parent font-size in px" to feed as `ctx.font_size` when
+    // resolving a child's `em` font-size; a caller that plugs in some other
+    // value (a default, the root font-size, whatever's convenient) gets a
+    // *technically* resolved but *semantically wrong* base for that one
+    // case. `rem` (always relative to a single scenario-wide root, not a
+    // per-ancestor chain) and `vw`/`vh` (relative to the real viewport) do
+    // NOT have this problem — they are fully correct via `ctx.root_font_size`
+    // / `ctx.viewport_*` regardless of cascade. `%` on `line-height` is
+    // special-cased below against the *own* font-size per CSS, not
+    // `ctx.parent_size`, so it isn't affected either. In short: `em`/`%` on
+    // `font-size` need a cascade.rs fix to be fully correct end-to-end;
+    // everything else these methods resolve is correct today.
+    //
+    // These are additive — nothing above changes signature, and nothing
+    // currently in the engine calls these yet, since every existing call
+    // site (`rustmotion-components/**`) is outside this workstream's file
+    // scope. Wiring a real `LengthContext` (viewport dims from `PaintCtx`,
+    // parent font-size from a resolved-cascade) into those call sites is the
+    // integration step a sibling workstream (or a follow-up PR) needs to do
+    // for relative units on type to actually reach rendered output.
+
+    /// `font-size` resolved against `ctx`, correctly handling
+    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::font_size_px_or`]. `em`/`%`
+    /// resolve against `ctx.font_size`, which the caller should set to the
+    /// parent's *actual computed* font-size in px for correctness (see the
+    /// module note above on why nothing does that yet).
+    pub fn font_size_px_ctx(&self, ctx: &LengthContext, default: f32) -> f32 {
+        self.font_size
+            .as_ref()
+            .and_then(|l| l.parse().resolve(ctx))
+            .unwrap_or(default)
+    }
+
+    /// `letter-spacing` resolved against `ctx`, correctly handling
+    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::letter_spacing_px`]. Per
+    /// CSS, `em` here means the element's *own* font-size, so pass a `ctx`
+    /// whose `font_size` is the already-resolved own font-size (e.g. via
+    /// [`Self::font_size_px_ctx`]), not the parent's — see
+    /// [`Self::typography_px_ctx`] for a helper that gets this right
+    /// automatically.
+    pub fn letter_spacing_px_ctx(&self, ctx: &LengthContext) -> f32 {
+        self.letter_spacing
+            .as_ref()
+            .and_then(|l| l.parse().resolve(ctx))
+            .unwrap_or(0.0)
+    }
+
+    /// `line-height` resolved against `ctx`, correctly handling
+    /// `%`/`em`/`rem`/`vw`/`vh` — unlike [`Self::line_height_for`].
+    /// `LineHeight::Number` (unitless, e.g. `1.5`) is unaffected — it always
+    /// means `n * font_size` regardless of any context. For
+    /// `LineHeight::Length`, `%` is special-cased to CSS's actual rule for
+    /// this property (relative to the element's *own* font-size, not
+    /// `ctx.parent_size` like `%` normally means): a generic
+    /// `ParsedLength::resolve` would silently resolve it against the wrong
+    /// base otherwise. Same own-vs-parent `em` caveat as
+    /// [`Self::letter_spacing_px_ctx`] applies.
+    pub fn line_height_for_ctx(&self, font_size: f32, ctx: &LengthContext) -> f32 {
+        match &self.line_height {
+            Some(LineHeight::Number(n)) => n * font_size,
+            Some(LineHeight::Length(lp)) => match lp.parse() {
+                ParsedLength::Percent(p) => p / 100.0 * font_size,
+                other => other.resolve(ctx).unwrap_or(font_size * 1.3),
+            },
+            _ => font_size * 1.3,
+        }
+    }
+
+    /// Resolve `font-size`, `letter-spacing`, and `line-height` together in
+    /// one call, honouring CSS's two different `em` bases (see the module
+    /// note above `font_size_px_ctx`): `font-size`'s own `em` resolves
+    /// against `ctx.font_size` (conventionally the parent's font-size),
+    /// while `letter-spacing`'s and `line-height`'s `em` resolve against the
+    /// just-computed *own* font-size, not `ctx.font_size` again. Returns
+    /// `(font_size_px, letter_spacing_px, line_height_px)`.
+    pub fn typography_px_ctx(
+        &self,
+        ctx: &LengthContext,
+        default_font_size: f32,
+    ) -> (f32, f32, f32) {
+        let font_size = self.font_size_px_ctx(ctx, default_font_size);
+        let own_ctx = LengthContext { font_size, ..*ctx };
+        let letter_spacing = self.letter_spacing_px_ctx(&own_ctx);
+        let line_height = self.line_height_for_ctx(font_size, &own_ctx);
+        (font_size, letter_spacing, line_height)
     }
 
     /// `opacity` with default 1.0.
@@ -1270,5 +1386,115 @@ mod tests {
             }
             other => panic!("expected Length(50%), got {other:?}"),
         }
+    }
+
+    // ---- issue #125 §2: context-aware typography resolution ----
+
+    fn style_with(font_size: &str, letter_spacing: &str, line_height: &str) -> CssStyle {
+        let json = format!(
+            r#"{{ "font-size": {font_size}, "letter-spacing": {letter_spacing}, "line-height": {line_height} }}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn font_size_px_ctx_resolves_vw() {
+        let s = style_with(r#""15.6vw""#, "0", "1");
+        let ctx = LengthContext {
+            viewport_width: 1920.0,
+            ..Default::default()
+        };
+        // The exact regression from issue #125 §2: `font-size: "15.6vw"`
+        // used to resolve to 0 via `.px()` (rendering nothing / a black
+        // frame). Through a LengthContext it resolves correctly.
+        assert_eq!(s.font_size_px_ctx(&ctx, 48.0), 15.6 / 100.0 * 1920.0);
+        // The context-free accessor still can't do this — proving the two
+        // are genuinely different code paths, not the same thing renamed.
+        assert_eq!(s.font_size_px_or(48.0), 0.0);
+    }
+
+    #[test]
+    fn font_size_px_ctx_resolves_rem_without_cascade_dependency() {
+        let s = style_with(r#""2rem""#, "0", "1");
+        let ctx = LengthContext {
+            root_font_size: 20.0,
+            ..Default::default()
+        };
+        // rem is relative to a single scenario-wide root font-size, not a
+        // per-ancestor chain — no cascade.rs involvement needed for this to
+        // be correct.
+        assert_eq!(s.font_size_px_ctx(&ctx, 48.0), 40.0);
+    }
+
+    #[test]
+    fn font_size_px_ctx_falls_back_to_default_when_unset() {
+        let s = CssStyle::default();
+        assert_eq!(s.font_size_px_ctx(&LengthContext::default(), 48.0), 48.0);
+    }
+
+    #[test]
+    fn letter_spacing_px_ctx_resolves_own_em_not_parent_em() {
+        // letter-spacing's `em` is relative to the *element's own*
+        // font-size, not whatever `ctx.font_size` happened to be for
+        // resolving font-size itself.
+        let s = style_with("300", r#""-0.03em""#, "1");
+        let own_ctx = LengthContext {
+            font_size: 300.0, // the element's own resolved font-size
+            ..Default::default()
+        };
+        assert!((s.letter_spacing_px_ctx(&own_ctx) - (-9.0)).abs() < 1e-4);
+        // Context-free path can't resolve this at all (issue #125 §2): it
+        // silently (now loudly, but still numerically) drops to 0, which is
+        // byte-identical to a deliberate zero tracking.
+        assert_eq!(s.letter_spacing_px(), 0.0);
+    }
+
+    #[test]
+    fn line_height_percent_resolves_against_own_font_size_not_parent_size() {
+        // CSS special case: `line-height: 50%` means 50% of the element's
+        // own font-size, NOT 50% of `ctx.parent_size` like `%` means for
+        // most other properties (width, padding, etc).
+        let s = style_with("100", r#""50%""#, r#""50%""#);
+        let ctx = LengthContext {
+            parent_size: 1000.0, // deliberately different from font_size,
+            // to prove `%` here does NOT fall through to the generic
+            // percent-of-parent resolution.
+            ..Default::default()
+        };
+        assert_eq!(s.line_height_for_ctx(100.0, &ctx), 50.0);
+    }
+
+    #[test]
+    fn line_height_number_ignores_context_like_before() {
+        let s = style_with("100", "0", "1.5");
+        assert_eq!(
+            s.line_height_for_ctx(100.0, &LengthContext::default()),
+            150.0
+        );
+    }
+
+    #[test]
+    fn typography_px_ctx_resolves_all_three_with_correct_em_bases() {
+        // font-size: 1.5em against a 200px parent font-size -> 300px own
+        // font-size. letter-spacing/line-height's em must then use that
+        // 300px *own* size, not the 200px parent size passed in via ctx.
+        // line-height as a bare JSON number (unitless, `LineHeight::Number`)
+        // — a quoted `"0.85"` would instead deserialize as a `Length`
+        // string, which parses a bare numeric string as *pixels*
+        // (`ParsedLength::Px`), not as the unitless multiplier CSS means;
+        // that's an existing quirk of `LineHeight`'s untagged variants,
+        // unrelated to this fix.
+        let s = style_with(r#""1.5em""#, r#""-0.03em""#, "0.85");
+        let ctx = LengthContext {
+            font_size: 200.0, // parent's font-size, for font-size's own em
+            ..Default::default()
+        };
+        let (font_size, letter_spacing, line_height) = s.typography_px_ctx(&ctx, 48.0);
+        assert_eq!(font_size, 300.0);
+        assert!(
+            (letter_spacing - (300.0 * -0.03)).abs() < 1e-3,
+            "letter-spacing em must resolve against the OWN 300px font-size, got {letter_spacing}"
+        );
+        assert_eq!(line_height, 300.0 * 0.85);
     }
 }
