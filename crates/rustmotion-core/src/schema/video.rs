@@ -347,6 +347,7 @@ impl AnimationTiming {
     /// Convert to PresetConfig for compatibility with resolve_animations.
     pub fn to_preset_config(&self) -> PresetConfig {
         PresetConfig {
+            amplitude: None,
             delay: self.delay,
             duration: self.duration,
             repeat: self.repeat,

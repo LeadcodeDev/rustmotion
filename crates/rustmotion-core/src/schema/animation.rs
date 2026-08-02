@@ -170,6 +170,12 @@ pub struct PresetConfig {
     /// `AnimationTiming::spring`).
     #[serde(default)]
     pub spring: Option<SpringConfig>,
+    /// Travel of an oscillating preset, in pixels (`float_3d`; default 12).
+    ///
+    /// Varying it across elements in one scene is what turns a shared bob into
+    /// parallax: things at different depths move by different amounts.
+    #[serde(default)]
+    pub amplitude: Option<f64>,
 }
 
 impl Default for PresetConfig {
@@ -180,6 +186,7 @@ impl Default for PresetConfig {
             repeat: false,
             overshoot: None,
             spring: None,
+            amplitude: None,
         }
     }
 }

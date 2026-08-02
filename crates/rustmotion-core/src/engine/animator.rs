@@ -1380,12 +1380,25 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
         ],
 
         // ── Floating/orbit ────────────────────────────────────────────
-        AnimationPreset::Float3d => vec![
-            kf_anim_3kf("position.y", 0.0, -12.0, 0.0, EasingType::EaseInOut),
-            kf_anim_3kf("rotate_x", 0.0, 5.0, 0.0, EasingType::EaseInOut),
-            kf_anim_3kf("rotate_y", 0.0, -8.0, 0.0, EasingType::EaseInOut),
-            kf_anim("perspective", 0.0, 1000.0, 1.0, 1000.0, EasingType::Linear),
-        ],
+        AnimationPreset::Float3d => {
+            // The cycle spans delay..delay+duration, so `duration` sets the
+            // period and `delay` shifts the phase.
+            //
+            // Both were previously inert: the keyframes were pinned to 0.0 /
+            // 0.5 / 1.0 seconds, so every floating element in a scene shared
+            // one 1-second cycle and moved in lockstep no matter what the
+            // scenario asked for. A row of cards bobbing in unison reads as a
+            // dance; the same cards on different phases and travels read as
+            // depth, which is the point of the preset.
+            let amp = config.amplitude.unwrap_or(12.0);
+            let tilt = amp / 12.0;
+            vec![
+                kf_anim_3kf_over("position.y", delay, end, 0.0, -amp, 0.0, EasingType::EaseInOut),
+                kf_anim_3kf_over("rotate_x", delay, end, 0.0, 5.0 * tilt, 0.0, EasingType::EaseInOut),
+                kf_anim_3kf_over("rotate_y", delay, end, 0.0, -8.0 * tilt, 0.0, EasingType::EaseInOut),
+                kf_anim("perspective", delay, 1000.0, end, 1000.0, EasingType::Linear),
+            ]
+        }
 
         // ── Spéciaux ────────────────────────────────────────────────────
         AnimationPreset::DrawIn => vec![kf_anim(
@@ -1480,6 +1493,25 @@ fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64
             stiffness: 120.0,
             mass: 1.0,
         }),
+    }
+}
+
+/// Three-keyframe oscillation laid out over an explicit `start..end` window,
+/// so the caller controls both when it begins and how long one cycle lasts.
+fn kf_anim_3kf_over(
+    property: &str,
+    start: f64,
+    end: f64,
+    v0: f64,
+    v1: f64,
+    v2: f64,
+    easing: EasingType,
+) -> Animation {
+    Animation {
+        property: property.to_string(),
+        keyframes: vec![kf(start, v0), kf((start + end) / 2.0, v1), kf(end, v2)],
+        easing,
+        spring: None,
     }
 }
 
