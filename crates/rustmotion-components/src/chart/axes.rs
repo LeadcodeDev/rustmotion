@@ -112,11 +112,82 @@ impl Chart {
                     chart_x + (i as f32 / (n - 1).max(1) as f32) * chart_w
                 };
                 let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
-                let lx = x - label_w / 2.0;
+                // Centring the first/last label on the axis end pushes half of
+                // it outside the component's own box (measured: the last label
+                // of a 5-point line chart bled 5px past the right edge). Clamp
+                // into [0, box_width] — `chart_margins()` always returns a
+                // right margin of 8, so the box ends at chart_x + chart_w + 8.
+                let box_w = chart_x + chart_w + 8.0;
+                let lx = (x - label_w / 2.0).clamp(0.0, (box_w - label_w).max(0.0));
                 let ly = chart_y + chart_h + ascent + 6.0;
                 draw_text_with_fallback(
                     canvas,
                     label,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                    lx,
+                    ly,
+                    &label_paint,
+                );
+            }
+        }
+    }
+
+    /// Draw the *value* axis of a transposed (horizontal) cartesian chart:
+    /// vertical grid lines and value tick labels along the bottom.
+    ///
+    /// [`draw_axes`] assumes the value axis is vertical (grid lines
+    /// horizontal, values down the left gutter), which is wrong for
+    /// `horizontal_bar` — there the value axis runs left-to-right and the
+    /// category axis is the vertical one.
+    pub(super) fn draw_value_axis_x(
+        &self,
+        canvas: &Canvas,
+        chart_x: f32,
+        chart_y: f32,
+        chart_w: f32,
+        chart_h: f32,
+        min_val: f64,
+        max_val: f64,
+    ) {
+        if !self.show_grid && !self.show_x_labels {
+            return;
+        }
+        let Some(font) = self.make_label_font() else {
+            return;
+        };
+        let emoji_font =
+            emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, self.label_font_size));
+        let (_, metrics) = font.metrics();
+        let ascent = -metrics.ascent;
+
+        let grid_steps = 5;
+        let range = max_val - min_val;
+
+        for i in 0..=grid_steps {
+            let frac = i as f32 / grid_steps as f32;
+            let x = chart_x + frac * chart_w;
+
+            if self.show_grid {
+                let mut grid_paint = paint_from_hex(&self.grid_color);
+                grid_paint.set_style(PaintStyle::Stroke);
+                grid_paint.set_stroke_width(1.0);
+                grid_paint.set_anti_alias(true);
+                canvas.draw_line((x, chart_y), (x, chart_y + chart_h), &grid_paint);
+            }
+
+            if self.show_x_labels {
+                let label = format_number(min_val + range * frac as f64);
+                let mut label_paint = paint_from_hex(&self.label_color);
+                label_paint.set_anti_alias(true);
+                let label_w = measure_text_with_fallback(&label, &font, &emoji_font, 0.0);
+                let box_w = chart_x + chart_w + 8.0;
+                let lx = (x - label_w / 2.0).clamp(0.0, (box_w - label_w).max(0.0));
+                let ly = chart_y + chart_h + ascent + 6.0;
+                draw_text_with_fallback(
+                    canvas,
+                    &label,
                     &font,
                     &emoji_font,
                     0.0,
