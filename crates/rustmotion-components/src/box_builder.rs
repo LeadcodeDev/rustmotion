@@ -2260,6 +2260,7 @@ mod tests {
         use rustmotion_core::css::units::Length;
         let counter = ChildComponent {
             component: Component::Counter(Counter {
+                duration: None,
                 from: 0.0,
                 to: 1234.0,
                 decimals: 0,
