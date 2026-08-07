@@ -1,4 +1,4 @@
-# Parallaxe des cards
+# Parallaxe des cards et des blocs de texte
 
 **Règle : dès qu'une scène contient plusieurs cards, elles doivent dériver
 lentement en vertical les unes par rapport aux autres.** Une card seule à
@@ -39,12 +39,27 @@ Au-delà de ~12 px le mouvement se regarde au lieu de se ressentir, et il entre
 en concurrence avec l'animation d'entrée et le pan caméra. La caméra fournit
 déjà le mouvement principal ; la parallaxe ne fait qu'écarter les plans.
 
+## Les blocs de texte aussi
+
+La règle s'étend aux `text` : chaque bloc dérive, mais **moins que les cards**
+(2,5 → 5 px) et sur des cycles plus longs (10 → 16 s). La typographie est le
+plan le plus éloigné de l'objectif, et un titre qui oscille visiblement se lit
+mal. Les lignes empilées d'un même titre doivent tirer des phases distinctes,
+sinon le titre bouge comme un panneau rigide.
+
 ## Vérifier plutôt que juger à l'œil
 
 L'unisson est difficile à voir sur une lecture et évident sur une mesure. Suivre
 le centroïde vertical de deux cards sur une fenêtre stabilisée et corréler les
 deux séries : **+1.00 = unisson**, à corriger. En dessous de ~0.6 la divergence
 est acquise.
+
+**Piège de mesure — le pan caméra est un mode commun.** La caméra déplace tous
+les éléments ensemble, et ce mouvement est d'un ordre de grandeur supérieur à
+une dérive de 4 px : corréler les positions absolues renvoie +0.99 même quand
+la parallaxe fonctionne parfaitement. Mesurer l'**écart** entre deux éléments,
+qui annule le mouvement commun : écart-type nul = bloc rigide, quelques
+pixels = parallaxe réelle.
 
 ## Piège historique
 
