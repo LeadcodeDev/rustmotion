@@ -27,6 +27,67 @@ fn announced_duration(scenario: &ResolvedScenario) -> f64 {
     rustmotion::encode::build_frame_tasks(scenario).len() as f64 / fps
 }
 
+/// Why `--fix` must not write over this input.
+///
+/// `--fix` serialises `LoadedScenario::raw`, which is the document *after*
+/// variable substitution and `include` resolution — not the document on disk. For
+/// a plain JSON scenario the two coincide and writing back is faithful. For
+/// anything templated they do not, and the write silently replaces the source
+/// with its own expansion: the `config` block and every `$var` disappear, includes
+/// get inlined into the parent, and an HTML input is replaced by JSON outright.
+///
+/// One rule covers all three: only write back a source `--fix` can reproduce.
+#[derive(Debug, PartialEq, Eq)]
+enum FixRefusal {
+    HtmlSource,
+    Templated,
+    UsesInclude,
+}
+
+impl FixRefusal {
+    fn explain(&self, path: &Path) -> String {
+        let p = path.display();
+        match self {
+            Self::HtmlSource => format!(
+                "--fix cannot rewrite {p}: it is an HTML source, and the fixer only knows how to \
+                 emit JSON — applying it would replace your markup with the transpiled scenario. \
+                 Apply the fix to the HTML by hand, or transpile first and fix the JSON."
+            ),
+            Self::Templated => format!(
+                "--fix cannot rewrite {p}: it declares `config` or uses `$variables`, and the \
+                 fixer would write back the substituted scenario — dropping the template and \
+                 making `--var` a silent no-op. Fix the template by hand."
+            ),
+            Self::UsesInclude => format!(
+                "--fix cannot rewrite {p}: it uses `include`, and the fixer would write back the \
+                 resolved tree — inlining the included files into the parent and patching by a \
+                 path that no longer means the same node. Fix the included file directly."
+            ),
+        }
+    }
+}
+
+/// `None` when `--fix` may write over `input`.
+fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
+    if rustmotion::loader::is_html_path(input) {
+        return Some(FixRefusal::HtmlSource);
+    }
+    // Inspect the bytes on disk, not the loaded tree: by then substitution has
+    // already erased the very markers that make the write unfaithful.
+    let source: serde_json::Value = match serde_json::from_str(raw_source) {
+        Ok(v) => v,
+        // Unparseable source is not something we should be overwriting either.
+        Err(_) => return Some(FixRefusal::Templated),
+    };
+    if source.get("config").is_some() || raw_source.contains("$") {
+        return Some(FixRefusal::Templated);
+    }
+    if raw_source.contains("\"include\"") {
+        return Some(FixRefusal::UsesInclude);
+    }
+    None
+}
+
 pub fn cmd_validate(
     input: &PathBuf,
     report: Option<&Path>,
@@ -57,6 +118,10 @@ pub fn cmd_validate(
 
     let mut applied_fixes = 0usize;
     if fix && !report_out.geom_violations.is_empty() {
+        let raw_source = std::fs::read_to_string(input).unwrap_or_default();
+        if let Some(refusal) = refuse_fix(input, &raw_source) {
+            return Err(RustmotionError::Generic(refusal.explain(input)));
+        }
         let mut json_value = loaded.raw.clone();
         applied_fixes = apply_fixes(&mut json_value, &report_out.geom_violations);
         if applied_fixes > 0 {
@@ -430,5 +495,75 @@ mod tests {
             (duration - 3.0).abs() < 1e-6,
             "expected 3.0s with no transitions, got {duration}"
         );
+    }
+
+    /// `--fix` writes back the *resolved* tree. Anything the resolution erased is
+    /// erased on disk too, so these three inputs must be refused rather than
+    /// silently rewritten.
+    mod fix_refusals {
+        use super::super::{refuse_fix, FixRefusal};
+        use std::path::Path;
+
+        const PLAIN: &str = r#"{"video":{"width":320,"height":240,"fps":30},
+            "scenes":[{"duration":1.0,"children":[]}]}"#;
+
+        #[test]
+        fn a_plain_json_scenario_is_writable() {
+            assert_eq!(refuse_fix(Path::new("s.json"), PLAIN), None);
+        }
+
+        #[test]
+        fn an_html_source_is_refused() {
+            // Writing here replaces the author's markup with transpiled JSON.
+            assert_eq!(
+                refuse_fix(Path::new("s.html"), "<rustmotion></rustmotion>"),
+                Some(FixRefusal::HtmlSource)
+            );
+        }
+
+        #[test]
+        fn a_templated_scenario_is_refused() {
+            // The write would bake in the substitution and make --var a no-op.
+            let with_config = r#"{"config":{"title":"hi"},"video":{"width":320,"height":240,
+                "fps":30},"scenes":[{"duration":1.0,"children":[]}]}"#;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_config),
+                Some(FixRefusal::Templated)
+            );
+
+            let with_var = r#"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"text","content":"$title"}]}]}"#;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_var),
+                Some(FixRefusal::Templated)
+            );
+        }
+
+        #[test]
+        fn a_scenario_using_include_is_refused() {
+            // The resolved tree inlines the include, so a path-based patch lands on
+            // a node the source file does not contain.
+            let with_include = r#"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"include":"part.json"}]}"#;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_include),
+                Some(FixRefusal::UsesInclude)
+            );
+        }
+
+        #[test]
+        fn every_refusal_names_the_file_and_says_what_to_do_instead() {
+            let p = Path::new("scenes/hero.json");
+            for r in [
+                FixRefusal::HtmlSource,
+                FixRefusal::Templated,
+                FixRefusal::UsesInclude,
+            ] {
+                let msg = r.explain(p);
+                assert!(msg.contains("scenes/hero.json"), "{msg}");
+                assert!(msg.contains("by hand") || msg.contains("directly"), "{msg}");
+            }
+        }
     }
 }
