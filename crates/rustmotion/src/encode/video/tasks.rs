@@ -269,13 +269,32 @@ pub fn render_frame_task_scaled(
             use crate::engine::world::WorldTimeline;
             let view = &scenario.views[*view_idx];
             let timeline = WorldTimeline::build(view, config.fps, config.width, config.height);
-            crate::engine::render::render_world_frame_scaled(
+            let mut pixels = crate::engine::render::render_world_frame_scaled(
                 config,
                 view,
                 &timeline,
                 *frame_in_view,
                 scale_factor,
-            )
+            )?;
+            // `apply_post_effects` runs for every other frame kind (Normal,
+            // the camera-pan and slide-transition composites) but was never
+            // called on a `WorldFrame` — a scene's `effects` (e.g. vignette)
+            // silently never rendered inside a `world` view. Apply the
+            // active scene's effects, by symmetry with how `Normal` applies
+            // that scene's own effects.
+            let scaled_w = (config.width as f32 * scale_factor) as u32;
+            let scaled_h = (config.height as f32 * scale_factor) as u32;
+            let time = *frame_in_view as f64 / config.fps as f64;
+            if let Some(active_idx) = timeline.active_scene_idx(time, &view.scenes, config.fps) {
+                apply_post_effects(
+                    &mut pixels,
+                    scaled_w,
+                    scaled_h,
+                    &view.scenes[active_idx].effects,
+                    *frame_in_view,
+                );
+            }
+            Ok(pixels)
         }
         FrameTask::ViewTransition {
             view_a_idx,
@@ -288,7 +307,12 @@ pub fn render_frame_task_scaled(
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
-            let progress = transition_progress(*frame_in_transition, *transition_duration, fps);
+            // Open-interval progress (never exactly 0.0 or 1.0) — see
+            // `view_transition_progress`'s doc for why a `ViewTransition`
+            // needs this and a `SlideTransition` (via `transition_progress`)
+            // does not.
+            let progress =
+                view_transition_progress(*frame_in_transition, *transition_duration, fps);
 
             let view_a = &scenario.views[*view_a_idx];
             let view_b = &scenario.views[*view_b_idx];
@@ -296,14 +320,29 @@ pub fn render_frame_task_scaled(
             let frame_a = render_last_frame_of_view(config, view_a, fps, scale_factor)?;
             let frame_b = render_first_frame_of_view(config, view_b, fps, scale_factor)?;
 
-            Ok(apply_transition(
+            let mut composited = apply_transition(
                 &frame_a,
                 &frame_b,
                 scaled_w,
                 scaled_h,
                 progress,
                 transition_type,
-            ))
+            );
+            // By symmetry with `SlideTransition` (which applies scene_b's
+            // effects to the blended result, "the transition is the entry
+            // of scene_b"): apply the incoming view's first scene's effects,
+            // so an effect present on both sides' Normal frames doesn't
+            // disappear for the transition's duration and pop back.
+            if let Some(first_scene) = view_b.scenes.first() {
+                apply_post_effects(
+                    &mut composited,
+                    scaled_w,
+                    scaled_h,
+                    &first_scene.effects,
+                    *frame_in_transition,
+                );
+            }
+            Ok(composited)
         }
     }
 }
@@ -324,6 +363,32 @@ pub fn render_frame_task_scaled(
 fn transition_progress(frame_in_transition: u32, transition_duration: f64, fps: u32) -> f64 {
     let transition_frames = (transition_duration * fps as f64).round() as u32;
     frame_in_transition as f64 / transition_frames.saturating_sub(1).max(1) as f64
+}
+
+/// Frame index within a *view* transition → progress in the OPEN interval
+/// `(0.0, 1.0)`, excluding both endpoints.
+///
+/// A `SlideTransition` (via `transition_progress` above) is deliberately
+/// allowed to hit exactly 0.0/1.0 at its ends, because at those points it
+/// renders each side at scene-frame indices that were never emitted as a
+/// `Normal` frame — `frame_a_idx`/`frame_in_transition` continue exactly
+/// where `normal_start`/`normal_end` left off, so a 0.0-progress transition
+/// frame is new content, not a repeat.
+///
+/// A `ViewTransition` is different: `frame_a`/`frame_b` are
+/// `render_last_frame_of_view`/`render_first_frame_of_view` — the outgoing
+/// view's own last `Normal` frame and the incoming view's own first
+/// `Normal` frame, at the exact same time point, re-rendered byte-for-byte.
+/// A blend weight of exactly 0.0 or 1.0 there reproduces one of those
+/// frames identically, placed directly next to the frame it duplicates in
+/// the output stream — a still frame sitting inside otherwise continuous
+/// motion. Mapping onto the open interval instead — `(f + 1) / (N + 1)`
+/// instead of `f / (N - 1)` — keeps every `ViewTransition` frame a genuine
+/// blend of both sides, so no frame in the stream is ever byte-identical to
+/// its neighbour.
+fn view_transition_progress(frame_in_transition: u32, transition_duration: f64, fps: u32) -> f64 {
+    let transition_frames = (transition_duration * fps as f64).round().max(1.0);
+    (frame_in_transition as f64 + 1.0) / (transition_frames + 1.0)
 }
 
 fn render_last_frame_of_view(
@@ -440,6 +505,36 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     tasks
 }
 
+/// Frames actually spent on the transition from `scenes[i]` into
+/// `scenes[i + 1]` — defined by `scenes[i + 1].transition` — clamped to the
+/// *outgoing* scene's own frame budget. `(frames, effective_duration)`
+/// where `effective_duration` is that frame count expressed back in
+/// seconds, exactly the value `transition_progress` must be given so its
+/// internal `(duration * fps).round()` reproduces `frames` instead of the
+/// raw, unclamped declared duration.
+///
+/// A transition longer than the scene it leaves cannot consume more frames
+/// than that scene has: `scenes[i]` only has `scene_frames` frames to spend,
+/// full stop. Before this clamp existed, the *entering* scene's
+/// `normal_start` (see `build_slide_view_tasks`) was computed from the raw
+/// declared duration instead of from this same number — so when a
+/// transition declared e.g. 1.0s but the outgoing scene was only 0.3s long,
+/// only 9 frames of `SlideTransition` were ever emitted, yet the entering
+/// scene still skipped its first 30 frames (`normal_start = 30`) waiting for
+/// a transition that had already finished after 9 — silently dropping 21
+/// frames (0.7s) of the entering scene's own animation. Passing the raw
+/// duration through to `transition_progress` compounded this: progress
+/// maxed out around 0.28 instead of reaching 1.0 on the last emitted frame.
+fn actual_outgoing_transition(scenes: &[Scene], i: usize, fps: u32) -> (u32, f64) {
+    let Some(transition) = scenes.get(i + 1).and_then(|s| s.transition.as_ref()) else {
+        return (0, 0.0);
+    };
+    let raw_frames = (transition.duration * fps as f64).round() as u32;
+    let scene_frames = (scenes[i].duration * fps as f64).round() as u32;
+    let frames = raw_frames.min(scene_frames);
+    (frames, frames as f64 / fps as f64)
+}
+
 fn build_slide_view_tasks(
     tasks: &mut Vec<FrameTask>,
     view_idx: usize,
@@ -451,16 +546,15 @@ fn build_slide_view_tasks(
     for (i, scene) in scenes.iter().enumerate() {
         let scene_frames = (scene.duration * fps as f64).round() as u32;
         let next_transition = scenes.get(i + 1).and_then(|s| s.transition.as_ref());
-        let outgoing_transition_frames = next_transition
-            .map(|t| (t.duration * fps as f64).round() as u32)
-            .unwrap_or(0);
+        let (outgoing_transition_frames, outgoing_effective_duration) =
+            actual_outgoing_transition(scenes, i, fps);
 
+        // Symmetric with `outgoing_transition_frames` above: the frames this
+        // scene skips at its own start must equal what the *previous*
+        // scene's iteration actually emitted for the transition into this
+        // one, not a value recomputed independently from the raw duration.
         let incoming_transition_frames = if i > 0 {
-            scene
-                .transition
-                .as_ref()
-                .map(|t| (t.duration * fps as f64).round() as u32)
-                .unwrap_or(0)
+            actual_outgoing_transition(scenes, i - 1, fps).0
         } else {
             0
         };
@@ -478,20 +572,19 @@ fn build_slide_view_tasks(
         }
 
         if let Some(transition) = next_transition {
-            let actual_transition_frames = outgoing_transition_frames.min(scene_frames);
             let scene_b_frames = (scenes[i + 1].duration * fps as f64).round() as u32;
             let easing = transition.easing.clone();
-            for f in 0..actual_transition_frames {
+            for f in 0..outgoing_transition_frames {
                 tasks.push(FrameTask::SlideTransition {
                     view_idx,
                     scene_a_idx: i,
                     scene_b_idx: i + 1,
                     frame_in_transition: f,
-                    scene_a_frame_offset: scene_frames - actual_transition_frames,
+                    scene_a_frame_offset: scene_frames - outgoing_transition_frames,
                     scene_a_total_frames: scene_frames,
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
-                    transition_duration: transition.duration,
+                    transition_duration: outgoing_effective_duration,
                     easing: easing.clone(),
                 });
             }
@@ -677,16 +770,14 @@ pub(super) fn build_scene_frame_tasks_in_view(
     let next_transition = scenes
         .get(scene_idx + 1)
         .and_then(|s| s.transition.as_ref());
-    let outgoing_transition_frames = next_transition
-        .map(|t| (t.duration * fps as f64).round() as u32)
-        .unwrap_or(0);
+    let (outgoing_transition_frames, outgoing_effective_duration) =
+        actual_outgoing_transition(scenes, scene_idx, fps);
 
+    // Mirrors `build_slide_view_tasks`: must agree exactly with what the
+    // previous scene's own slot emitted, or the two builders diverge and
+    // `slot_tasks_reproduce_the_full_builder_exactly` catches it.
     let incoming_transition_frames = if scene_idx > 0 {
-        scene
-            .transition
-            .as_ref()
-            .map(|t| (t.duration * fps as f64).round() as u32)
-            .unwrap_or(0)
+        actual_outgoing_transition(scenes, scene_idx - 1, fps).0
     } else {
         0
     };
@@ -704,20 +795,19 @@ pub(super) fn build_scene_frame_tasks_in_view(
     }
 
     if let Some(transition) = next_transition {
-        let actual_transition_frames = outgoing_transition_frames.min(scene_frames);
         let scene_b_frames = (scenes[scene_idx + 1].duration * fps as f64).round() as u32;
         let easing = transition.easing.clone();
-        for f in 0..actual_transition_frames {
+        for f in 0..outgoing_transition_frames {
             tasks.push(FrameTask::SlideTransition {
                 view_idx,
                 scene_a_idx: scene_idx,
                 scene_b_idx: scene_idx + 1,
                 frame_in_transition: f,
-                scene_a_frame_offset: scene_frames - actual_transition_frames,
+                scene_a_frame_offset: scene_frames - outgoing_transition_frames,
                 scene_a_total_frames: scene_frames,
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
-                transition_duration: transition.duration,
+                transition_duration: outgoing_effective_duration,
                 easing: easing.clone(),
             });
         }
@@ -810,6 +900,265 @@ mod transition_progress_tests {
     fn single_frame_transition_does_not_panic() {
         let p = transition_progress(0, 1.0 / 60.0, 30);
         assert!(p.is_finite());
+    }
+}
+
+// Constat 1 (audit lot "transitions"): a transition longer than the scene it
+// leaves must not silently drop frames from the scene it enters.
+#[cfg(test)]
+mod outgoing_transition_clamp_tests {
+    use super::*;
+    use crate::schema::Scene;
+
+    fn scene(duration: f64) -> Scene {
+        serde_json::from_value(serde_json::json!({
+            "duration": duration,
+            "children": []
+        }))
+        .unwrap()
+    }
+
+    fn scene_with_transition(duration: f64, transition_duration: f64) -> Scene {
+        serde_json::from_value(serde_json::json!({
+            "duration": duration,
+            "children": [],
+            "transition": { "type": "fade", "duration": transition_duration }
+        }))
+        .unwrap()
+    }
+
+    // The audit's own repro: scene A is far shorter than the declared
+    // transition, so the transition can only ever spend A's own 9 frames
+    // (0.3s @ 30fps), not the raw 30 (1.0s @ 30fps) it asked for.
+    #[test]
+    fn clamps_to_the_outgoing_scenes_own_frame_budget() {
+        let scenes = vec![scene(0.3), scene_with_transition(2.0, 1.0)];
+        let (frames, effective_duration) = actual_outgoing_transition(&scenes, 0, 30);
+        assert_eq!(
+            frames, 9,
+            "9 frames is all scene A (0.3s @ 30fps) has to spend"
+        );
+        assert!(
+            (effective_duration - 0.3).abs() < 1e-9,
+            "effective duration must reflect the clamped frame count, not the raw 1.0s: {effective_duration}"
+        );
+    }
+
+    #[test]
+    fn no_clamp_needed_when_transition_fits() {
+        // 0.5s transition entering scene B, 2.0s outgoing scene A @ 30fps:
+        // 15 frames <= 60 available, no clamp — effective duration is the
+        // declared one, byte-for-byte.
+        let pair = vec![scene(2.0), scene_with_transition(2.0, 0.5)];
+        let (frames, effective_duration) = actual_outgoing_transition(&pair, 0, 30);
+        assert_eq!(frames, 15);
+        assert!((effective_duration - 0.5).abs() < 1e-9);
+    }
+
+    // The core regression: every one of scene B's own local-frame indices
+    // must be rendered exactly once, somewhere in the output — either as
+    // part of the SlideTransition (indices 0..outgoing_frames) or as a
+    // Normal frame (indices normal_start..scene_b_frames). Before the fix,
+    // indices `[9, 30)` were rendered nowhere: the transition only ever
+    // advanced scene B through frame 8, and Normal frames for B started at
+    // the unclamped 30.
+    #[test]
+    fn every_local_frame_of_the_entering_scene_is_rendered_exactly_once() {
+        let json = r#"{
+            "video": { "width": 320, "height": 180, "fps": 30 },
+            "scenes": [
+                { "duration": 0.3, "children": [] },
+                { "duration": 2.0, "children": [],
+                  "transition": { "type": "fade", "duration": 1.0 } }
+            ]
+        }"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let tasks = build_frame_tasks(&scenario);
+
+        let scene_b_frames = (2.0_f64 * 30.0).round() as u32; // 60
+        let mut covered = vec![0u32; scene_b_frames as usize];
+        for t in &tasks {
+            match t {
+                FrameTask::SlideTransition {
+                    scene_b_idx: 1,
+                    frame_in_transition,
+                    ..
+                } => covered[*frame_in_transition as usize] += 1,
+                FrameTask::Normal {
+                    scene_idx: 1,
+                    frame_in_scene,
+                    ..
+                } => covered[*frame_in_scene as usize] += 1,
+                _ => {}
+            }
+        }
+
+        let missing: Vec<usize> = covered
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c == 0)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "scene B local frames never rendered: {missing:?} (covered={covered:?})"
+        );
+        let duplicated: Vec<usize> = covered
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c > 1)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            duplicated.is_empty(),
+            "scene B local frames rendered more than once: {duplicated:?}"
+        );
+
+        // Exact frame-accounting check: 9 SlideTransition frames (scene A's
+        // entire 9-frame budget) + 51 Normal frames for scene B
+        // (60 - 9 = 51) + 0 Normal frames for scene A (fully absorbed by
+        // the clamped transition) = 60 tasks total.
+        assert_eq!(tasks.len(), 60, "tasks: {tasks:?}");
+    }
+}
+
+// Constat 6 (audit lot "transitions"): a ViewTransition frame must never be
+// byte-identical to the Normal frame it sits next to in the output stream.
+#[cfg(test)]
+mod view_transition_progress_tests {
+    use super::*;
+
+    #[test]
+    fn never_reaches_either_endpoint() {
+        let frames = (0.2_f64 * 30.0).round() as u32; // 6
+        for f in 0..frames {
+            let p = view_transition_progress(f, 0.2, 30);
+            assert!(
+                p > 0.0 && p < 1.0,
+                "frame {f}: progress {p} must be strictly inside (0.0, 1.0)"
+            );
+        }
+    }
+
+    #[test]
+    fn monotonic_and_symmetric_about_the_midpoint() {
+        let frames = (0.2_f64 * 30.0).round() as u32; // 6
+        let mut prev = 0.0;
+        let mut values = Vec::new();
+        for f in 0..frames {
+            let p = view_transition_progress(f, 0.2, 30);
+            assert!(p > prev, "must be strictly increasing: {prev} -> {p}");
+            prev = p;
+            values.push(p);
+        }
+        // (f+1)/(N+1) is symmetric: values[i] + values[N-1-i] == 1.0.
+        for i in 0..values.len() {
+            let j = values.len() - 1 - i;
+            assert!(
+                (values[i] + values[j] - 1.0).abs() < 1e-9,
+                "not symmetric about the midpoint: values[{i}]={} values[{j}]={}",
+                values[i],
+                values[j]
+            );
+        }
+    }
+
+    #[test]
+    fn single_frame_transition_does_not_panic_and_stays_open() {
+        let p = view_transition_progress(0, 1.0 / 60.0, 30);
+        assert!(p.is_finite());
+        assert!(p > 0.0 && p < 1.0);
+    }
+
+    // Contrast with `transition_progress`, which the SlideTransition path
+    // deliberately pins to exactly 0.0/1.0 at its ends (new content there,
+    // not a repeat — see `transition_progress`'s doc). A `ViewTransition`
+    // must not share that behaviour.
+    #[test]
+    fn differs_from_the_closed_interval_slide_transition_formula() {
+        let frames = (0.2_f64 * 30.0).round() as u32;
+        assert_eq!(transition_progress(0, 0.2, 30), 0.0);
+        assert!(view_transition_progress(0, 0.2, 30) > 0.0);
+        assert_eq!(transition_progress(frames - 1, 0.2, 30), 1.0);
+        assert!(view_transition_progress(frames - 1, 0.2, 30) < 1.0);
+    }
+}
+
+// Constat 6, black-box: an actual ViewTransition composite must not be
+// byte-identical to the Normal frame sitting next to it in the output
+// stream (the last frame of view A, or the first frame of view B).
+#[cfg(test)]
+mod view_transition_no_duplicate_frame_tests {
+    use super::*;
+    use crate::loader::load_scenario_from_source;
+
+    fn two_view_scenario() -> String {
+        r##"{
+            "video": { "width": 64, "height": 64, "fps": 30, "background": "#000000" },
+            "composition": [
+                { "type": "slide", "scenes": [
+                    { "duration": 0.5, "children": [
+                        { "type": "shape", "shape": "rect", "position": "absolute",
+                          "x": 0, "y": 0, "style": { "width": 64, "height": 64, "background": "#ffffff" },
+                          "animation": [{ "name": "fade_in", "duration": 0.5, "easing": "linear" }] }
+                    ] }
+                ] },
+                { "type": "slide",
+                  "transition": { "type": "fade", "duration": 0.2 },
+                  "scenes": [
+                    { "duration": 0.5, "children": [
+                        { "type": "shape", "shape": "rect", "position": "absolute",
+                          "x": 0, "y": 0, "style": { "width": 64, "height": 64, "background": "#000000" } }
+                    ] }
+                ] }
+            ]
+        }"##
+        .to_string()
+    }
+
+    #[test]
+    fn transition_frames_are_never_byte_identical_to_their_adjacent_normal_frame() {
+        let json = two_view_scenario();
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+        let tasks = build_frame_tasks(&scenario);
+
+        // Locate: last Normal frame of view 0, first/last ViewTransition
+        // frame, first Normal frame of view 1 — in output order, exactly as
+        // they sit in the encoded stream.
+        let last_normal_a = tasks
+            .iter()
+            .rposition(|t| matches!(t, FrameTask::Normal { view_idx: 0, .. }))
+            .expect("view 0 has normal frames");
+        let vt_frames: Vec<usize> = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, FrameTask::ViewTransition { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(!vt_frames.is_empty(), "expected ViewTransition frames");
+        let first_vt = vt_frames[0];
+        let last_vt = *vt_frames.last().unwrap();
+        let first_normal_b = tasks
+            .iter()
+            .position(|t| matches!(t, FrameTask::Normal { view_idx: 1, .. }))
+            .expect("view 1 has normal frames");
+        assert_eq!(last_normal_a + 1, first_vt, "no gap before the transition");
+        assert_eq!(last_vt + 1, first_normal_b, "no gap after the transition");
+
+        let render = |i: usize| render_frame_task(&scenario.video, &scenario, &tasks[i]).unwrap();
+        let buf_last_normal_a = render(last_normal_a);
+        let buf_first_vt = render(first_vt);
+        let buf_last_vt = render(last_vt);
+        let buf_first_normal_b = render(first_normal_b);
+
+        assert_ne!(
+            buf_last_normal_a, buf_first_vt,
+            "first ViewTransition frame duplicates the last Normal frame of view 0"
+        );
+        assert_ne!(
+            buf_last_vt, buf_first_normal_b,
+            "last ViewTransition frame duplicates the first Normal frame of view 1"
+        );
     }
 }
 

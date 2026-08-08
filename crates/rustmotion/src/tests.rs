@@ -2878,3 +2878,206 @@ mod parallax_hitmap_tests {
         );
     }
 }
+
+// ─── World-view regressions (audit lot "transitions", constats 2/7/8) ────────
+
+#[cfg(test)]
+mod world_view_regressions {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+    use crate::schema::ResolvedScenario;
+
+    fn scenario(json: &str) -> ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("load")
+    }
+
+    fn avg_luma(buf: &[u8]) -> f64 {
+        let mut sum = 0u64;
+        let mut n = 0u64;
+        for px in buf.chunks_exact(4) {
+            sum += px[0] as u64 + px[1] as u64 + px[2] as u64;
+            n += 3;
+        }
+        sum as f64 / n as f64
+    }
+
+    // Constat 2: the world-view background crossfade must genuinely fade the
+    // outgoing scene's background during the pan, and must not jump when the
+    // pan ends and the renderer switches from the two-scene crossfade branch
+    // to the single-active-scene branch.
+    #[test]
+    fn outgoing_world_background_fades_gradually_instead_of_holding_then_jumping() {
+        let json = r##"{
+            "video": { "width": 320, "height": 180, "fps": 30, "background": "#000000" },
+            "composition": [
+                { "type": "world", "camera_pan_duration": 0.8, "camera_easing": "linear",
+                  "scenes": [
+                    { "duration": 2.0, "children": [],
+                      "background": { "preset": "halo", "zones": [
+                        { "color": "#FFFFFF80", "x": 0.5, "y": 0.5, "radius": 3.0 }
+                      ] } },
+                    { "duration": 2.0, "children": [],
+                      "background": { "preset": "halo", "zones": [
+                        { "color": "#00000000", "x": 0.5, "y": 0.5, "radius": 3.0 }
+                      ] } }
+                  ] }
+            ]
+        }"##;
+        let scenario = scenario(json);
+        let tasks = build_frame_tasks(&scenario);
+        let fps = scenario.video.fps;
+
+        // Pan window: boundary at t=2.0, half=0.4s -> [1.6, 2.4]. Sample a
+        // margin either side too, at frame granularity (the actual render
+        // grain), from t=1.5 to t=2.5.
+        let render_at = |t: f64| {
+            let f = (t * fps as f64).round() as usize;
+            let task = tasks
+                .iter()
+                .find(|task| matches!(task, FrameTask::WorldFrame { frame_in_view, .. } if *frame_in_view as usize == f))
+                .unwrap_or_else(|| panic!("no WorldFrame task for frame {f} (t={t})"));
+            render_frame_task(&scenario.video, &scenario, task).unwrap()
+        };
+
+        let mut samples = Vec::new();
+        let start_f = (1.5 * fps as f64).round() as i32;
+        let end_f = (2.5 * fps as f64).round() as i32;
+        for f in start_f..=end_f {
+            let t = f as f64 / fps as f64;
+            samples.push((f, avg_luma(&render_at(t))));
+        }
+
+        // No single-frame jump: the old bug held scene A's halo at full
+        // alpha for the entire pan, then a hard cut when the "single active
+        // scene" branch took over at the pan's end.
+        let mut max_jump = 0.0_f64;
+        let mut worst = (0, 0);
+        for w in samples.windows(2) {
+            let jump = (w[1].1 - w[0].1).abs();
+            if jump > max_jump {
+                max_jump = jump;
+                worst = (w[0].0, w[1].0);
+            }
+        }
+        assert!(
+            max_jump < 15.0,
+            "avg-luma jump of {max_jump:.1} between frames {worst:?} — background must fade \
+             gradually, not hold then cut. Samples: {samples:?}"
+        );
+
+        // Genuine fade, not a flat hold: the value partway through the pan
+        // must sit strictly between the pre-pan and post-pan levels, not
+        // equal either endpoint (the "never fades" half of the bug).
+        let pre = samples.first().unwrap().1;
+        let post = samples.last().unwrap().1;
+        let mid = samples[samples.len() / 2].1;
+        assert!(
+            (mid - pre).abs() > 1.0 && (mid - post).abs() > 1.0,
+            "mid-pan luma {mid:.1} must differ meaningfully from both pre-pan {pre:.1} and \
+             post-pan {post:.1} — background never faded if it matches either endpoint"
+        );
+    }
+
+    // Constat 7: `freeze_at` on a world-view scene must stop its animated
+    // content exactly like it does in a slide view, not keep advancing.
+    #[test]
+    fn freeze_at_stops_animation_inside_a_world_view() {
+        let json = r##"{
+            "video": { "width": 200, "height": 200, "fps": 30, "background": "#000000" },
+            "composition": [
+                { "type": "world", "scenes": [
+                    { "duration": 2.0, "freeze_at": 0.5, "children": [
+                        { "type": "counter", "from": 0, "to": 200,
+                          "style": { "font-size": 48, "color": "#ffffff" } }
+                    ] }
+                ] }
+            ]
+        }"##;
+        let scenario = scenario(json);
+        let tasks = build_frame_tasks(&scenario);
+        // 2.0s @ 30fps = 60 WorldFrame tasks; freeze_at=0.5s = frame 15.
+        assert_eq!(tasks.len(), 60);
+
+        let render = |i: usize| render_frame_task(&scenario.video, &scenario, &tasks[i]).unwrap();
+        let before_freeze = render(5); // t ~= 0.167s, counter still climbing
+        let after_freeze_a = render(45); // t = 1.5s, well past freeze_at
+        let after_freeze_b = render(55); // t ~= 1.833s, also well past freeze_at
+
+        assert_ne!(
+            before_freeze, after_freeze_a,
+            "counter must have visibly changed before the freeze point"
+        );
+        assert_eq!(
+            after_freeze_a, after_freeze_b,
+            "frames 45 and 55 are both past freeze_at=0.5s and must be pixel-identical \
+             (the counter must have stopped, not kept incrementing)"
+        );
+    }
+
+    // Constat 8a: `scene.effects` (post-effects) must apply on WorldFrame
+    // tasks, not just Normal/SlideTransition ones.
+    #[test]
+    fn post_effects_apply_on_world_frames() {
+        let json = r##"{
+            "video": { "width": 100, "height": 100, "background": "#ffffff" },
+            "composition": [
+                { "type": "world", "scenes": [
+                    { "duration": 1.0, "children": [],
+                      "effects": [ { "type": "vignette", "intensity": 0.9, "radius": 0.3 } ] }
+                ] }
+            ]
+        }"##;
+        let scenario = scenario(json);
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::WorldFrame { .. }))
+            .expect("world frame task");
+        let buf = render_frame_task(&scenario.video, &scenario, task).unwrap();
+
+        let corner_r = buf[0] as u16;
+        let center_base = (50 * 100 + 50) * 4;
+        let center_r = buf[center_base] as u16;
+        assert!(
+            corner_r < center_r,
+            "vignette must darken the corner of a WorldFrame: corner={corner_r} center={center_r}"
+        );
+    }
+
+    // Constat 8b: a ViewTransition composite must carry the incoming view's
+    // effects too, by symmetry with SlideTransition (so an effect present on
+    // both sides' Normal frames doesn't disappear for the transition and pop
+    // back).
+    #[test]
+    fn post_effects_apply_on_view_transition_frames() {
+        let json = r##"{
+            "video": { "width": 100, "height": 100, "fps": 10, "background": "#ffffff" },
+            "composition": [
+                { "type": "slide", "scenes": [
+                    { "duration": 0.5, "children": [],
+                      "effects": [ { "type": "vignette", "intensity": 0.9, "radius": 0.3 } ] }
+                ] },
+                { "type": "slide", "transition": { "type": "fade", "duration": 0.3 },
+                  "scenes": [
+                    { "duration": 0.5, "children": [],
+                      "effects": [ { "type": "vignette", "intensity": 0.9, "radius": 0.3 } ] }
+                ] }
+            ]
+        }"##;
+        let scenario = scenario(json);
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::ViewTransition { .. }))
+            .expect("view transition task");
+        let buf = render_frame_task(&scenario.video, &scenario, task).unwrap();
+
+        let corner_r = buf[0] as u16;
+        let center_base = (50 * 100 + 50) * 4;
+        let center_r = buf[center_base] as u16;
+        assert!(
+            corner_r < center_r,
+            "vignette must darken the corner of a ViewTransition frame: corner={corner_r} center={center_r}"
+        );
+    }
+}
