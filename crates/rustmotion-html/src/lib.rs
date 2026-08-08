@@ -69,6 +69,34 @@ pub enum HtmlError {
     /// Emitted when `<font>` sets both `path`/`src` and `source` — they are mutually exclusive.
     #[error("<font family=\"{family}\">: 'path'/'src' and 'source' are mutually exclusive")]
     FontPathAndSourceConflict { family: String },
+    /// Emitted for `<style>`. Unlike `<script>`/`<title>`/`<noscript>`/`<template>`
+    /// (silently skipped — they never visually render in real HTML either, so
+    /// skipping them matches an author's own expectation), `<style>` DOES have
+    /// real, expected visual effect in HTML. The dialect has no CSS
+    /// selector/cascade engine (only inline `style="..."` attributes), so a
+    /// `<style>` block's rules would never take effect — refused instead of
+    /// silently discarded, so the author's intent isn't dropped without a trace.
+    #[error(
+        "<style> blocks are not supported by the HTML dialect (no CSS selector/cascade engine) — move these declarations onto the target elements' style=\"...\" attribute"
+    )]
+    StyleElementUnsupported,
+    /// Emitted for a native HTML tag whose real payload (`src`, nested shape
+    /// markup, …) has no representation via the generic `Container`/`div`
+    /// fallback — that fallback would silently render an empty box. The
+    /// dialect's `rm-*` custom-element mechanism is the way to express these.
+    #[error(
+        "<{tag}> is not supported by the HTML dialect and would render as an empty container — use <{suggestion} ...> instead"
+    )]
+    UnsupportedNativeElement { tag: String, suggestion: String },
+    /// Emitted when a `<scene>` is found nested inside an element other than
+    /// `<rustmotion>` itself (or `<font>`, which the transpiler recurses
+    /// through to work around html5ever's formatting-element reconstruction).
+    /// `collect_scenes_and_fonts` only walks direct children, so a nested
+    /// `<scene>` would otherwise vanish from the scenario without a trace.
+    #[error(
+        "<scene> found nested inside <{parent}> — <scene> elements must be direct children of <rustmotion> (only <font> is recursed into)"
+    )]
+    NestedScene { parent: String },
 }
 
 /// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
@@ -169,6 +197,15 @@ fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
 /// element and nests subsequent siblings inside it, we recurse into `<font>`
 /// children so that `<scene>` elements placed after `<font>` declarations are
 /// still found at any depth.
+///
+/// Any other child is scanned (at any depth) for a nested `<scene>` — a
+/// wrapper element (typo'd unclosed tag, deliberate `<div>` grouping, or
+/// html5ever's own formatting-element error recovery on tags like `<b>`)
+/// would otherwise make `<scene>` elements vanish from the scenario with no
+/// trace, since this function only descends into direct children. A `<style>`
+/// found at this level is refused for the same reason `element_to_value`
+/// refuses it inside a scene: it has real expected visual effect that the
+/// dialect cannot honor, so it must not be silently dropped either.
 fn collect_scenes_and_fonts(
     parent: &Handle,
     scenes: &mut Vec<Value>,
@@ -181,6 +218,12 @@ fn collect_scenes_and_fonts(
                 fonts.push(font_to_value(child)?);
                 // Recurse: html5ever may nest siblings inside the <font> element.
                 collect_scenes_and_fonts(child, scenes, fonts)?;
+            }
+            Some("style") => return Err(HtmlError::StyleElementUnsupported),
+            Some(other) if find_element(child, "scene").is_some() => {
+                return Err(HtmlError::NestedScene {
+                    parent: other.to_string(),
+                });
             }
             _ => {}
         }

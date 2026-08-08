@@ -2,11 +2,22 @@ use serde_json::{Map, Value};
 
 use crate::HtmlError;
 
-/// Coerce a CSS value string into JSON. A bare number or `<n>px` becomes a JSON
-/// number (integral → integer, so it deserializes into `u32`/`f32` fields);
-/// everything else (`%`, `auto`, `fr`, colors, keywords) stays a string.
+/// Coerce a CSS value string into JSON. `true`/`false` become a JSON boolean
+/// (aligned with [`coerce_dsl_value`] — without this, no `bool` schema field
+/// is reachable from HTML: `auto_scroll`, `diff`, `loop`, `show_grid`,
+/// `show_borders`, `pulse`, … all reject the JSON string `"true"`/`"false"`
+/// that a naive coercion would otherwise produce). A bare number or `<n>px`
+/// becomes a JSON number (integral → integer, so it deserializes into
+/// `u32`/`f32` fields); everything else (`%`, `auto`, `fr`, colors, keywords)
+/// stays a string.
 pub fn coerce_value(raw: &str) -> Value {
     let t = raw.trim();
+    if t == "true" {
+        return Value::Bool(true);
+    }
+    if t == "false" {
+        return Value::Bool(false);
+    }
     let num = t.strip_suffix("px").unwrap_or(t).trim();
     if let Ok(f) = num.parse::<f64>() {
         if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
@@ -165,6 +176,13 @@ mod tests {
         assert_eq!(coerce_value("center"), json!("center"));
         assert_eq!(coerce_value("#0f172a"), json!("#0f172a"));
         assert_eq!(coerce_value("1fr"), json!("1fr"));
+    }
+
+    #[test]
+    fn coerce_value_true_false_become_json_booleans() {
+        assert_eq!(coerce_value("true"), json!(true));
+        assert_eq!(coerce_value("false"), json!(false));
+        assert_eq!(coerce_value(" true "), json!(true), "trims whitespace too");
     }
 
     #[test]
