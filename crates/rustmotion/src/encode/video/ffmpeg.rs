@@ -69,20 +69,14 @@ fn ffmpeg_args(
                 &["-c:v", "libx265", "-crf", &crf, "-preset", "medium"],
                 &mut args,
             );
-            push(
-                &["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")],
-                &mut args,
-            );
+            push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
         }
         "vp9" => {
             push(
                 &["-c:v", "libvpx-vp9", "-crf", &crf, "-b:v", "0"],
                 &mut args,
             );
-            push(
-                &["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")],
-                &mut args,
-            );
+            push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
         }
         "prores" => {
             push(&["-c:v", "prores_ks", "-profile:v", "4"], &mut args);
@@ -346,7 +340,11 @@ mod tests {
         for codec in ["h264", "h265", "vp9", "prores"] {
             let args = ffmpeg_args(320, 240, 30, codec, 23, false, Some("/tmp/a.raw"), "o.mp4");
             let inputs = input_positions(&args);
-            assert_eq!(inputs.len(), 2, "{codec}: expected a video and an audio input");
+            assert_eq!(
+                inputs.len(),
+                2,
+                "{codec}: expected a video and an audio input"
+            );
 
             // The audio input keeps its own format options immediately ahead of it.
             let audio_i = inputs[1];
@@ -362,7 +360,11 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(args.last().unwrap(), "o.mp4", "{codec}: output must be last");
+            assert_eq!(
+                args.last().unwrap(),
+                "o.mp4",
+                "{codec}: output must be last"
+            );
         }
     }
 
