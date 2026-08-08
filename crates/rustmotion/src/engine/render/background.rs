@@ -17,6 +17,14 @@ pub(super) fn draw_animated_background(
     // Compute scroll offset for tiled presets (gradient_shift handles rotation internally)
     let (scroll_x, scroll_y) = compute_scroll_offset(bg, time);
 
+    // Whole tile periods the wrap removed. The geometry doesn't care (the
+    // pattern is periodic on `spacing`) but `draw_bg_grid_dots`'s pulse is
+    // a function of position, so without adding these back its phase would
+    // jump by `spacing * 0.01` radians every time the offset wraps — a
+    // visible, periodic pop in every dot's radius and alpha at once.
+    let (raw_x, raw_y) = raw_scroll_offset(bg, time);
+    let phase_origin = (raw_x - scroll_x, raw_y - scroll_y);
+
     canvas.save();
     canvas.translate((bg.x + scroll_x, bg.y + scroll_y));
 
@@ -30,7 +38,9 @@ pub(super) fn draw_animated_background(
             width,
             height,
         ),
-        BackgroundPreset::GridDots(cfg) => draw_bg_grid_dots(canvas, cfg, time, width, height),
+        BackgroundPreset::GridDots(cfg) => {
+            draw_bg_grid_dots(canvas, cfg, time, width, height, phase_origin)
+        }
         BackgroundPreset::ConcentricCircles(cfg) => {
             draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height)
         }
@@ -64,15 +74,7 @@ pub(super) fn draw_world_bg_with_parallax(
         }
         _ => {
             // Grid-based backgrounds: modulo offset for seamless tiling.
-            let spacing = match &bg.preset {
-                BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
-                BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
-                BackgroundPreset::Heropattern(cfg) => {
-                    let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
-                    def.map(|d| d.width * cfg.scale).unwrap_or(60.0).max(20.0)
-                }
-                _ => 60.0_f32.max(20.0),
-            };
+            let spacing = tile_spacing(&bg.preset);
             let offset_x = -(cam_x % spacing);
             let offset_y = -(cam_y % spacing);
             canvas.save();
@@ -115,10 +117,11 @@ fn draw_bg_gradient_shift(
     let angle = (sign * speed * time) % 360.0;
     let rad = angle.to_radians();
 
-    // Interpolate in linear color space to reduce banding on dark gradients
-    let linear_cs = skia_safe::ColorSpace::new_srgb_linear();
-
-    // Subdivide color stops (16 intermediate steps between each pair) for smoother gradients
+    // Subdivide color stops (16 intermediate steps between each pair),
+    // interpolating in *linear light* and re-encoding to sRGB per generated
+    // stop — see `subdivide_gradient_stops` for why this can't be delegated
+    // to a Skia `ColorSpace` tag on the shader (the render surfaces carry no
+    // color space, so any such tag is a silent no-op).
     let (colors, positions) = subdivide_gradient_stops(&base_colors, 16);
 
     let shader = match cfg.gradient_type {
@@ -130,7 +133,7 @@ fn draw_bg_gradient_shift(
             let end = Point::new(cx + rad.cos() * half_diag, cy + rad.sin() * half_diag);
             skia_safe::shader::Shader::linear_gradient(
                 (start, end),
-                GradientShaderColors::ColorsInSpace(&colors, Some(linear_cs)),
+                GradientShaderColors::ColorsInSpace(&colors, None),
                 Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
@@ -143,7 +146,7 @@ fn draw_bg_gradient_shift(
             skia_safe::shader::Shader::radial_gradient(
                 center,
                 radius,
-                GradientShaderColors::ColorsInSpace(&colors, Some(linear_cs)),
+                GradientShaderColors::ColorsInSpace(&colors, None),
                 Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
@@ -160,8 +163,25 @@ fn draw_bg_gradient_shift(
     }
 }
 
-/// Subdivide gradient color stops by inserting intermediate interpolated colors.
-/// Returns (colors, positions) with `subdivisions` extra stops between each original pair.
+/// Subdivide gradient color stops by inserting intermediate interpolated
+/// colors. Returns (colors, positions) with `subdivisions` extra stops
+/// between each original pair.
+///
+/// RGB is interpolated in **linear light** (decoded from sRGB, lerped,
+/// re-encoded to sRGB per generated stop) — the actual fix for
+/// rules/gradient-quality.md's "linear color space interpolation" claim.
+/// The two mitigations used to rely on Skia: tagging the shader's colors
+/// with `ColorSpace::new_srgb_linear()` and subdividing so Skia's own
+/// per-pixel lerp had more (supposedly linear-space) stops to work with.
+/// Both were silent no-ops: the render surfaces are created with no color
+/// space (`ImageInfo::new(..., None)`), which short-circuits any
+/// color-space conversion Skia would otherwise do — so the colors stayed
+/// gamma-encoded sRGB the whole time, and subdividing an already-sRGB lerp
+/// is a mathematical identity (17x more stops, zero visual effect). Doing
+/// the gamma conversion here, on plain `f32`s, works regardless of what
+/// color space (if any) the destination surface ends up tagged with later.
+///
+/// Alpha is NOT gamma-encoded and keeps a plain linear lerp.
 pub(super) fn subdivide_gradient_stops(
     colors: &[skia_safe::Color4f],
     subdivisions: u32,
@@ -182,20 +202,54 @@ pub(super) fn subdivide_gradient_stops(
         for s in 0..steps {
             let t = s as f32 / steps as f32;
             let global_t = (i as f32 + t) / seg;
-            out_colors.push(skia_safe::Color4f {
-                r: c0.r + (c1.r - c0.r) * t,
-                g: c0.g + (c1.g - c0.g) * t,
-                b: c0.b + (c1.b - c0.b) * t,
-                a: c0.a + (c1.a - c0.a) * t,
-            });
+            let color = if t == 0.0 {
+                // Exact copy at the segment start — no conversion round-trip
+                // drift on stops that already existed pre-subdivision.
+                *c0
+            } else {
+                skia_safe::Color4f {
+                    r: lerp_srgb_channel(c0.r, c1.r, t),
+                    g: lerp_srgb_channel(c0.g, c1.g, t),
+                    b: lerp_srgb_channel(c0.b, c1.b, t),
+                    a: c0.a + (c1.a - c0.a) * t,
+                }
+            };
+            out_colors.push(color);
             out_pos.push(global_t);
         }
     }
-    // Last color
+    // Last color — exact copy, same reasoning as the `t == 0.0` case above.
     out_colors.push(colors[n - 1]);
     out_pos.push(1.0);
 
     (out_colors, out_pos)
+}
+
+/// Lerp one sRGB-encoded channel (0..1) by decoding both endpoints to linear
+/// light, interpolating there, and re-encoding back to sRGB.
+fn lerp_srgb_channel(a: f32, b: f32, t: f32) -> f32 {
+    let linear = srgb_to_linear(a) + (srgb_to_linear(b) - srgb_to_linear(a)) * t;
+    linear_to_srgb(linear)
+}
+
+/// sRGB EOTF (decode): gamma-encoded 0..1 -> linear light 0..1.
+fn srgb_to_linear(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// sRGB OETF (encode): linear light 0..1 -> gamma-encoded 0..1.
+fn linear_to_srgb(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 /// Soft colored glow zones (halo preset).
@@ -274,21 +328,48 @@ fn draw_bg_concentric_circles(
     }
 }
 
+/// Pulse factor (radius multiplier and alpha basis) of the dot drawn at
+/// canvas-local `(x, y)`.
+///
+/// `phase_origin` is the whole number of tile periods `compute_scroll_offset`
+/// wrapped away, and is subtracted so the argument stays the dot's position
+/// on the *unwrapped* scroll track. Geometry is periodic on `spacing` and so
+/// survives the wrap unchanged; this `sin` is not, and would otherwise step
+/// by `spacing * 0.01` rad at every wrap.
+fn dot_pulse(x: f32, y: f32, time: f32, phase_origin: (f32, f32)) -> f32 {
+    let wx = x - phase_origin.0;
+    let wy = y - phase_origin.1;
+    (wx * 0.01 + wy * 0.01 + time * 2.0).sin() * 0.3 + 0.7
+}
+
 /// Animated dot grid pattern.
-fn draw_bg_grid_dots(canvas: &Canvas, cfg: &GridDotsConfig, time: f32, width: f32, height: f32) {
+fn draw_bg_grid_dots(
+    canvas: &Canvas,
+    cfg: &GridDotsConfig,
+    time: f32,
+    width: f32,
+    height: f32,
+    phase_origin: (f32, f32),
+) {
     let mut paint = paint_from_hex(&cfg.color);
     paint.set_anti_alias(true);
 
     let spacing = cfg.spacing.max(20.0);
     let dot_radius = cfg.element_size / 2.0;
 
-    // Scroll is now handled by compute_scroll_offset + canvas translate upstream.
+    // Scroll is handled by compute_scroll_offset + canvas translate
+    // upstream, which now wraps the offset into `(-spacing, spacing)` (see
+    // `compute_scroll_offset`) — this loop must overscan symmetrically on
+    // BOTH axes (one `spacing` of margin on every side) to still cover the
+    // full viewport for any offset in that range. The x-loop used to start
+    // at 0 with no left margin (asymmetric vs. the y-loop below), so any
+    // positive scroll left a growing blank band on the left edge.
     let mut y = -spacing;
     while y < height + spacing {
-        let mut x = 0.0_f32;
+        let mut x = -spacing;
         while x < width + spacing {
             // Pulse: subtle size variation based on position + time
-            let phase = (x * 0.01 + y * 0.01 + time * 2.0).sin() * 0.3 + 0.7;
+            let phase = dot_pulse(x, y, time, phase_origin);
             let r = dot_radius * phase;
             paint.set_alpha_f(phase * 0.4);
             canvas.draw_circle((x, y), r, &paint);
@@ -520,8 +601,50 @@ pub(super) fn interpolate_animated_bg(
     }
 }
 
-/// Compute the scroll offset for tiled backgrounds based on direction + speed.
+/// Tile period (px) a preset's own draw loop repeats on — the amount by
+/// which a scroll offset can be wrapped without changing the rendered
+/// pattern. Shared by `compute_scroll_offset` (below) and
+/// `draw_world_bg_with_parallax`'s camera-pan modulo so the two never
+/// diverge on what "one period" means for a given preset.
+fn tile_spacing(preset: &BackgroundPreset) -> f32 {
+    match preset {
+        BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
+        BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
+        BackgroundPreset::Heropattern(cfg) => {
+            let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
+            def.map(|d| d.width * cfg.scale).unwrap_or(60.0).max(20.0)
+        }
+        _ => 60.0_f32.max(20.0),
+    }
+}
+
+/// Compute the scroll offset for tiled backgrounds based on direction +
+/// speed, wrapped into `(-spacing, spacing)` so it never grows unbounded.
+///
+/// Bug this fixes: the offset used to grow linearly with `time` forever.
+/// The tiled draw loops (`draw_bg_grid_dots`, `draw_bg_heropattern`) only
+/// ever overscan by one `spacing`/`margin` around the viewport — with the
+/// canvas translated by an unbounded offset, the pattern slides off-frame
+/// and leaves a growing blank band once the offset exceeds that one-tile
+/// margin (see paint.md finding #5). Since every tiled pattern is exactly
+/// periodic on `spacing`, translating by any offset congruent mod `spacing`
+/// produces byte-identical pixels — Rust's `%` already returns a value with
+/// `|result| < spacing` and the same sign as the input, which is exactly
+/// the symmetric `(-spacing, spacing)` margin the (now-symmetric, see
+/// `draw_bg_grid_dots`) draw loops need. `t=0` (or `speed=0`) stays an exact
+/// `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
 pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
+    let (raw_x, raw_y) = raw_scroll_offset(bg, time);
+    let spacing = tile_spacing(&bg.preset);
+    (raw_x % spacing, raw_y % spacing)
+}
+
+/// The unwrapped scroll offset — how far the pattern *would* have travelled
+/// under the old unbounded scheme. Only `compute_scroll_offset` (for the
+/// wrap) and the grid-dot pulse phase (for continuity across a wrap, see
+/// `phase_origin` in `draw_animated_background`) need this; nothing should
+/// translate a canvas by it.
+fn raw_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
     let speed = bg.speed;
     if speed == 0.0 {
         return (0.0, 0.0);
@@ -650,6 +773,197 @@ mod halo_opacity_tests {
             (r, g, b),
             (0, 0, 0),
             "negative opacity must clamp to fully transparent"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scroll_offset_wrap_tests {
+    //! TDD tests for paint.md finding #5: `compute_scroll_offset` must wrap
+    //! into one tile period instead of growing unbounded, or the tiled
+    //! background's draw loops (which only ever overscan by one `spacing`
+    //! around the viewport) leave a growing blank band.
+
+    use super::*;
+    use crate::schema::GridDotsConfig;
+
+    fn grid_bg(direction: ScrollDirection, speed: f32) -> AnimatedBackground {
+        AnimatedBackground {
+            preset: BackgroundPreset::GridDots(GridDotsConfig {
+                color: "#ffffff".into(),
+                element_size: 8.0,
+                spacing: 40.0,
+            }),
+            x: 0.0,
+            y: 0.0,
+            speed,
+            direction: Some(direction),
+        }
+    }
+
+    #[test]
+    fn scroll_offset_stays_within_one_tile_period() {
+        // Repro (paint.md #5): 300x200, grid_dots, speed 60, direction
+        // right, spacing 40 — at t=3s the raw offset is 180px (4.5
+        // spacings), way outside what `draw_bg_grid_dots`'s one-tile
+        // overscan margin can cover.
+        let bg = grid_bg(ScrollDirection::Right, 60.0);
+        for t in [0.0f32, 0.1, 0.5, 1.0, 3.0, 10.0, 37.3] {
+            let (dx, dy) = compute_scroll_offset(&bg, t);
+            assert!(
+                (-40.0..=40.0).contains(&dx),
+                "t={t}: dx={dx} must stay within one tile period (±spacing=40)"
+            );
+            assert_eq!(
+                dy, 0.0,
+                "t={t}: pure horizontal scroll must not drift vertically (dy={dy})"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_offset_at_t0_is_unchanged_zero() {
+        // Non-regression: t=0 must stay an exact no-op, not jump to a whole
+        // tile period ahead/behind.
+        let bg = grid_bg(ScrollDirection::Right, 60.0);
+        assert_eq!(compute_scroll_offset(&bg, 0.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn scroll_offset_zero_speed_is_still_a_pure_noop() {
+        let bg = grid_bg(ScrollDirection::Right, 0.0);
+        assert_eq!(compute_scroll_offset(&bg, 5.0), (0.0, 0.0));
+    }
+
+    /// Regression guard for a side effect of the wrap itself: geometry is
+    /// periodic on `spacing` so it crosses a wrap unchanged, but the dot
+    /// pulse is a `sin` of position and is not. Feeding it canvas-local
+    /// coordinates made every dot's radius and alpha step at once, once per
+    /// `spacing / speed` seconds.
+    #[test]
+    fn dot_pulse_is_continuous_across_a_wrap() {
+        let bg = grid_bg(ScrollDirection::Right, 60.0);
+        // spacing 40 / speed 60 => the offset wraps at t = 2/3 s.
+        let (before, after) = (0.6666_f32, 0.6667_f32);
+        assert!(
+            compute_scroll_offset(&bg, before).0 > compute_scroll_offset(&bg, after).0,
+            "test setup: these two instants must straddle a wrap"
+        );
+
+        // Pulse of whichever dot lands on a fixed screen position.
+        let (sx_screen, sy_screen) = (200.0_f32, 100.0_f32);
+        let sampled = |t: f32| {
+            let (sx, sy) = compute_scroll_offset(&bg, t);
+            let (rx, ry) = raw_scroll_offset(&bg, t);
+            dot_pulse(sx_screen - sx, sy_screen - sy, t, (rx - sx, ry - sy))
+        };
+        let delta = (sampled(after) - sampled(before)).abs();
+        assert!(
+            delta < 0.01,
+            "pulse must not jump across a wrap, got delta {delta}"
+        );
+
+        // Witness that this is a real hazard and not a vacuous assertion:
+        // the same sample without the phase origin does step visibly.
+        let naive = |t: f32| {
+            let (sx, sy) = compute_scroll_offset(&bg, t);
+            dot_pulse(sx_screen - sx, sy_screen - sy, t, (0.0, 0.0))
+        };
+        assert!(
+            (naive(after) - naive(before)).abs() > 0.05,
+            "canvas-local phase should step at a wrap — if it no longer does, \
+             this test has stopped proving anything"
+        );
+    }
+
+    /// The pulse must be untouched before the first wrap, so the fix cannot
+    /// change how any existing scenario's opening seconds look.
+    #[test]
+    fn dot_pulse_matches_the_original_formula_with_no_wrap_yet() {
+        let bg = grid_bg(ScrollDirection::Right, 60.0);
+        for t in [0.0_f32, 0.1, 0.5] {
+            let (sx, sy) = compute_scroll_offset(&bg, t);
+            let (rx, ry) = raw_scroll_offset(&bg, t);
+            assert_eq!(
+                (rx - sx, ry - sy),
+                (0.0, 0.0),
+                "t={t}: no whole period wrapped away yet"
+            );
+            let expected = (40.0_f32 * 0.01 + 20.0 * 0.01 + t * 2.0).sin() * 0.3 + 0.7;
+            assert_eq!(dot_pulse(40.0, 20.0, t, (rx - sx, ry - sy)), expected);
+        }
+    }
+
+    #[test]
+    fn scroll_offset_wraps_consistently_for_left_direction_too() {
+        let bg = grid_bg(ScrollDirection::Left, 60.0);
+        for t in [0.0f32, 3.0, 10.0] {
+            let (dx, _dy) = compute_scroll_offset(&bg, t);
+            assert!(
+                (-40.0..=40.0).contains(&dx),
+                "t={t}: dx={dx} must stay within one tile period"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod gradient_linear_space_tests {
+    //! TDD tests for paint.md finding #7: the "linear color space
+    //! interpolation" and "subdivided stops" banding mitigations were both
+    //! inert (the render surfaces carry no Skia `ColorSpace`, so the
+    //! `ColorsInSpace(..., Some(linear_cs))` tag was a silent no-op, and
+    //! subdividing an already-sRGB-space lerp is a mathematical identity).
+    //! Fix: `subdivide_gradient_stops` itself now interpolates in linear
+    //! light and re-encodes to sRGB per generated stop.
+
+    use super::*;
+    use skia_safe::Color4f;
+
+    #[test]
+    fn subdivide_interpolates_in_linear_light_not_srgb_gamma() {
+        // Black -> white: the true midpoint in *linear light* (0.5) encodes
+        // back to sRGB as ~188, not the naive sRGB-byte midpoint of 127.
+        let black = Color4f::new(0.0, 0.0, 0.0, 1.0);
+        let white = Color4f::new(1.0, 1.0, 1.0, 1.0);
+        let (colors, positions) = subdivide_gradient_stops(&[black, white], 1);
+        assert_eq!(positions.len(), 3, "1 subdivision -> stops at 0, 0.5, 1.0");
+        assert_eq!(positions[1], 0.5);
+        let mid_255 = (colors[1].r * 255.0).round() as i32;
+        assert!(
+            (mid_255 - 188).abs() <= 3,
+            "midpoint should be ~188 (linear-light average re-encoded to sRGB), got {mid_255}"
+        );
+    }
+
+    #[test]
+    fn subdivide_endpoints_are_exact() {
+        let a = Color4f::new(0.2, 0.4, 0.6, 1.0);
+        let b = Color4f::new(0.8, 0.1, 0.9, 1.0);
+        let (colors, positions) = subdivide_gradient_stops(&[a, b], 16);
+        assert_eq!(positions[0], 0.0);
+        assert_eq!(*positions.last().unwrap(), 1.0);
+        let first = colors[0];
+        let last = *colors.last().unwrap();
+        assert!((first.r - a.r).abs() < 1e-4, "first.r={}", first.r);
+        assert!((first.g - a.g).abs() < 1e-4, "first.g={}", first.g);
+        assert!((first.b - a.b).abs() < 1e-4, "first.b={}", first.b);
+        assert!((last.r - b.r).abs() < 1e-4, "last.r={}", last.r);
+        assert!((last.g - b.g).abs() < 1e-4, "last.g={}", last.g);
+        assert!((last.b - b.b).abs() < 1e-4, "last.b={}", last.b);
+    }
+
+    #[test]
+    fn subdivide_alpha_stays_linear_not_gamma_corrected() {
+        // Alpha is not gamma-encoded — it must keep lerping plainly, unlike
+        // RGB.
+        let a = Color4f::new(0.0, 0.0, 0.0, 0.0);
+        let b = Color4f::new(0.0, 0.0, 0.0, 1.0);
+        let (colors, _positions) = subdivide_gradient_stops(&[a, b], 1);
+        assert!(
+            (colors[1].a - 0.5).abs() < 1e-4,
+            "alpha midpoint should be a plain 0.5 lerp, got {}",
+            colors[1].a
         );
     }
 }
