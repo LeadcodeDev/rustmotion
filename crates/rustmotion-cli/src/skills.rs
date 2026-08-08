@@ -192,10 +192,13 @@ pub fn install(global: bool) -> Result<()> {
         }
     }
 
-    // Write CLAUDE.md only in local mode
+    // Write CLAUDE.md only in local mode. The project may already own this file —
+    // merge into a delimited block rather than claiming the whole document.
     if !global {
         let claude_path = root.join("CLAUDE.md");
-        if write_if_changed(&claude_path, CLAUDE_MD)? {
+        let existing = std::fs::read_to_string(&claude_path).ok();
+        let merged = crate::claude_md::merge(existing.as_deref(), CLAUDE_MD);
+        if write_if_changed(&claude_path, &merged)? {
             written += 1;
         } else {
             skipped += 1;
@@ -299,12 +302,24 @@ pub fn uninstall(global: bool) -> Result<()> {
     std::fs::remove_dir_all(&skills_dir)?;
     let mut removed = 1;
 
-    // Remove CLAUDE.md only in local mode
+    // Remove only what we put there. A CLAUDE.md carrying the project's own
+    // instructions keeps them; the file is deleted only when our block was all it
+    // ever held.
     if !global {
         let claude_path = root.join("CLAUDE.md");
-        if claude_path.exists() {
-            std::fs::remove_file(&claude_path)?;
-            removed += 1;
+        if let Ok(existing) = std::fs::read_to_string(&claude_path) {
+            match crate::claude_md::strip(&existing) {
+                Some(remaining) => {
+                    if remaining != existing {
+                        std::fs::write(&claude_path, remaining)?;
+                        removed += 1;
+                    }
+                }
+                None => {
+                    std::fs::remove_file(&claude_path)?;
+                    removed += 1;
+                }
+            }
         }
     }
 
