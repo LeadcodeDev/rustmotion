@@ -762,57 +762,90 @@ pub fn render_world_frame_scaled(
                 &scene_b.resolved_background.animated
             };
 
-            // Calculate crossfade progress based on camera pan position
-            let pan_half = timeline.camera_pan_duration / 2.0;
-            let (_, _scene_b_start) = timeline.scene_windows[scene_b_idx];
+            // Calculate crossfade progress based on camera pan position.
+            // This boundary's pan sits between `scene_a_idx` and
+            // `scene_b_idx`, i.e. `boundary_pan_duration[scene_b_idx - 1]`
+            // (see `WorldTimeline::boundary_pan_duration`) — using the
+            // single view-level `camera_pan_duration` here instead would
+            // desync this background crossfade window from the foreground
+            // opacity/camera windows whenever the per-boundary clamp kicks
+            // in (pan longer than a neighbouring scene's duration).
+            let pan_half = timeline
+                .boundary_pan_duration
+                .get(scene_b_idx.saturating_sub(1))
+                .copied()
+                .unwrap_or(timeline.camera_pan_duration)
+                / 2.0;
             let pan_start = timeline.scene_windows[scene_b_idx].0 - pan_half;
             let pan_end = timeline.scene_windows[scene_b_idx].0 + pan_half;
             let crossfade =
                 safe_div(time - pan_start, pan_end - pan_start, 1.0).clamp(0.0, 1.0) as f32;
 
-            // Draw scene A backgrounds with fading alpha
-            if crossfade < 1.0 {
+            if std::ptr::eq(bgs_a, bgs_b) {
+                // Same backgrounds on both sides (the documented recipe: a
+                // shared `view.background` and no per-scene override) — a
+                // crossfade of a layer with itself is that layer, so just
+                // paint it once instead of doing the work twice.
                 for bg in bgs_a {
                     draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
                 }
-            }
-            // Draw scene B backgrounds with growing alpha
-            if crossfade > 0.0 && !std::ptr::eq(bgs_a, bgs_b) {
-                // If backgrounds are different, create a temporary surface for B and blend
-                let bg_info = ImageInfo::new(
-                    (scaled_w, scaled_h),
-                    ColorType::RGBA8888,
-                    skia_safe::AlphaType::Premul,
-                    None,
+            } else {
+                // Distinct per-scene backgrounds: render each side into its
+                // own transparent, full-frame layer and crossfade the RAW
+                // pixel buffers in f32 — the same technique
+                // `camera_pan_transition`'s `Static` mode uses for the
+                // slide-view side of a scene-to-scene cut (see
+                // `crates/rustmotion-core/src/engine/transition.rs`).
+                //
+                // The previous version painted `bgs_a` straight onto the
+                // canvas at full alpha unconditionally, then composited
+                // `bgs_b` over it through Skia's 8-bit Paint alpha: scene
+                // A's background never faded at all, and scene B's alpha
+                // byte discharged its whole accumulated per-frame
+                // truncation as a single jump the instant `non_persisted`
+                // dropped back below 2 — measured as a step at the pan's
+                // end instead of a spread-out fade.
+                let layer_a = render_world_bg_layer_pixels(
+                    bgs_a,
+                    time as f32,
+                    vw,
+                    vh,
+                    cam_x,
+                    cam_y,
+                    scaled_w,
+                    scaled_h,
+                    scale_factor,
                 );
-                if let Some(mut bg_surface) = surfaces::raster(&bg_info, None, None) {
-                    let bg_canvas = bg_surface.canvas();
-                    if scale_factor != 1.0 {
-                        bg_canvas.scale((scale_factor, scale_factor));
+                let layer_b = render_world_bg_layer_pixels(
+                    bgs_b,
+                    time as f32,
+                    vw,
+                    vh,
+                    cam_x,
+                    cam_y,
+                    scaled_w,
+                    scaled_h,
+                    scale_factor,
+                );
+                if let (Some(la), Some(lb)) = (layer_a, layer_b) {
+                    let blended = blend_world_bg_layers(&la, &lb, crossfade);
+                    let bg_info = ImageInfo::new(
+                        (scaled_w, scaled_h),
+                        ColorType::RGBA8888,
+                        skia_safe::AlphaType::Premul,
+                        None,
+                    );
+                    let data = skia_safe::Data::new_copy(&blended);
+                    if let Some(img) =
+                        skia_safe::images::raster_from_data(&bg_info, data, scaled_w as usize * 4)
+                    {
+                        canvas.save();
+                        if scale_factor != 1.0 {
+                            canvas.reset_matrix();
+                        }
+                        canvas.draw_image(&img, (0.0, 0.0), None);
+                        canvas.restore();
                     }
-                    bg_canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-                    for bg in bgs_b {
-                        draw_world_bg_with_parallax(
-                            bg_canvas,
-                            bg,
-                            time as f32,
-                            vw,
-                            vh,
-                            cam_x,
-                            cam_y,
-                        );
-                    }
-                    let snapshot = bg_surface.image_snapshot();
-                    let mut paint = skia_safe::Paint::default();
-                    paint.set_alpha_f(crossfade);
-                    // save()/restore() already bracket the matrix change; an
-                    // extra canvas.scale() after restore would compound it.
-                    canvas.save();
-                    if scale_factor != 1.0 {
-                        canvas.reset_matrix();
-                    }
-                    canvas.draw_image(&snapshot, (0.0, 0.0), Some(&paint));
-                    canvas.restore();
                 }
             }
         } else {
@@ -855,7 +888,18 @@ pub fn render_world_frame_scaled(
         canvas.translate((wx - viewport_cx, wy - viewport_cy));
 
         // Use local_time for animations (clamped to 0 if pan hasn't finished)
-        let anim_time = vis.local_time.max(0.0);
+        let mut anim_time = vis.local_time.max(0.0);
+        // Apply freeze_at (parity with the other four render paths —
+        // render_frame_v2_scaled, render_scene_hits, render_scene_bg_scaled,
+        // render_scene_fg_scaled — all of which clamp `time` the same way).
+        // Only the animation clock is clamped, not `frame_index`
+        // (`vis.local_frame` below): the other paths keep advancing
+        // `frame_index` past the freeze point too, and diverging here would
+        // desync any effect keyed on frame index (e.g. grain) from a scene
+        // that also appears in a slide view.
+        if let Some(freeze_at) = scene.freeze_at {
+            anim_time = anim_time.min(freeze_at);
+        }
         // World views keep the global per-scene camera (depth planes are a
         // slide-view feature; the world pan is a separate transform).
         let ctx = RenderContext {
@@ -933,6 +977,68 @@ pub fn render_world_frame_scaled(
         .ok_or(RustmotionError::PixelRead)?;
 
     Ok(pixels)
+}
+
+/// Render a world-view scene's set of animated backgrounds into their own
+/// transparent, full-frame surface and read back the raw RGBA8888 pixels.
+/// Used to crossfade the outgoing/incoming scene's background layers in f32
+/// (see the call site in `render_world_frame_scaled`) instead of Skia's
+/// 8-bit Paint alpha. `None` only on surface-allocation failure.
+#[allow(clippy::too_many_arguments)]
+fn render_world_bg_layer_pixels(
+    bgs: &[crate::schema::AnimatedBackground],
+    time: f32,
+    vw: f32,
+    vh: f32,
+    cam_x: f32,
+    cam_y: f32,
+    scaled_w: i32,
+    scaled_h: i32,
+    scale_factor: f32,
+) -> Option<Vec<u8>> {
+    let info = ImageInfo::new(
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut surface = surfaces::raster(&info, None, None)?;
+    let canvas = surface.canvas();
+    if scale_factor != 1.0 {
+        canvas.scale((scale_factor, scale_factor));
+    }
+    canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+    for bg in bgs {
+        draw_world_bg_with_parallax(canvas, bg, time, vw, vh, cam_x, cam_y);
+    }
+    let row_bytes = scaled_w as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
+    let dst_info = ImageInfo::new(
+        (scaled_w, scaled_h),
+        ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    surface
+        .read_pixels(&dst_info, &mut pixels, row_bytes, (0, 0))
+        .then_some(pixels)
+}
+
+/// Blend two equally-sized RGBA8888 buffers in f32, byte-for-byte — the same
+/// formula `blend_fade` in `crates/rustmotion-core/src/engine/transition.rs`
+/// uses for slide-view crossfades. Kept as a local copy because that helper
+/// is private to its own crate; see the call site's doc for why an f32
+/// blend matters here instead of Skia's Paint alpha.
+fn blend_world_bg_layers(a: &[u8], b: &[u8], progress: f32) -> Vec<u8> {
+    let inv = 1.0 - progress;
+    a.iter()
+        .zip(b.iter())
+        .map(|(&av, &bv)| {
+            let va = av as f32 * inv;
+            let vb = bv as f32 * progress;
+            (va + vb + 0.5) as u8
+        })
+        .collect()
 }
 
 /// Render only the background (solid color + animated-background) of a scene.
