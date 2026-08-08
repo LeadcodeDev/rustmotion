@@ -323,7 +323,12 @@ impl Stat {
 
             let max_v = self.sparkline_data.iter().fold(f64::MIN, |a, &b| a.max(b));
             let min_v = self.sparkline_data.iter().fold(f64::MAX, |a, &b| a.min(b));
-            let range = (max_v - min_v).max(0.001);
+            // A flat series has no span. Flooring the divisor instead normalises
+            // every point to 0, which glues the line to the bottom edge and reads
+            // as "collapsed to zero" rather than "unchanged" — centre it instead,
+            // matching `chart::line`'s handling of the same case.
+            let span = max_v - min_v;
+            let flat = span.abs() < f64::EPSILON;
             let n = self.sparkline_data.len();
 
             let spark_color = self.sparkline_color.as_deref().unwrap_or("#3B82F6");
@@ -333,7 +338,8 @@ impl Stat {
 
             for (i, &val) in self.sparkline_data.iter().enumerate() {
                 let x = pad + (i as f32 / (n - 1) as f32) * spark_w;
-                let y = spark_y + spark_h - ((val - min_v) / range) as f32 * spark_h;
+                let norm = if flat { 0.5 } else { (val - min_v) / span };
+                let y = spark_y + spark_h - norm as f32 * spark_h;
 
                 if i == 0 {
                     line_path.move_to((x, y));

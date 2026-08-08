@@ -60,12 +60,45 @@ rustmotion_core::impl_traits!(Sparkline {
     Styled => style,
 });
 
+/// `(min, max, normalize)` for a min-max scaled series, matching
+/// `chart::line::series_scale`'s flat-series handling: a constant series is
+/// centred (`0.5`) instead of collapsing to the bottom edge. Dividing by a
+/// `max(0.001)` floor mapped a constant series to 0, so a flat series read
+/// as "all zero" instead of "constant at some value". Duplicated locally —
+/// `chart::line::series_scale` is `pub(super)` to the `chart` module, not
+/// reachable from here.
+fn series_scale(values: impl Iterator<Item = f64> + Clone) -> (f64, f64, impl Fn(f64) -> f32) {
+    let min_val = values.clone().fold(f64::INFINITY, f64::min);
+    let max_val = values.fold(f64::NEG_INFINITY, f64::max);
+    let (min_val, max_val) = if min_val.is_finite() && max_val.is_finite() {
+        (min_val, max_val)
+    } else {
+        (0.0, 0.0)
+    };
+    let span = max_val - min_val;
+    let flat = span.abs() < f64::EPSILON;
+    let range = if flat { 1.0 } else { span };
+    (min_val, max_val, move |v: f64| {
+        if flat {
+            0.5
+        } else {
+            ((v - min_val) / range) as f32
+        }
+    })
+}
+
 impl Sparkline {
     fn progress_at(&self, time: f64) -> f32 {
         if !self.animated {
             return 1.0;
         }
-        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        // Ramp measured from `start_at`, not from scene time zero — matches
+        // `Counter::ramp_progress`. A sparkline delayed with `start_at` used
+        // to read raw scene time, so it was already fully revealed on the
+        // very first frame it became visible.
+        let start = self.timing.start_at.unwrap_or(0.0);
+        let elapsed = (time - start).max(0.0);
+        let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
 
@@ -79,9 +112,7 @@ impl Sparkline {
 
         let progress = self.progress_at(time);
 
-        let max_val = self.data.iter().fold(f64::MIN, |a, &b| a.max(b));
-        let min_val = self.data.iter().fold(f64::MAX, |a, &b| a.min(b));
-        let range = (max_val - min_val).max(0.001);
+        let (_, _, norm) = series_scale(self.data.iter().copied());
 
         let pad = self.stroke_width;
 
@@ -90,7 +121,7 @@ impl Sparkline {
 
         for (i, &val) in self.data.iter().enumerate() {
             let x = pad + (i as f32 / (n - 1) as f32) * (w - pad * 2.0);
-            let y = pad + (h - pad * 2.0) - ((val - min_val) / range) as f32 * (h - pad * 2.0);
+            let y = pad + (h - pad * 2.0) - norm(val) * (h - pad * 2.0);
 
             if i == 0 {
                 line_path.move_to((x, y));
@@ -164,5 +195,103 @@ impl Painter for Sparkline {
         ctx: &PaintCtx,
     ) {
         self.paint(canvas, layout.width, layout.height, ctx.time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::traits::TimingConfig;
+
+    fn base_sparkline(data: Vec<f64>) -> Sparkline {
+        Sparkline {
+            data,
+            color: default_color(),
+            fill: false,
+            fill_opacity: default_fill_opacity(),
+            stroke_width: default_stroke_width(),
+            animated: true,
+            animation_duration: 1.0,
+            timing: TimingConfig::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn ink_bounds(
+        surface: &mut skia_safe::Surface,
+        w: i32,
+        h: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    maxx = maxx.max(x);
+                    miny = miny.min(y);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx <= maxx).then_some((minx, maxx, miny, maxy))
+    }
+
+    #[test]
+    fn a_flat_series_is_centered_not_pinned_to_the_bottom_edge() {
+        // #7's exact repro: with every value equal, `(val - min_val)` is
+        // 0 for every point, so the line was drawn on the bottom edge
+        // (`h - pad`) — reading as "a series of zeroes" instead of "a
+        // constant series at some value". `chart::line::series_scale`
+        // was fixed to center a flat series (0.5) for exactly this reason.
+        const H: i32 = 40;
+        let flat = base_sparkline(vec![7.0, 7.0, 7.0, 7.0, 7.0]);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((120, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            flat.paint(canvas, 120.0, H as f32, 10.0);
+        }
+        let (_minx, _maxx, miny, maxy) =
+            ink_bounds(&mut surface, 120, H).expect("flat sparkline must still paint a line");
+        let mid = (miny + maxy) as f32 / 2.0;
+        let bottom_edge = H as f32 - flat.stroke_width;
+        assert!(
+            (mid - H as f32 / 2.0).abs() < 6.0,
+            "flat series line should sit near vertical center (y~{}), got y=[{miny}..{maxy}]",
+            H / 2
+        );
+        assert!(
+            (bottom_edge - maxy as f32).abs() > 6.0,
+            "flat series line must not be pinned to the bottom edge: y=[{miny}..{maxy}], bottom={bottom_edge}"
+        );
+    }
+
+    #[test]
+    fn progress_ramp_starts_at_start_at_not_at_scene_time_zero() {
+        let mut sparkline = base_sparkline(vec![1.0, 2.0, 3.0]);
+        sparkline.animation_duration = 1.5;
+        sparkline.timing = TimingConfig {
+            start_at: Some(2.0),
+            end_at: None,
+        };
+        assert_eq!(sparkline.progress_at(2.0), 0.0);
+        assert!(sparkline.progress_at(2.75) < 1.0);
+        assert_eq!(sparkline.progress_at(3.5), 1.0);
     }
 }

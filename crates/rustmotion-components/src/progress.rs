@@ -75,10 +75,10 @@ rustmotion_core::impl_traits!(Progress {
 });
 
 impl Progress {
-    fn paint(&self, canvas: &Canvas) -> Result<()> {
+    fn paint(&self, canvas: &Canvas, w: f32, h: f32) -> Result<()> {
         match self.variant {
-            ProgressVariant::Linear => self.render_linear(canvas),
-            ProgressVariant::Circular => self.render_circular(canvas),
+            ProgressVariant::Linear => self.render_linear(canvas, w, h),
+            ProgressVariant::Circular => self.render_circular(canvas, w, h),
         }
     }
 }
@@ -87,18 +87,24 @@ impl Painter for Progress {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas);
+        // `self.width`/`self.height` only seed the *intrinsic* size in
+        // `box_builder` (promoted to CSS when `style.width`/`style.height`
+        // are absent) — the box taffy actually assigns can differ whenever
+        // an author sets `style.width`/`style.height` or a flex-grow
+        // idiom directly, which `html-css-mental-model.md` recommends.
+        // Painting at `self.width`/`self.height` regardless left the fill
+        // sized to whichever one happened to be smaller, filling only part
+        // of its own box (or overflowing it) instead of the box.
+        let _ = self.paint(canvas, layout.width, layout.height);
     }
 }
 
 impl Progress {
-    fn render_linear(&self, canvas: &Canvas) -> Result<()> {
-        let w = self.width;
-        let h = self.height;
+    fn render_linear(&self, canvas: &Canvas, w: f32, h: f32) -> Result<()> {
         let radius = self.border_radius;
         let progress = self.progress.clamp(0.0, 1.0) as f32;
 
@@ -129,14 +135,12 @@ impl Progress {
         Ok(())
     }
 
-    fn render_circular(&self, canvas: &Canvas) -> Result<()> {
-        let w = self.width;
-        let h = self.height;
+    fn render_circular(&self, canvas: &Canvas, w: f32, h: f32) -> Result<()> {
         let progress = self.progress.clamp(0.0, 1.0) as f32;
 
         let cx = w / 2.0;
         let cy = h / 2.0;
-        let radius = cx.min(cy) - self.track_width / 2.0 - 2.0;
+        let radius = (cx.min(cy) - self.track_width / 2.0 - 2.0).max(0.0);
         let oval = Rect::from_xywh(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
 
         // Track
@@ -190,5 +194,144 @@ impl Progress {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_progress(variant: ProgressVariant) -> Progress {
+        Progress {
+            progress: 0.5,
+            variant,
+            width: default_progress_width(),
+            height: default_progress_height(),
+            background_color: default_progress_bg(),
+            fill_color: default_progress_fill(),
+            border_radius: 0.0,
+            track_width: default_track_width(),
+            show_value: false,
+            timing: TimingConfig::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn base_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 2.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 900,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn ink_bounds(
+        surface: &mut skia_safe::Surface,
+        w: i32,
+        h: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    maxx = maxx.max(x);
+                    miny = miny.min(y);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx <= maxx).then_some((minx, maxx, miny, maxy))
+    }
+
+    #[test]
+    fn linear_progress_fills_the_layout_box_not_its_own_width_height() {
+        // #4's exact repro: `render_linear` always drew at `self.width` x
+        // `self.height` (defaults 300x20) regardless of the box taffy
+        // actually assigned it. `box_builder` only promotes `c.width`/
+        // `c.height` to CSS when `style.width`/`style.height` are absent —
+        // so a `progress` sized via `style.width: 800` (the project's
+        // CSS-first idiom) painted a 300px-wide bar sitting inside an
+        // 800px-wide box, filling only 37% of it at `progress: 0.5`.
+        let progress = base_progress(ProgressVariant::Linear);
+        const BOX_W: f32 = 800.0;
+        const BOX_H: f32 = 24.0;
+        let layout = BoxLayout {
+            width: BOX_W,
+            height: BOX_H,
+            ..Default::default()
+        };
+        let ctx = base_ctx();
+        let props = AnimatedProperties::default();
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((900, 200)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            progress.paint_content(canvas, &layout, &props, &ctx);
+        }
+        let (_minx, maxx, _miny, _maxy) =
+            ink_bounds(&mut surface, 900, 200).expect("progress must paint something");
+        // At progress 0.5 the fill should reach roughly the middle of the
+        // 800px box (~400px), not the middle of the component's own
+        // `width` field (300px -> 150px).
+        assert!(
+            maxx as f32 > BOX_W * 0.4,
+            "fill did not scale to the box's own width: max ink x = {maxx}, box width = {BOX_W}"
+        );
+    }
+
+    #[test]
+    fn circular_progress_fits_the_layout_box_not_its_own_width_height() {
+        let progress = base_progress(ProgressVariant::Circular);
+        const BOX_W: f32 = 60.0;
+        const BOX_H: f32 = 60.0;
+        let layout = BoxLayout {
+            width: BOX_W,
+            height: BOX_H,
+            ..Default::default()
+        };
+        let ctx = base_ctx();
+        let props = AnimatedProperties::default();
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((300, 300)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            progress.paint_content(canvas, &layout, &props, &ctx);
+        }
+        let (minx, maxx, miny, maxy) =
+            ink_bounds(&mut surface, 300, 300).expect("progress must paint something");
+        // The ring must be centered on the 60x60 box's own center (30, 30),
+        // not on the component's own `width`/`height` fields' center
+        // (150, 10 for the 300x20 defaults) — the un-fixed painter puts the
+        // whole ring outside a small box entirely.
+        let center_x = (minx + maxx) as f32 / 2.0;
+        let center_y = (miny + maxy) as f32 / 2.0;
+        assert!(
+            (center_x - BOX_W / 2.0).abs() < 5.0 && (center_y - BOX_H / 2.0).abs() < 5.0,
+            "ring is not centered on the {BOX_W}x{BOX_H} box: center=({center_x}, {center_y})"
+        );
     }
 }
