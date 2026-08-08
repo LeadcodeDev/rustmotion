@@ -1,3 +1,4 @@
+mod claude_md;
 mod commands;
 mod skills;
 pub mod tui;
