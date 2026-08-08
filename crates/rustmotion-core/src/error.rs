@@ -161,8 +161,14 @@ pub enum RustmotionError {
     #[error("Failed to open FFmpeg stdin pipe")]
     FfmpegPipe,
 
-    #[error("Failed to write to FFmpeg pipe: {reason}")]
-    FfmpegWrite { reason: String },
+    // A broken pipe here nearly always means ffmpeg already died on its own
+    // arguments, so the useful diagnostic is ffmpeg's stderr rather than our
+    // write error. Carry it in the error so it survives `--quiet`.
+    #[error("Failed to write to FFmpeg pipe: {reason}{}", .stderr.as_ref().map(|s| format!("\nffmpeg reported:\n{}", s)).unwrap_or_default())]
+    FfmpegWrite {
+        reason: String,
+        stderr: Option<String>,
+    },
 
     #[error("Failed to wait for FFmpeg: {reason}")]
     FfmpegWait { reason: String },
