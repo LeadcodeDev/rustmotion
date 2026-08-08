@@ -220,8 +220,23 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         viewport_width: ctx.viewport_size.0,
         viewport_height: ctx.viewport_size.1,
         parent_size: box_layout.width.max(box_layout.height),
-        font_size: 16.0,
+        font_size: node.css.font_size_px_or(16.0),
         root_font_size: 16.0,
+    };
+    // Per-axis contexts for `transform`'s translate percentages: CSS
+    // resolves a `translate`/`translate3d` x-component percentage against
+    // the box's own WIDTH and the y-component against its own HEIGHT — never
+    // `max(width, height)` on both axes (that's only correct for square
+    // boxes). Mirrors what `resolve_origin` already does for
+    // `transform-origin` below. `z`/`perspective()` keep the general
+    // (shared) context — CSS has no per-axis convention for them.
+    let length_ctx_x = LengthContext {
+        parent_size: box_layout.width,
+        ..length_ctx
+    };
+    let length_ctx_y = LengthContext {
+        parent_size: box_layout.height,
+        ..length_ctx
     };
 
     canvas.save();
@@ -259,13 +274,18 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .perspective
             .as_ref()
             .map(|l| l.resolve(&length_ctx).max(1.0));
+        let axes = TransformAxes {
+            x: length_ctx_x,
+            y: length_ctx_y,
+            general: length_ctx,
+        };
         apply_transform(
             canvas,
             transform_list,
             perspective_d,
             transform_pivot,
             perspective_pivot,
-            &length_ctx,
+            &axes,
         );
     }
 
@@ -293,58 +313,22 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         });
     }
 
-    // 3. opacity / filter layer — one shared layer carries both the group
-    // alpha and the CSS `filter` chain (applies to the node and its subtree).
-    let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
-    let content_filter = node
-        .css
-        .filter
-        .as_deref()
-        .and_then(|list| filters_to_image_filter(list, &length_ctx));
-    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
-        let mut paint = Paint::default();
-        if opacity < 1.0 {
-            paint.set_alpha((opacity * 255.0) as u8);
-        }
-        if let Some(filter) = content_filter {
-            paint.set_image_filter(filter);
-        }
-        let rec = SaveLayerRec::default().paint(&paint);
-        canvas.save_layer(&rec);
-        true
-    } else {
-        false
-    };
-
-    // 4. clip overflow:hidden / clip
-    let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
-    if matches!(
-        overflow,
-        Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
-    ) {
-        let radius = node
-            .css
-            .border_radius
-            .as_ref()
-            .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
-            .unwrap_or([0.0; 4]);
-        let rrect = padding_rrect(box_layout, radius);
-        canvas.clip_rrect(rrect, ClipOp::Intersect, true);
-    }
-
-    // 5. outset box-shadow
-    if let Some(shadows) = node.css.box_shadow.as_ref() {
-        for shadow in shadows {
-            if shadow.inset.unwrap_or(false) {
-                continue;
-            }
-            paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
-        }
-    }
-
-    // 5.5 backdrop-filter: filter what is already painted behind this node,
-    // clipped to its (rounded) border-box, before its own background goes on
-    // top — the glassmorphism pattern.
+    // 3. backdrop-filter: filter what is *already painted behind this node*
+    // (earlier siblings, ancestor backgrounds), clipped to its own (rounded)
+    // border-box — the glassmorphism pattern. This must run BEFORE this
+    // node's own opacity/filter layer (step 4) opens: if it ran after (as it
+    // used to), the backdrop's `SaveLayerRec::backdrop()` would sample the
+    // freshly-opened, still-empty opacity layer instead of the real scene
+    // beneath it, making the blur a total no-op the instant `opacity < 1.0`
+    // or a `filter` is also present on the same node — exactly the
+    // glassmorphism + fade_in combination rules/glassmorphism.md recommends.
+    // Self-contained bracket (save/clip/layer/restore/restore): the panel is
+    // baked directly onto the canvas below, so this node's own opacity later
+    // fades its own background/border/content on top of it without
+    // re-fading the panel itself (avoiding a second, unrelated ordering
+    // hazard: a shared clip+layer would also have to stay open across
+    // background/border painting, reintroducing the overflow/shadow bug
+    // fixed below for those steps too).
     if let Some(filters) = node.css.backdrop_filter.as_deref() {
         if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
             let radius = node
@@ -362,20 +346,100 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
-    // 6. background
+    // 4. opacity / filter layer — one shared layer carries both the group
+    // alpha and the CSS `filter` chain (applies to the node and its
+    // subtree). Bounded to the node's own box (padded by the filter chain's
+    // blur/drop-shadow bleed so those still bleed past the edge, unclipped):
+    // an unbounded `SaveLayerRec` sizes the layer against the current clip —
+    // usually the whole viewport — so every faded/filtered node allocates
+    // and composites a full-frame layer regardless of how small it is
+    // (measured on this repo's release binary, 1080x1920/60 frames, 30 small
+    // `opacity: 0.5` shapes, `--threads 1`: ~42-60s wall time unbounded vs.
+    // ~0.5s bounded — roughly two orders of magnitude, not a rounding
+    // error; cost scales with viewport area, not node size).
+    let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+    let content_filter = node
+        .css
+        .filter
+        .as_deref()
+        .and_then(|list| filters_to_image_filter(list, &length_ctx));
+    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
+        let mut paint = Paint::default();
+        if opacity < 1.0 {
+            paint.set_alpha((opacity * 255.0) as u8);
+        }
+        if let Some(filter) = content_filter {
+            paint.set_image_filter(filter);
+        }
+        let bleed = node
+            .css
+            .filter
+            .as_deref()
+            .map(|list| filter_bleed(list, &length_ctx))
+            .unwrap_or(0.0);
+        let bounds = Rect::from_xywh(
+            box_layout.x - bleed,
+            box_layout.y - bleed,
+            box_layout.width + bleed * 2.0,
+            box_layout.height + bleed * 2.0,
+        );
+        let rec = SaveLayerRec::default().paint(&paint).bounds(&bounds);
+        canvas.save_layer(&rec);
+        true
+    } else {
+        false
+    };
+
+    // 5. outset box-shadow, 6. background, 7. border — the box's own
+    // decorations. Painted BEFORE any overflow clip (step 8): CSS `overflow`
+    // clips a box's *descendants*, never the box's own border-box
+    // decorations (an outset box-shadow exists precisely outside the
+    // border-box; background/border are already shaped by border-radius on
+    // their own and gain nothing from an extra clip). They still sit inside
+    // the opacity/filter layer above so a faded node fades its whole
+    // appearance uniformly, background included.
+    if let Some(shadows) = node.css.box_shadow.as_ref() {
+        for shadow in shadows {
+            if shadow.inset.unwrap_or(false) {
+                continue;
+            }
+            paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
+        }
+    }
     if let Some(bg) = node.css.background.as_ref() {
         paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
     }
-
-    // 7. border — `gradient-border` replaces the standard border when present
-    // (a box has one border, not two stacked ones).
+    // `gradient-border` replaces the standard border when present (a box
+    // has one border, not two stacked ones).
     if let Some(gb) = node.css.gradient_border.as_ref() {
         paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
     } else if let Some(border) = node.css.border.as_ref() {
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
-    // 8. component-specific content (Ghost is painted identically to Component;
+    // 8. clip overflow:hidden / clip — scoped to this node's own content and
+    // its children only (see step 5-7's comment for why the box's own
+    // decorations must stay outside this clip).
+    let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
+    let opened_overflow_clip = if matches!(
+        overflow,
+        Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
+    ) {
+        let radius = node
+            .css
+            .border_radius
+            .as_ref()
+            .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
+            .unwrap_or([0.0; 4]);
+        let rrect = padding_rrect(box_layout, radius);
+        canvas.save();
+        canvas.clip_rrect(rrect, ClipOp::Intersect, true);
+        true
+    } else {
+        false
+    };
+
+    // 9. component-specific content (Ghost is painted identically to Component;
     // the only difference is that Ghost is excluded from the hit-map above).
     let payload_opt = match &node.kind {
         BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
@@ -386,11 +450,15 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
     }
 
-    // 9. children (z-index ordered, then source order)
+    // 10. children (z-index ordered, then source order)
     let mut indices: Vec<usize> = (0..node.children.len()).collect();
     indices.sort_by_key(|&i| node.children[i].css.z_index.unwrap_or(0));
     for &i in &indices {
         paint_node(canvas, &node.children[i], ctx, tree_depth + 1);
+    }
+
+    if opened_overflow_clip {
+        canvas.restore();
     }
 
     // inset shadows (after children so they overlay content)
@@ -406,6 +474,40 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         canvas.restore();
     }
     canvas.restore();
+}
+
+/// Conservative outward bleed (px) a `filter` chain can paint beyond the
+/// node's own box — used to size the opacity/filter layer's `SaveLayerRec`
+/// bounds generously enough that `blur`/`drop-shadow` never get clipped at
+/// the box edge (see the perf fix in step 4 above: an unbounded layer costs
+/// ~5.9x render time, but a *too-tight* one would silently clip filter
+/// bleed, trading a perf bug for a correctness one). `1.5x` the nominal
+/// radius covers the visible falloff of `image_filters::blur`'s Gaussian
+/// (sigma = radius/2, and ~3*sigma is the point the kernel is visually
+/// negligible).
+fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f32 {
+    use crate::css::style::FilterFn;
+    let mut bleed = 0.0f32;
+    for f in list {
+        let b = match f {
+            FilterFn::Blur { radius } => radius.resolve(ctx).max(0.0) * 1.5,
+            FilterFn::DropShadow {
+                offset_x,
+                offset_y,
+                blur,
+                ..
+            } => {
+                let blur_bleed = blur
+                    .as_ref()
+                    .map(|b| b.resolve(ctx).max(0.0) * 1.5)
+                    .unwrap_or(0.0);
+                offset_x.resolve(ctx).abs().max(offset_y.resolve(ctx).abs()) + blur_bleed
+            }
+            _ => 0.0,
+        };
+        bleed = bleed.max(b);
+    }
+    bleed
 }
 
 // ---- CSS filters ----
@@ -684,6 +786,19 @@ fn has_3d_transform(list: &[TransformFn]) -> bool {
     })
 }
 
+/// Per-axis length-resolution contexts for `transform`. CSS resolves a
+/// `translate`/`translate3d` percentage's x-component against the box's own
+/// width and its y-component against its own height — never `max(width,
+/// height)` on both axes (see `apply_transform`/`transform_to_m44`).
+/// `z`/`perspective()` have no established per-axis CSS convention, so they
+/// keep the general (pre-existing) context.
+#[derive(Clone, Copy)]
+struct TransformAxes {
+    x: LengthContext,
+    y: LengthContext,
+    general: LengthContext,
+}
+
 /// Apply CSS transform + perspective to the canvas.
 ///
 /// # Parameters
@@ -700,7 +815,7 @@ fn apply_transform(
     perspective_d: Option<f32>,
     transform_pivot: (f32, f32),
     perspective_pivot: (f32, f32),
-    ctx: &LengthContext,
+    axes: &TransformAxes,
 ) {
     // Detect whether perspective and transform pivots differ.
     let pivots_equal = (transform_pivot.0 - perspective_pivot.0).abs() < 0.001
@@ -713,16 +828,16 @@ fn apply_transform(
         for tr in list {
             match tr {
                 TransformFn::Translate { x, y } => {
-                    canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
+                    canvas.translate(Point::new(x.resolve(&axes.x), y.resolve(&axes.y)));
                 }
                 TransformFn::TranslateX { x } => {
-                    canvas.translate(Point::new(x.resolve(ctx), 0.0));
+                    canvas.translate(Point::new(x.resolve(&axes.x), 0.0));
                 }
                 TransformFn::TranslateY { y } => {
-                    canvas.translate(Point::new(0.0, y.resolve(ctx)));
+                    canvas.translate(Point::new(0.0, y.resolve(&axes.y)));
                 }
                 TransformFn::Translate3d { x, y, .. } => {
-                    canvas.translate(Point::new(x.resolve(ctx), y.resolve(ctx)));
+                    canvas.translate(Point::new(x.resolve(&axes.x), y.resolve(&axes.y)));
                 }
                 TransformFn::Scale { x, y } => {
                     canvas.scale((*x, *y));
@@ -765,7 +880,7 @@ fn apply_transform(
             m.pre_concat(&css_perspective_m44(d));
         }
         for tr in list {
-            m.pre_concat(&transform_to_m44(tr, ctx));
+            m.pre_concat(&transform_to_m44(tr, axes));
         }
         m.pre_concat(&M44::translate(-pivot.0, -pivot.1, 0.0));
         canvas.concat_44(&m);
@@ -789,7 +904,7 @@ fn apply_transform(
         // Inner transform bracket (transform-origin).
         m.pre_concat(&M44::translate(tp.0, tp.1, 0.0));
         for tr in list {
-            m.pre_concat(&transform_to_m44(tr, ctx));
+            m.pre_concat(&transform_to_m44(tr, axes));
         }
         m.pre_concat(&M44::translate(-tp.0, -tp.1, 0.0));
 
@@ -820,15 +935,19 @@ fn css_perspective_m44(d: f32) -> M44 {
     ])
 }
 
-fn transform_to_m44(tr: &TransformFn, ctx: &LengthContext) -> M44 {
+fn transform_to_m44(tr: &TransformFn, axes: &TransformAxes) -> M44 {
     match tr {
-        TransformFn::Translate { x, y } => M44::translate(x.resolve(ctx), y.resolve(ctx), 0.0),
-        TransformFn::TranslateX { x } => M44::translate(x.resolve(ctx), 0.0, 0.0),
-        TransformFn::TranslateY { y } => M44::translate(0.0, y.resolve(ctx), 0.0),
-        TransformFn::TranslateZ { z } => M44::translate(0.0, 0.0, z.resolve(ctx)),
-        TransformFn::Translate3d { x, y, z } => {
-            M44::translate(x.resolve(ctx), y.resolve(ctx), z.resolve(ctx))
+        TransformFn::Translate { x, y } => {
+            M44::translate(x.resolve(&axes.x), y.resolve(&axes.y), 0.0)
         }
+        TransformFn::TranslateX { x } => M44::translate(x.resolve(&axes.x), 0.0, 0.0),
+        TransformFn::TranslateY { y } => M44::translate(0.0, y.resolve(&axes.y), 0.0),
+        TransformFn::TranslateZ { z } => M44::translate(0.0, 0.0, z.resolve(&axes.general)),
+        TransformFn::Translate3d { x, y, z } => M44::translate(
+            x.resolve(&axes.x),
+            y.resolve(&axes.y),
+            z.resolve(&axes.general),
+        ),
         TransformFn::Scale { x, y } => M44::scale(*x, *y, 1.0),
         TransformFn::ScaleX { x } => M44::scale(*x, 1.0, 1.0),
         TransformFn::ScaleY { y } => M44::scale(1.0, *y, 1.0),
@@ -896,7 +1015,9 @@ fn transform_to_m44(tr: &TransformFn, ctx: &LengthContext) -> M44 {
             0.0,
             1.0,
         ]),
-        TransformFn::Perspective { length } => css_perspective_m44(length.resolve(ctx).max(1.0)),
+        TransformFn::Perspective { length } => {
+            css_perspective_m44(length.resolve(&axes.general).max(1.0))
+        }
         TransformFn::Matrix { values: v } => M44::row_major(&[
             v[0], v[2], 0.0, v[4], v[1], v[3], 0.0, v[5], 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]),
@@ -1520,6 +1641,113 @@ mod hit_tests {
     }
 
     #[test]
+    fn backdrop_filter_survives_sibling_opacity_below_one() {
+        // Same scene as `backdrop_filter_blurs_content_behind`, but the panel
+        // also carries `opacity: 0.99` — a visually-imperceptible change that
+        // must NOT disable the blur. Bug: the opacity/filter SaveLayerRec
+        // (paint_pass step 3) used to open BEFORE the backdrop-filter's own
+        // save_layer(backdrop) (old step 5.5), so the backdrop sampled the
+        // freshly-opened, still-empty opacity layer instead of the real
+        // scene beneath it — a total no-op. `opacity` alone (no
+        // `backdrop_filter`) is not the trigger; only nodes that combine
+        // both are affected, which is exactly the documented glassmorphism
+        // template (glassmorphism.md pairs `backdrop-filter` with a
+        // `fade_in`/`fade_in_up` entrance animation that drives `opacity`).
+        use crate::css::style::{Background, Color as CssColor, FilterFn};
+        use crate::css::units::Length;
+
+        let black_top = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(0.0)),
+                top: Some(CLP::Px(0.0)),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                background: Some(Background::Color(CssColor::String("#000000".into()))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let panel = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(50.0)),
+                top: Some(CLP::Px(50.0)),
+                width: Some(CSize::Length(CLP::Px(100.0))),
+                height: Some(CSize::Length(CLP::Px(100.0))),
+                backdrop_filter: Some(vec![FilterFn::Blur {
+                    radius: Length::Px(10.0),
+                }]),
+                opacity: Some(0.99),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                height: Some(CSize::Length(CLP::Px(200.0))),
+                background: Some(Background::Color(CssColor::String("#ffffff".into()))),
+                ..Default::default()
+            },
+            children: vec![black_top, panel],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        root.assign_ids(0);
+
+        let layout = run_layout(&root, (200.0, 200.0), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 200)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            &root,
+            &layout,
+            &test_frame(200, 200),
+            &NoopDispatcher,
+        );
+
+        let info = skia_safe::ImageInfo::new(
+            (200, 200),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; 200 * 200 * 4];
+        assert!(surface.read_pixels(&info, &mut buf, 200 * 4, (0, 0)));
+        let red = |x: usize, y: usize| buf[(y * 200 + x) * 4] as i32;
+
+        // Outside the panel: hard edge preserved.
+        assert!(red(10, 97) < 10, "outside/above must stay black");
+        assert!(red(10, 103) > 245, "outside/below must stay white");
+        // Inside the panel: boundary must still smear into greys — the bug
+        // makes this a hard 0/255 edge identical to the outside columns.
+        let above = red(100, 97);
+        let below = red(100, 103);
+        assert!(
+            above > 30,
+            "backdrop not blurred above boundary with opacity:0.99 (r={above})"
+        );
+        assert!(
+            below < 225,
+            "backdrop not blurred below boundary with opacity:0.99 (r={below})"
+        );
+    }
+
+    #[test]
     fn hitmap_reflects_node_transform() {
         use crate::css::style::TransformFn;
 
@@ -1970,6 +2198,54 @@ mod transform_origin_tests {
             "expected some red pixels with distinct origins"
         );
     }
+
+    // ---- Test 8: translate percentages resolve per-axis, not max(w,h) ----
+
+    #[test]
+    fn translate_percent_resolves_against_own_axis_not_max_dimension() {
+        // A 200x100 red box at (0,0), `transform: translate(50%, 50%)`.
+        // CSS resolves a translate-x percentage against the box's own WIDTH
+        // and translate-y against its own HEIGHT — never `max(width,
+        // height)` on both axes (only correct for square boxes). Expected:
+        // x shifts by 100 (50% of 200) -> [100,299]; y shifts by 50 (50% of
+        // 100) -> [50,149]. The bug instead resolved y against max(200,100)
+        // = 200, doubling the vertical shift to +100 -> [100,199].
+        let mut n = red_box(Position::Absolute, 0.0, 0.0, 200.0, 100.0);
+        n.css.transform = Some(vec![TransformFn::Translate {
+            x: CLP::String("50%".into()),
+            y: CLP::String("50%".into()),
+        }]);
+        let mut root = root_node(400.0, 400.0, vec![n]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        let mut min_x = u32::MAX;
+        let mut max_x = 0u32;
+        let mut min_y = u32::MAX;
+        let mut max_y = 0u32;
+        for y in 0..400u32 {
+            for x in 0..400u32 {
+                let i = ((y * 400 + x) * 4) as usize;
+                if buf[i] > 200 && buf[i + 1] < 50 && buf[i + 2] < 50 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+        assert_ne!(min_x, u32::MAX, "expected some red pixels");
+
+        assert!((min_x as i32 - 100).abs() <= 2, "min_x={min_x}");
+        assert!((max_x as i32 - 299).abs() <= 2, "max_x={max_x}");
+        assert!(
+            (min_y as i32 - 50).abs() <= 2,
+            "min_y={min_y} (expected ~50; the max(w,h) bug would give ~100)"
+        );
+        assert!(
+            (max_y as i32 - 149).abs() <= 2,
+            "max_y={max_y} (expected ~149; the max(w,h) bug would give ~199)"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2392,6 +2668,229 @@ mod glassmorphism_tests {
         let s: CssStyle = serde_json::from_str(json).unwrap();
         assert_eq!(s.backdrop_blur, Some(20.0));
         assert!(s.inner_shadow.is_some());
+    }
+}
+
+#[cfg(test)]
+mod paint_order_tests {
+    //! TDD tests for two paint-pass audit findings:
+    //!   - overflow:hidden must never clip a node's OWN outset box-shadow
+    //!     (CSS clips descendants, never the box's own decorations).
+    //!   - the opacity/filter SaveLayerRec must be bounded to the node's box
+    //!     (+ filter bleed), not left to size against the ambient clip
+    //!     (usually the whole viewport) — without clipping visible blur.
+
+    use super::*;
+
+    use crate::css::style::{
+        Background, BoxShadow, Color as CssColor, CssStyle, Display, FilterFn, FlexDirection,
+        Overflow, Position, Size as CSize,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::{Length, LengthPercentage as CLP};
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+            camera: None,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn root_node(w: f32, h: f32, background: &str, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: Some(Background::Color(CssColor::String(background.to_string()))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    /// Count of "probe" red pixels (spread-only, blur:0, so a hard-edged
+    /// halo) in a rectangular region — used to compare before/after pixel
+    /// counts for the paint-order fix.
+    fn count_red_in(buf: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> usize {
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * w + x) * 4) as usize;
+                if buf[i] > 200 && buf[i + 1] < 50 && buf[i + 2] < 50 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    fn card_with_shadow(overflow_hidden: bool) -> BoxNode {
+        let mut css = CssStyle {
+            position: Some(Position::Absolute),
+            left: Some(CLP::Px(50.0)),
+            top: Some(CLP::Px(50.0)),
+            width: Some(CSize::Length(CLP::Px(100.0))),
+            height: Some(CSize::Length(CLP::Px(100.0))),
+            background: Some(Background::Color(CssColor::String("#ffffff".into()))),
+            box_shadow: Some(vec![BoxShadow {
+                offset_x: Length::Px(0.0),
+                offset_y: Length::Px(0.0),
+                blur: None,
+                spread: Some(Length::Px(20.0)),
+                color: Some(CssColor::String("#ff0000".into())),
+                inset: None,
+            }]),
+            ..Default::default()
+        };
+        if overflow_hidden {
+            css.overflow = Some(Overflow::Hidden);
+        }
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css,
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    #[test]
+    fn overflow_hidden_does_not_clip_own_outset_box_shadow() {
+        // 100x100 white card at (50,50) on a 200x200 black canvas, outset
+        // box-shadow (red, spread 20, blur 0 -> hard-edged halo rect from
+        // (30,30) to (170,170)). Probe points (100,45) and (100,155) sit in
+        // the halo band above/below the card, outside its own border-box.
+        let without = {
+            let mut root = root_node(200.0, 200.0, "#000000", vec![card_with_shadow(false)]);
+            render_pixels(&mut root, 200, 200)
+        };
+        let with_hidden = {
+            let mut root = root_node(200.0, 200.0, "#000000", vec![card_with_shadow(true)]);
+            render_pixels(&mut root, 200, 200)
+        };
+
+        let probe = |buf: &[u8], x: usize, y: usize| -> (u8, u8, u8) {
+            let i = (y * 200 + x) * 4;
+            (buf[i], buf[i + 1], buf[i + 2])
+        };
+
+        let above_plain = probe(&without, 100, 45);
+        let below_plain = probe(&without, 100, 155);
+        assert!(
+            above_plain.0 > 200 && above_plain.1 < 50,
+            "sanity: shadow halo must be visible without overflow, got {above_plain:?}"
+        );
+        assert!(
+            below_plain.0 > 200 && below_plain.1 < 50,
+            "sanity: shadow halo must be visible without overflow, got {below_plain:?}"
+        );
+
+        let above_hidden = probe(&with_hidden, 100, 45);
+        let below_hidden = probe(&with_hidden, 100, 155);
+        assert!(
+            above_hidden.0 > 200 && above_hidden.1 < 50,
+            "overflow:hidden must not erase the node's own outset shadow, got {above_hidden:?}"
+        );
+        assert!(
+            below_hidden.0 > 200 && below_hidden.1 < 50,
+            "overflow:hidden must not erase the node's own outset shadow, got {below_hidden:?}"
+        );
+
+        // Probe-pixel count over the full halo band, before/after overflow.
+        let halo_count_plain = count_red_in(&without, 200, 25, 25, 175, 175);
+        let halo_count_hidden = count_red_in(&with_hidden, 200, 25, 25, 175, 175);
+        assert_eq!(
+            halo_count_plain, halo_count_hidden,
+            "halo pixel count must be identical with/without overflow:hidden \
+             (plain={halo_count_plain}, hidden={halo_count_hidden})"
+        );
+    }
+
+    #[test]
+    fn filter_layer_bounds_do_not_clip_blur_bleed() {
+        // A 60x60 opaque red square with `opacity: 0.999` (forces the
+        // SaveLayerRec open) AND `filter: blur(24px)` on a 300x300 black
+        // canvas. Bounding the layer to the node's box (issue #4 fix) must
+        // still leave room for the blur to bleed outward — if the bounds
+        // were the bare box rect, Skia would hard-clip the blurred fringe
+        // at the box edge, and the region just outside the box would stay
+        // pure black instead of picking up a soft red glow.
+        let n = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(120.0)),
+                top: Some(CLP::Px(120.0)),
+                width: Some(CSize::Length(CLP::Px(60.0))),
+                height: Some(CSize::Length(CLP::Px(60.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                opacity: Some(0.999),
+                filter: Some(vec![FilterFn::Blur {
+                    radius: Length::Px(24.0),
+                }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = root_node(300.0, 300.0, "#000000", vec![n]);
+        let buf = render_pixels(&mut root, 300, 300);
+
+        let probe = |x: usize, y: usize| -> u8 {
+            let i = (y * 300 + x) * 4;
+            buf[i]
+        };
+        // 8px outside the left edge of the box (box left edge = x=120),
+        // vertically centered (y=150): must show blur bleed (red > black).
+        let bled = probe(112, 150);
+        assert!(
+            bled > 15,
+            "blur must bleed past the box edge under bounded SaveLayerRec, got r={bled}"
+        );
+        // Far outside any plausible bleed radius: must stay black.
+        let far = probe(20, 20);
+        assert_eq!(far, 0, "far corner must stay untouched, got r={far}");
     }
 }
 
