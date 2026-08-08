@@ -560,11 +560,21 @@ mod camera_pan_tests {
 
         for (progress, expected) in [(0.0, [255u8, 0, 0]), (1.0, [0, 0, 255])] {
             let out = camera_pan_transition(
-                &bg, &bg, &fg_a, &fg_b, w, h, progress, 8.0, 0.0,
-                &EasingType::Linear, PanBackground::Static,
+                &bg,
+                &bg,
+                &fg_a,
+                &fg_b,
+                w,
+                h,
+                progress,
+                8.0,
+                0.0,
+                &EasingType::Linear,
+                PanBackground::Static,
             );
             assert_eq!(
-                &out[0..3], &expected,
+                &out[0..3],
+                &expected,
                 "at progress {progress} the adjacent scene must render untouched",
             );
         }
@@ -580,14 +590,26 @@ mod camera_pan_tests {
         let fg_b = solid(w, h, 0, 0, 255, 255);
 
         let out = camera_pan_transition(
-            &bg, &bg, &fg_a, &fg_b, w, h, 0.5, 8.0, 0.0,
-            &EasingType::Linear, PanBackground::Static,
+            &bg,
+            &bg,
+            &fg_a,
+            &fg_b,
+            w,
+            h,
+            0.5,
+            8.0,
+            0.0,
+            &EasingType::Linear,
+            PanBackground::Static,
         );
         // Left half carries the outgoing plane, right half the incoming one.
         let left_red = out[0];
         let right_blue = out[((w - 1) * 4 + 2) as usize];
         assert!(left_red > 128, "outgoing plane faded too far: {left_red}");
-        assert!(right_blue > 128, "incoming plane still too faint: {right_blue}");
+        assert!(
+            right_blue > 128,
+            "incoming plane still too faint: {right_blue}"
+        );
     }
 
     fn solid(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
