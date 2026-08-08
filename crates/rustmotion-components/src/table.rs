@@ -146,7 +146,14 @@ impl Table {
         let text_color = self.style.color_str_or("#FFFFFF");
         let header_text_color = self.header_text_color.as_deref().unwrap_or("#FFFFFF");
         let default_row_colors = vec!["#1F2937".to_string(), "#111827".to_string()];
-        let row_colors = self.row_colors.as_ref().unwrap_or(&default_row_colors);
+        // `"row_colors": []` deserializes to Some(vec![]), not None — a generator
+        // writes it to mean "no striping". Row painting indexes this slice, so an
+        // empty one has to fall back rather than reach the painter.
+        let row_colors = self
+            .row_colors
+            .as_ref()
+            .filter(|c| !c.is_empty())
+            .unwrap_or(&default_row_colors);
 
         // Resolve fonts before the optional clip below so an early return on
         // font failure keeps canvas save/restore balanced.

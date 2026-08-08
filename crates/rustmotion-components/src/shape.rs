@@ -61,7 +61,15 @@ impl Painter for Shape {
                         .iter()
                         .map(|c| color4f_from_hex(c))
                         .collect();
-                    let stops: Option<Vec<f32>> = gradient.stops.clone();
+                    // skia asserts `pos.len() == colors.len()` inside the gradient
+                    // shader — a mismatch aborts the process instead of erroring.
+                    // Nothing upstream enforces the pairing, so drop stops we
+                    // cannot honour and let skia distribute the colours evenly.
+                    let stops: Option<Vec<f32>> = gradient
+                        .stops
+                        .as_ref()
+                        .filter(|s| s.len() == colors.len())
+                        .cloned();
                     let mut paint = Paint::default();
                     paint.set_anti_alias(true);
 
