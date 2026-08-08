@@ -295,7 +295,10 @@ mod tests {
             suffix: None,
             easing: EasingType::default(),
             duration,
-            timing: TimingConfig { start_at, end_at: None },
+            timing: TimingConfig {
+                start_at,
+                end_at: None,
+            },
             style: CssStyle::default(),
             timeline: Vec::new(),
             stagger: None,
