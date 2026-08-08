@@ -6,7 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, paint_from_hex, typeface_with_fallback,
+    draw_text_with_fallback, emoji_typeface, paint_from_hex, resolve_custom_typeface,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::{CodeblockReveal, RevealMode, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -130,10 +131,24 @@ pub(crate) const FONT_SIZE: f32 = 14.0;
 pub(crate) const LINE_HEIGHT: f32 = 22.0;
 pub(crate) const PADDING: f32 = 16.0;
 
+/// The typeface both the painter and the intrinsic measurement resolve.
+///
+/// These must never diverge. The measurement reserves the box the painter then
+/// fills, so a different face on either side produces text that overflows a box
+/// the geometry validator has already declared safe — the exact failure mode the
+/// audit found across the text components. Both sides used to hardcode
+/// `"SF Mono"` independently, which agreed only by coincidence and ignored an
+/// explicit `font-family` outright, custom or not.
+pub(crate) fn resolve_typeface(style: &CssStyle) -> Option<skia_safe::Typeface> {
+    let font_style = skia_safe::FontStyle::normal();
+    let family = style.font_family_or("SF Mono");
+    resolve_custom_typeface(family, font_style)
+        .or_else(|| typeface_with_fallback(family, font_style).ok())
+}
+
 impl Terminal {
     fn make_font(&self) -> Option<skia_safe::Font> {
-        let font_style = skia_safe::FontStyle::normal();
-        let typeface = typeface_with_fallback("SF Mono", font_style).ok()?;
+        let typeface = resolve_typeface(&self.style)?;
         let size = self.style.font_size_px_or(FONT_SIZE);
         Some(skia_safe::Font::from_typeface(typeface, size))
     }

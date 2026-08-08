@@ -2,7 +2,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Font, FontStyle, Rect};
 
-use rustmotion_core::css::style::WhiteSpace as CssWhiteSpace;
+use rustmotion_core::css::style::{
+    FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
+    WhiteSpace as CssWhiteSpace,
+};
+use rustmotion_core::css::units::LengthContext;
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -43,12 +47,32 @@ rustmotion_core::impl_traits!(Caption {
 });
 
 impl Caption {
-    fn paint(&self, canvas: &Canvas, layout_width: f32, layout_height: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_width: f32, layout_height: f32, ctx: &PaintCtx) {
+        let time = ctx.time;
         let font_size = self.style.font_size_px_or(48.0);
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
 
-        let Ok(typeface) = typeface_with_fallback(font_family, FontStyle::bold()) else {
+        // #9: `letter-spacing`/`line-height` `em`/`%` resolve against this
+        // element's own font-size (just above); `vw`/`vh` resolve against
+        // the real viewport, available here via `ctx` (mirrors
+        // `text.rs::paint`'s `type_ctx`).
+        let type_ctx = LengthContext {
+            viewport_width: ctx.video_width as f32,
+            viewport_height: ctx.video_height as f32,
+            parent_size: layout_width.max(0.0),
+            font_size,
+            root_font_size: 16.0,
+        };
+
+        // #9: derive weight/slant from `style.font-weight`/`font-style`
+        // instead of always painting bold. `CaptionIntrinsic` (via
+        // `TextIntrinsic`) measures at whatever weight the style declares
+        // (400/normal when unset) — painting an unconditional bold made the
+        // glyphs wider than the box that was centred/measured for them.
+        let font_style = Self::resolve_font_style(&self.style);
+
+        let Ok(typeface) = typeface_with_fallback(font_family, font_style) else {
             return;
         };
 
@@ -182,8 +206,20 @@ impl Caption {
                     self.style.white_space,
                     Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
                 );
+                // #1: when `max_width` is unset, wrap at the box `layout`
+                // actually gave this caption (matches `text.rs:442-451`)
+                // instead of never wrapping — `CaptionIntrinsic` measures
+                // (and taffy reserves a box) against that same width, so
+                // painting at `f32::MAX` here painted a single line far
+                // wider than the reserved box, bleeding past it and past
+                // the viewport with `validate` never seeing the mismatch
+                // (it re-measures via the same intrinsic, not this paint
+                // path).
                 let max_width = if nowrap {
                     f32::MAX
+                } else if layout_width.is_finite() && layout_width > 0.0 {
+                    self.max_width
+                        .map_or(layout_width, |mw| mw.min(layout_width))
                 } else {
                     self.max_width.unwrap_or(f32::MAX)
                 };
@@ -203,7 +239,16 @@ impl Caption {
                     current_x += word_width + space_width;
                 }
 
-                let line_height = font_size * 1.4;
+                // #9: honour `style.line-height` like `CaptionIntrinsic`
+                // does (via `TextIntrinsic::from_parts` ->
+                // `line_height_for_ctx`) instead of a hardcoded 1.4 — the
+                // box taffy reserves is sized from the former, so painting
+                // with the latter drifted the line spacing away from what
+                // was measured (7.7% at the unset default, arbitrarily more
+                // with an explicit `line-height`), and the caption's own
+                // vertical clip (below in the outer `paint`) silently crops
+                // whatever spills past the mismatch.
+                let line_height = self.style.line_height_for_ctx(font_size, &type_ctx);
                 let cx = layout_width / 2.0;
 
                 if let Some(bg_color) = self.style.background_color_str() {
@@ -291,6 +336,29 @@ impl Caption {
         let paint = paint_from_hex(self.pill_color.as_deref().unwrap_or(DEFAULT_PILL_COLOR));
         canvas.draw_rrect(skia_safe::RRect::new_rect_xy(rect, radius, radius), &paint);
     }
+
+    /// #9: the Skia `FontStyle` to paint with, derived from `style.font-
+    /// weight`/`font-style` — mirrors `text.rs`'s weight/slant mapping and
+    /// `intrinsic.rs`'s `weight_to_u16` (used to measure the box), so the
+    /// weight the box was measured at and the weight painted into it always
+    /// agree. Pulled out as its own function so it's directly unit-testable
+    /// without needing to render anything.
+    fn resolve_font_style(style: &CssStyle) -> FontStyle {
+        let weight = match &style.font_weight {
+            Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
+                skia_safe::font_style::Weight::BOLD
+            }
+            Some(CssFontWeight::Number(n)) if *n >= 600 => skia_safe::font_style::Weight::BOLD,
+            Some(CssFontWeight::Number(n)) => skia_safe::font_style::Weight::from(*n as i32),
+            _ => skia_safe::font_style::Weight::NORMAL,
+        };
+        let slant = match style.font_style {
+            Some(CssFontStyle::Italic) => skia_safe::font_style::Slant::Italic,
+            Some(CssFontStyle::Oblique) => skia_safe::font_style::Slant::Oblique,
+            _ => skia_safe::font_style::Slant::Upright,
+        };
+        FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant)
+    }
 }
 
 impl Painter for Caption {
@@ -301,7 +369,7 @@ impl Painter for Caption {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
+        self.paint(canvas, layout.width, layout.height, ctx);
     }
 }
 
@@ -333,7 +401,30 @@ mod tests {
     use rustmotion_core::css::Length;
     use rustmotion_core::schema::CaptionWord;
 
+    /// A `PaintCtx` for tests that don't care about frame/fps bookkeeping —
+    /// only `time` and, since #9, the viewport dims threaded into the
+    /// `LengthContext` used to resolve `vw`/`vh` typography units.
+    fn test_ctx(time: f64) -> PaintCtx {
+        PaintCtx {
+            time,
+            scene_duration: 2.0,
+            frame_index: (time * 30.0) as u32,
+            fps: 30,
+            video_width: 1920,
+            video_height: 1080,
+            stagger_offset: 0.0,
+        }
+    }
+
     fn make_caption(text: &str, white_space: Option<CssWhiteSpace>) -> Caption {
+        make_caption_with_max_width(text, white_space, Some(80.0))
+    }
+
+    fn make_caption_with_max_width(
+        text: &str,
+        white_space: Option<CssWhiteSpace>,
+        max_width: Option<f32>,
+    ) -> Caption {
         let words = text
             .split_whitespace()
             .map(|w| CaptionWord {
@@ -346,7 +437,7 @@ mod tests {
             words,
             active_color: default_active_color(),
             mode: CaptionStyle::Highlight,
-            max_width: Some(80.0),
+            max_width,
             pill_color: None,
             style: CssStyle {
                 font_size: Some(Length::Px(28.0)),
@@ -410,7 +501,7 @@ mod tests {
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = surface.canvas();
-            caption.paint(canvas, W as f32, H as f32, 0.5);
+            caption.paint(canvas, W as f32, H as f32, &test_ctx(0.5));
         }
         let (_minx, _maxx, miny, _maxy) =
             ink_bounds(&mut surface, W, H).expect("caption must paint something");
@@ -431,7 +522,7 @@ mod tests {
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = surface.canvas();
-            caption.paint(canvas, W as f32, H as f32, 0.1);
+            caption.paint(canvas, W as f32, H as f32, &test_ctx(0.1));
         }
         let (_minx, _maxx, miny, _maxy) =
             ink_bounds(&mut surface, W, H).expect("word_pop caption must paint something");
@@ -453,7 +544,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((800.0, 250.0));
-            caption.paint(canvas, 80.0, H as f32, 0.5);
+            caption.paint(canvas, 80.0, H as f32, &test_ctx(0.5));
         }
         let (minx, maxx, miny, maxy) =
             ink_bounds(&mut surface, W, H).expect("nowrap caption must paint something");
@@ -479,7 +570,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((800.0, 250.0));
-            caption.paint(canvas, 80.0, H as f32, 0.5);
+            caption.paint(canvas, 80.0, H as f32, &test_ctx(0.5));
         }
         let (minx, maxx, miny, maxy) =
             ink_bounds(&mut surface, W, H).expect("wrapped caption must paint something");
@@ -493,6 +584,188 @@ mod tests {
             maxy - miny > 50,
             "wrapped caption must spread across multiple lines, got ink height {}",
             maxy - miny
+        );
+    }
+
+    // ─── #1: wrap at the box's layout_width when max_width is unset ───────
+
+    #[test]
+    fn wraps_at_layout_width_when_max_width_is_unset() {
+        // Reproduction: no `max_width` on the caption (the common case — a
+        // caption's box comes from wherever it's placed, e.g. a card), but
+        // the layout pass still hands `paint` a real, finite `layout_width`
+        // (mirrors `CaptionIntrinsic`, which measures against exactly this
+        // width). Before the fix, `max_width.unwrap_or(f32::MAX)` ignored
+        // `layout_width` entirely and painted one line stretching far past
+        // the box — and past the viewport in the audit's repro.
+        let caption = make_caption_with_max_width(
+            "the quick brown fox jumps over the lazy dog again",
+            None,
+            None, // no explicit max_width
+        );
+        const W: i32 = 1600;
+        const H: i32 = 400;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.translate((800.0, 200.0));
+            // The box the layout pass assigned: 300px wide, well short of
+            // this sentence's unwrapped width at font-size 28.
+            caption.paint(canvas, 300.0, H as f32, &test_ctx(0.5));
+        }
+        let (minx, maxx, miny, maxy) =
+            ink_bounds(&mut surface, W, H).expect("caption must paint something");
+
+        assert!(
+            maxx - minx < 320,
+            "must wrap within ~layout_width (300px), got ink width {}",
+            maxx - minx
+        );
+        assert!(
+            maxy - miny > 50,
+            "must spread across multiple lines when max_width is unset, got ink height {}",
+            maxy - miny
+        );
+    }
+
+    #[test]
+    fn nowrap_still_ignores_layout_width_when_max_width_is_unset() {
+        // Regression guard: the #1 fix must not touch `white-space:
+        // nowrap`'s existing "always ignore any width constraint" contract.
+        let caption = make_caption_with_max_width(
+            "the quick brown fox jumps over the lazy dog",
+            Some(CssWhiteSpace::Nowrap),
+            None,
+        );
+        const W: i32 = 1600;
+        const H: i32 = 400;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.translate((800.0, 200.0));
+            caption.paint(canvas, 300.0, H as f32, &test_ctx(0.5));
+        }
+        let (minx, maxx, miny, maxy) =
+            ink_bounds(&mut surface, W, H).expect("caption must paint something");
+
+        assert!(
+            maxx - minx > 400,
+            "nowrap must still bleed past layout_width, got ink width {}",
+            maxx - minx
+        );
+        assert!(
+            maxy - miny < 50,
+            "nowrap must stay on one line, got ink height {}",
+            maxy - miny
+        );
+    }
+
+    // ─── #9: line-height / font-weight measure-vs-paint parity ────────────
+
+    #[test]
+    fn honours_style_line_height_instead_of_hardcoded_1_4() {
+        // Reproduction: `style.line-height: 0.9` must change the vertical
+        // gap between wrapped lines. Before the fix, the painter always
+        // used `font_size * 1.4` regardless of `style.line-height`, while
+        // `CaptionIntrinsic` (the box taffy reserves) honoured it — a
+        // caption author following rules/typography-readability.md's
+        // guidance to set `line-height` got a box sized for their value but
+        // glyphs painted at a fixed 1.4.
+        let mut tight = make_caption_with_max_width(
+            "one two three four five six seven eight",
+            None,
+            Some(80.0),
+        );
+        tight.style.line_height = Some(rustmotion_core::css::style::LineHeight::Number(0.9));
+        let mut loose = make_caption_with_max_width(
+            "one two three four five six seven eight",
+            None,
+            Some(80.0),
+        );
+        loose.style.line_height = Some(rustmotion_core::css::style::LineHeight::Number(2.0));
+
+        const W: i32 = 1600;
+        const H: i32 = 800;
+
+        let mut surf_tight =
+            skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surf_tight.canvas();
+            canvas.translate((800.0, 50.0));
+            tight.paint(canvas, 80.0, H as f32, &test_ctx(0.5));
+        }
+        let (_, _, _, tight_maxy) =
+            ink_bounds(&mut surf_tight, W, H).expect("tight caption must paint something");
+
+        let mut surf_loose =
+            skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surf_loose.canvas();
+            canvas.translate((800.0, 50.0));
+            loose.paint(canvas, 80.0, H as f32, &test_ctx(0.5));
+        }
+        let (_, _, _, loose_maxy) =
+            ink_bounds(&mut surf_loose, W, H).expect("loose caption must paint something");
+
+        assert!(
+            loose_maxy > tight_maxy + 50,
+            "line-height: 2.0 must spread lines much further than 0.9 \
+             (tight bottom={tight_maxy}, loose bottom={loose_maxy})"
+        );
+    }
+
+    // `Caption::resolve_font_style` is the exact weight/slant computation
+    // `paint` uses; testing it directly is deterministic regardless of
+    // whether the system's resolved "bold" and "normal" typefaces happen to
+    // have visually/metrically distinct advance widths on this particular
+    // host (on this machine, Helvetica's bold and normal share identical
+    // glyph metrics — a pixel-width comparison would pass whether or not
+    // `paint` used the right weight, which isn't a real check of the fix).
+
+    #[test]
+    fn resolve_font_style_defaults_to_normal_matching_the_intrinsic_measurement() {
+        // #9 (weight half): `CaptionIntrinsic` (via `TextIntrinsic`'s
+        // `weight_to_u16`) measures at weight 400 when `style.font-weight`
+        // is unset. Before the fix, `paint` ignored `style.font-weight`
+        // entirely and always painted `FontStyle::bold()` (weight 700) — a
+        // silent measure-vs-paint weight mismatch on every caption that
+        // doesn't set an explicit font-weight (the common case).
+        let style = CssStyle::default();
+        let resolved = Caption::resolve_font_style(&style);
+        assert_eq!(
+            *resolved.weight(),
+            400,
+            "unset font-weight must resolve to normal (400), not a hardcoded bold"
+        );
+    }
+
+    #[test]
+    fn resolve_font_style_honours_explicit_bold_and_numeric_weight() {
+        let bold = CssStyle {
+            font_weight: Some(CssFontWeight::Keyword(FontWeightKw::Bold)),
+            ..Default::default()
+        };
+        assert_eq!(*Caption::resolve_font_style(&bold).weight(), 700);
+
+        // Below the >=600 "treat as bold" threshold (same threshold
+        // `text.rs`'s equivalent mapping uses), so the exact numeric value
+        // passes through unchanged.
+        let numeric = CssStyle {
+            font_weight: Some(CssFontWeight::Number(350)),
+            ..Default::default()
+        };
+        assert_eq!(*Caption::resolve_font_style(&numeric).weight(), 350);
+    }
+
+    #[test]
+    fn resolve_font_style_honours_italic() {
+        let italic = CssStyle {
+            font_style: Some(CssFontStyle::Italic),
+            ..Default::default()
+        };
+        assert_eq!(
+            Caption::resolve_font_style(&italic).slant(),
+            skia_safe::font_style::Slant::Italic
         );
     }
 }

@@ -138,7 +138,7 @@ crates/
 │   │   ├── animator.rs         # Résolution animations, easing, spring solver
 │   │   ├── transition.rs       # Transitions entre scènes
 │   │   ├── renderer/           # Primitives Skia (colors, fonts, shapes, text)
-│   │   └── text/cosmic.rs      # Bridge cosmic-text ↔ Skia (mesure + glyphs)
+│   │   └── text/cosmic.rs      # Bridge cosmic-text — PAS branché sur le rendu réel
 │   ├── schema/                 # Modèles de données JSON
 │   │   ├── scenario.rs         # Scenario, ResolvedScenario, View, Scene, VideoConfig
 │   │   ├── style.rs            # Specialized types (CardBorder, CardShadow, Fill, etc.)
