@@ -1,22 +1,29 @@
 //! Batch rendering: render one video per line of a JSONL data file.
 //!
 //! Design invariants:
-//! - All input is validated (JSONL parse + name template + variable checks) BEFORE
-//!   any render starts. A corrupt line does not waste render time.
+//! - All input is validated (JSONL parse + name template + variable checks +
+//!   the same schema/geometry pass `render` runs, see `validation::run_checks`)
+//!   BEFORE any render starts. A corrupt or overflowing line does not waste
+//!   render time, and does not silently produce a bad video either.
 //! - Each data line is a JSON object; its fields become variable overrides.
 //! - `{field}` in the name template is replaced by the field's JSON-rendered value;
-//!   `{index}` by the 0-based line number.
+//!   `{index}` by the 0-based line number. The resolved name may create
+//!   subdirectories under `--output-dir` (e.g. `{lang}/{id}.mp4`) but may not
+//!   escape it: a `..` component or an absolute path is rejected in preflight.
 //! - Unknown variables (when the template has a `config` block) produce an actionable
 //!   error listing declared variables — same as the single-file path.
-//! - Exit code is non-zero if any render failed; partial success is reported.
+//! - Exit code is non-zero if any render failed *or panicked* (`--jobs > 1`
+//!   dispatches renders across worker threads; a panic in one is caught and
+//!   counted as a failure, never silently dropped); partial success is reported.
 
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::loader::load_input_with_vars;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::commands::render::cmd_render;
+use crate::commands::validation::{self, ValidationSource};
 
 /// One row parsed from the JSONL data file.
 struct BatchRow {
@@ -72,6 +79,38 @@ pub(crate) fn resolve_name_template(
     Ok(out)
 }
 
+/// Reject a resolved output name that would escape `--output-dir` once joined
+/// onto it. `Path::join` replaces the base entirely when the joined path is
+/// absolute, and a `..` component walks back out of it regardless — either
+/// way `output_dir.join(name)` can land anywhere on disk. `name` comes from
+/// `{field}` substitution of the (untrusted) JSONL data file, so this check
+/// runs in preflight, before any render starts, same as every other
+/// preflight check in this module.
+///
+/// A plain relative path — including one that creates subdirectories, e.g.
+/// `"en/abc.mp4"` — remains legal: only `ParentDir` (`..`), `RootDir`
+/// (a leading `/`), and `Prefix` (a Windows drive/UNC root) are rejected.
+fn reject_escaping_name(name: &str) -> std::result::Result<(), String> {
+    for component in Path::new(name).components() {
+        match component {
+            Component::ParentDir => {
+                return Err(format!(
+                    "resolved output name '{name}' contains a '..' component, \
+                     which would escape --output-dir"
+                ))
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "resolved output name '{name}' is an absolute path, \
+                     which would escape --output-dir"
+                ))
+            }
+            Component::CurDir | Component::Normal(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// Parse the JSONL file, resolve output names, and validate overrides against
 /// the scenario template (dry-run load). Returns ordered rows or an error if
 /// anything is invalid. No rendering happens here.
@@ -121,12 +160,35 @@ fn preflight(
                 continue;
             }
         };
+        if let Err(msg) = reject_escaping_name(&name) {
+            preflight_errors.push(format!("line {}: {}", index + 1, msg));
+            continue;
+        }
         let output_path = output_dir.join(&name);
 
-        // Validate overrides against the template (dry-run: load then discard)
-        let path_buf = template_path.to_path_buf();
-        if let Err(e) = load_input_with_vars(&path_buf, Some(&overrides)) {
-            preflight_errors.push(format!("line {}: {}", index + 1, e));
+        // Validate overrides against the template: parse, resolve variables,
+        // then run the same schema + geometry pass `render` runs before it
+        // renders a single-file scenario (`validation::run_checks`, wired
+        // with the same defaults `render` uses with no flags: blocking
+        // geometry violations, no animated-frame sampling). A batch row is
+        // exactly the situation the module doc warns about — N videos
+        // produced in one shot — so it must not be the one path that skips
+        // the "unwrappable_text_overflow" / viewport-overflow gate CLAUDE.md
+        // requires. The loaded scenario itself is discarded here: `render_row`
+        // reloads it below, right before the actual render.
+        let loaded = match validation::load_with_vars(
+            ValidationSource::File(template_path),
+            Some(&overrides),
+        ) {
+            Ok(l) => l,
+            Err(e) => {
+                preflight_errors.push(format!("line {}: {}", index + 1, e));
+                continue;
+            }
+        };
+        let report = validation::run_checks(&loaded, false);
+        if report.is_blocking(false) {
+            preflight_errors.push(format!("line {}: {}", index + 1, report.to_error()));
             continue;
         }
 
@@ -274,13 +336,42 @@ pub fn cmd_batch(
             .collect();
 
         for h in handles {
-            let _ = h.join(); // panics in threads are surfaced as failures below
+            // `h.join()` returns `Err` when the worker thread panicked instead
+            // of returning normally (e.g. a codec assertion on an odd frame
+            // dimension). That row was neither counted in `success_arc` nor
+            // pushed to `failures` by the closure above — it *only* runs its
+            // bookkeeping on the `Ok`/`Err` return path, which a panic skips
+            // entirely. Left unhandled, `_ = h.join()` was true to its
+            // comment ("panics ... are surfaced as failures below") in name
+            // only: nothing below ever inspected the join result, so a batch
+            // where every worker panicked reported "0/N succeeded" and still
+            // returned `Ok(())` — exit code 0 for a batch that rendered
+            // nothing. Record it as a failure explicitly instead.
+            if let Err(payload) = h.join() {
+                failures.lock().unwrap().push(format!(
+                    "worker thread panicked: {}",
+                    panic_message(&payload)
+                ));
+            }
         }
         success_count = *success_arc.lock().unwrap();
     }
 
     let failure_list = failures.lock().unwrap().clone();
     let fail_count = failure_list.len();
+
+    // Defense in depth: every row must end up counted as either a success or
+    // a failure. This should already hold given the panic handling above,
+    // but if it doesn't — a future refactor drops a bookkeeping update, a
+    // panic happens somewhere neither counter is touched — fail loudly
+    // rather than silently report a batch as complete when it wasn't.
+    if success_count + fail_count != total {
+        return Err(RustmotionError::Generic(format!(
+            "batch accounting mismatch: {success_count} succeeded + {fail_count} failed \
+             != {total} total item(s) — {} item(s) neither succeeded nor were reported as failed",
+            total.saturating_sub(success_count + fail_count)
+        )));
+    }
 
     if !quiet {
         eprintln!("Batch complete: {}/{} succeeded.", success_count, total);
@@ -295,6 +386,23 @@ pub fn cmd_batch(
     }
 
     Ok(())
+}
+
+/// Extract a human-readable message from a caught thread panic payload.
+/// `std::thread::Result`'s `Err` variant is `Box<dyn Any + Send>`; panics
+/// raised via `panic!("...")` / `.unwrap()` / `.expect(...)` box either a
+/// `&'static str` or a `String`, which covers the vast majority of real
+/// panics (including the openh264 `assert_eq!` this fix was written for).
+/// Anything else (a custom payload via `std::panic::panic_any`) still
+/// produces a readable, if generic, message instead of losing the row.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 fn render_row(
@@ -378,6 +486,44 @@ mod name_template_tests {
         assert_eq!(
             resolve_name_template("static.mp4", &data, 0).unwrap(),
             "static.mp4"
+        );
+    }
+}
+
+#[cfg(test)]
+mod escaping_name_tests {
+    use super::*;
+
+    #[test]
+    fn plain_relative_name_is_allowed() {
+        assert!(reject_escaping_name("abc.mp4").is_ok());
+    }
+
+    /// `{lang}/{id}.mp4`-style names are a documented, legitimate feature
+    /// (`field_placeholder_resolved` above): rejecting every non-`Normal`
+    /// path component would also reject this, which is why only
+    /// `ParentDir`/`RootDir`/`Prefix` are rejected, not every multi-segment
+    /// name.
+    #[test]
+    fn relative_subdirectory_name_is_allowed() {
+        assert!(reject_escaping_name("en/abc.mp4").is_ok());
+    }
+
+    #[test]
+    fn parent_dir_component_is_rejected() {
+        let err = reject_escaping_name("../../escaped.mp4").unwrap_err();
+        assert!(
+            err.contains(".."),
+            "error must call out the '..' component: {err}"
+        );
+    }
+
+    #[test]
+    fn absolute_unix_path_is_rejected() {
+        let err = reject_escaping_name("/tmp/scratch/pwned/absolute.mp4").unwrap_err();
+        assert!(
+            err.contains("absolute"),
+            "error must call out the absolute path: {err}"
         );
     }
 }
@@ -505,6 +651,346 @@ mod batch_integration_tests {
         assert!(
             err.to_string().contains("batch data line"),
             "error must identify the bad data line: {err}"
+        );
+
+        let _ = std::fs::remove_file(&template);
+        let _ = std::fs::remove_file(&data);
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// Constat #2/#4: a `{field}` value from the (untrusted) JSONL data file
+    /// containing `..` must not be able to walk `output_dir.join(name)` back
+    /// out of `--output-dir`. Reproduces the brief's scenario: `--output-dir
+    /// <base>/sub/dir`, `--name-template '{name}.png'`, data field
+    /// `"../../escaped"` — before the fix this created
+    /// `<base>/escaped.png/frame_00000.png`, outside `<base>/sub/dir`.
+    #[test]
+    fn batch_rejects_name_that_escapes_output_dir_via_parent_dir() {
+        let template = write_json(&minimal_template("name"), "tmpl_escape_dotdot");
+        let data = write_jsonl(
+            &[serde_json::json!({"name": "../../escaped"})],
+            "escape_dotdot",
+        );
+        let base = std::env::temp_dir().join(format!("rm_batch_escdd_{}", std::process::id()));
+        let out_dir = base.join("sub").join("dir");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let err = cmd_batch(
+            &template,
+            &data,
+            &out_dir,
+            "{name}.png",
+            None,
+            None,
+            Some("png-seq".to_string()),
+            false,
+            1,
+            true,
+        )
+        .expect_err("a name containing '..' must be rejected in preflight");
+
+        assert!(
+            err.to_string().contains(".."),
+            "error must call out the escaping component: {err}"
+        );
+
+        // `<base>/sub/dir/../../escaped.png` lexically resolves to
+        // `<base>/escaped.png` — it must never have been created.
+        let escaped_target = base.join("escaped.png");
+        assert!(
+            !escaped_target.exists(),
+            "traversal target must not have been created: {}",
+            escaped_target.display()
+        );
+
+        let _ = std::fs::remove_file(&template);
+        let _ = std::fs::remove_file(&data);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Constat #2/#4, absolute-path variant: `Path::join` with an absolute
+    /// component discards the base entirely, so a `{field}` value that is
+    /// itself an absolute path writes straight to that path, ignoring
+    /// `--output-dir` completely.
+    #[test]
+    fn batch_rejects_name_that_is_an_absolute_path() {
+        let template = write_json(&minimal_template("name"), "tmpl_escape_abs");
+        let escape_target =
+            std::env::temp_dir().join(format!("rm_batch_abs_escape_target_{}", std::process::id()));
+        let name_value = escape_target.to_string_lossy().to_string();
+        let data = write_jsonl(&[serde_json::json!({"name": name_value})], "escape_abs");
+        let out_dir =
+            std::env::temp_dir().join(format!("rm_batch_out_escabs_{}", std::process::id()));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let target_with_ext = PathBuf::from(format!("{}.png", escape_target.display()));
+        let _ = std::fs::remove_dir_all(&target_with_ext);
+
+        let err = cmd_batch(
+            &template,
+            &data,
+            &out_dir,
+            "{name}.png",
+            None,
+            None,
+            Some("png-seq".to_string()),
+            false,
+            1,
+            true,
+        )
+        .expect_err("an absolute output name must be rejected in preflight");
+
+        assert!(
+            err.to_string().to_lowercase().contains("absolute"),
+            "error must call out the absolute path: {err}"
+        );
+        assert!(
+            !target_with_ext.exists(),
+            "absolute-path target must not have been created: {}",
+            target_with_ext.display()
+        );
+
+        let _ = std::fs::remove_file(&template);
+        let _ = std::fs::remove_file(&data);
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// The traversal fix must not regress the documented `{field}/{field}`
+    /// nested-subdirectory feature (`field_placeholder_resolved` unit test):
+    /// only `..`/absolute components are rejected, plain relative
+    /// subdirectories still get created under `--output-dir`.
+    #[test]
+    fn batch_relative_subdirectory_name_still_creates_nested_output() {
+        let template = write_json(&minimal_template("lang"), "tmpl_subdir");
+        let data = write_jsonl(&[serde_json::json!({"lang": "en"})], "subdir");
+        let out_dir =
+            std::env::temp_dir().join(format!("rm_batch_out_subdir_{}", std::process::id()));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        cmd_batch(
+            &template,
+            &data,
+            &out_dir,
+            "{lang}/{index}.png",
+            None,
+            None,
+            Some("png-seq".to_string()),
+            false,
+            1,
+            true,
+        )
+        .expect("a relative subdirectory name must still be allowed");
+
+        let subdir = out_dir.join("en").join("0.png");
+        assert!(
+            subdir.exists() && subdir.is_dir(),
+            "expected nested output dir en/0.png to exist"
+        );
+
+        let _ = std::fs::remove_file(&template);
+        let _ = std::fs::remove_file(&data);
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// Constat #3: `batch` must run the same schema + geometry validation
+    /// `render` runs before it renders a single-file scenario — CLAUDE.md's
+    /// "schema + geometry, les deux doivent passer" rule applies just as
+    /// much to a batch row. Reproduces the brief's scenario: a 320×180
+    /// template with 96px `white-space: nowrap` text and a long `$title`
+    /// override overflows the viewport; `render` blocks on it, so `batch`
+    /// must too, before any render starts.
+    #[test]
+    fn batch_preflight_rejects_a_geometry_overflow() {
+        let template = write_json(
+            &serde_json::json!({
+                "config": { "title": { "type": "string", "default": "x" } },
+                "video": { "width": 320, "height": 180, "fps": 1 },
+                "scenes": [{
+                    "duration": 1.0,
+                    "children": [{
+                        "type": "text",
+                        "content": "$title",
+                        "style": { "font-size": 96, "white-space": "nowrap" }
+                    }]
+                }]
+            }),
+            "tmpl_overflow",
+        );
+        let data = write_jsonl(
+            &[serde_json::json!({"title": "A ridiculously long overflowing headline"})],
+            "overflow",
+        );
+        let out_dir =
+            std::env::temp_dir().join(format!("rm_batch_out_overflow_{}", std::process::id()));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let err = cmd_batch(
+            &template,
+            &data,
+            &out_dir,
+            "{index}.png",
+            None,
+            None,
+            Some("png-seq".to_string()),
+            false,
+            1,
+            true,
+        )
+        .expect_err("a scenario that overflows the viewport must fail preflight, like `render`");
+
+        assert!(
+            err.to_string().contains("geometry violation"),
+            "error must surface the geometry violation, matching `render`'s message: {err}"
+        );
+        assert!(
+            !out_dir.join("0.png").exists(),
+            "preflight failure must mean no render started"
+        );
+
+        let _ = std::fs::remove_file(&template);
+        let _ = std::fs::remove_file(&data);
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// Guard that temporarily restricts `PATH` to a minimal, `ffmpeg`-free
+    /// set of directories, so `render`'s `Command::new("ffmpeg").arg(
+    /// "-version")` availability probe fails and the built-in openh264
+    /// fallback encoder runs instead — the codepath the audit's own repro
+    /// deliberately forced with `env -i PATH=/usr/bin:/bin ...` to make the
+    /// `YUVBuffer` even-dimension assertion panic reachable without a real
+    /// `ffmpeg` dependency in CI. Restores the original `PATH` on drop.
+    struct NoFfmpegPathGuard {
+        original: Option<std::ffi::OsString>,
+        _permit: std::sync::MutexGuard<'static, ()>,
+    }
+
+    /// Serializes every test in this file that mutates `PATH` — required
+    /// because `std::env::set_var`/`remove_var` are `unsafe`: the standard
+    /// library only guarantees soundness when nothing else in the process
+    /// reads or writes the environment concurrently. This is the only test
+    /// file in `rustmotion-cli` whose tests spawn a real (non `png-seq` /
+    /// `gif` / `raw`) video encode — every other test in this crate's test
+    /// binary never reads `PATH` — so this lock only needs to protect
+    /// against concurrent runs of tests within this file.
+    static PATH_MUTATION_LOCK: Mutex<()> = Mutex::new(());
+
+    impl NoFfmpegPathGuard {
+        fn install() -> Self {
+            let permit = PATH_MUTATION_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let original = std::env::var_os("PATH");
+            // SAFETY: `_permit` holds `PATH_MUTATION_LOCK` for this guard's
+            // entire lifetime (released on `Drop`, after `PATH` is restored
+            // below), and per the lock's doc comment no other thread in this
+            // binary reads/writes `PATH` while it is held.
+            unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
+            Self {
+                original,
+                _permit: permit,
+            }
+        }
+    }
+
+    impl Drop for NoFfmpegPathGuard {
+        fn drop(&mut self) {
+            // SAFETY: see `install`.
+            unsafe {
+                match &self.original {
+                    Some(v) => std::env::set_var("PATH", v),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+    }
+
+    /// Constat #1: with `--jobs > 1`, a worker thread that panics (instead of
+    /// returning `Err`) was invisible to `cmd_batch` — `let _ = h.join()`
+    /// discarded the panic, so neither `success_arc` nor `failures` was ever
+    /// incremented for that row. A batch where *every* worker panicked
+    /// reported "Batch complete: 0/N succeeded." and still returned `Ok(())`
+    /// — exit code 0 for a batch that rendered nothing.
+    ///
+    /// The brief's own reproduction (odd frame dimensions, e.g. 321×241,
+    /// forcing an `openh264` `assert_eq!(width % 2, 0, ...)` panic) is no
+    /// longer reachable *through `batch`* once constat #3 is fixed: schema
+    /// validation (`video.width and video.height must be even`, wired in by
+    /// the constat #3 fix above) now rejects that scenario in preflight,
+    /// before any worker thread is even spawned — a nice side effect, but it
+    /// means this test needs a different panic that survives preflight.
+    /// `create_encoder` (crates/rustmotion/src/encode/video/h264.rs) computes
+    /// `let pixels = width * height;` in plain (checked) `u32` arithmetic
+    /// before ever touching a frame buffer; 70000×70000 is even, positive,
+    /// and passes every schema/geometry check, but `70000 * 70000 =
+    /// 4_900_000_000` overflows `u32::MAX` (4_294_967_295) and panics with
+    /// "attempt to multiply with overflow" — deterministically, and before
+    /// any expensive Skia canvas allocation happens for the (nonexistent)
+    /// video frame. Still requires the openh264 fallback (`create_encoder`
+    /// is only reached when `ffmpeg` is unavailable), hence
+    /// `NoFfmpegPathGuard`.
+    #[test]
+    fn batch_parallel_worker_panic_is_reported_as_failure_not_silent_success() {
+        let template = write_json(
+            &serde_json::json!({
+                "video": { "width": 70000, "height": 70000, "fps": 1 },
+                "scenes": [{ "duration": 1.0, "children": [] }]
+            }),
+            "tmpl_overflow_dims",
+        );
+        let data = write_jsonl(
+            &[serde_json::json!({}), serde_json::json!({})],
+            "overflow_dims",
+        );
+        let out_dir =
+            std::env::temp_dir().join(format!("rm_batch_out_overflowdims_{}", std::process::id()));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let _no_ffmpeg = NoFfmpegPathGuard::install();
+
+        // Run `cmd_batch` on a worker so a hang (e.g. a deadlock introduced
+        // by a broken fix) fails the test instead of wedging the whole
+        // suite, mirroring `paint_within` in
+        // crates/rustmotion-components/tests/degenerate_inputs.rs.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t_template = template.clone();
+        let t_data = data.clone();
+        let t_out_dir = out_dir.clone();
+        let worker = std::thread::spawn(move || {
+            let result = cmd_batch(
+                &t_template,
+                &t_data,
+                &t_out_dir,
+                "{index}.mp4",
+                None,
+                None,
+                None, // default format: the mp4/openh264 path under test
+                false,
+                2, // jobs: exercises the parallel path constat #1 is about
+                true,
+            );
+            let _ = tx.send(result);
+        });
+
+        let result = match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(r) => {
+                worker
+                    .join()
+                    .expect("outer worker thread must not itself panic");
+                r
+            }
+            Err(_) => {
+                panic!("cmd_batch did not return within 30s — possible deadlock in the join/accounting fix")
+            }
+        };
+
+        assert!(
+            result.is_err(),
+            "a batch where every worker panicked must not report success"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.to_lowercase().contains("panic"),
+            "the failure must surface the panic, not just an opaque render failure: {msg}"
         );
 
         let _ = std::fs::remove_file(&template);
