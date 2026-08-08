@@ -79,11 +79,12 @@ impl TagCloud {
         1.0 - (1.0 - p).powi(3)
     }
 
+    /// Never empty: callers index into it with `%`, and `"colors": []` — which a
+    /// generator emits to mean "no custom palette" — otherwise divides by zero.
     fn palette(&self) -> Vec<&str> {
-        if let Some(colors) = &self.colors {
-            colors.iter().map(|s| s.as_str()).collect()
-        } else {
-            DEFAULT_PALETTE.to_vec()
+        match &self.colors {
+            Some(colors) if !colors.is_empty() => colors.iter().map(|s| s.as_str()).collect(),
+            _ => DEFAULT_PALETTE.to_vec(),
         }
     }
 

@@ -154,12 +154,23 @@ impl DotMap {
             world_paint.set_style(PaintStyle::Fill);
             world_paint.set_anti_alias(true);
 
-            let spacing = self.dot_spacing;
+            // A spacing at or below zero makes the division +inf, and `inf as u32`
+            // saturates to u32::MAX in Rust — the nested loop below would then be
+            // scheduled for ~1.8e19 iterations and never return. The geometry pass
+            // rejects 0.01 but not 0, so the floor has to live here.
+            let spacing = if self.dot_spacing.is_finite() && self.dot_spacing >= 1.0 {
+                self.dot_spacing
+            } else {
+                1.0
+            };
             let radius = self.dot_radius;
             let margin = spacing;
 
-            let cols = ((w - margin * 2.0) / spacing) as u32;
-            let rows = ((h - margin * 2.0) / spacing) as u32;
+            // Belt and braces: even a legal spacing on a very large box should not
+            // be able to schedule an unbounded amount of work.
+            const MAX_DOTS_PER_AXIS: u32 = 4096;
+            let cols = (((w - margin * 2.0) / spacing) as u32).min(MAX_DOTS_PER_AXIS);
+            let rows = (((h - margin * 2.0) / spacing) as u32).min(MAX_DOTS_PER_AXIS);
 
             for row in 0..rows {
                 for col in 0..cols {

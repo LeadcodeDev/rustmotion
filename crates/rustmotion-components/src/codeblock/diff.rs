@@ -444,7 +444,7 @@ pub(super) fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentE
                     });
                     pending_delete.clear();
                 }
-                col += change.value().len();
+                col += change.value().chars().count();
             }
             ChangeTag::Delete => {
                 pending_delete.push_str(change.value());
@@ -456,7 +456,7 @@ pub(super) fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentE
                     insert: change.value().to_string(),
                 });
                 pending_delete.clear();
-                col += change.value().len();
+                col += change.value().chars().count();
             }
         }
     }
@@ -473,6 +473,19 @@ pub(super) fn compute_word_diff(old_line: &str, new_line: &str) -> Vec<FragmentE
 }
 
 // ─── Cursor-animated line editing ────────────────────────────────────────────
+
+/// Byte offset of the `n`-th character, saturating at the end of the string.
+///
+/// Every column in a `FragmentEdit` is a character count, because the reveal
+/// interpolates a *fraction* of the total edit length: counting bytes makes the
+/// animation land part-way through a multi-byte glyph, which both slices at an
+/// invalid boundary and spends three frames revealing one CJK character.
+fn byte_at(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
 
 pub(super) fn draw_cursor_edited_line(
     canvas: &Canvas,
@@ -498,7 +511,10 @@ pub(super) fn draw_cursor_edited_line(
         return;
     }
 
-    let total_work: usize = edits.iter().map(|e| e.delete.len() + e.insert.len()).sum();
+    let total_work: usize = edits
+        .iter()
+        .map(|e| e.delete.chars().count() + e.insert.chars().count())
+        .sum();
     if total_work == 0 {
         let highlighted = highlight_code(new_line, language, theme);
         if let Some(line) = highlighted.first() {
@@ -515,32 +531,33 @@ pub(super) fn draw_cursor_edited_line(
 
     for edit in edits {
         let adjusted_col = (edit.col as i64 + offset_adjust).max(0) as usize;
-        let delete_len = edit.delete.len();
-        let insert_len = edit.insert.len();
+        let delete_len = edit.delete.chars().count();
+        let insert_len = edit.insert.chars().count();
         let edit_work = delete_len + insert_len;
 
         if work_done + edit_work <= chars_progress {
-            let end = (adjusted_col + delete_len).min(current_line.len());
-            let start = adjusted_col.min(current_line.len());
-            current_line.replace_range(start..end, &edit.insert);
+            let start = byte_at(&current_line, adjusted_col);
+            let end = byte_at(&current_line, adjusted_col + delete_len);
+            current_line.replace_range(start..end.max(start), &edit.insert);
             offset_adjust += insert_len as i64 - delete_len as i64;
             work_done += edit_work;
         } else {
             let remaining_progress = chars_progress - work_done;
             if remaining_progress < delete_len {
                 let chars_deleted = remaining_progress;
-                let del_start = (adjusted_col + delete_len - chars_deleted).min(current_line.len());
-                let del_end = (adjusted_col + delete_len).min(current_line.len());
+                let first_deleted = adjusted_col + delete_len - chars_deleted;
+                let del_start = byte_at(&current_line, first_deleted);
+                let del_end = byte_at(&current_line, adjusted_col + delete_len);
                 if del_start < del_end {
                     current_line.replace_range(del_start..del_end, "");
                 }
-                cursor_col = Some(del_start.min(current_line.len()));
+                cursor_col = Some(first_deleted);
             } else {
                 let chars_inserted = remaining_progress - delete_len;
-                let start = adjusted_col.min(current_line.len());
-                let end = (adjusted_col + delete_len).min(current_line.len());
-                let partial_insert = &edit.insert[..chars_inserted.min(edit.insert.len())];
-                current_line.replace_range(start..end, partial_insert);
+                let start = byte_at(&current_line, adjusted_col);
+                let end = byte_at(&current_line, adjusted_col + delete_len);
+                let partial_insert = &edit.insert[..byte_at(&edit.insert, chars_inserted)];
+                current_line.replace_range(start..end.max(start), partial_insert);
                 cursor_col = Some(adjusted_col + chars_inserted);
             }
             break;
@@ -562,7 +579,8 @@ pub(super) fn draw_cursor_edited_line(
             };
 
             if should_show {
-                let prefix = &current_line[..col.min(current_line.len())];
+                // `col` counts characters, like every other column here.
+                let prefix = &current_line[..byte_at(&current_line, col)];
                 let (prefix_width, _) = font.measure_str(prefix, None);
                 let cursor_x = x + prefix_width;
                 let mut cursor_paint = paint_from_hex(cursor_color);
