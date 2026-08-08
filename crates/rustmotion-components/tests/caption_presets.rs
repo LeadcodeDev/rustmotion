@@ -19,10 +19,16 @@ const H: u32 = 300;
 /// Renders a single caption component (absolutely positioned at y=150 so the
 /// baseline-anchored glyphs are fully on-canvas) and returns the RGBA buffer.
 fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
+    render_caption_at(json, time, 150.0)
+}
+
+/// Same as [`render_caption`] but with an explicit vertical position, for
+/// tests whose caption spans more lines than fit below the default y=150.
+fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
     let component: Component = serde_json::from_value(json).expect("deserialize caption");
     let child = ChildComponent {
         component,
-        position: Some(PositionMode::Absolute { x: 0.0, y: 150.0 }),
+        position: Some(PositionMode::Absolute { x: 0.0, y }),
         x: None,
         y: None,
         z_index: None,
@@ -192,4 +198,66 @@ fn karaoke_pop_highlights_active_word_with_pill() {
         inactive > 100,
         "inactive words not visible: {inactive} white pixels"
     );
+}
+
+/// Audit finding #1: a caption with no `max_width` set, given a box
+/// narrower than its unwrapped content via `style.width` (mirrors a caption
+/// placed inside a card, the documented use case), must wrap to fit that
+/// box — not paint one wide line that bleeds out of it. Routed through the
+/// real pipeline so `CaptionIntrinsic` (the box taffy reserves) and
+/// `Caption::paint` (what actually gets drawn) are exercised together: this
+/// is exactly the measure-vs-paint pairing the geometry validator depends
+/// on to catch overflow, and before the fix the two disagreed silently.
+#[test]
+fn wraps_within_its_layout_box_when_max_width_is_unset() {
+    let json = serde_json::json!({
+        "type": "caption",
+        "mode": "highlight",
+        "words": [
+            { "text": "the", "start": 0.0, "end": 100.0 },
+            { "text": "quick", "start": 0.0, "end": 100.0 },
+            { "text": "brown", "start": 0.0, "end": 100.0 },
+            { "text": "fox", "start": 0.0, "end": 100.0 },
+            { "text": "jumps", "start": 0.0, "end": 100.0 },
+            { "text": "over", "start": 0.0, "end": 100.0 },
+            { "text": "the", "start": 0.0, "end": 100.0 },
+            { "text": "lazy", "start": 0.0, "end": 100.0 },
+            { "text": "dog", "start": 0.0, "end": 100.0 }
+        ],
+        // No `max_width` — the box comes entirely from `style.width` below,
+        // mirroring a caption inside a fixed-width card.
+        "style": { "width": "150px", "font-size": 24, "color": "#FFFFFF" }
+    });
+    let buf = render_caption_at(json, 0.5, 20.0);
+    let (minx, maxx, miny, maxy) = ink_bounds(&buf).expect("caption must paint something");
+
+    assert!(
+        maxx - minx < 200,
+        "must wrap to roughly the 150px box width, got ink width {}",
+        maxx - minx
+    );
+    assert!(
+        maxy - miny > 60,
+        "must spread across multiple lines (9 words don't fit 150px on one line at 30px \
+         font-size), got ink height {}",
+        maxy - miny
+    );
+}
+
+/// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent pixel
+/// in an RGBA8888 `W`x`H` buffer, or `None` if nothing was painted.
+fn ink_bounds(buf: &[u8]) -> Option<(i32, i32, i32, i32)> {
+    let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+    for y in 0..H as i32 {
+        for x in 0..W as i32 {
+            let idx = ((y * W as i32 + x) * 4 + 3) as usize;
+            if buf[idx] > 0 {
+                minx = minx.min(x);
+                maxx = maxx.max(x);
+                miny = miny.min(y);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    (minx <= maxx).then_some((minx, maxx, miny, maxy))
 }

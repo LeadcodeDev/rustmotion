@@ -94,7 +94,7 @@ pub(super) fn render_codeblock(
     let x = layout.x;
     let y = layout.y;
 
-    let (pad_top, pad_right, _pad_bottom, pad_left) = padding;
+    let (pad_top, pad_right, pad_bottom, pad_left) = padding;
     let corner_radius = layer.style.border_radius_px_or(12.0);
 
     let bg_color = layer.style.background_color_str().unwrap_or("#2b303b");
@@ -114,8 +114,40 @@ pub(super) fn render_codeblock(
     let code_x = x + pad_left + gutter_width;
     let code_y = y + chrome_height + pad_top;
 
-    let scroll_offset = if layer.auto_scroll && natural_height > total_height + 0.5 {
-        natural_height - total_height
+    // #4: the non-transition (typewriter/reveal) path only paints
+    // `visible_lines` lines, not the full `current_code` — `natural_height`
+    // (used below) is the height of *all* the code, revealed or not. Using
+    // it for the scroll offset made the offset constant and maximal from
+    // t=0, translating the not-yet-revealed lines' eventual position
+    // upward by the full amount immediately: the first lines to reveal sit
+    // above the clip, invisible, until the reveal has caught up with that
+    // fixed offset (reproduced: 60% of a 4s typewriter reveal painted zero
+    // text pixels). Compute reveal state up front so the scroll offset can
+    // be based on what's actually drawn — matches `terminal.rs`'s
+    // `content_h = visible_lines * line_h + padding + chrome_h` formula,
+    // which has never had this bug.
+    let reveal_state = if transition.is_none() {
+        let highlighted = highlight_code(&current_code, &layer.language, theme);
+        let (visible_lines, visible_chars, last_line_opacity) =
+            compute_reveal(layer, time, &highlighted);
+        Some((highlighted, visible_lines, visible_chars, last_line_opacity))
+    } else {
+        None
+    };
+
+    // Diff transitions (`render_diff_transition`) always paint the entire
+    // lerped diff, with no partial reveal — `natural_height` (the lerped
+    // dims_a/dims_b height) already matches what gets drawn for that path,
+    // so it needs no `visible_lines` adjustment; only the reveal path did.
+    let drawn_height = match &reveal_state {
+        Some((_, visible_lines, _, _)) => {
+            *visible_lines as f32 * actual_line_height + pad_top + pad_bottom + chrome_height
+        }
+        None => natural_height,
+    };
+
+    let scroll_offset = if layer.auto_scroll {
+        (drawn_height - total_height).max(0.0)
     } else {
         0.0
     };
@@ -149,9 +181,8 @@ pub(super) fn render_codeblock(
             trans,
         );
     } else {
-        let highlighted = highlight_code(&current_code, &layer.language, theme);
-        let (visible_lines, visible_chars, last_line_opacity) =
-            compute_reveal(layer, time, &highlighted);
+        let (highlighted, visible_lines, visible_chars, last_line_opacity) =
+            reveal_state.expect("reveal_state is always Some when transition is None");
 
         if layer.show_line_numbers {
             draw_line_numbers(

@@ -9,6 +9,23 @@
 //! Shaping & line-breaking are delegated to cosmic-text. Paint is done by
 //! rasterizing each glyph to an alpha mask, tinting it with the requested
 //! color, and blitting it as a small `Image` into Skia.
+//!
+//! **Not currently wired into the real render path (audit #10).** Every
+//! component's actual measure/paint goes through `skia_safe::Font::
+//! measure_str` / `TextBlob::new` in `engine::renderer::text` +
+//! `rustmotion-components::intrinsic::TextIntrinsic`, not through this
+//! module — `measure_text`/`paint_text` below have no callers outside their
+//! own tests (`grep -rn "engine::text\|text::cosmic" crates/` confirms
+//! this). If you're chasing a text overflow/measure-vs-paint bug, look in
+//! `engine::renderer::text.rs` and `rustmotion-components::intrinsic`
+//! instead — the shaping/bidi/glyph-fallback behaviour cosmic-text would
+//! provide here is not what actually renders today. Kept building (and the
+//! `cosmic-text` dependency kept) as a candidate landing spot for a future
+//! real shaping engine; not deleted unilaterally by this fix since that
+//! call — wire it in for real vs. remove the module and its dependency —
+//! is bigger than any single finding in this pass. See
+//! `rustmotion-components::intrinsic` module doc for the other side of this
+//! (it also used to claim a cosmic-text backing it doesn't have).
 
 use std::sync::{Mutex, OnceLock};
 

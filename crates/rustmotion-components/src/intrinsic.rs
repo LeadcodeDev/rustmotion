@@ -24,7 +24,12 @@ use crate::gradient_text::GradientText;
 use crate::kbd::Kbd;
 use crate::text::Text;
 
-/// Cosmic-text–backed intrinsic measurer for [`Text`].
+/// Skia-backed intrinsic measurer for [`Text`] (audit #10: despite the name
+/// this module's doc header suggests, this uses `skia_safe::Font::
+/// measure_str` via `engine::renderer::text`'s fallback-aware helpers — the
+/// same primitives `Text::paint` draws with — not `engine::text::cosmic`,
+/// which has no callers on the real render path at all; see that module's
+/// doc comment).
 pub struct TextIntrinsic {
     content: String,
     font_family: Option<String>,
@@ -58,20 +63,38 @@ impl TextIntrinsic {
     /// wrap:true unconditionally so their measured size still matches what
     /// those painters actually draw.
     pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
-        // No `LengthContext` is reachable here without changing this
-        // constructor's signature — its only callers are `box_builder.rs`
-        // and `rustmotion-cli/src/commands/geometry.rs`, both outside this
+        // No *real* `LengthContext` (real viewport, real parent width) is
+        // reachable here without changing this constructor's signature —
+        // its only callers are `box_builder.rs` and
+        // `rustmotion-cli/src/commands/geometry.rs`, both outside this
         // workstream's scope (box_builder.rs is a sibling's live file this
         // wave; the geometry validator re-measures via this exact type and
         // must keep agreeing with it byte-for-byte, so changing what it
-        // needs to pass in is not a call to make unilaterally here). So
-        // `font_size`/`line_height` stay on the context-free accessors
-        // (issue #125 §2's `vw`/`vh`/`rem`/`%` gap is not closed for this
-        // constructor) — only `letter_spacing` below, which is used
-        // exclusively by the wrap fix in `measure()`, no signature change
-        // needed for it.
+        // needs to pass in is not a call to make unilaterally here).
+        //
+        // But `letter-spacing`'s and `line-height`'s `em`/`%` resolve
+        // against this element's *own* font-size (not the parent's, not the
+        // viewport) — CSS spec, also documented on
+        // `CssStyle::letter_spacing_px_ctx`/`line_height_for_ctx` — and that
+        // own font-size is already known right here, with zero signature
+        // change needed. Building a `LengthContext` carrying just that
+        // resolved `font_size` (defaults for everything else) and using the
+        // `_ctx` resolvers closes the measure-vs-paint divergence for `em`/
+        // `%` specifically (`Text`/`Caption`'s painters already resolve
+        // these two properties with the real `PaintCtx`'s viewport, but
+        // `em`/`%` on them don't read the viewport at all, so the two agree
+        // regardless of what viewport this default carries). `vw`/`vh`/
+        // `rem` on `letter-spacing`/`line-height` remain unresolved against
+        // the *real* viewport here (they fall back to this struct's default
+        // 1920×1080/16px root) — closing that fully needs the real
+        // `VideoConfig` plumbed through `box_builder.rs`/`geometry.rs`,
+        // still out of scope for the reasons above.
         let font_size = style.font_size_px_or(48.0);
-        let line_height_resolved = style.line_height_for(font_size);
+        let own_ctx = rustmotion_core::css::units::LengthContext {
+            font_size,
+            ..rustmotion_core::css::units::LengthContext::default()
+        };
+        let line_height_resolved = style.line_height_for_ctx(font_size, &own_ctx);
         Self {
             content: content.to_string(),
             font_family: style.font_family.clone(),
@@ -79,7 +102,7 @@ impl TextIntrinsic {
             line_height_resolved,
             weight: weight_to_u16(style.font_weight.as_ref()),
             italic: matches!(style.font_style, Some(CssFontStyle::Italic)),
-            letter_spacing: style.letter_spacing_px(),
+            letter_spacing: style.letter_spacing_px_ctx(&own_ctx),
             max_width,
             wrap: true,
         }
@@ -404,8 +427,8 @@ fn _line_height_unused(_: Option<&LineHeight>) {}
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::terminal::{
-    Terminal, CHROME_HEIGHT, FONT_SIZE as TERM_FONT_SIZE, LINE_HEIGHT as TERM_LINE_HEIGHT,
-    PADDING as TERM_PADDING,
+    resolve_typeface as resolve_terminal_typeface, Terminal, CHROME_HEIGHT,
+    FONT_SIZE as TERM_FONT_SIZE, LINE_HEIGHT as TERM_LINE_HEIGHT, PADDING as TERM_PADDING,
 };
 
 /// Intrinsic measurer for [`Terminal`].
@@ -445,8 +468,10 @@ impl TerminalIntrinsic {
     }
 
     fn measure_max_width(t: &Terminal, font_size: f32) -> f32 {
-        let font_style = skia_safe::FontStyle::normal();
-        let Ok(typeface) = typeface_with_fallback("SF Mono", font_style) else {
+        // Same resolver the painter calls — see `terminal::resolve_typeface`.
+        // Measuring with one face and painting with another is how text ends up
+        // overflowing a box the geometry pass has already approved.
+        let Some(typeface) = resolve_terminal_typeface(&t.style) else {
             // Font unavailable (CI without fonts); return 0 — the layout will
             // be width-unconstrained and the container drives the size.
             return 0.0;
@@ -1089,6 +1114,149 @@ mod tests {
             w > 80.0,
             "nowrap caption intrinsic must ignore the 80px constraint, got {}",
             w
+        );
+    }
+
+    // ─── #2 / #5: em/% typography resolve against own font-size, not 0 ────
+
+    fn text_with_style(content: &str, style: CssStyle) -> Text {
+        Text {
+            content: content.into(),
+            max_width: None,
+            timing: Default::default(),
+            style,
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        }
+    }
+
+    #[test]
+    fn line_height_percent_no_longer_collapses_the_box_to_zero_height() {
+        // #2 reproduction: `line-height: "150%"` went through the
+        // context-free `line_height_for`, which cannot resolve `%` and
+        // silently fell back to 0 — the intrinsic then reported a
+        // `line_count * 0.0 = 0` height, so `paint_pass.rs`'s `if height <=
+        // 0.0 { return }` guard skipped painting the node (and its
+        // subtree) entirely, even though `validate` reported success.
+        use rustmotion_core::css::units::LengthPercentage;
+        let text = text_with_style(
+            "VISIBLE?",
+            CssStyle {
+                font_size: Some(Length::Px(60.0)),
+                line_height: Some(LineHeight::Length(LengthPercentage::String("150%".into()))),
+                ..Default::default()
+            },
+        );
+        let m = TextIntrinsic::from_text(&text);
+        let (_w, h) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert!(
+            (h - 90.0).abs() < 0.5,
+            "line-height: 150% of a 60px font-size must resolve to 90px (own font-size, per \
+             CSS), got {h}"
+        );
+    }
+
+    #[test]
+    fn line_height_em_no_longer_collapses_the_box_to_zero_height() {
+        use rustmotion_core::css::units::LengthPercentage;
+        let text = text_with_style(
+            "VISIBLE?",
+            CssStyle {
+                font_size: Some(Length::Px(60.0)),
+                line_height: Some(LineHeight::Length(LengthPercentage::String("1.5em".into()))),
+                ..Default::default()
+            },
+        );
+        let m = TextIntrinsic::from_text(&text);
+        let (_w, h) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert!(
+            (h - 90.0).abs() < 0.5,
+            "line-height: 1.5em of a 60px font-size must resolve to 90px, got {h}"
+        );
+        // Sanity: matches the already-correct unitless-number form exactly,
+        // proving em and the bare-number multiplier agree.
+        let numeric = text_with_style(
+            "VISIBLE?",
+            CssStyle {
+                font_size: Some(Length::Px(60.0)),
+                line_height: Some(LineHeight::Number(1.5)),
+                ..Default::default()
+            },
+        );
+        let (_w, h_numeric) = TextIntrinsic::from_text(&numeric).measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert_eq!(h, h_numeric);
+    }
+
+    #[test]
+    fn letter_spacing_em_matches_the_equivalent_px_measurement() {
+        // #5 reproduction: `letter-spacing: "1.2em"` at font-size 200
+        // (=240px) went through the context-free `letter_spacing_px`, which
+        // returns 0 for `em` — the intrinsic reserved a box as if tracking
+        // were 0 while `Text::paint` (which already uses the `_ctx`
+        // resolver) painted with the real 240px tracking, so `validate`'s
+        // `unwrappable_text_overflow`/viewport checks (which re-measure via
+        // this same intrinsic) never saw the real, wider painted width.
+        let em_style = CssStyle {
+            font_size: Some(Length::Px(200.0)),
+            letter_spacing: Some(Length::String("1.2em".into())),
+            white_space: Some(WhiteSpace::Nowrap),
+            ..Default::default()
+        };
+        let px_style = CssStyle {
+            font_size: Some(Length::Px(200.0)),
+            letter_spacing: Some(Length::Px(240.0)),
+            white_space: Some(WhiteSpace::Nowrap),
+            ..Default::default()
+        };
+        let w_em = TextIntrinsic::from_text(&text_with_style("TRACKING", em_style))
+            .measure(
+                (None, None),
+                (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+            )
+            .0;
+        let w_px = TextIntrinsic::from_text(&text_with_style("TRACKING", px_style))
+            .measure(
+                (None, None),
+                (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+            )
+            .0;
+        assert!(
+            (w_em - w_px).abs() < 1.0,
+            "letter-spacing: 1.2em (font-size 200) must measure the same as the equivalent \
+             240px value: em={w_em}, px={w_px}"
+        );
+        // And it must differ from the old (broken) zero-tracking width —
+        // otherwise this test would pass vacuously even if em still
+        // resolved to 0.
+        let w_zero_tracking = TextIntrinsic::from_text(&text_with_style(
+            "TRACKING",
+            CssStyle {
+                font_size: Some(Length::Px(200.0)),
+                white_space: Some(WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+        ))
+        .measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        )
+        .0;
+        assert!(
+            w_em > w_zero_tracking + 100.0,
+            "em tracking must measurably widen the line versus zero tracking: em={w_em}, \
+             zero={w_zero_tracking}"
         );
     }
 }

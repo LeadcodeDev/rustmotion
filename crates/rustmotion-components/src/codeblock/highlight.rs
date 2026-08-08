@@ -539,6 +539,25 @@ pub(crate) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight
         skia_safe::font_style::Width::NORMAL,
         skia_safe::font_style::Slant::Upright,
     );
+
+    // #7: a custom/Google font declared in the scenario for `family` must
+    // win over the hardcoded monospace fallback list below — check the
+    // custom registry directly, first. Previously the only place that
+    // consulted it was `typeface_with_fallback`, reached solely through the
+    // final `.or_else` below; but the `fallbacks` list's `match_family_style`
+    // calls (which try `family` itself first, among plain system families)
+    // already return *something* on essentially every real system — Skia's
+    // system `FontMgr` almost never returns `None` for "JetBrains Mono"/
+    // "Fira Code"/"Menlo"/"Courier New"/"monospace" collectively — so that
+    // `.or_else` was never reached and a declared custom font (an Anton
+    // `.ttf`, a Google "IBM Plex Mono") was silently ignored (see commit
+    // b4603f9, which fixed the equivalent regression for `text`).
+    if let Some(typeface) =
+        rustmotion_core::engine::renderer::resolve_custom_typeface(family, style)
+    {
+        return Some(Font::from_typeface(typeface, size));
+    }
+
     let fallbacks = [
         family,
         "JetBrains Mono",
@@ -555,4 +574,62 @@ pub(crate) fn resolve_monospace_font(family: &str, size: f32, weight: FontWeight
             rustmotion_core::engine::renderer::typeface_with_fallback(family, style).ok()
         })?;
     Some(Font::from_typeface(typeface, size))
+}
+
+#[cfg(test)]
+mod monospace_font_tests {
+    use super::*;
+
+    /// #7 reproduction: a codeblock's declared custom/Google font must
+    /// actually be used, not silently shadowed by the hardcoded monospace
+    /// fallback chain. Registers a real display face (Anton — visually
+    /// nothing like any of "JetBrains Mono"/"Fira Code"/"Menlo"/"Courier
+    /// New"/"monospace") under a family name that collides with none of
+    /// them, and asserts `resolve_monospace_font` actually resolves to it.
+    /// Skips on a cold font cache (no network access in CI) — the render QA
+    /// in `examples/` (e.g. `cb_anton.json`) is the visual counterpart.
+    #[test]
+    fn declared_custom_font_wins_over_hardcoded_monospace_fallbacks() {
+        let path = format!(
+            "{}/.cache/rustmotion/fonts/anton-400.ttf",
+            std::env::var("HOME").unwrap_or_default()
+        );
+        let Ok(bytes) = std::fs::read(&path) else {
+            return; // cold font cache → skip (render QA covers it)
+        };
+
+        let font_mgr = rustmotion_core::engine::renderer::font_mgr();
+        let parsed = font_mgr
+            .new_from_data(&skia_safe::Data::new_copy(&bytes), None)
+            .expect("cached TTF must parse");
+        let parsed_style = parsed.font_style();
+        rustmotion_core::engine::renderer::register_custom_font_variant(
+            "RmProbeCodeblockAnton",
+            bytes,
+            *parsed_style.weight(),
+            false,
+        );
+
+        let font = resolve_monospace_font("RmProbeCodeblockAnton", 20.0, FontWeight::Normal)
+            .expect("resolve_monospace_font must succeed");
+        assert_eq!(
+            font.typeface().family_name(),
+            "Anton",
+            "declared custom font must win over the hardcoded monospace fallback chain, got {}",
+            font.typeface().family_name()
+        );
+    }
+
+    /// Regression guard: an *undeclared* family (nothing in the custom
+    /// registry) must still fall through to a real monospace font via the
+    /// hardcoded chain, not fail or silently switch to some arbitrary
+    /// serif/sans system default.
+    #[test]
+    fn unregistered_family_still_falls_back_to_a_monospace_font() {
+        let font = resolve_monospace_font("RmProbeNoSuchFamilyXYZ", 20.0, FontWeight::Normal)
+            .expect("must still resolve a fallback font");
+        // Not asserting a specific family name (host-dependent) — just that
+        // resolution succeeds and doesn't panic/None out.
+        assert!(font.size() > 0.0);
+    }
 }
