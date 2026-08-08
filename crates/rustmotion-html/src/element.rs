@@ -7,6 +7,16 @@ use crate::{element_attrs, tag_name, HtmlError};
 enum TagKind {
     Container,
     Text,
+    /// Tags that never visually render in real HTML either (`<script>`,
+    /// `<title>`, `<noscript>`, `<template>`, `<head>`) — skipped to match
+    /// that expectation, rather than painted as a stray `text` component.
+    /// `<style>` is deliberately NOT in this bucket: see `element_to_value`.
+    Ignored,
+    /// A native HTML tag with no representation beyond an empty `div`: its
+    /// real payload (`src`, nested shape markup, …) would be silently
+    /// dropped by the generic `Container` fallback. Refused instead, naming
+    /// the dialect's `rm-*` custom-element equivalent.
+    UnsupportedNative(&'static str),
     Custom(String),
 }
 
@@ -16,6 +26,10 @@ fn tag_kind(tag: &str) -> TagKind {
         "p" | "span" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "strong" | "em" | "label" => {
             TagKind::Text
         }
+        "script" | "title" | "noscript" | "template" | "head" => TagKind::Ignored,
+        "img" => TagKind::UnsupportedNative("rm-image"),
+        "video" => TagKind::UnsupportedNative("rm-video"),
+        "svg" => TagKind::UnsupportedNative("rm-svg"),
         t if t.starts_with("rm-") => TagKind::Custom(t["rm-".len()..].to_string()),
         _ => TagKind::Container,
     }
@@ -62,8 +76,19 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
     let Some(tag) = tag_name(handle) else {
         return Ok(None);
     };
+    // `<style>` has real, expected visual effect in HTML (unlike the tags in
+    // `TagKind::Ignored`), so silently dropping it would defeat the author's
+    // intent without a trace — refused instead. See `HtmlError::StyleElementUnsupported`.
+    if tag == "style" {
+        return Err(HtmlError::StyleElementUnsupported);
+    }
     let attrs = element_attrs(handle);
     match tag_kind(&tag) {
+        TagKind::Ignored => Ok(None),
+        TagKind::UnsupportedNative(suggestion) => Err(HtmlError::UnsupportedNativeElement {
+            tag,
+            suggestion: suggestion.to_string(),
+        }),
         TagKind::Text => {
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("text"));
@@ -89,10 +114,24 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from(type_name));
             for (k, v) in &attrs {
-                if k == "style" || k == "class" || k == "anim" || v.is_empty() {
+                if k == "style" || k == "class" || k == "anim" {
                     continue;
                 }
-                obj.insert(k.clone(), coerce_value(v));
+                // A bare HTML boolean attribute (`<rm-codeblock diff>`) is
+                // indistinguishable, at the DOM level, from an explicit empty
+                // value (`diff=""`) — html5ever normalizes both to the same
+                // empty attribute value. Per HTML's own boolean-attribute
+                // convention (`<video controls>`, `<input disabled>`), treat
+                // an empty value as `true` rather than silently dropping the
+                // attribute: for a bool schema field this is exactly the
+                // author's intent; for any other field type, `validate`
+                // reports a named type-mismatch instead of a silent no-op.
+                let value = if v.is_empty() {
+                    Value::Bool(true)
+                } else {
+                    coerce_value(v)
+                };
+                obj.insert(k.clone(), value);
             }
             if let Some(style) = style_object(&attrs)? {
                 obj.insert("style".into(), style);
@@ -326,5 +365,109 @@ mod tests {
         );
         assert_eq!(v["style"]["animation"][0]["name"], json!("fade_in"));
         assert_eq!(v["from"], json!(0));
+    }
+
+    // --- <style>/ignored elements (constat 1) ---
+
+    #[test]
+    fn style_element_is_refused() {
+        let e = map_first_err(r#"<style>h1 { color: #0f0 }</style>"#);
+        assert!(
+            matches!(e, crate::HtmlError::StyleElementUnsupported),
+            "expected StyleElementUnsupported, got: {e:?}"
+        );
+    }
+
+    #[test]
+    fn script_element_is_skipped_not_painted() {
+        let v = map_first(r#"<div><script>alert(1)</script><p>real</p></div>"#);
+        let children = v["children"].as_array().expect("children array");
+        assert_eq!(
+            children.len(),
+            1,
+            "script content must not become a component: {v}"
+        );
+        assert_eq!(children[0]["content"], json!("real"));
+    }
+
+    #[test]
+    fn title_and_noscript_and_template_elements_are_skipped_not_painted() {
+        let v = map_first(
+            r#"<div><title>tt</title><noscript>ns</noscript><template>tpl</template><p>real</p></div>"#,
+        );
+        let children = v["children"].as_array().expect("children array");
+        assert_eq!(
+            children.len(),
+            1,
+            "title/noscript/template content must not become a component: {v}"
+        );
+        assert_eq!(children[0]["content"], json!("real"));
+    }
+
+    #[test]
+    fn tag_kind_head_is_ignored() {
+        // <head> content never survives as a distinct DOM node when authored
+        // inline (html5ever drops the wrapper per HTML5 "in body" parsing
+        // rules and lets its text bleed into the parent), so this can only be
+        // exercised at the `tag_kind` unit level, not through the full
+        // element_to_value/html_to_scenario_value pipeline.
+        assert!(matches!(tag_kind("head"), TagKind::Ignored));
+    }
+
+    // --- unsupported native elements (constat 3) ---
+
+    #[test]
+    fn img_element_is_refused_with_rm_image_suggestion() {
+        let e = map_first_err(r#"<img src="hero.png" width="400" height="300">"#);
+        match e {
+            crate::HtmlError::UnsupportedNativeElement { tag, suggestion } => {
+                assert_eq!(tag, "img");
+                assert_eq!(suggestion, "rm-image");
+            }
+            other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn video_element_is_refused_with_rm_video_suggestion() {
+        let e = map_first_err(r#"<video src="clip.mp4"></video>"#);
+        match e {
+            crate::HtmlError::UnsupportedNativeElement { tag, suggestion } => {
+                assert_eq!(tag, "video");
+                assert_eq!(suggestion, "rm-video");
+            }
+            other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn svg_element_is_refused_with_rm_svg_suggestion() {
+        let e = map_first_err(r#"<svg viewBox="0 0 10 10"><circle r="4"></circle></svg>"#);
+        match e {
+            crate::HtmlError::UnsupportedNativeElement { tag, suggestion } => {
+                assert_eq!(tag, "svg");
+                assert_eq!(suggestion, "rm-svg");
+            }
+            other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
+        }
+    }
+
+    // --- boolean attributes on custom elements (constat 4) ---
+
+    #[test]
+    fn custom_element_bool_attribute_true_and_false() {
+        let v = map_first(r#"<rm-codeblock auto_scroll="false" diff="true"></rm-codeblock>"#);
+        assert_eq!(v["auto_scroll"], json!(false));
+        assert_eq!(v["diff"], json!(true));
+    }
+
+    #[test]
+    fn custom_element_bare_attribute_becomes_true() {
+        let v = map_first(r#"<rm-codeblock diff></rm-codeblock>"#);
+        assert_eq!(
+            v["diff"],
+            json!(true),
+            "bare boolean attribute must become true, not be dropped: {v}"
+        );
     }
 }
