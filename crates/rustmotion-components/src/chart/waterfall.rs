@@ -35,7 +35,11 @@ impl Chart {
         let max_val = all_vals.iter().fold(f64::MIN, |a, &b| a.max(b));
         let range = (max_val - min_val).max(0.001);
 
-        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        let x_labels: Vec<String> = self
+            .data
+            .iter()
+            .map(|d| d.label.clone().unwrap_or_default())
+            .collect();
         self.draw_axes(
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, true,
         );

@@ -95,7 +95,11 @@ impl Gauge {
         if !self.animated {
             return 1.0;
         }
-        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        // Measure from `start_at`, like every other animated component: driving
+        // the ramp off raw scene time makes a delayed gauge arrive already full.
+        let start = self.timing.start_at.unwrap_or(0.0);
+        let elapsed = (time - start).max(0.0);
+        let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
         1.0 - (1.0 - p).powi(3)
     }
 
