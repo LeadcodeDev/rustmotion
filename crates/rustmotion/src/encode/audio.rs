@@ -10,7 +10,20 @@ use symphonia::core::probe::Hint;
 use crate::error::RustmotionError;
 use crate::schema::AudioTrack;
 
-const TARGET_SAMPLE_RATE: u32 = 48000;
+/// Sample rate `mix_audio_tracks` resamples every track to and sizes its PCM
+/// output buffer from. Both downstream muxers declare this exact rate as
+/// fixed metadata rather than reading it from the PCM itself: the ffmpeg
+/// path (`crates/rustmotion/src/encode/video/ffmpeg.rs`, PCM input `-ar`)
+/// and the minimp4 path (`crates/rustmotion/src/encode/video/mux.rs`,
+/// `init_audio(_, 44100, _)`). A mismatch here does not fail loudly — it
+/// plays back at the wrong speed and pitch, because the container reports
+/// the declared rate while decoding PCM produced at a different one
+/// (constat #2: was 48000 here vs. 44100 in both muxers, an 8.8% duration
+/// drift and a half-tone pitch shift on every video with audio). `mux.rs`
+/// is outside this fix's ownership boundary and still hardcodes `44100` as
+/// a literal — keep it in sync with this constant if either ever changes.
+pub const OUTPUT_SAMPLE_RATE: u32 = 44_100;
+const TARGET_SAMPLE_RATE: u32 = OUTPUT_SAMPLE_RATE;
 const TARGET_CHANNELS: u32 = 2;
 
 /// Decode an audio file into PCM i16 samples (stereo, 44100Hz, interleaved)
@@ -349,4 +362,103 @@ fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     }
 
     result
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write a minimal, hand-rolled canonical PCM WAV file (16-bit, mono) —
+    /// no ffmpeg and no extra crate needed, `symphonia`'s built-in WAV demuxer
+    /// decodes this directly.
+    fn write_minimal_wav(path: &std::path::Path, sample_rate: u32, num_samples: u32) {
+        let bits_per_sample: u16 = 16;
+        let num_channels: u16 = 1;
+        let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+        let block_align = num_channels * bits_per_sample / 8;
+        let data_size = num_samples * block_align as u32;
+
+        let mut buf = Vec::with_capacity(44 + data_size as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_size).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&num_channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        // Silence is a fine fixture: this test exercises PCM buffer sizing,
+        // not audio content.
+        buf.extend(std::iter::repeat_n(0u8, data_size as usize));
+
+        std::fs::write(path, &buf).expect("write fixture wav");
+    }
+
+    /// Constat #2: `mix_audio_tracks` resamples to `TARGET_SAMPLE_RATE` and
+    /// sizes its output buffer from it, but both downstream muxers declare a
+    /// *different*, hardcoded rate as the PCM's metadata:
+    /// `crates/rustmotion/src/encode/video/ffmpeg.rs` ("-ar 44100") and
+    /// `crates/rustmotion/src/encode/video/mux.rs` (`init_audio(_, 44100,
+    /// _)`). A mismatch plays the mixed track back at the wrong speed and
+    /// desyncs it from the video (measured: +8.8% duration drift, pitch
+    /// shifted down a half-tone). This test ties the mixer's output size
+    /// directly to `TARGET_SAMPLE_RATE` so a regression back to a rate the
+    /// muxers don't expect fails loudly here instead of silently at
+    /// playback.
+    #[test]
+    fn mixed_pcm_is_sized_for_the_rate_both_muxers_declare() {
+        assert_eq!(
+            TARGET_SAMPLE_RATE, 44_100,
+            "both muxers (ffmpeg.rs '-ar 44100', mux.rs init_audio(.., 44100, ..)) \
+             declare 44100Hz as fixed metadata — TARGET_SAMPLE_RATE must match or \
+             every video with audio plays back at the wrong speed"
+        );
+
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_audio_rate_test_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Source at a rate different from the target, to also exercise the
+        // resampler rather than short-circuiting on a same-rate copy.
+        write_minimal_wav(&wav_path, 22_050, 22_050);
+
+        let track = AudioTrack {
+            src: wav_path.to_str().unwrap().to_string(),
+            start: 0.0,
+            end: None,
+            volume: 1.0,
+            fade_in: None,
+            fade_out: None,
+            volume_keyframes: Vec::new(),
+        };
+
+        let total_duration = 1.0_f64;
+        let pcm = mix_audio_tracks(&[track], total_duration)
+            .expect("mix must succeed")
+            .expect("must return Some(pcm) for a non-empty track list");
+
+        let expected_len = (total_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize
+            * TARGET_CHANNELS as usize
+            * 2; // i16 = 2 bytes/sample
+        assert_eq!(
+            pcm.len(),
+            expected_len,
+            "PCM buffer length must be computed from TARGET_SAMPLE_RATE={TARGET_SAMPLE_RATE}; \
+             a caller that assumes 44100Hz (both muxers do) will read this buffer at the \
+             wrong duration/pitch if the constant disagrees"
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+    }
 }
