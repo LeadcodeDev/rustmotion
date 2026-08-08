@@ -35,7 +35,7 @@ src/
 │   │   ├── shapes.rs     # rounded_rect, circle, arrow paths
 │   │   └── text.rs       # Skia text measurement (line metrics, wrapping)
 │   └── text/
-│       └── cosmic.rs     # cosmic-text FontSystem global + Skia glyph bridge
+│       └── cosmic.rs     # cosmic-text FontSystem — dormant, pas sur le chemin de rendu
 ├── schema/               # JSON-serializable data models
 │   ├── scenario.rs       # Scenario, ResolvedScenario, View, ResolvedView, Scene, VideoConfig
 │   ├── style.rs          # Specialized types: CardBorder, CardShadow, Fill, Gradient, etc.
