@@ -1393,10 +1393,41 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
             let amp = config.amplitude.unwrap_or(12.0);
             let tilt = amp / 12.0;
             vec![
-                kf_anim_3kf_over("position.y", delay, end, 0.0, -amp, 0.0, EasingType::EaseInOut),
-                kf_anim_3kf_over("rotate_x", delay, end, 0.0, 5.0 * tilt, 0.0, EasingType::EaseInOut),
-                kf_anim_3kf_over("rotate_y", delay, end, 0.0, -8.0 * tilt, 0.0, EasingType::EaseInOut),
-                kf_anim("perspective", delay, 1000.0, end, 1000.0, EasingType::Linear),
+                kf_anim_3kf_over(
+                    "position.y",
+                    delay,
+                    end,
+                    0.0,
+                    -amp,
+                    0.0,
+                    EasingType::EaseInOut,
+                ),
+                kf_anim_3kf_over(
+                    "rotate_x",
+                    delay,
+                    end,
+                    0.0,
+                    5.0 * tilt,
+                    0.0,
+                    EasingType::EaseInOut,
+                ),
+                kf_anim_3kf_over(
+                    "rotate_y",
+                    delay,
+                    end,
+                    0.0,
+                    -8.0 * tilt,
+                    0.0,
+                    EasingType::EaseInOut,
+                ),
+                kf_anim(
+                    "perspective",
+                    delay,
+                    1000.0,
+                    end,
+                    1000.0,
+                    EasingType::Linear,
+                ),
             ]
         }
 
