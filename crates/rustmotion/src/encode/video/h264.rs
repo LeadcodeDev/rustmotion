@@ -161,14 +161,14 @@ pub fn encode_video_incremental(
         return Err(RustmotionError::NoFrames);
     }
 
-    // Flatten tasks that need rendering
+    // Flatten tasks that need rendering. Kept in increasing scene-index
+    // order (the encode loop below relies on that to detect scene
+    // boundaries by watching for a change in `scene_idx`, rather than
+    // pre-summing per-scene frame counts).
     let mut flat_tasks: Vec<(usize, &super::tasks::FrameTask)> = Vec::new();
-    let mut scene_frame_counts: Vec<(usize, u32)> = Vec::new();
     for i in 0..num_scenes {
         if needs_render[i] {
-            let tasks = &scene_tasks[i];
-            scene_frame_counts.push((i, tasks.len() as u32));
-            for task in tasks {
+            for task in &scene_tasks[i] {
                 flat_tasks.push((i, task));
             }
         }
@@ -176,10 +176,26 @@ pub fn encode_video_incremental(
 
     let frames_to_render = flat_tasks.len() as u32;
 
-    // Render in parallel batches
+    // Render and encode one batch at a time instead of materialising every
+    // dirty frame's YUV buffer before encoding a single one (constat #9).
+    // The old two-phase shape — render ALL batches into `all_yuv`, only then
+    // start encoding — meant a `--watch` re-render of a long, high-res
+    // scenario held the *entire* duration's worth of YUV resident before
+    // the encoder even started: at 1080x1920 a YUV420 frame is ~3.11MB, so
+    // 60s @ 30fps (1800 frames) peaked at ~5.6GB before any bytes were
+    // encoded. Rendering still happens in parallel batches (unchanged
+    // throughput), but each batch is encoded immediately after it renders,
+    // so at most one batch's worth of YUV (a few dozen frames) is ever
+    // resident at once.
     let batch_size = (rayon::current_num_threads() * 2).max(4);
     let counter = AtomicU32::new(0);
-    let mut all_yuv: Vec<Result<Vec<u8>>> = Vec::with_capacity(flat_tasks.len());
+
+    let mut encoder = create_encoder(width, height, fps)?;
+    let mut rendered_segments: std::collections::HashMap<usize, Vec<u8>> =
+        std::collections::HashMap::new();
+    let mut current_scene: Option<usize> = None;
+    let mut current_segment: Vec<u8> = Vec::new();
+    let mut encoded_count: u32 = 0;
 
     for batch in flat_tasks.chunks(batch_size) {
         let batch_results: Vec<Result<Vec<u8>>> = batch
@@ -199,38 +215,34 @@ pub fn encode_video_incremental(
             ));
         }
 
-        all_yuv.extend(batch_results);
-    }
+        for ((scene_idx, _), yuv_result) in batch.iter().zip(batch_results) {
+            let yuv = yuv_result?;
 
-    // Encode phase
-    if let Some(ref mut cb) = on_progress {
-        cb(EncodeProgress::Encoding(0, frames_to_render));
-    }
+            // `flat_tasks` groups frames by scene in increasing scene-index
+            // order (built by iterating `0..num_scenes` and pushing each
+            // dirty scene's tasks contiguously), so a scene index only ever
+            // changes when the previous scene's segment is complete.
+            if current_scene != Some(*scene_idx) {
+                if let Some(prev_idx) = current_scene {
+                    rendered_segments.insert(prev_idx, std::mem::take(&mut current_segment));
+                }
+                current_scene = Some(*scene_idx);
+            }
 
-    let mut encoder = create_encoder(width, height, fps)?;
-    let mut yuv_iter = all_yuv.into_iter();
-    let mut rendered_segments: std::collections::HashMap<usize, Vec<u8>> =
-        std::collections::HashMap::new();
-    let mut encoded_count: u32 = 0;
-
-    for &(scene_idx, frame_count) in &scene_frame_counts {
-        let mut segment_h264: Vec<u8> = Vec::new();
-
-        for _ in 0..frame_count {
-            let yuv = yuv_iter.next().unwrap()?;
             encoder.force_intra_frame();
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
             let bitstream = encoder
                 .encode(&yuv_buf)
                 .map_err(|e| RustmotionError::from(e.to_string()))?;
-            bitstream.write_vec(&mut segment_h264);
+            bitstream.write_vec(&mut current_segment);
             encoded_count += 1;
             if let Some(ref mut cb) = on_progress {
                 cb(EncodeProgress::Encoding(encoded_count, frames_to_render));
             }
         }
-
-        rendered_segments.insert(scene_idx, segment_h264);
+    }
+    if let Some(prev_idx) = current_scene {
+        rendered_segments.insert(prev_idx, std::mem::take(&mut current_segment));
     }
 
     // Assemble final segments
@@ -354,5 +366,66 @@ mod incremental_tests {
             err.to_string().contains("world"),
             "reason must name world views: {err}"
         );
+    }
+
+    /// Constat #9: the old code rendered *every* dirty frame into `all_yuv`
+    /// before encoding a single one — a full render phase, then a full
+    /// encode phase, back to back. That is what let a `--watch` re-render of
+    /// a long, high-resolution scenario hold the entire duration's worth of
+    /// YUV buffers in memory before the encoder even started.
+    ///
+    /// Peak RSS isn't observable from a unit test, but the *causal* symptom
+    /// is: `Encoding` progress events can only start after every `Rendering`
+    /// event has fired, because rendering must finish in full before
+    /// encoding begins. With batch-interleaved render+encode, an `Encoding`
+    /// event fires after each batch — including before the *last* batch has
+    /// even been rendered, as long as there is more than one batch. This
+    /// test forces >=4 batches (independent of the machine's core count, by
+    /// reading `rayon::current_num_threads()` the same way production code
+    /// does) and asserts that interleaving.
+    #[test]
+    fn incremental_encode_interleaves_rendering_and_encoding_instead_of_buffering_everything() {
+        let batch_size = (rayon::current_num_threads() * 2).max(4);
+        let total_frames = batch_size * 3 + 1; // guarantee >= 4 batches
+        let fps = 10u32;
+        let duration = total_frames as f64 / fps as f64;
+
+        let json = format!(
+            r#"{{"video": {{"width": 16, "height": 16, "fps": {fps}}},
+                 "scenes": [{{"duration": {duration}, "children": []}}]}}"#
+        );
+        let scenario = load_scenario_from_source(None, Some(&json)).unwrap();
+
+        let mut events: Vec<(&'static str, u32)> = Vec::new();
+        let mut cb = |p: EncodeProgress| match p {
+            EncodeProgress::Rendering(cur, _) => events.push(("render", cur)),
+            EncodeProgress::Encoding(cur, _) => events.push(("encode", cur)),
+            EncodeProgress::Muxing => events.push(("mux", 0)),
+        };
+
+        let out = std::env::temp_dir().join(format!(
+            "rustmotion_incr_mem_test_{}.mp4",
+            std::process::id()
+        ));
+        encode_video_incremental(&scenario, out.to_str().unwrap(), true, None, Some(&mut cb))
+            .expect("encode");
+
+        let last_render_idx = events
+            .iter()
+            .rposition(|(k, _)| *k == "render")
+            .expect("at least one render event");
+        let first_encode_idx = events
+            .iter()
+            .position(|(k, _)| *k == "encode")
+            .expect("at least one encode event");
+
+        assert!(
+            first_encode_idx < last_render_idx,
+            "encoding must start before rendering finishes (interleaved batches), \
+             got event sequence: {:?}",
+            events
+        );
+
+        let _ = std::fs::remove_file(&out);
     }
 }

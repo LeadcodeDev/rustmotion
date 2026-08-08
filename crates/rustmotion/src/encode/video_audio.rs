@@ -236,8 +236,48 @@ fn wav_cache_path(src: &str, trim_start: f64, trim_end: Option<f64>, rate: f64) 
     trim_start.to_bits().hash(&mut hasher);
     trim_end.map(|v| v.to_bits()).hash(&mut hasher);
     rate.to_bits().hash(&mut hasher);
+
+    // Constat #10: the cache key used to depend only on
+    // (src, trim_start, trim_end, rate) — editing `src` in place (same
+    // path, new bytes) left the old extraction cached under the same key
+    // forever, silently serving stale audio. Folding in the source's size
+    // and mtime means a modified file gets a different cache path
+    // automatically. Best-effort: if `metadata` fails (source vanished
+    // between validation and extraction), the hash simply falls back to the
+    // path-only key, matching the previous behavior exactly.
+    if let Ok(meta) = std::fs::metadata(src) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                dur.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+
     let hash = hasher.finish();
     std::env::temp_dir().join(format!("rustmotion_vidaud_{:016x}.wav", hash))
+}
+
+/// Scratch path ffmpeg writes to before a successful extraction is promoted
+/// (renamed) onto `wav_path`.
+///
+/// Deviates from the audit's literal suggestion of a `<hash>.wav.partial`
+/// suffix: `Path::with_extension` on a path already ending in `.wav`
+/// replaces the extension rather than appending, so `<hash>.wav.partial`
+/// really means "last extension is `.partial`" — and ffmpeg picks its output
+/// muxer from the *last* extension. Pointing it at a `.partial`-suffixed
+/// path makes it fail with "Unable to choose an output format", which
+/// looked identical to the transient-failure case this fix exists to guard
+/// against until traced back to this naming choice. Keeping `.wav` as the
+/// final extension (`<hash>.partial.wav`) keeps ffmpeg's format
+/// autodetection working while still being unambiguously distinct from the
+/// real cache path.
+fn partial_wav_path(wav_path: &std::path::Path) -> PathBuf {
+    let stem = wav_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio");
+    wav_path.with_file_name(format!("{stem}.partial.wav"))
 }
 
 // ─── Audio extraction ─────────────────────────────────────────────────────────
@@ -258,6 +298,17 @@ fn extract_audio_to_wav(
     if wav_path.exists() {
         return Some(wav_path);
     }
+
+    // Constat #10: ffmpeg used to write straight to `wav_path`. An
+    // interrupted extraction (Ctrl-C, disk full, the source still being
+    // written) left a truncated file sitting exactly at the path
+    // `wav_path.exists()` treats as a valid cache hit above — every
+    // subsequent render silently reused the corrupt WAV, with no error and
+    // no way to detect it short of manually clearing `temp_dir()`. Writing
+    // to a scratch sibling and renaming onto `wav_path` only after ffmpeg
+    // reports success means a failed extraction can never become a false
+    // cache hit.
+    let partial_path = partial_wav_path(&wav_path);
 
     let mut args: Vec<String> = Vec::new();
 
@@ -286,7 +337,7 @@ fn extract_audio_to_wav(
 
     // Overwrite output
     args.push("-y".to_string());
-    args.push(wav_path.to_str().unwrap_or_default().to_string());
+    args.push(partial_path.to_str().unwrap_or_default().to_string());
 
     let status = std::process::Command::new("ffmpeg")
         .args(&args)
@@ -295,13 +346,24 @@ fn extract_audio_to_wav(
         .status();
 
     match status {
-        Ok(s) if s.success() => Some(wav_path),
+        Ok(s) if s.success() => match std::fs::rename(&partial_path, &wav_path) {
+            Ok(()) => Some(wav_path),
+            Err(e) => {
+                eprintln!(
+                    "rustmotion: embedded-video audio: failed to finalize cached WAV for '{}': {}. Skipping.",
+                    src, e
+                );
+                let _ = std::fs::remove_file(&partial_path);
+                None
+            }
+        },
         Ok(_) => {
             eprintln!(
                 "rustmotion: embedded-video audio: ffmpeg failed to extract audio from '{}' \
                  (trim_start={:.3}, trim_end={:?}, rate={:.3}). Skipping.",
                 src, trim_start, trim_end, rate
             );
+            let _ = std::fs::remove_file(&partial_path);
             None
         }
         Err(e) => {
@@ -309,6 +371,7 @@ fn extract_audio_to_wav(
                 "rustmotion: embedded-video audio: could not spawn ffmpeg for '{}': {}. Skipping.",
                 src, e
             );
+            let _ = std::fs::remove_file(&partial_path);
             None
         }
     }
@@ -623,6 +686,133 @@ mod tests {
         let p1 = wav_cache_path("foo.mp4", 0.0, None, 1.0);
         let p2 = wav_cache_path("foo.mp4", 0.5, None, 1.0);
         assert_ne!(p1, p2);
+    }
+
+    /// Constat #10: the cache key must fold in the source file's own
+    /// metadata, not just its path — otherwise editing a video in place
+    /// (same path, new bytes) keeps serving audio extracted from the file's
+    /// *previous* contents forever, with no error and no way to detect it.
+    #[test]
+    fn wav_cache_path_changes_when_source_file_is_modified() {
+        let src = std::env::temp_dir().join(format!(
+            "rm_vidaud_src_test_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&src, b"version one").unwrap();
+        let p1 = wav_cache_path(src.to_str().unwrap(), 0.0, None, 1.0);
+
+        // Best-effort: push the mtime forward too, in case the filesystem's
+        // mtime resolution is coarser than the write below.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&src, b"version two, a longer and different payload").unwrap();
+        let p2 = wav_cache_path(src.to_str().unwrap(), 0.0, None, 1.0);
+
+        assert_ne!(
+            p1, p2,
+            "modifying the source file's contents must invalidate the cached WAV path"
+        );
+
+        let _ = std::fs::remove_file(&src);
+    }
+
+    /// Constat #10: a failed extraction must never leave a residue file —
+    /// neither the promoted `wav_path` (a false cache hit on the next
+    /// render, per `wav_path.exists()` above) nor the `.partial` scratch
+    /// file ffmpeg wrote to along the way.
+    #[test]
+    fn failed_extraction_leaves_no_residue_on_disk() {
+        if !ffmpeg_available() {
+            eprintln!("failed_extraction_leaves_no_residue_on_disk: ffmpeg not found — skipping");
+            return;
+        }
+        let missing_src = std::env::temp_dir().join(format!(
+            "rm_vidaud_missing_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&missing_src); // guarantee it does not exist
+
+        let wav_path = wav_cache_path(missing_src.to_str().unwrap(), 0.0, None, 1.0);
+        let partial_path = partial_wav_path(&wav_path);
+        let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_file(&partial_path);
+
+        let result = extract_audio_to_wav(missing_src.to_str().unwrap(), 0.0, None, 1.0);
+
+        assert!(
+            result.is_none(),
+            "extraction from a nonexistent source must fail"
+        );
+        assert!(
+            !wav_path.exists(),
+            "a failed extraction must not leave a cached WAV that a later render would reuse"
+        );
+        assert!(
+            !partial_path.exists(),
+            "a failed extraction must not leave a .partial scratch file behind"
+        );
+    }
+
+    /// Constat #10: a successful extraction promotes the `.partial` scratch
+    /// file to the real cache path and leaves no `.partial` behind.
+    #[test]
+    fn successful_extraction_leaves_no_partial_file_behind() {
+        if !ffmpeg_available() {
+            eprintln!(
+                "successful_extraction_leaves_no_partial_file_behind: ffmpeg not found — skipping"
+            );
+            return;
+        }
+        let fixture = std::env::temp_dir().join("rustmotion_test_vidaud_partial_fixture.mp4");
+        let fixture_str = fixture.to_str().unwrap();
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                fixture_str,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            eprintln!(
+                "successful_extraction_leaves_no_partial_file_behind: fixture generation failed — skipping"
+            );
+            return;
+        }
+
+        let wav_path = wav_cache_path(fixture_str, 0.0, None, 1.0);
+        let partial_path = partial_wav_path(&wav_path);
+        let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_file(&partial_path);
+
+        let result = extract_audio_to_wav(fixture_str, 0.0, None, 1.0);
+
+        assert!(
+            result.is_some(),
+            "extraction from a valid fixture must succeed"
+        );
+        assert!(
+            wav_path.exists(),
+            "successful extraction must leave the cached WAV at its final path"
+        );
+        assert!(
+            !partial_path.exists(),
+            "successful extraction must not leave the .partial scratch file behind"
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_file(&fixture);
     }
 
     // ── Integration test (gated on ffmpeg) ───────────────────────────────────

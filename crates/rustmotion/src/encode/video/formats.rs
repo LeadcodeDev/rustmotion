@@ -81,7 +81,7 @@ pub fn encode_png_sequence(
 pub fn encode_gif(
     scenario: &Scenario,
     output_path: &str,
-    _quiet: bool,
+    quiet: bool,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
     let config = &scenario.video;
@@ -116,10 +116,17 @@ pub fn encode_gif(
             reason: e.to_string(),
         })?;
 
-    let delay = (100.0 / fps as f64).round() as u16;
+    if !quiet && fps > 50 {
+        eprintln!(
+            "rustmotion: GIF frame delay has a 1/100s resolution — {} fps cannot be represented \
+             exactly; playback speed will be approximate.",
+            fps
+        );
+    }
 
     let batch_size = (rayon::current_num_threads() * 2).max(4);
     let counter = AtomicU32::new(0);
+    let mut frame_idx: u32 = 0;
 
     for batch in tasks.chunks(batch_size) {
         let results: Vec<Result<Vec<u8>>> = batch
@@ -141,7 +148,8 @@ pub fn encode_gif(
         for result in results {
             let rgba = result?;
             let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba.clone(), 10);
-            frame.delay = delay;
+            frame.delay = gif_frame_delay_cs(frame_idx, fps);
+            frame_idx += 1;
             encoder
                 .write_frame(&frame)
                 .map_err(|e| RustmotionError::GifFrame {
@@ -153,38 +161,75 @@ pub fn encode_gif(
     Ok(())
 }
 
-/// Stream raw RGBA pixel data to stdout for piping to external tools
+/// Centisecond delay for GIF frame `frame_index` out of a stream running at
+/// `fps`.
+///
+/// Constat #7: rounding `100.0 / fps` once and reusing that flat delay for
+/// every frame accumulates rounding error across the whole GIF — at 30fps,
+/// `round(100/30) = 3cs` per frame gives 60 frames * 3cs = 1.800s for a
+/// 2.000s scenario (a 10% shortfall), and at fps > 100 the delay rounds to 0
+/// and viewers fall back to their own default (~10cs), turning a short clip
+/// into a multi-minute one.
+///
+/// Emitting the *cumulative* rounded boundary and taking the difference
+/// between consecutive frames (`round(100*(i+1)/fps) - round(100*i/fps)`)
+/// telescopes to the exact target duration: the rounding error is
+/// distributed across frames instead of compounding. A 2cs floor is applied
+/// afterward — GIF's 1/100s tick can't represent anything shorter, and
+/// unclamped near-zero delays are exactly what pushes viewers into their own
+/// undocumented fallback.
+fn gif_frame_delay_cs(frame_index: u32, fps: u32) -> u16 {
+    let cs_at = |i: u32| -> i64 { (100.0 * i as f64 / fps as f64).round() as i64 };
+    let delay = cs_at(frame_index + 1) - cs_at(frame_index);
+    delay.clamp(2, u16::MAX as i64) as u16
+}
+
+/// Stream raw RGBA pixel data to stdout for piping to external tools.
 pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
-    let config = &scenario.video;
-    let fps = config.fps;
-
     let mut stdout = std::io::stdout().lock();
+    encode_raw_frames(scenario, quiet, &mut stdout)
+}
 
-    let mut frame_offset = 0u32;
+/// Shared implementation behind `encode_raw_stdout`, generic over the writer
+/// so it can be exercised in tests against an in-memory buffer instead of
+/// the process's real stdout.
+///
+/// Constat #5: this used to iterate `view.scenes` directly and compute each
+/// scene's frame count in isolation (`(scene.duration * fps).round()`),
+/// which ignores that consecutive scenes overlap during a transition — the
+/// entering scene's tail is trimmed to make room for the blended frames.
+/// `--format raw` therefore emitted MORE frames than `png-seq`/the encoded
+/// MP4 (120 vs 90 for a 2s+2s scenario with a 1s fade) and never applied
+/// `apply_post_effects` or `ViewTransition`/`WorldFrame` compositing at all.
+/// Routing through `build_frame_tasks` + `render_frame_task` — the same
+/// pipeline every other encoder in this module uses — fixes all of that at
+/// once: `raw`'s frame stream is now byte-for-byte, frame-for-frame, the
+/// same content the MP4 encodes.
+fn encode_raw_frames(scenario: &Scenario, quiet: bool, writer: &mut dyn Write) -> Result<()> {
+    let config = &scenario.video;
+
     for view in &scenario.views {
-        for scene in &view.scenes {
-            let scene_frames = (scene.duration * fps as f64).round() as u32;
+        prefetch_icons(&view.scenes);
+    }
 
-            for local_frame in 0..scene_frames {
-                let rgba = crate::engine::render::render_scene_frame(
-                    config,
-                    scene,
-                    local_frame,
-                    scene_frames,
-                )?;
-                stdout.write_all(&rgba)?;
+    let tasks = build_frame_tasks(scenario);
+    let total_frames = tasks.len() as u32;
 
-                if !quiet {
-                    let global_frame = frame_offset + local_frame;
-                    eprint!("\rFrame {}", global_frame);
-                }
-            }
-            frame_offset += scene_frames;
+    if total_frames == 0 {
+        return Err(RustmotionError::NoFrames);
+    }
+
+    for (idx, task) in tasks.iter().enumerate() {
+        let rgba = render_frame_task(config, scenario, task)?;
+        writer.write_all(&rgba)?;
+
+        if !quiet {
+            eprint!("\rFrame {}", idx);
         }
     }
 
     if !quiet {
-        eprintln!("\nDone: {} frames streamed to stdout", frame_offset);
+        eprintln!("\nDone: {} frames streamed to stdout", total_frames);
     }
 
     Ok(())
@@ -344,5 +389,152 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir_mt1);
         let _ = std::fs::remove_dir_all(&dir_mt2);
         let _ = std::fs::remove_dir_all(&dir_st);
+    }
+
+    // ── Constat #5: raw format frame count ─────────────────────────────────
+
+    /// A 2s scene + a 2s scene with a 1s incoming fade transition, at 8x8 to
+    /// stay fast, mirroring the brief's exact repro shape (320x240, 2s+2s,
+    /// 1s fade → 90 frames instead of a naive 120).
+    fn transition_scenario_json(width: u32, height: u32, fps: u32) -> String {
+        format!(
+            r##"{{"video": {{"width": {width}, "height": {height}, "fps": {fps}}},
+            "scenes": [
+                {{"duration": 2.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#ff0000",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}},
+                {{"duration": 2.0, "transition": {{"type": "fade", "duration": 1.0}}, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#0000ff",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}}
+            ]}}"##
+        )
+    }
+
+    /// Constat #5: `--format raw` must stream exactly the frames
+    /// `build_frame_tasks` produces (and thus exactly what `png-seq`/the MP4
+    /// encoder produce), not a naive per-scene frame count that ignores
+    /// transition overlap. Brief's repro: 2s+2s scenario with a 1s fade
+    /// gives 3.0s worth of frames (90 @ 30fps), not 4.0s (120 @ 30fps).
+    #[test]
+    fn raw_frame_count_matches_build_frame_tasks_across_a_transition() {
+        let fps = 30u32;
+        let json = transition_scenario_json(8, 8, fps);
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let mut buf: Vec<u8> = Vec::new();
+        encode_raw_frames(&scenario, true, &mut buf).expect("raw encode");
+
+        let bytes_per_frame = 8usize * 8 * 4;
+        assert_eq!(
+            buf.len() % bytes_per_frame,
+            0,
+            "raw output must be a whole number of frames"
+        );
+        let raw_frame_count = buf.len() / bytes_per_frame;
+
+        let expected_frame_count = build_frame_tasks(&scenario).len();
+        assert_eq!(
+            raw_frame_count, expected_frame_count,
+            "raw format must produce the same frame count as build_frame_tasks (matches \
+             png-seq/mp4), not a naive per-scene sum that ignores transition overlap"
+        );
+        // Ground truth from the brief: 2s + 2s with a 1s transition is 3.0s
+        // of output, not 4.0s.
+        assert_eq!(
+            expected_frame_count,
+            (3.0 * fps as f64).round() as usize,
+            "a 2s+2s scenario with a 1s fade must occupy 3.0s of output frames"
+        );
+    }
+
+    // ── Constat #7: GIF frame delay rounding ────────────────────────────────
+
+    /// At fps where the average per-frame delay comfortably clears the 2cs
+    /// floor, the telescoping sum of `gif_frame_delay_cs` must exactly
+    /// reproduce the target duration — no accumulated rounding drift.
+    #[test]
+    fn gif_delay_sums_to_the_exact_target_duration_for_low_fps() {
+        for fps in [20u32, 24, 25, 30, 40, 50] {
+            let duration_s = 2.0_f64;
+            let frame_count = (duration_s * fps as f64).round() as u32;
+            let sum_cs: i64 = (0..frame_count)
+                .map(|i| gif_frame_delay_cs(i, fps) as i64)
+                .sum();
+            let expected_cs = (duration_s * 100.0).round() as i64;
+            assert_eq!(
+                sum_cs, expected_cs,
+                "fps={fps}: summed delays must equal the target duration exactly"
+            );
+        }
+    }
+
+    /// The 2cs floor must never be violated, however high `fps` climbs —
+    /// this is what turns the old bug's catastrophic 0-delay (viewers
+    /// silently substitute ~10cs, ballooning a 2s clip to 48s) into a
+    /// bounded, predictable slowdown instead.
+    #[test]
+    fn gif_delay_never_drops_below_the_two_centisecond_floor() {
+        for fps in [60u32, 120, 240, 1000] {
+            for i in 0..20 {
+                let delay = gif_frame_delay_cs(i, fps);
+                assert!(
+                    delay >= 2,
+                    "fps={fps} frame={i}: delay {delay}cs is below the floor"
+                );
+            }
+        }
+    }
+
+    /// End-to-end regression for the brief's exact reproduction: a real GIF
+    /// encoded at 30fps for a 2.0s scene must play back for ~2.000s, not the
+    /// buggy 1.800s (flat `round(100/30)=3cs` delay × 60 frames). Decodes
+    /// the GIF's own frame delays via the `gif` crate (already a direct
+    /// dependency) — no ffmpeg needed.
+    #[test]
+    fn gif_total_playback_duration_matches_the_scenario_duration() {
+        let fps = 30u32;
+        let json = format!(
+            r#"{{"video": {{"width": 8, "height": 8, "fps": {fps}}},
+                 "scenes": [{{"duration": 2.0, "children": []}}]}}"#
+        );
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_gif_duration_test_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&out);
+        encode_gif(&scenario, out.to_str().unwrap(), true, None).expect("encode gif");
+
+        let file = std::fs::File::open(&out).expect("open gif");
+        let mut decoder = gif::DecodeOptions::new()
+            .read_info(file)
+            .expect("read gif info");
+        let mut total_cs: u32 = 0;
+        let mut frame_count = 0u32;
+        while let Some(frame) = decoder.read_next_frame().expect("read frame") {
+            total_cs += frame.delay as u32;
+            frame_count += 1;
+        }
+
+        assert_eq!(
+            frame_count, 60,
+            "expected 60 frames at 30fps for a 2.0s scene"
+        );
+        let total_secs = total_cs as f64 / 100.0;
+        assert!(
+            (total_secs - 2.0).abs() < 0.02,
+            "gif total playback duration must match the scenario's 2.000s, got {total_secs:.3}s"
+        );
+
+        let _ = std::fs::remove_file(&out);
     }
 }
