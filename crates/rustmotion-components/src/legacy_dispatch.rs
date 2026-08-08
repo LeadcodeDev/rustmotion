@@ -119,8 +119,41 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             return;
         };
 
+        // The `Painter` contract (traits/painter.rs, rules/paint-context.md)
+        // promises the canvas is already translated to the CONTENT-box
+        // origin, with `layout` describing the content box — padding
+        // reserved by taffy is consumed here, not left for the painter to
+        // rediscover. `Codeblock` is a deliberate, documented exception: it
+        // reads `style.padding` itself (`codeblock/render.rs` computes
+        // `code_x = x + pad_left + gutter_width` from the layout origin it
+        // receives) and paints its own background/border directly from the
+        // BORDER-box origin. Honoring the general contract for it too would
+        // double-apply padding — content shifted twice, background rect
+        // shrunk incorrectly — so it keeps receiving the untranslated
+        // border-box origin and dimensions, exactly as before this fix.
+        let is_self_padding = matches!(child.component, Component::Codeblock(_));
+
         canvas.save();
-        canvas.translate((layout.x, layout.y));
+        let local = if is_self_padding {
+            canvas.translate((layout.x, layout.y));
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: layout.width,
+                height: layout.height,
+                ..Default::default()
+            }
+        } else {
+            let (cx, cy, cw, ch) = layout.content_box();
+            canvas.translate((cx, cy));
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: cw,
+                height: ch,
+                ..Default::default()
+            }
+        };
 
         let paint_ctx = PaintCtx {
             time: local_time,
@@ -130,13 +163,6 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             video_width: frame.video_width,
             video_height: frame.video_height,
             stagger_offset: stagger_delay,
-        };
-        let local = BoxLayout {
-            x: 0.0,
-            y: 0.0,
-            width: layout.width,
-            height: layout.height,
-            ..Default::default()
         };
         painter.paint_content(canvas, &local, &props, &paint_ctx);
 
@@ -191,6 +217,83 @@ mod tests {
             z_index: None,
             bleed: false,
         }
+    }
+
+    #[test]
+    fn leaf_painter_content_is_inset_by_padding() {
+        // A 100x80 red shape at (0,0) with `padding: 20`. The Painter
+        // contract (traits/painter.rs, rules/paint-context.md) promises the
+        // canvas is already translated to the CONTENT-box origin — so the
+        // shape's own fill (which just paints (0,0)..(layout.width,
+        // layout.height)) should only cover the 60x40 content box (20,20)
+        // to (80,60), leaving the 20px padding ring showing the (empty/
+        // background) canvas underneath. Bug: the dispatcher translated to
+        // the BORDER-box origin and handed the painter the full border-box
+        // dimensions, so the fill ignored padding entirely and covered the
+        // whole (0,0)-(100,80) box.
+        use rustmotion_core::css::style::Edges;
+
+        let mut scene = vec![shape_child(100.0, 80.0, 0.0, 0.0)];
+        if let Component::Shape(s) = &mut scene[0].component {
+            s.style.padding = Some(Edges::Uniform(CLP::Px(20.0)));
+        }
+        let built = build_scene(&scene, (200.0, 200.0));
+        let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
+        let canvas = surface.canvas();
+        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let frame = PaintFrame {
+            time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 200,
+            video_height: 200,
+            scene_duration: 1.0,
+            camera: None,
+        };
+        rustmotion_core::engine::paint_pass::paint_tree(
+            canvas,
+            &built.root,
+            &layout,
+            &frame,
+            &dispatcher,
+        );
+
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let read = |x: i32, y: i32| -> [u8; 4] {
+            let mut buf = [0u8; 4];
+            assert!(snapshot.read_pixels(
+                &info,
+                &mut buf,
+                4,
+                skia_safe::IPoint::new(x, y),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            buf
+        };
+
+        // Inside the padding ring (5,5): must NOT be red after the fix.
+        let padding_zone = read(5, 5);
+        assert!(
+            !(padding_zone[0] > 200 && padding_zone[1] < 50 && padding_zone[2] < 50),
+            "padding ring must not be painted by the leaf's own fill, got {:?}",
+            padding_zone
+        );
+        // Deep inside the content box (50,40): must be red either way.
+        let content_zone = read(50, 40);
+        assert!(
+            content_zone[0] > 200 && content_zone[1] < 50 && content_zone[2] < 50,
+            "content box must still be painted red, got {:?}",
+            content_zone
+        );
     }
 
     #[test]
