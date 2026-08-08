@@ -43,7 +43,11 @@ impl Chart {
         let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
 
         let n = self.data.len();
-        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        let x_labels: Vec<String> = self
+            .data
+            .iter()
+            .map(|d| d.label.clone().unwrap_or_default())
+            .collect();
         self.draw_axes(
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );
@@ -131,7 +135,11 @@ impl Chart {
         let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
 
         let n = self.data.len();
-        let x_labels: Vec<String> = self.data.iter().filter_map(|d| d.label.clone()).collect();
+        let x_labels: Vec<String> = self
+            .data
+            .iter()
+            .map(|d| d.label.clone().unwrap_or_default())
+            .collect();
         self.draw_axes(
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );

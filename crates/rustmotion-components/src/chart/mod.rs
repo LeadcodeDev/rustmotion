@@ -210,7 +210,13 @@ impl Chart {
         if !self.animated {
             return 1.0;
         }
-        let p = (time / self.animation_duration).clamp(0.0, 1.0) as f32;
+        // Ramp measured from `start_at`, not from scene time zero — matches
+        // `Counter::ramp_progress`. A chart delayed with `start_at` used to
+        // read raw scene time, so it was already fully drawn on the very
+        // first frame it became visible.
+        let start = self.timing.start_at.unwrap_or(0.0);
+        let elapsed = (time - start).max(0.0);
+        let p = (elapsed / self.animation_duration).clamp(0.0, 1.0) as f32;
         // ease_out_cubic
         1.0 - (1.0 - p).powi(3)
     }
@@ -316,5 +322,89 @@ impl Painter for Chart {
         ctx: &PaintCtx,
     ) {
         let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::traits::TimingConfig;
+
+    fn base_chart() -> Chart {
+        Chart {
+            chart_type: ChartType::Bar,
+            data: Vec::new(),
+            animated: true,
+            animation_duration: 1.5,
+            colors: None,
+            inner_radius: 0.6,
+            fill_opacity: 0.3,
+            smooth: false,
+            categories: Vec::new(),
+            series: Vec::new(),
+            axes: Vec::new(),
+            radar_data: Vec::new(),
+            points: Vec::new(),
+            direction: None,
+            show_grid: false,
+            show_x_labels: false,
+            show_y_labels: false,
+            grid_color: default_grid_color(),
+            label_color: default_label_color(),
+            label_font_size: default_label_font_size(),
+            show_labels: false,
+            timing: TimingConfig::default(),
+            style: rustmotion_core::css::CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn progress_ramp_starts_at_start_at_not_at_scene_time_zero() {
+        // #3's exact repro: a chart delayed with `start_at: 2.0` and
+        // `animation_duration: 1.5` was already fully drawn (progress 1.0)
+        // on the very first frame it became visible, because the ramp read
+        // raw scene time instead of time-since-`start_at` — the same defect
+        // `Counter::ramp_progress` was fixed for.
+        let mut chart = base_chart();
+        chart.animation_duration = 1.5;
+        chart.timing = TimingConfig {
+            start_at: Some(2.0),
+            end_at: None,
+        };
+
+        assert_eq!(
+            chart.progress_at(2.0),
+            0.0,
+            "no time has elapsed since start_at yet"
+        );
+        assert!(
+            chart.progress_at(2.75) < 1.0,
+            "still mid-ramp half a second after start_at"
+        );
+        assert_eq!(
+            chart.progress_at(3.5),
+            1.0,
+            "animation_duration has fully elapsed since start_at"
+        );
+    }
+
+    #[test]
+    fn progress_ramp_with_no_start_at_behaves_like_before() {
+        let chart = base_chart();
+        assert_eq!(chart.progress_at(0.0), 0.0);
+        assert_eq!(chart.progress_at(1.5), 1.0);
+    }
+
+    #[test]
+    fn progress_ramp_when_not_animated_is_always_complete() {
+        let mut chart = base_chart();
+        chart.animated = false;
+        chart.timing = TimingConfig {
+            start_at: Some(2.0),
+            end_at: None,
+        };
+        assert_eq!(chart.progress_at(0.0), 1.0);
     }
 }
