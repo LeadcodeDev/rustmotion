@@ -5,7 +5,7 @@ use super::background::draw_animated_background;
 use super::background::draw_world_bg_with_parallax;
 use crate::components::ChildComponent;
 use crate::error::RustmotionError;
-use crate::schema::{Camera, Scene, SceneLayout, VideoConfig};
+use crate::schema::{Camera, Scene, SceneLayout, VideoConfig, ViewType};
 use rustmotion_core::css::style::{
     AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection, Gap,
     JustifyContent as CssJustifyContent,
@@ -343,9 +343,46 @@ pub fn render_frame_v2_scaled(
     Ok(pixels)
 }
 
-/// Build a `CssStyle` from an optional `SceneLayout` for root-level flex layout.
-pub fn root_style(scene_layout: Option<&SceneLayout>) -> CssStyle {
+/// The implicit layout a `world` scene gets when it declares no `layout` of
+/// its own (round 4 audit, lot VALIDATION GÉOMÉTRIQUE, constat 4) — a
+/// centred column, unlike a `slide` scene's implicit top-aligned column.
+/// Single source of truth for both `render_world_frame_scaled` (which used
+/// to inline this same struct literal) and `root_style`'s `ViewType::World`
+/// branch below, so the geometry validator and the renderer can never see a
+/// different default for the same (layout-absent) world scene.
+fn world_default_scene_layout() -> SceneLayout {
     use crate::schema::{CardAlign, CardDirection, CardJustify};
+    SceneLayout {
+        direction: Some(CardDirection::Column),
+        gap: Some(12.0),
+        align_items: Some(CardAlign::Center),
+        justify_content: Some(CardJustify::Center),
+        padding: None,
+    }
+}
+
+/// Build a `CssStyle` from an optional `SceneLayout` for root-level flex
+/// layout. `view_type` decides the fallback when `scene_layout` is absent:
+/// a `slide` scene falls back to a plain top-aligned column (the historical
+/// behaviour, byte-identical to before this parameter existed); a `world`
+/// scene falls back to [`world_default_scene_layout`] — the same centred
+/// layout `render_world_frame_scaled` synthesizes for a layout-absent world
+/// scene. Before this, callers outside `scene.rs` (the geometry validator)
+/// had no way to ask for the world fallback and always got the slide one,
+/// validating a different root box than the one `render_world_frame_scaled`
+/// actually lays out against.
+pub fn root_style(scene_layout: Option<&SceneLayout>, view_type: ViewType) -> CssStyle {
+    use crate::schema::{CardAlign, CardDirection, CardJustify};
+    let owned_world_default;
+    let scene_layout = match (scene_layout, view_type) {
+        (Some(layout), _) => Some(layout),
+        (None, ViewType::World) => {
+            owned_world_default = world_default_scene_layout();
+            Some(&owned_world_default)
+        }
+        (None, ViewType::Slide) => None,
+    };
+
     let mut style = CssStyle::default();
     style.display = Some(rustmotion_core::css::style::Display::Flex);
 
@@ -431,7 +468,14 @@ fn render_with_new_pipeline_iter<'a, I>(
 
     // Mirror the legacy `root_style` so the new pipeline applies the same
     // scene-level flex configuration (direction, gap, padding, alignment).
-    let root_css = root_style(scene_layout);
+    // `ViewType::Slide` here: this helper is shared by the ordinary
+    // per-scene render path (always slide scenes — see `render_frame_v2_scaled`
+    // / `render_scene_fg_scaled`) AND `render_world_frame_scaled` below, but
+    // the latter always resolves its own `scene_layout` fallback (via
+    // `world_default_scene_layout`) *before* calling in here, so
+    // `scene_layout` is never `None` on that path — the `ViewType::World`
+    // branch is unreachable from this call site either way.
+    let root_css = root_style(scene_layout, ViewType::Slide);
 
     let anim = Some(BuildAnimationCtx {
         time: ctx.time,
@@ -656,7 +700,10 @@ pub fn render_scene_hits(
         _ => None,
     };
 
-    let root_css = root_style(scene.layout.as_ref());
+    // `ViewType::Slide`: `render_scene_hits` is only ever called for
+    // `FrameTask::Normal` (slide-view scenes) — world frames build hits
+    // through a different path — see `encode/video/tasks.rs::render_frame_task_hits`.
+    let root_css = root_style(scene.layout.as_ref(), ViewType::Slide);
     let anim = Some(BuildAnimationCtx {
         time,
         scene_duration: scene.duration,
@@ -939,14 +986,13 @@ pub fn render_world_frame_scaled(
         }
 
         // World scenes: force content children into centered flex flow.
-        // Decorative children (particles) are excluded from flex and rendered fullscreen.
-        let world_default_layout = crate::schema::SceneLayout {
-            direction: Some(crate::schema::CardDirection::Column),
-            gap: Some(12.0),
-            align_items: Some(crate::schema::CardAlign::Center),
-            justify_content: Some(crate::schema::CardJustify::Center),
-            padding: None,
-        };
+        // Decorative children (particles) are excluded from flex and rendered
+        // fullscreen. `world_default_scene_layout` is the single source of
+        // truth for this fallback — `root_style`'s `ViewType::World` branch
+        // uses the exact same function, so the geometry validator sees the
+        // same root layout this render path lays out against (round 4
+        // audit, constat 4).
+        let world_default_layout = world_default_scene_layout();
         let scene_layout = scene.layout.as_ref().unwrap_or(&world_default_layout);
         let scene_children = deserialize_children(scene);
 

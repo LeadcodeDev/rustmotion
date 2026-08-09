@@ -566,4 +566,142 @@ mod tests {
             }
         }
     }
+
+    /// Round 4 audit, constat 1: PR #145 introduced `refuse_fix`, gated on
+    /// the raw bytes on disk (not `loaded.raw`), and `apply_fixes`/`navigate`
+    /// already walk raw-preserving indices (H3, see
+    /// `geometry.rs::deserialize_children_indexed`'s doc comment). This
+    /// workstream's job is not to redo that fix — it's to prove, end to
+    /// end through `cmd_validate` (not just unit-testing `refuse_fix` in
+    /// isolation, as `fix_refusals` above does), that the refusal actually
+    /// engages for the two concrete failure modes constat 1 names:
+    /// - validate.rs:60 — `--fix` would otherwise serialise the
+    ///   *post-substitution* document, dropping `config` and baking in
+    ///   `$var` resolutions, silently destroying the template.
+    /// - validate.rs:198 — a violation path carries the *resolved* scene
+    ///   index (post `include::resolve_entries` inlining), which does not
+    ///   line up with the RAW `scenes` array `navigate` walks as soon as an
+    ///   `include` expands to a scene count that shifts later positions.
+    ///
+    /// Both are already covered by the existing `refuse_fix` gate (a
+    /// `Templated`/`UsesInclude` scenario is refused outright, before
+    /// `apply_fixes` ever runs) — these two tests are the proof, not a new
+    /// fix. No RED phase: this constat is "verify existing behaviour", not
+    /// "here is a bug"; both tests pass on first run.
+    mod fix_refusals_end_to_end {
+        use super::super::cmd_validate;
+
+        #[test]
+        fn cmd_validate_fix_refuses_to_overwrite_a_templated_scenario_and_leaves_the_file_untouched(
+        ) {
+            let path = std::env::temp_dir().join(format!(
+                "rm_validate_fix_templated_{}.json",
+                std::process::id()
+            ));
+            // `config` + a whole-string `$title` reference, plus a real
+            // geometry violation (nowrap text far too wide for its card) so
+            // `--fix` actually attempts to write.
+            let original = r##"{
+                "config": { "title": { "type": "string", "default": "hi" } },
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{
+                    "duration": 1.0,
+                    "children": [{
+                        "type": "card",
+                        "x": 100, "y": 100,
+                        "style": { "width": "200px", "height": "200px", "background": "#222244" },
+                        "children": [{
+                            "type": "text",
+                            "content": "$title but also this string is too long to fit",
+                            "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap" }
+                        }]
+                    }]
+                }]
+            }"##;
+            std::fs::write(&path, original).expect("write fixture");
+
+            let result = cmd_validate(&path, None, /*fix=*/ true, false, false, false, None);
+
+            let after = std::fs::read_to_string(&path).expect("read back fixture");
+            std::fs::remove_file(&path).ok();
+
+            assert!(
+                result.is_err(),
+                "--fix on a templated scenario with a real violation must be refused, \
+                 not silently applied"
+            );
+            assert_eq!(
+                after, original,
+                "the file must be byte-identical after a refused --fix — writing \
+                 loaded.raw here would have dropped `config` and baked in the \
+                 substituted $title"
+            );
+        }
+
+        #[test]
+        fn cmd_validate_fix_refuses_to_overwrite_a_scenario_using_include_and_leaves_files_untouched(
+        ) {
+            let dir = std::env::temp_dir()
+                .join(format!("rm_validate_fix_include_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            let part_path = dir.join("part.json");
+            let parent_path = dir.join("parent.json");
+
+            // The included file resolves to TWO scenes; the offending
+            // narrow-card/nowrap-text violation lives in the SECOND one, so
+            // its *resolved* scene index (1) does not correspond to any
+            // scene in the parent's own RAW `scenes` array (which has a
+            // single entry: the include directive) — the concrete index
+            // skew constat 1 names.
+            let part = r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [
+                    { "duration": 1.0, "children": [] },
+                    {
+                        "duration": 1.0,
+                        "children": [{
+                            "type": "card",
+                            "x": 100, "y": 100,
+                            "style": { "width": "200px", "height": "200px", "background": "#222244" },
+                            "children": [{
+                                "type": "text",
+                                "content": "this string is too long to fit",
+                                "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap" }
+                            }]
+                        }]
+                    }
+                ]
+            }"##;
+            let parent = r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{ "include": "part.json" }]
+            }"##;
+            std::fs::write(&part_path, part).expect("write part fixture");
+            std::fs::write(&parent_path, parent).expect("write parent fixture");
+
+            let result = cmd_validate(
+                &parent_path,
+                None,
+                /*fix=*/ true,
+                false,
+                false,
+                false,
+                None,
+            );
+
+            let parent_after = std::fs::read_to_string(&parent_path).expect("read back parent");
+            let part_after = std::fs::read_to_string(&part_path).expect("read back part");
+            std::fs::remove_dir_all(&dir).ok();
+
+            assert!(
+                result.is_err(),
+                "--fix on an include-using scenario with a real violation must be refused"
+            );
+            assert_eq!(
+                parent_after, parent,
+                "parent file must be byte-identical after a refused --fix"
+            );
+            assert_eq!(part_after, part, "included file must be untouched too");
+        }
+    }
 }
