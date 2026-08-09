@@ -10,10 +10,31 @@ use rustmotion_core::css::style::{
     AlignItems as CssAlignItems, CssStyle, Edges, FlexDirection as CssFlexDirection, Gap,
     JustifyContent as CssJustifyContent,
 };
-use rustmotion_core::css::units::LengthPercentage;
+use rustmotion_core::css::taffy_bridge::ConversionContext;
+use rustmotion_core::css::units::{LengthContext, LengthPercentage};
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::paint_pass::PlaneCamera;
 use rustmotion_core::engine::renderer::color4f_from_hex;
+
+/// Build the `ConversionContext` that resolves `vw`/`vh`/`%` units for a
+/// layout pass, anchored to the *real* output viewport instead of
+/// `ConversionContext::default()`'s hardcoded 1920×1080 (round 4 audit,
+/// lot LAYOUT, constat 1). On a 1080×1920 vertical video — a resolution
+/// this project documents as a common target — `width: "50vw"` used to
+/// resolve as 50% of a phantom 1920px-wide viewport (960px) instead of 50%
+/// of the real 1080px one (540px), a 78% error, and `vh` was off by the
+/// same margin in the other axis. `font-size`/`root-font-size` stay at the
+/// CSS initial `16px`: nothing upstream of this call resolves and threads a
+/// root font-size through yet.
+fn viewport_conversion_context(viewport_w: f32, viewport_h: f32) -> ConversionContext {
+    ConversionContext {
+        length: LengthContext {
+            viewport_width: viewport_w,
+            viewport_height: viewport_h,
+            ..LengthContext::default()
+        },
+    }
+}
 
 /// Internal render-time context — bundles per-scene timing/dimension info that
 /// the scene renderer threads down into its helpers. This is intentionally
@@ -405,7 +426,6 @@ fn render_with_new_pipeline_iter<'a, I>(
 {
     use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
-    use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 
@@ -422,7 +442,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let layout = run_layout(
         &built.root,
         (viewport_w, viewport_h),
-        &ConversionContext::default(),
+        &viewport_conversion_context(viewport_w, viewport_h),
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
@@ -597,7 +617,6 @@ pub fn render_scene_hits(
         build_scene_from_refs, component_kind, BuildAnimationCtx,
     };
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
-    use rustmotion_core::css::taffy_bridge::ConversionContext;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::engine::paint_pass::{paint_tree_with_hits, EnrichedHit, PaintFrame};
 
@@ -644,7 +663,7 @@ pub fn render_scene_hits(
         fps: config.fps,
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
-    let layout = run_layout(&built.root, (vw, vh), &ConversionContext::default());
+    let layout = run_layout(&built.root, (vw, vh), &viewport_conversion_context(vw, vh));
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,

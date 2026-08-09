@@ -9,9 +9,9 @@
 use taffy::prelude as tf;
 
 use super::style::{
-    AlignContent, AlignItems, AlignSelf, CssStyle, Display, Edges, FlexDirection, FlexWrap, Gap,
-    GridAutoFlow, GridLine, GridLineEnd, GridTrack, GridTrackKeyword, JustifyContent, Overflow,
-    Position, Size,
+    AlignContent, AlignItems, AlignSelf, BoxSizing, CssStyle, Display, Edges, FlexDirection,
+    FlexWrap, Gap, GridAutoFlow, GridLine, GridLineEnd, GridTrack, GridTrackKeyword,
+    JustifyContent, JustifyItems, JustifySelf, Overflow, Position, Size,
 };
 use super::units::{LengthContext, LengthPercentage, ParsedLength};
 
@@ -65,6 +65,18 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     };
     style.aspect_ratio = css.aspect_ratio;
 
+    // `box-sizing` (round 4 audit, lot LAYOUT, constat 3): taffy supports it
+    // natively (`Style::box_sizing`, default `BorderBox`) — schema-valid but
+    // untranslated before this fix, so `content-box` was silently ignored
+    // and every sized box behaved as `border-box` regardless of what the
+    // author declared.
+    if let Some(bs) = css.box_sizing {
+        style.box_sizing = match bs {
+            BoxSizing::ContentBox => tf::BoxSizing::ContentBox,
+            BoxSizing::BorderBox => tf::BoxSizing::BorderBox,
+        };
+    }
+
     // Margin / padding / border (border WIDTH only — border style/color are paint props)
     style.margin = edges_to_rect_lpa(css.margin.as_ref(), ctx);
     style.padding = edges_to_rect_lp(css.padding.as_ref(), ctx);
@@ -114,6 +126,29 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     if let Some(basis) = css.flex_basis.as_ref() {
         style.flex_basis = size_to_dim(Some(basis), ctx);
     }
+    // `order` (round 4 audit, lot LAYOUT, constat 3): schema-valid but has no
+    // taffy equivalent — taffy has no flex/grid item-reordering primitive
+    // (its internal `order` on `Layout` is source order, assigned during
+    // layout, not settable via `Style`). Translating is not possible, so —
+    // per the same "fail loud instead of a silent no-op" contract this
+    // module's `Length`/`LengthPercentage` parsing already uses (see
+    // `units.rs`'s `px_or_warn` / `parse_length_or_warn`) — warn instead of
+    // dropping it without a trace. Reorder the JSON `children` array itself
+    // to get the equivalent effect.
+    // Emitted at most once per process: `to_taffy_style` runs per node per
+    // layout pass, and layout runs per frame — an unguarded `eprintln!` here
+    // would print the same line a thousand times over a single render and
+    // slow it down while doing so.
+    if css.order.is_some() {
+        static WARNED_ORDER: std::sync::Once = std::sync::Once::new();
+        WARNED_ORDER.call_once(|| {
+            eprintln!(
+                "Warning: `order` is not supported by the layout engine (no flex/grid item \
+                 reordering primitive) — it is ignored. Reorder the component's JSON `children` \
+                 array instead to change paint/layout order."
+            );
+        });
+    }
 
     // Gap
     if let Some(gap) = css.gap.as_ref() {
@@ -154,6 +189,17 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     if let Some(gr) = css.grid_row.as_ref() {
         style.grid_row = grid_placement_line(gr);
     }
+    // `justify-items` / `justify-self` (round 4 audit, lot LAYOUT, constat 3):
+    // taffy supports both natively for grid children, reusing the same
+    // `AlignItems`/`AlignSelf` types as `align-items`/`align-self` (the
+    // block-axis equivalents) — same untranslated-but-schema-valid gap as
+    // `box-sizing` above.
+    if let Some(ji) = css.justify_items {
+        style.justify_items = Some(justify_items_to_taffy(ji));
+    }
+    if let Some(js) = css.justify_self {
+        style.justify_self = justify_self_to_taffy(js);
+    }
 
     // Overflow
     if let Some(o) = css.overflow {
@@ -188,6 +234,33 @@ fn align_self_to_taffy(a: AlignSelf) -> Option<tf::AlignSelf> {
         AlignSelf::FlexEnd | AlignSelf::End => tf::AlignSelf::End,
         AlignSelf::Center => tf::AlignSelf::Center,
         AlignSelf::Baseline => tf::AlignSelf::Baseline,
+    })
+}
+
+fn justify_items_to_taffy(j: JustifyItems) -> tf::AlignItems {
+    match j {
+        JustifyItems::Stretch => tf::AlignItems::Stretch,
+        JustifyItems::Start => tf::AlignItems::Start,
+        JustifyItems::End => tf::AlignItems::End,
+        JustifyItems::Center => tf::AlignItems::Center,
+        // `legacy` (old CSS2-era grid keyword, only meaningful combined with
+        // `left`/`right`/`center` which this schema doesn't expose) has no
+        // taffy analog; `Start` is the closest normal-flow behaviour and
+        // matches this bridge's own `Auto`-ish fallbacks elsewhere.
+        JustifyItems::Legacy => tf::AlignItems::Start,
+    }
+}
+
+fn justify_self_to_taffy(j: JustifySelf) -> Option<tf::AlignSelf> {
+    Some(match j {
+        // `auto` computes to the parent's `justify-items` — `None` is
+        // exactly how this bridge already models `align-self: auto`
+        // inheriting `align-items` above.
+        JustifySelf::Auto => return None,
+        JustifySelf::Stretch => tf::AlignSelf::Stretch,
+        JustifySelf::Start => tf::AlignSelf::Start,
+        JustifySelf::End => tf::AlignSelf::End,
+        JustifySelf::Center => tf::AlignSelf::Center,
     })
 }
 
@@ -723,5 +796,59 @@ mod tests {
             (w1 - 300.0).abs() < 1.0,
             "each 1fr column should be ~300px wide, got {w1}"
         );
+    }
+
+    // ── Round 4 audit, lot LAYOUT, constat 3: box-sizing / justify-items /
+    // justify-self are schema-valid but were never translated to taffy. ────
+
+    #[test]
+    fn box_sizing_content_box_is_translated() {
+        let css = CssStyle {
+            box_sizing: Some(BoxSizing::ContentBox),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.box_sizing, tf::BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn box_sizing_defaults_to_border_box() {
+        let css = CssStyle::default();
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.box_sizing, tf::BoxSizing::BorderBox);
+    }
+
+    #[test]
+    fn justify_items_is_translated_for_grid_children() {
+        let css = CssStyle {
+            display: Some(Display::Grid),
+            justify_items: Some(JustifyItems::Center),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.justify_items, Some(tf::AlignItems::Center));
+    }
+
+    #[test]
+    fn justify_self_is_translated() {
+        let css = CssStyle {
+            justify_self: Some(JustifySelf::End),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.justify_self, Some(tf::AlignSelf::End));
+    }
+
+    #[test]
+    fn justify_self_auto_falls_back_to_parent_justify_items() {
+        // `auto` computes to the parent's `justify-items` — taffy models
+        // this the same way `align-self: auto` models inheriting
+        // `align-items`: `None`, not an explicit `Start`.
+        let css = CssStyle {
+            justify_self: Some(JustifySelf::Auto),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.justify_self, None);
     }
 }
