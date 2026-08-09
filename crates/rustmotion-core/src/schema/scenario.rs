@@ -130,8 +130,16 @@ pub struct View {
     #[serde(default)]
     pub transition: Option<Transition>,
     /// (world) Shared background: color string, animated entry, or array.
+    // Constat #5: `background`'s `deserialize_with` bypasses the normal
+    // derive, so schemars had nothing to infer a schema from — hence the
+    // `#[schemars(skip)]` this used to carry. But `View` is also
+    // `deny_unknown_fields` (-> `additionalProperties: false` in the
+    // exported schema), so skipping the property didn't just leave it
+    // undocumented: it made the exported schema declare invalid every view
+    // that actually sets `background`. `BackgroundValue` now has a real
+    // (manual) `JsonSchema` impl — see `background.rs` — so this can be a
+    // normal declared property again.
     #[serde(default, deserialize_with = "deserialize_background_value")]
-    #[schemars(skip)]
     pub background: Option<BackgroundValue>,
     /// (world) Legacy shared animated backgrounds.
     #[serde(
@@ -341,8 +349,11 @@ pub struct WorldPosition {
 pub struct Scene {
     pub duration: f64,
     /// Unified background: color string, animated entry (with optional $ref), or array.
+    // Constat #5: see the identical note on `View::background` — same
+    // `#[schemars(skip)]` + `deny_unknown_fields` combination made the
+    // exported schema declare invalid every `examples/*.json` scene that
+    // sets `background` (which is most of them).
     #[serde(default, deserialize_with = "deserialize_background_value")]
-    #[schemars(skip)]
     pub background: Option<BackgroundValue>,
     #[serde(default)]
     pub children: Vec<serde_json::Value>,
@@ -415,6 +426,46 @@ pub struct CameraOrigin {
     pub y: f32,
 }
 
+/// Every camera property `interpolate_camera_property`
+/// (`crates/rustmotion/src/engine/render/scene.rs`, owned by the sibling
+/// GEO workstream this wave — read-only here) actually looks up via
+/// `camera.keyframes.iter().find(|k| k.property == property)`. Constat #4:
+/// a `CameraKeyframe.property` outside this fixed set (or the dotted
+/// `origin.x`/`origin.y` convention misspelled as `origin_x`/`originX`)
+/// never matches that lookup — the keyframe track is silently ignored and
+/// the camera just uses its static value for that property, with no error.
+const KNOWN_CAMERA_PROPERTIES: &[&str] = &["x", "y", "zoom", "rotation", "origin.x", "origin.y"];
+
+fn validate_camera_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
+    if KNOWN_CAMERA_PROPERTIES.contains(&value) {
+        return Ok(());
+    }
+    let normalize = |s: &str| s.replace(['-', '_', ' '], ".").to_lowercase();
+    let normalized = normalize(value);
+    if let Some(suggestion) = KNOWN_CAMERA_PROPERTIES
+        .iter()
+        .find(|known| normalize(known) == normalized)
+    {
+        Err(E::custom(format!(
+            "unknown camera keyframe property '{value}' — did you mean '{suggestion}'?"
+        )))
+    } else {
+        Err(E::custom(format!(
+            "unknown camera keyframe property '{value}': expected one of {}",
+            KNOWN_CAMERA_PROPERTIES.join(", ")
+        )))
+    }
+}
+
+fn deserialize_camera_property<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    validate_camera_property::<D::Error>(&s)?;
+    Ok(s)
+}
+
 /// A keyframe for a camera property.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -422,6 +473,7 @@ pub struct CameraKeyframe {
     /// The camera property to animate: "x", "y", "zoom", "rotation",
     /// "origin.x", "origin.y" (dotted form, matching the component keyframe
     /// convention for compound properties).
+    #[serde(deserialize_with = "deserialize_camera_property")]
     pub property: String,
     /// Time-value pairs for the animation.
     pub values: Vec<CameraKeyframePoint>,
@@ -906,5 +958,59 @@ mod strict_schema_tests {
         }"##;
         let s: Scenario = serde_json::from_str(json).expect("valid scenario must still parse");
         assert_eq!(s.scenes.len(), 1);
+    }
+}
+
+/// Constat #4 (camera half): `CameraKeyframe.property` is consumed by
+/// `interpolate_camera_property` in `crates/rustmotion/src/engine/render/
+/// scene.rs` (read-only for this workstream — owned by the sibling GEO
+/// workstream this wave), which looks up
+/// `camera.keyframes.iter().find(|k| k.property == property)` for each of a
+/// *fixed* set of six properties (`"x"`, `"y"`, `"zoom"`, `"rotation"`,
+/// `"origin.x"`, `"origin.y"`). A misspelled or wrongly-cased
+/// `CameraKeyframe.property` simply never matches that lookup — the track
+/// silently falls back to the camera's static value and never animates,
+/// with no error anywhere.
+#[cfg(test)]
+mod camera_keyframe_property_tests {
+    use super::*;
+
+    #[test]
+    fn known_camera_properties_still_work() {
+        for prop in ["x", "y", "zoom", "rotation", "origin.x", "origin.y"] {
+            let json = format!(
+                r#"{{ "property": "{prop}", "values": [ {{ "time": 0.0, "value": 1.0 }} ] }}"#
+            );
+            let kf: CameraKeyframe = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("property '{prop}' must be accepted, got: {e}"));
+            assert_eq!(kf.property, prop);
+        }
+    }
+
+    #[test]
+    fn unknown_camera_property_is_a_named_error_not_a_silent_no_op() {
+        let json = r#"{ "property": "tilt", "values": [ { "time": 0.0, "value": 1.0 } ] }"#;
+        let err = serde_json::from_str::<CameraKeyframe>(json).expect_err(
+            "an unrecognised camera keyframe property must be rejected, not silently inert",
+        );
+        assert!(err.to_string().contains("tilt"), "got: {err}");
+    }
+
+    #[test]
+    fn misspelled_origin_property_is_a_named_error() {
+        // The documented dotted-compound-property convention
+        // (`origin.x`/`origin.y`) is easy to get wrong (`originX`,
+        // `origin_x`) — before this fix, any of those silently never
+        // animated the camera origin, with the keyframes block accepted
+        // and simply ignored.
+        let json = r#"{ "property": "origin_x", "values": [ { "time": 0.0, "value": 1.0 } ] }"#;
+        let err = serde_json::from_str::<CameraKeyframe>(json)
+            .expect_err("origin_x must be rejected — the real property is origin.x");
+        let msg = err.to_string();
+        assert!(msg.contains("origin_x"), "got: {msg}");
+        assert!(
+            msg.contains("origin.x"),
+            "expected a did-you-mean nudge toward origin.x, got: {msg}"
+        );
     }
 }

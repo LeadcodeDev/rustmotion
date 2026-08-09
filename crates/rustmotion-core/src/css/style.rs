@@ -486,12 +486,21 @@ pub enum Visibility {
 }
 
 /// `width: <length>` / `width: auto` / `width: 50%` / `width: max-content` / etc.
+///
+/// Constat #6: `#[serde(untagged)]` tries variants in declaration order and
+/// keeps the first that succeeds. `Length(LengthPercentage)` has its own
+/// `String` catch-all variant that accepts *any* string — so with `Keyword`
+/// declared after `Length` (as this used to be), `"max-content"` matched
+/// `Length(String("max-content"))` before `Keyword` was ever tried:
+/// `max-content`/`min-content`/`fit-content` were unreachable, dead schema.
+/// `Keyword` must come before the `Length` catch-all; `Auto` before either
+/// is fine since it needs an exact `"auto"` match nothing else claims first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Size {
     Auto(AutoKw),
-    Length(LengthPercentage),
     Keyword(SizeKeyword),
+    Length(LengthPercentage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -509,8 +518,19 @@ pub enum SizeKeyword {
 }
 
 /// Edge values for `margin` / `padding`. Either uniform or per-side.
+///
+/// Constat #2: `CssStyle` itself has `deny_unknown_fields`, which gives the
+/// impression that any bad key under `style` is rejected — but one level
+/// down, `Sides`'s four fields are all `#[serde(default)]` with no
+/// `deny_unknown_fields` of its own. Since this is an untagged enum, a
+/// well-meaning but unsupported shape like `{"horizontal": 20}` (the exact
+/// form the LAYOUT `margin-left` rule teaches LLMs to reach for) fails to
+/// match `Uniform` (not a scalar) and then matches `Sides` anyway — every
+/// side defaults to 0, no error. `deny_unknown_fields` here closes that: an
+/// object that isn't a recognised `{top,right,bottom,left}` shape now fails
+/// to match either variant, and the untagged enum reports it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Edges {
     Uniform(LengthPercentage),
     Sides {
@@ -579,18 +599,35 @@ pub enum BorderStyle {
 }
 
 /// Border-radius: uniform or per-corner.
+///
+/// Constat #1: every other composite in this file is kebab-case on the wire
+/// (`box-shadow` -> `offset-x`/`offset-y`, `transform-origin` -> `x`/`y`,
+/// etc. — see `rules/component-field-placement.md`). `Corners` used to be
+/// the sole snake_case outlier (`top_left`/...), with no `deny_unknown_fields`
+/// and every field defaulted — so the kebab form a CSS-literate author (or
+/// LLM) naturally writes matched *zero* declared fields, and being an
+/// untagged enum, serde didn't complain: it just produced `Corners` with
+/// every corner at 0px, silently. `rename_all = "kebab-case"` makes kebab
+/// the canonical wire form (matching every neighbour); `alias` keeps the
+/// original snake_case working for any scenario already written that way;
+/// `deny_unknown_fields` turns any other spelling (a genuine typo) into a
+/// named parse error instead of a third silent zero.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum BorderRadius {
     Uniform(LengthPercentage),
     Corners {
-        #[serde(default)]
+        #[serde(default, alias = "top_left")]
+        #[serde(rename = "top-left")]
         top_left: LengthPercentage,
-        #[serde(default)]
+        #[serde(default, alias = "top_right")]
+        #[serde(rename = "top-right")]
         top_right: LengthPercentage,
-        #[serde(default)]
+        #[serde(default, alias = "bottom_right")]
+        #[serde(rename = "bottom-right")]
         bottom_right: LengthPercentage,
-        #[serde(default)]
+        #[serde(default, alias = "bottom_left")]
+        #[serde(rename = "bottom-left")]
         bottom_left: LengthPercentage,
     },
 }
@@ -786,12 +823,20 @@ pub enum FontStyle {
 }
 
 /// `line-height: 1.5` (number) or `line-height: 24px` (length).
+///
+/// Same class of bug as constat #6 on [`Size`], found while auditing this
+/// file for other untagged enums with a catch-all before a specific variant:
+/// `Length(LengthPercentage)`'s `String` fallback accepts any string, so
+/// with `Keyword` declared after it, `"normal"` matched
+/// `Length(String("normal"))` — which then resolves through
+/// `Length::px()`/`.parse()` as an unparseable length, falling back to 0 —
+/// instead of `Keyword(LineHeightKw::Normal)`. `Keyword` now comes first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum LineHeight {
     Number(f32),
-    Length(LengthPercentage),
     Keyword(LineHeightKw),
+    Length(LengthPercentage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1496,5 +1541,178 @@ mod tests {
             "letter-spacing em must resolve against the OWN 300px font-size, got {letter_spacing}"
         );
         assert_eq!(line_height, 300.0 * 0.85);
+    }
+
+    // ---- constat #1: border-radius per-corner kebab-case (RED first) ----
+
+    #[test]
+    fn border_radius_corners_accepts_kebab_case() {
+        // This is the shape every sibling composite in this file uses
+        // (box-shadow -> offset-x/offset-y, transform-origin -> x/y, etc.)
+        // and the shape `rules/component-field-placement.md` teaches. Before
+        // the fix, `BorderRadius::Corners`'s fields are literally
+        // `top_left`/`top_right`/... with no kebab alias, so this kebab
+        // object fails to match `Corners` (unknown fields) and, being all
+        // `#[serde(default)]`, matches it anyway with every corner at 0 —
+        // the untagged enum never reports an error, it just silently
+        // produces radius 0.
+        let json = r#"{ "border-radius": { "top-left": "12px", "top-right": "12px", "bottom-right": "4px", "bottom-left": "4px" } }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        match s.border_radius {
+            Some(BorderRadius::Corners {
+                top_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            }) => {
+                assert_eq!(top_left.px(), 12.0, "top-left must be honoured, not 0");
+                assert_eq!(top_right.px(), 12.0);
+                assert_eq!(bottom_right.px(), 4.0);
+                assert_eq!(bottom_left.px(), 4.0);
+            }
+            other => panic!("expected Corners, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn border_radius_corners_still_accepts_legacy_snake_case() {
+        // Back-compat: any scenario already written with the old
+        // snake_case field names must keep working identically.
+        let json = r#"{ "border-radius": { "top_left": "8px", "top_right": "8px", "bottom_right": "8px", "bottom_left": "8px" } }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        assert_eq!(s.border_radius_px(), Some(8.0));
+    }
+
+    #[test]
+    fn border_radius_corners_typo_is_a_named_error_not_a_silent_zero() {
+        // A misspelled key must not silently resolve to Corners{0,0,0,0} —
+        // it must be reported.
+        let json = r#"{ "border-radius": { "topleft": "12px" } }"#;
+        let err = serde_json::from_str::<CssStyle>(json).expect_err("typo must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("topleft")
+                || msg.contains("border-radius")
+                || msg.contains("BorderRadius"),
+            "error must name the offending input, got: {msg}"
+        );
+    }
+
+    // ---- constat #2: `Edges` (padding/margin) rejects unknown shapes (RED first) ----
+
+    #[test]
+    fn edges_rejects_unknown_object_shape_instead_of_defaulting_to_zero() {
+        // `rules/margin-left-hack.md`-adjacent trap: an LLM reasoning in CSS
+        // terms writes `{"horizontal": 20}` instead of the supported
+        // `{"top":.., "right":.., "bottom":.., "left":..}` shape. Before the
+        // fix, `Edges::Sides`'s four fields are all `#[serde(default)]` with
+        // no `deny_unknown_fields`, so this object matches `Sides` anyway
+        // with every side at 0 — silent, wrong padding instead of an error.
+        let json = r#"{ "padding": { "horizontal": 20 } }"#;
+        let err = serde_json::from_str::<CssStyle>(json)
+            .expect_err("an unrecognised padding shape must be rejected, not silently zeroed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("horizontal") || msg.contains("padding") || msg.contains("Edges"),
+            "error must name the offending input, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn edges_still_accepts_valid_per_side_object() {
+        let json = r#"{ "padding": { "top": "10px", "right": "20px", "bottom": "10px", "left": "20px" } }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        assert_eq!(s.padding_px(), (10.0, 20.0, 10.0, 20.0));
+    }
+
+    #[test]
+    fn edges_still_accepts_uniform_scalar() {
+        let json = r#"{ "padding": "24px" }"#;
+        let s: CssStyle = serde_json::from_str(json).unwrap();
+        assert_eq!(s.padding_px(), (24.0, 24.0, 24.0, 24.0));
+    }
+
+    // ---- constat #6: `Size` untagged variant order (RED first) ----
+
+    #[test]
+    fn size_keyword_max_content_is_reachable() {
+        // `Size` is `#[serde(untagged)]`: Auto, Length, Keyword in that
+        // declared order (before the fix). `Length(LengthPercentage)`'s
+        // `String` fallback variant accepts *any* string, so it is tried
+        // (and succeeds) before `Keyword` is ever reached — `max-content` /
+        // `min-content` / `fit-content` are dead schema. After the fix,
+        // `Keyword` must be tried before the `Length` catch-all.
+        for (kw, expected) in [
+            ("max-content", SizeKeyword::MaxContent),
+            ("min-content", SizeKeyword::MinContent),
+            ("fit-content", SizeKeyword::FitContent),
+        ] {
+            let json = format!(r#"{{ "width": "{kw}" }}"#);
+            let s: CssStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                s.width,
+                Some(Size::Keyword(expected)),
+                "width: \"{kw}\" must resolve to Size::Keyword, not Size::Length(String(..))"
+            );
+        }
+    }
+
+    #[test]
+    fn size_length_and_auto_are_unaffected_by_the_reorder() {
+        let s: CssStyle = serde_json::from_str(r#"{ "width": "200px" }"#).unwrap();
+        assert!(matches!(s.width, Some(Size::Length(_))));
+        let s: CssStyle = serde_json::from_str(r#"{ "width": "50%" }"#).unwrap();
+        assert!(matches!(s.width, Some(Size::Length(_))));
+        let s: CssStyle = serde_json::from_str(r#"{ "width": "auto" }"#).unwrap();
+        assert!(matches!(s.width, Some(Size::Auto(_))));
+        let s: CssStyle = serde_json::from_str(r#"{ "width": 200 }"#).unwrap();
+        assert!(matches!(s.width, Some(Size::Length(_))));
+    }
+
+    // ---- extra: `LineHeight` has the same catch-all-before-specific shape
+    // as constat #6's `Size`, found while auditing this file for the same
+    // bug class. Fixed alongside it (see the doc comment on `LineHeight`).
+
+    #[test]
+    fn line_height_keyword_normal_is_reachable() {
+        let s: CssStyle = serde_json::from_str(r#"{ "line-height": "normal" }"#).unwrap();
+        assert_eq!(
+            s.line_height,
+            Some(LineHeight::Keyword(LineHeightKw::Normal)),
+            "line-height: \"normal\" must resolve to Keyword, not Length(String(\"normal\"))"
+        );
+    }
+
+    #[test]
+    fn line_height_number_and_length_are_unaffected_by_the_reorder() {
+        let s: CssStyle = serde_json::from_str(r#"{ "line-height": 1.5 }"#).unwrap();
+        assert!(matches!(s.line_height, Some(LineHeight::Number(_))));
+        let s: CssStyle = serde_json::from_str(r#"{ "line-height": "24px" }"#).unwrap();
+        assert!(matches!(s.line_height, Some(LineHeight::Length(_))));
+    }
+
+    // ---- border-radius: kebab-case is the canonical wire form on output ----
+
+    #[test]
+    fn border_radius_corners_serializes_as_kebab_case() {
+        let s = CssStyle {
+            border_radius: Some(BorderRadius::Corners {
+                top_left: LengthPercentage::Px(1.0),
+                top_right: LengthPercentage::Px(2.0),
+                bottom_right: LengthPercentage::Px(3.0),
+                bottom_left: LengthPercentage::Px(4.0),
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        let br = &json["border-radius"];
+        assert_eq!(br["top-left"], serde_json::json!(1.0));
+        assert_eq!(br["top-right"], serde_json::json!(2.0));
+        assert_eq!(br["bottom-right"], serde_json::json!(3.0));
+        assert_eq!(br["bottom-left"], serde_json::json!(4.0));
+        assert!(
+            br.get("top_left").is_none(),
+            "must not emit the legacy snake_case key any more"
+        );
     }
 }
