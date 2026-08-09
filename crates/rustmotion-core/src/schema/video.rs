@@ -173,7 +173,17 @@ impl AnimationEffect {
 }
 
 /// Timing configuration for preset animations.
+// `deny_unknown_fields` (constat #8): this is the `AnimationTiming` payload
+// of an internally-tagged `AnimationEffect` variant (`#[serde(tag = "name")]`
+// on the enum). Serde's tagged-enum deserializer buffers the object and
+// re-drives it through the variant's own `Deserialize` impl *without* the
+// `name` tag key, so `deny_unknown_fields` here rejects a typo'd field (e.g.
+// `duratoin`) without ever seeing/rejecting `name` itself — verified with a
+// minimal repro before relying on it. Without this, `validate_attrs.rs`
+// never sees inside `style.animation[*]` (it only walks component-level
+// keys), so a typo silently no-ops instead of erroring.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -193,6 +203,13 @@ pub struct AnimationTiming {
     /// this overrides them.
     #[serde(default)]
     pub spring: Option<SpringConfig>,
+    /// Travel of an oscillating preset, in pixels (`float_3d` only; default
+    /// 12). Threaded through `to_preset_config` into `PresetConfig::amplitude`,
+    /// which `expand_preset_inner` already reads — this field is what makes
+    /// an author-supplied amplitude actually reach it instead of the
+    /// hardcoded default on every element.
+    #[serde(default)]
+    pub amplitude: Option<f64>,
 }
 
 fn default_animation_duration() -> f64 {
@@ -201,6 +218,7 @@ fn default_animation_duration() -> f64 {
 
 /// Configuration for the `tilt_in` animation with configurable 3D transform values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TiltInConfig {
     #[serde(default)]
     pub delay: f64,
@@ -230,12 +248,14 @@ impl Default for AnimationTiming {
             repeat: false,
             overshoot: None,
             spring: None,
+            amplitude: None,
         }
     }
 }
 
 /// Timing configuration for char animation effect variants (used inside style.animation).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CharAnimationTiming {
     /// Delay before animation starts (seconds).
     #[serde(default)]
@@ -347,7 +367,7 @@ impl AnimationTiming {
     /// Convert to PresetConfig for compatibility with resolve_animations.
     pub fn to_preset_config(&self) -> PresetConfig {
         PresetConfig {
-            amplitude: None,
+            amplitude: self.amplitude,
             delay: self.delay,
             duration: self.duration,
             repeat: self.repeat,
@@ -359,6 +379,7 @@ impl AnimationTiming {
 
 /// Custom keyframe animations configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct KeyframesConfig {
     pub keyframes: Vec<Animation>,
     #[serde(default)]
@@ -379,6 +400,7 @@ pub struct KeyframesConfig {
 /// `samples = 1` is the degenerate case: the single ghost falls at `t - 0` and
 /// superimposes exactly on the principal → visually equivalent to no blur.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct MotionBlurConfig {
     /// Reserved for future intensity scaling (currently unused by the ghost
     /// sampler — the `samples` parameter controls quality). Kept for schema
@@ -409,6 +431,7 @@ fn default_motion_blur_shutter() -> f64 {
 /// `base_opacity * falloff^i`; the principal is unchanged. Unlike motion blur,
 /// the trail is additive: the principal retains its full opacity.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TrailConfig {
     /// Number of trailing ghost copies (default 4, clamped 1..=12).
     #[serde(default = "default_trail_copies")]
@@ -437,6 +460,7 @@ fn default_trail_falloff() -> f32 {
 /// Configuration for a 3D orbit/floating animation effect.
 /// Creates circular or elliptical motion with pseudo-depth (scale + opacity modulation).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OrbitConfig {
     /// Horizontal radius of the orbit in pixels.
     #[serde(default = "default_orbit_radius")]
@@ -477,6 +501,7 @@ fn default_orbit_depth() -> f64 {
 // --- Wiggle Config ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct WiggleConfig {
     pub property: String,
     pub amplitude: f64,
@@ -667,6 +692,7 @@ pub struct TextBackground {
 
 /// Glow effect (colored luminous halo around the element)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct GlowConfig {
     /// Glow color (hex string, e.g. "#5C39EE")
     #[serde(default = "default_glow_color")]
