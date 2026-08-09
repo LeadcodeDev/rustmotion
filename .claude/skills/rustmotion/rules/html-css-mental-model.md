@@ -83,16 +83,18 @@ Tout ce qui est **espace, alignement, distribution** se règle via les propriét
 | Besoin | Propriété | Sur quel élément | Exemple |
 |---|---|---|---|
 | Espace entre enfants frères | `gap` | Parent (flex ou grid) | `"gap": 24` |
-| Espace entre contenu et bordure du container | `padding` | Le container lui-même | `"padding": 40` ou `"padding": [32, 48]` |
-| Décaler UN seul enfant par rapport aux autres | `margin` | L'enfant en question | `"margin-top": 16` |
+| Espace entre contenu et bordure du container | `padding` | Le container lui-même | `"padding": 40` ou `"padding": {"top": 32, "bottom": 32, "left": 48, "right": 48}` |
+| Décaler UN seul enfant par rapport aux autres | `margin` | L'enfant en question | `"margin": {"top": 16}` |
 | Centrer horizontalement (axe principal = column) | `align-items: "center"` | Parent flex | `"align-items": "center"` |
 | Centrer verticalement (axe principal = column) | `justify-content: "center"` | Parent flex | `"justify-content": "center"` |
-| Pousser un enfant à droite | `margin-left: "auto"` | Cet enfant | `"margin-left": "auto"` |
+| Pousser un enfant à droite | `margin: {"left": "auto"}` | Cet enfant | `"margin": {"left": "auto"}` |
 | Élément prend tout l'espace restant | `flex-grow: 1` | L'enfant | `"flex-grow": 1` |
 | Alignement différent pour un seul enfant | `align-self` | L'enfant | `"align-self": "flex-end"` |
 | 2 colonnes égales | `grid-template-columns` | Parent grid | `["1fr","1fr"]` |
 | 3 colonnes proportionnelles | `grid-template-columns` | Parent grid | `["2fr","1fr","1fr"]` |
 | Colonne de taille fixe + reste | `grid-template-columns` | Parent grid | `[240, "1fr"]` |
+
+**Piège `margin-top` / `margin-left` :** il n'existe **pas** de champ `margin-top`, `margin-left`, `margin-right`, `margin-bottom` séparé — seulement `margin: Option<Edges>` (`CssStyle` a `deny_unknown_fields`, donc un `"margin-top"` fait échouer la désérialisation du composant entier, qui disparaît silencieusement de la vidéo). `margin` accepte soit une valeur uniforme (`"margin": 16`), soit un objet par côté avec les côtés omis valant 0 : `"margin": {"top": 16}`, `"margin": {"left": "auto"}`. `padding` a exactement la même forme (`padding: Option<Edges>`) et la même limitation — pas de `padding-top` isolé, et pas de raccourci tableau `[v, h]` façon CSS shorthand : `"padding": {"top": 32, "bottom": 32, "left": 48, "right": 48}`, pas `"padding": [32, 48]`.
 
 ### Règle de décision
 
@@ -174,8 +176,7 @@ Besoin d'une exception pour UN seul enfant ?
 { "type": "text", "position": "absolute", "x": 60, "y": 40 }
 
 // ✅ — padding sur le container, les enfants sont en flow
-{ "type": "card", "style": { "padding": [40, 60], "gap": 24, "width": 900 }, "children": [...] }
-//                                           ↑top/bottom  ↑left/right
+{ "type": "card", "style": { "padding": { "top": 40, "bottom": 40, "left": 60, "right": 60 }, "gap": 24, "width": 900 }, "children": [...] }
 ```
 
 ---

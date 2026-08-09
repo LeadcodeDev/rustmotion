@@ -142,6 +142,7 @@ where
             format!("/children/{i}"),
             0.0,
             (1.0, 0.0),
+            &root_css,
         ));
     }
 
@@ -226,6 +227,7 @@ fn build_ghosts<'a>(
     stagger_delay: f64,
     time_remap: (f64, f64),
     effects: &[AnimationEffect],
+    parent_css: &CssStyle,
 ) -> Vec<BoxNode> {
     let (mb, tr) = detect_ghost_effects(effects);
 
@@ -274,6 +276,9 @@ fn build_ghosts<'a>(
         if let Some(z) = child.z_index {
             css.z_index = Some(z);
         }
+        // Cascade: a ghost is the same component as the principal, painted
+        // at a different sampled time, so it inherits from the same parent.
+        rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
         // Apply timeline style states at the ghost time.
         if let Some(animatable) = child.component.as_animatable() {
             let steps = animatable.timeline_steps();
@@ -399,6 +404,7 @@ fn build_child<'a>(
     path: String,
     stagger_delay: f64,
     time_remap: (f64, f64),
+    parent_css: &CssStyle,
 ) -> Vec<BoxNode> {
     // Compute the local animation context for this node — remapped by the
     // accumulated affine time transform from ancestor containers.
@@ -428,6 +434,7 @@ fn build_child<'a>(
                 stagger_delay,
                 time_remap,
                 &effects,
+                parent_css,
             );
         }
     }
@@ -449,6 +456,15 @@ fn build_child<'a>(
     if let Some(z) = child.z_index {
         css.z_index = Some(z);
     }
+
+    // CSS cascade (round 4 audit, lot LAYOUT, constat 2): propagate
+    // inheritable properties (color, font-*, text-align, white-space, ...)
+    // from the parent's already-cascaded style into any of this node's own
+    // unset properties — mirrors CSS's "specified value" resolution, which
+    // happens before state/animation overrides compute the final value.
+    // `crates/rustmotion-core/src/css/cascade.rs::inherit_from` existed but
+    // nothing called it until this fix.
+    rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
 
     // Timeline style states: merge every state whose (at + stagger) <= t
     // into the box CSS. Opacity is excluded when a `transition` smooths it
@@ -569,6 +585,7 @@ fn build_child<'a>(
         &path,
         stagger_delay,
         time_remap,
+        &css,
     );
     let intrinsic = component_intrinsic(&child.component);
 
@@ -908,6 +925,7 @@ fn container_children<'a>(
     parent_path: &str,
     inherited_delay: f64,
     time_remap: (f64, f64),
+    parent_css: &CssStyle,
 ) -> Vec<BoxNode> {
     let (children, stagger, child_scale, child_offset): (&[ChildComponent], Option<f32>, f64, f64) =
         match component {
@@ -973,6 +991,7 @@ fn container_children<'a>(
             format!("{parent_path}/children/{j}"),
             inherited_delay + j as f64 * step,
             child_remap,
+            parent_css,
         ));
     }
     result
@@ -1305,6 +1324,14 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
         }
 
+        // ── Round 4 audit, lot LAYOUT, constat 4: the 23-components block
+        // below (`Callout` through `Lottie`) now routes every default size
+        // through `apply_default_size`, which honours an explicit
+        // `aspect-ratio` (see its own doc comment) instead of the two
+        // guards below reaching separate, aspect-ratio-blind defaults —
+        // `width: 400` + `aspect-ratio: 16/9` used to still get the
+        // component's unrelated hardcoded default height (e.g. `shape`'s
+        // 80px) instead of the 225px the ratio implies.
         // ── #126 / W3: the 23 components with no size source ─────────────
         //
         // A card's default flex column gives every child its width via
@@ -1345,12 +1372,11 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 CalloutArrowDirection::Left | CalloutArrowDirection::Right => (t.arrow_size, 0.0),
                 CalloutArrowDirection::Top | CalloutArrowDirection::Bottom => (0.0, t.arrow_size),
             };
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(text_w + h_pad * 2.0 + extra_w)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(line_h + v_pad + extra_h)));
-            }
+            apply_default_size(
+                css,
+                text_w + h_pad * 2.0 + extra_w,
+                line_h + v_pad + extra_h,
+            );
         }
         Tooltip(t) => {
             // Same shape as Callout above; padding value borrowed from
@@ -1368,12 +1394,11 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                     (0.0, t.arrow_size)
                 }
             };
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(text_w + h_pad * 2.0 + extra_w)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(line_h + v_pad + extra_h)));
-            }
+            apply_default_size(
+                css,
+                text_w + h_pad * 2.0 + extra_w,
+                line_h + v_pad + extra_h,
+            );
         }
         PillNav(p) => {
             // `height` is already a declared field on the component (like
@@ -1382,24 +1407,17 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // formula (h_pad = font_size*1.2 per side, `gap` before/after/
             // between every pill) using the same public fields and the same
             // `measure_text_with_fallback` call it makes internally.
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(p.height)));
-            }
-            if css.width.is_none() {
-                let font_size = p.style.font_size_px_or(14.0);
-                let family = p.style.font_family_or("Inter");
-                let h_pad = font_size * 1.2;
-                let n = p.items.len() as f32;
-                let labels_w: f32 = p
-                    .items
-                    .iter()
-                    .map(|label| {
-                        measure_text_line_width(label, font_size, family, false) + h_pad * 2.0
-                    })
-                    .sum();
-                let total_w = labels_w + p.gap * (n + 1.0).max(1.0);
-                css.width = Some(CSize::Length(CLP::Px(total_w)));
-            }
+            let font_size = p.style.font_size_px_or(14.0);
+            let family = p.style.font_family_or("Inter");
+            let h_pad = font_size * 1.2;
+            let n = p.items.len() as f32;
+            let labels_w: f32 = p
+                .items
+                .iter()
+                .map(|label| measure_text_line_width(label, font_size, family, false) + h_pad * 2.0)
+                .sum();
+            let total_w = labels_w + p.gap * (n + 1.0).max(1.0);
+            apply_default_size(css, total_w, p.height);
         }
         Marquee(m) => {
             // Marquee's whole purpose is to scroll unbounded content, so
@@ -1418,12 +1436,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // `font_size: 24` paired with `style.height: 48`, i.e.
             // `2 × font_size`.
             let font_size = m.style.font_size_px_or(m.font_size);
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(800.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(font_size * 2.0)));
-            }
+            apply_default_size(css, 800.0, font_size * 2.0);
         }
         Stepper(s) => {
             // Same shape as `Timeline`'s formula above (r*2 + label metrics),
@@ -1448,36 +1461,26 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 .fold(0.0_f32, f32::max);
             match s.orientation {
                 StepperOrientation::Horizontal => {
-                    if css.width.is_none() {
-                        // Per-step allocation: the node needs ~3 diameters of
-                        // breathing room (a common stepper-UI spacing
-                        // convention), or enough for its longest label/desc,
-                        // whichever is larger.
-                        let per_step = (s.node_size * 3.0).max(max_label_w.max(max_desc_w) + 24.0);
-                        css.width = Some(CSize::Length(CLP::Px(per_step * n)));
-                    }
-                    if css.height.is_none() {
-                        let label_h = LABEL_FS * 1.3;
-                        let desc_h = if has_desc { DESC_FS * 1.3 + 4.0 } else { 0.0 };
-                        let h = s.node_size + 4.0 + 12.0 + label_h + desc_h;
-                        css.height = Some(CSize::Length(CLP::Px(h)));
-                    }
+                    // Per-step allocation: the node needs ~3 diameters of
+                    // breathing room (a common stepper-UI spacing
+                    // convention), or enough for its longest label/desc,
+                    // whichever is larger.
+                    let per_step = (s.node_size * 3.0).max(max_label_w.max(max_desc_w) + 24.0);
+                    let label_h = LABEL_FS * 1.3;
+                    let desc_h = if has_desc { DESC_FS * 1.3 + 4.0 } else { 0.0 };
+                    let h = s.node_size + 4.0 + 12.0 + label_h + desc_h;
+                    apply_default_size(css, per_step * n, h);
                 }
                 StepperOrientation::Vertical => {
-                    if css.width.is_none() {
-                        let label_w = max_label_w.max(max_desc_w);
-                        let w = s.node_size + 12.0 + label_w + 24.0;
-                        css.width = Some(CSize::Length(CLP::Px(w)));
-                    }
-                    if css.height.is_none() {
-                        let label_block = if has_desc {
-                            LABEL_FS * 1.3 + DESC_FS * 1.3 + 8.0
-                        } else {
-                            LABEL_FS * 1.3 + 8.0
-                        };
-                        let per_step = (s.node_size * 2.0).max(label_block);
-                        css.height = Some(CSize::Length(CLP::Px(per_step * n)));
-                    }
+                    let label_w = max_label_w.max(max_desc_w);
+                    let w = s.node_size + 12.0 + label_w + 24.0;
+                    let label_block = if has_desc {
+                        LABEL_FS * 1.3 + DESC_FS * 1.3 + 8.0
+                    } else {
+                        LABEL_FS * 1.3 + 8.0
+                    };
+                    let per_step = (s.node_size * 2.0).max(label_block);
+                    apply_default_size(css, w, per_step * n);
                 }
             }
         }
@@ -1512,12 +1515,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 let lines = (total_w / box_w).ceil().max(1.0);
                 let line_h = tc.max_font_size * 1.3;
                 let box_h = lines * line_h + (lines - 1.0).max(0.0) * V_GAP;
-                if css.width.is_none() {
-                    css.width = Some(CSize::Length(CLP::Px(box_w)));
-                }
-                if css.height.is_none() {
-                    css.height = Some(CSize::Length(CLP::Px(box_h)));
-                }
+                apply_default_size(css, box_w, box_h);
             }
         }
         Heatmap(h) => {
@@ -1528,25 +1526,15 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             let rows = h.data.len();
             let cols = h.data.iter().map(|r| r.len()).max().unwrap_or(0);
             let step = h.cell_size + h.cell_gap;
-            if css.width.is_none() {
-                let w = (cols.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
-                css.width = Some(CSize::Length(CLP::Px(w)));
-            }
-            if css.height.is_none() {
-                let hh = (rows.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
-                css.height = Some(CSize::Length(CLP::Px(hh)));
-            }
+            let w = (cols.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
+            let hh = (rows.max(1) as f32 - 1.0).max(0.0) * step + h.cell_size;
+            apply_default_size(css, w, hh);
         }
         Sparkline(_) => {
             // "Sparkline: no axes, no labels, compact (120x40 default),
             // inline use" — documented in
             // .claude/skills/rustmotion/rules/data-viz-components.md.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(120.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(40.0)));
-            }
+            apply_default_size(css, 120.0, 40.0);
         }
         Stat(_) => {
             // Documented default from
@@ -1555,12 +1543,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // the fix for the issue's second bug: three `stat`s in a flex
             // row with no explicit size rendered zero pixels because width
             // (not just height) collapsed to 0 in a row context.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(280.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(180.0)));
-            }
+            apply_default_size(css, 280.0, 180.0);
         }
         Gauge(g) => {
             // Square — gauge.rs's own paint() derives its ring radius from
@@ -1575,12 +1558,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // icon-sizing-hierarchy.md.
             const TARGET_RADIUS: f32 = 88.0;
             let size = 2.0 * (TARGET_RADIUS + g.track_width / 2.0 + 4.0);
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(size)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(size)));
-            }
+            apply_default_size(css, size, size);
         }
         DotMap(_) => {
             // 2:1 — the standard aspect ratio for an equirectangular world
@@ -1588,24 +1566,14 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // dot_map.rs's own `geo_to_screen` implements. dot_map.rs always
             // paints a full-box background rect first, so any positive size
             // shows ink even with zero points.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(640.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(320.0)));
-            }
+            apply_default_size(css, 640.0, 320.0);
         }
         Comparison(_) => {
             // No natural intrinsic size (the painter just splits whatever
             // box it's given at the divider) — matches this project's own
             // reference usage in examples/mega-showcase.json's `comparison`
             // block.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(520.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(280.0)));
-            }
+            apply_default_size(css, 520.0, 280.0);
         }
         Treemap(_) => {
             // Slice-and-dice treemap fills whatever box it's given — matches
@@ -1613,12 +1581,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // examples/mega-showcase.json's `treemap` block (near-square,
             // the conventional treemap aspect since its rectangles are area-
             // proportional in both axes).
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(416.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(368.0)));
-            }
+            apply_default_size(css, 416.0, 368.0);
         }
         Chart(c) => {
             // Pie/donut/radar/radial_bar are inherently circular — a square
@@ -1631,12 +1594,12 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 c.chart_type,
                 ChartType::Pie | ChartType::Donut | ChartType::Radar | ChartType::RadialBar
             );
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(if round { 320.0 } else { 400.0 })));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(if round { 320.0 } else { 300.0 })));
-            }
+            let (dw, dh) = if round {
+                (320.0, 320.0)
+            } else {
+                (400.0, 300.0)
+            };
+            apply_default_size(css, dw, dh);
         }
         Skeleton(s) => {
             // `rectangle`: documented default from data-viz-components.md's
@@ -1648,31 +1611,12 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // formula above — matches skeleton.rs's own per-line paint loop
             // (`y = i * (line_height + line_gap)`) exactly.
             match s.variant {
-                SkeletonVariant::Rectangle => {
-                    if css.width.is_none() {
-                        css.width = Some(CSize::Length(CLP::Px(400.0)));
-                    }
-                    if css.height.is_none() {
-                        css.height = Some(CSize::Length(CLP::Px(200.0)));
-                    }
-                }
-                SkeletonVariant::Circle => {
-                    if css.width.is_none() {
-                        css.width = Some(CSize::Length(CLP::Px(64.0)));
-                    }
-                    if css.height.is_none() {
-                        css.height = Some(CSize::Length(CLP::Px(64.0)));
-                    }
-                }
+                SkeletonVariant::Rectangle => apply_default_size(css, 400.0, 200.0),
+                SkeletonVariant::Circle => apply_default_size(css, 64.0, 64.0),
                 SkeletonVariant::Text => {
                     let n = s.lines.max(1) as f32;
-                    if css.width.is_none() {
-                        css.width = Some(CSize::Length(CLP::Px(240.0)));
-                    }
-                    if css.height.is_none() {
-                        let h = n * s.line_height + (n - 1.0).max(0.0) * s.line_gap;
-                        css.height = Some(CSize::Length(CLP::Px(h)));
-                    }
+                    let h = n * s.line_height + (n - 1.0).max(0.0) * s.line_gap;
+                    apply_default_size(css, 240.0, h);
                 }
             }
         }
@@ -1686,12 +1630,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 MockupDevice::Laptop => (640.0, 400.0),
                 MockupDevice::Browser => (640.0, 360.0),
             };
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(dw)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(dh)));
-            }
+            apply_default_size(css, dw, dh);
         }
         Icon(_) => {
             // 64×64 — the midpoint of the documented "card / feature icon"
@@ -1699,12 +1638,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // icon-sizing-hierarchy.md (desktop 40–56px, mobile 72–96px,
             // square 60–80px), and a size icon asset systems near-universally
             // ship as a default export (24/32/48/64 being the common family).
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(64.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(64.0)));
-            }
+            apply_default_size(css, 64.0, 64.0);
         }
         Svg(_) => {
             // 200×200 — square, since an arbitrary vector graphic (icon,
@@ -1712,12 +1646,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // common equal-aspect SVG viewBox convention and sits above
             // Icon's 64px "card icon" role for the more elaborate content
             // `svg` typically carries (illustrations/diagrams, not glyphs).
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(200.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(200.0)));
-            }
+            apply_default_size(css, 200.0, 200.0);
         }
         Shape(_) => {
             // 80×80 — matches the median of this project's own decorative
@@ -1726,48 +1655,89 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // (26, 36, 44, 60, 70, 140 — median ~55, rounded up for
             // visibility as a standalone default rather than a same-scene
             // accent tuned against neighbours).
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(80.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(80.0)));
-            }
+            apply_default_size(css, 80.0, 80.0);
         }
         Image(_) => {
             // 4:3 (400×300) — the traditional default photo aspect ratio,
             // distinct from Video/Gif's 16:9 below so a generic still image
             // doesn't presume widescreen framing.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(400.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(300.0)));
-            }
+            apply_default_size(css, 400.0, 300.0);
         }
         Video(_) | Gif(_) => {
             // 16:9 (400×225) — the industry-standard video aspect ratio
             // (matches every render resolution this project documents:
             // 1920×1080, 1280×720), scaled down to a card-sized default.
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(400.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(225.0)));
-            }
+            apply_default_size(css, 400.0, 225.0);
         }
         Lottie(_) => {
             // 300×300 — square, matching the aspect the vast majority of
             // Lottie animation assets ship at (LottieFiles' own marketplace
             // preview convention is a 1:1 canvas).
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(300.0)));
-            }
-            if css.height.is_none() {
-                css.height = Some(CSize::Length(CLP::Px(300.0)));
-            }
+            apply_default_size(css, 300.0, 300.0);
         }
 
         _ => {}
+    }
+}
+
+/// Apply a component's natural default size (`dw` × `dh`) to `css`, honouring
+/// an explicit `aspect-ratio` instead of always falling back to `dw`/`dh`
+/// independently (round 4 audit, lot LAYOUT, constat 4 — the previous code
+/// guarded each axis with its own `is_none()` check and never looked at
+/// `aspect-ratio`, so `width: 400` + `aspect-ratio: 16/9` still got the
+/// component's unrelated hardcoded default height instead of 225).
+///
+/// - Both axes already set: untouched (the author fully specified the box).
+/// - One axis set to a fixed pixel length, `aspect-ratio` present: the other
+///   axis is derived from it (`h = w / ratio` or `w = h * ratio`) — the CSS
+///   replaced-element sizing rule for a single definite axis plus a
+///   preferred aspect ratio.
+/// - Neither axis set: the natural default width is kept (there is no
+///   author-declared axis to derive from), and height is derived from
+///   `aspect-ratio` when present, the natural default height otherwise.
+///
+/// `min-*`/`max-*` need no equivalent guard here: taffy clamps the final
+/// used size against them at layout time regardless of what `size` resolves
+/// to (`style.min_size`/`max_size` in `taffy_bridge::to_taffy_style`), so a
+/// default below `min-width` is corrected downstream, not silently wrong.
+fn apply_default_size(css: &mut CssStyle, dw: f32, dh: f32) {
+    let ratio = css.aspect_ratio.filter(|r| *r > 0.0);
+    match (css.width.is_some(), css.height.is_some()) {
+        (true, true) => {}
+        (true, false) => {
+            let h = fixed_px(css.width.as_ref())
+                .zip(ratio)
+                .map(|(w, r)| w / r)
+                .unwrap_or(dh);
+            css.height = Some(CSize::Length(CLP::Px(h)));
+        }
+        (false, true) => {
+            let w = fixed_px(css.height.as_ref())
+                .zip(ratio)
+                .map(|(h, r)| h * r)
+                .unwrap_or(dw);
+            css.width = Some(CSize::Length(CLP::Px(w)));
+        }
+        (false, false) => {
+            css.width = Some(CSize::Length(CLP::Px(dw)));
+            let h = ratio.map(|r| dw / r).unwrap_or(dh);
+            css.height = Some(CSize::Length(CLP::Px(h)));
+        }
+    }
+}
+
+/// Extract a fixed pixel value from a `Size`, if it resolves to one without a
+/// `LengthContext` (only `Size::Length(LengthPercentage::Px(_))` — a bare
+/// number or `"NNpx"`). `%`/`vw`/`vh`/`em`/`rem` and `auto` return `None`:
+/// `apply_default_size` can't derive a ratio from a length it can't resolve
+/// at build time, so it falls back to the component's hardcoded default.
+fn fixed_px(size: Option<&CSize>) -> Option<f32> {
+    match size? {
+        CSize::Length(lp) => match lp.try_parse()? {
+            rustmotion_core::css::units::ParsedLength::Px(v) => Some(v),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -1938,6 +1908,27 @@ mod tests {
                 stagger: None,
                 fill: None,
                 stroke: None,
+            }),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }
+    }
+
+    fn make_text(content: &str, style: CssStyle) -> ChildComponent {
+        ChildComponent {
+            component: Component::Text(crate::text::Text {
+                content: content.to_string(),
+                max_width: None,
+                timing: Default::default(),
+                style,
+                timeline: Vec::new(),
+                stagger: None,
+                text_shadow: None,
+                stroke: None,
+                text_background: None,
             }),
             position: None,
             x: None,
@@ -2750,6 +2741,194 @@ mod tests {
                 "stat #{i}: height should be > 0, got {}",
                 l.height
             );
+        }
+    }
+
+    // ── Round 4 audit, lot LAYOUT, constat 2: the CSS cascade is wired ──────
+    // `crates/rustmotion-core/src/css/cascade.rs::inherit_from` existed but
+    // nothing called it — `color`/`font-*` set on a container never reached
+    // children lacking their own value.
+
+    #[test]
+    fn card_color_cascades_to_text_child_with_no_color_of_its_own() {
+        use rustmotion_core::css::style::Color;
+
+        let card = make_card(
+            vec![make_text("hello", CssStyle::default())],
+            CssStyle {
+                color: Some(Color::String("#ff0000".into())),
+                ..Default::default()
+            },
+        );
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let text_box = &built.root.children[0].children[0];
+        assert_eq!(
+            text_box.css.color,
+            Some(Color::String("#ff0000".into())),
+            "text child declares no color of its own — it should inherit the card's"
+        );
+    }
+
+    #[test]
+    fn text_own_color_wins_over_inherited_card_color() {
+        use rustmotion_core::css::style::Color;
+
+        let card = make_card(
+            vec![make_text(
+                "hello",
+                CssStyle {
+                    color: Some(Color::String("#00ff00".into())),
+                    ..Default::default()
+                },
+            )],
+            CssStyle {
+                color: Some(Color::String("#ff0000".into())),
+                ..Default::default()
+            },
+        );
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let text_box = &built.root.children[0].children[0];
+        assert_eq!(
+            text_box.css.color,
+            Some(Color::String("#00ff00".into())),
+            "text child's own explicit color must win over the inherited card color"
+        );
+    }
+
+    #[test]
+    fn card_display_does_not_cascade_to_text_child() {
+        // `display` is not an inheritable CSS property — only the documented
+        // inheritable list (color, font-*, text-align, white-space, ...)
+        // should propagate.
+        let card = make_card(
+            vec![make_text("hello", CssStyle::default())],
+            CssStyle {
+                display: Some(Display::Flex),
+                ..Default::default()
+            },
+        );
+        let scene = vec![ChildComponent {
+            component: card,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (800.0, 600.0));
+        let text_box = &built.root.children[0].children[0];
+        assert_eq!(text_box.css.display, None);
+    }
+
+    // ── Round 4 audit, lot LAYOUT, constat 4: `apply_intrinsic_overrides`'s
+    // default size ignored an explicit `aspect-ratio`. ─────────────────────
+
+    fn make_aspect_shape(width: f32, aspect_ratio: f32) -> ChildComponent {
+        ChildComponent {
+            component: Component::Shape(crate::shape::Shape {
+                shape: rustmotion_core::schema::ShapeType::Rect,
+                text: None,
+                timing: Default::default(),
+                style: CssStyle {
+                    width: Some(CSize::Length(CLP::Px(width))),
+                    aspect_ratio: Some(aspect_ratio),
+                    ..Default::default()
+                },
+                timeline: Vec::new(),
+                stagger: None,
+                fill: None,
+                stroke: None,
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }
+    }
+
+    #[test]
+    fn explicit_width_with_aspect_ratio_derives_height_instead_of_the_hardcoded_default() {
+        // `shape`'s hardcoded default is 80×80 (see `apply_intrinsic_overrides`).
+        // `width: 400` + `aspect-ratio: 16/9` should derive height = 225, not
+        // fall back to the unrelated 80px default.
+        let scene = vec![make_aspect_shape(400.0, 16.0 / 9.0)];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+        let l = layout
+            .get(built.root.children[0].id)
+            .expect("shape laid out");
+        assert!(
+            (l.width - 400.0).abs() < 1.0,
+            "width should stay the author's explicit 400, got {}",
+            l.width
+        );
+        assert!(
+            (l.height - 225.0).abs() < 1.0,
+            "height should derive from width/aspect-ratio (400/1.778=225), got {}",
+            l.height
+        );
+    }
+
+    #[test]
+    fn neither_axis_set_with_aspect_ratio_derives_height_from_the_default_width() {
+        // No width/height at all: the natural default width (80 for shape)
+        // is kept, but height should come from the aspect-ratio, not the
+        // unrelated 80px default.
+        let scene = vec![make_aspect_shape_no_width(2.0)];
+        let built = build_scene(&scene, (1920.0, 1080.0));
+        let layout = run_layout(&built.root, (1920.0, 1080.0), &ConversionContext::default());
+        let l = layout
+            .get(built.root.children[0].id)
+            .expect("shape laid out");
+        assert!(
+            (l.width - 80.0).abs() < 1.0,
+            "width should keep the natural default (80), got {}",
+            l.width
+        );
+        assert!(
+            (l.height - 40.0).abs() < 1.0,
+            "height should derive from the default width/aspect-ratio (80/2=40), got {}",
+            l.height
+        );
+    }
+
+    fn make_aspect_shape_no_width(aspect_ratio: f32) -> ChildComponent {
+        ChildComponent {
+            component: Component::Shape(crate::shape::Shape {
+                shape: rustmotion_core::schema::ShapeType::Rect,
+                text: None,
+                timing: Default::default(),
+                style: CssStyle {
+                    aspect_ratio: Some(aspect_ratio),
+                    ..Default::default()
+                },
+                timeline: Vec::new(),
+                stagger: None,
+                fill: None,
+                stroke: None,
+            }),
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
         }
     }
 }
