@@ -351,4 +351,65 @@ mod tests {
         assert_eq!(errors.len(), 1, "expected one error: {errors:?}");
         assert!(errors[0].contains("counter"), "got: {}", errors[0]);
     }
+
+    #[test]
+    fn typo_inside_style_animation_effect_is_reported() {
+        // Constat #8: `walk_component` only compares a component's own
+        // top-level keys, then recurses into `children` — it never looks
+        // inside `style`, let alone `style.animation[*]`. A typo'd field on
+        // an animation effect (`duratoin` instead of `duration`) used to
+        // deserialize silently (the effect config structs had no
+        // `deny_unknown_fields`), so the author got a scenario that "worked"
+        // but quietly ran the default 0.8s duration instead of theirs.
+        //
+        // The fix lives in `schema/video.rs` (adding `deny_unknown_fields` to
+        // every `AnimationEffect` payload struct) rather than here: an
+        // internally-tagged enum's tag field is excluded from what the
+        // variant's own `Deserialize` sees, so this rejects the typo without
+        // ever flagging the legitimate `name` tag as unknown. That routes the
+        // typo through the *existing* typed-parse-failure path in
+        // `check_component_attrs` (the same one that already catches, e.g.,
+        // a missing required field) — it surfaces as a blocking error, not a
+        // `walk_component` warning.
+        let s = resolved(serde_json::json!([
+            {
+                "type": "text", "content": "hi",
+                "style": { "animation": [{ "name": "fade_in_up", "duratoin": 0.6 }] }
+            }
+        ]));
+        let (errors, _) = check_component_attrs(&s);
+        assert!(
+            errors.iter().any(|e| e.contains("duratoin")),
+            "expected the typo'd animation-effect field to be reported as an error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn well_formed_animation_effect_fields_are_not_flagged() {
+        // Sanity companion to the typo test: legitimate fields across a
+        // spread of effect kinds (preset timing, keyframes, wiggle, glow,
+        // motion_blur, tilt_in) must not trip the new deny_unknown_fields.
+        let s = resolved(serde_json::json!([
+            {
+                "type": "text", "content": "hi",
+                "style": { "animation": [
+                    { "name": "fade_in_up", "delay": 0.2, "duration": 0.6, "loop": false,
+                      "overshoot": 0.1, "spring": { "damping": 12, "stiffness": 100, "mass": 1 } },
+                    { "name": "float_3d", "duration": 1.0, "amplitude": 20 },
+                    { "name": "tilt_in", "delay": 0.0, "duration": 0.4, "rotate_x": 10.0 },
+                    { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 2, "seed": 3 },
+                    { "name": "glow", "color": "#ffffff", "radius": 10, "intensity": 1.0 },
+                    { "name": "motion_blur", "samples": 4, "shutter": 0.5 },
+                    { "name": "keyframes", "keyframes": [
+                        { "property": "opacity", "keyframes": [
+                            { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }
+                        ] }
+                    ], "delay": 0.0, "duration": 1.0, "loop": true }
+                ] }
+            }
+        ]));
+        let (errors, warnings) = check_component_attrs(&s);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
 }

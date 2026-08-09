@@ -5,7 +5,7 @@ use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
     Background, BackgroundLayer, Color, CssStyle, Display as CssDisplay,
 };
-use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario};
+use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario, SpringConfig};
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
@@ -123,25 +123,50 @@ fn validate_children(
         }
 
         // Animation completion budget check: ensure entrance animations finish within the scene.
+        //
+        // Constat #4: `start_at` is a *visibility* window, not a time
+        // origin — the engine resolves `animation.delay`/`duration` in
+        // absolute scene time regardless of `start_at` (PR #27's frozen
+        // semantics; `geometry.rs`'s `walk_anim` already states and relies
+        // on the same rule). The budget used to add `start_at` in here,
+        // which contradicts that: a scenario where the entrance genuinely
+        // finishes well inside the scene (just before the node becomes
+        // visible, so it appears already-settled) was rejected as if the
+        // animation ran late.
         if let Some(anim) = child.component.as_animatable() {
-            let start_at = child
-                .component
-                .as_timed()
-                .and_then(|t| t.timing().0)
-                .unwrap_or(0.0);
-
             for effect in anim.animation_effects() {
                 if let Some((delay, duration)) = entrance_budget(effect) {
-                    let finishes_at = start_at + delay + duration;
+                    let finishes_at = delay + duration;
                     // 50ms tolerance for floating-point edge cases.
                     if finishes_at > scene_duration + 0.05 {
                         let suggested = ((finishes_at + 0.5) * 10.0).ceil() / 10.0;
                         errors.push(format!(
-                            "{}: animation finishes at {:.2}s (start_at {:.2} + delay {:.2} + duration {:.2}) \
+                            "{}: animation finishes at {:.2}s (delay {:.2} + duration {:.2}) \
                              but scene_duration is {:.2}s — it will be truncated. \
                              Increase scene duration to at least {:.1}s or reduce animation delay/duration.",
-                            p, finishes_at, start_at, delay, duration, scene_duration, suggested
+                            p, finishes_at, delay, duration, scene_duration, suggested
                         ));
+                    }
+                }
+
+                // Constat #6: `SpringConfig` accepts any f64 unchecked — a
+                // preset's own `spring` override (`AnimationTiming::spring`,
+                // reachable via `as_preset()`) or a `keyframes` effect's
+                // per-`Animation` `spring` (used when that segment's easing
+                // is `spring`) both feed `engine::animator::spring_value`,
+                // where `mass <= 0`/`stiffness <= 0` produce NaN and negative
+                // `damping` diverges. Reject both regimes here so a bad
+                // config never reaches the solver.
+                if let Some((_, timing)) = effect.as_preset() {
+                    if let Some(spring) = &timing.spring {
+                        check_spring_config(spring, &p, errors);
+                    }
+                }
+                if let AnimationEffect::Keyframes(k) = effect {
+                    for kf_anim in &k.keyframes {
+                        if let Some(spring) = &kf_anim.spring {
+                            check_spring_config(spring, &p, errors);
+                        }
                     }
                 }
             }
@@ -343,6 +368,36 @@ fn check_color_str(s: &str, label: &str, path: &str, errors: &mut Vec<String>) {
             "{path}: {label} '{s}' is not a recognized CSS color (expected hex #rgb/#rrggbb[aa], \
              rgb()/rgba(...), hsl()/hsla(...), or a CSS named color) — it would render as opaque \
              magenta instead of {label}",
+        ));
+    }
+}
+
+/// Constat #6: reject `SpringConfig` values that would make
+/// `engine::animator::spring_value` produce NaN (`mass <= 0`, `stiffness <=
+/// 0`) or diverge instead of settle (`damping < 0`). The solver itself also
+/// floors these defensively (belt and suspenders — see `spring_value`'s doc
+/// comment), but catching it here gives the author an actionable error
+/// instead of a silently broken render.
+fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<String>) {
+    if spring.mass <= 0.0 {
+        errors.push(format!(
+            "{path}: spring.mass must be > 0 (got {}) — zero or negative mass makes the spring \
+             solver divide by zero and produce NaN",
+            spring.mass
+        ));
+    }
+    if spring.stiffness <= 0.0 {
+        errors.push(format!(
+            "{path}: spring.stiffness must be > 0 (got {}) — zero or negative stiffness makes \
+             the spring solver produce NaN",
+            spring.stiffness
+        ));
+    }
+    if spring.damping < 0.0 {
+        errors.push(format!(
+            "{path}: spring.damping must be >= 0 (got {}) — negative damping makes the spring \
+             diverge instead of settle",
+            spring.damping
         ));
     }
 }
@@ -555,6 +610,113 @@ mod style_warning_tests {
     }
 
     #[test]
+    fn negative_spring_damping_is_an_error() {
+        // Constat #6: damping < 0 makes the spring solver diverge instead of
+        // settle (a `SpringConfig` accepts any f64 — nothing in
+        // `rustmotion-cli` checked `damping`/`stiffness` before this).
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": -5, "stiffness": 100, "mass": 1 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("damping")),
+            "missing spring damping error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn zero_spring_stiffness_is_an_error() {
+        // stiffness <= 0 makes `spring_value`'s omega = sqrt(stiffness/mass) NaN.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "bounce_in", "duration": 0.6, "spring": { "damping": 10, "stiffness": 0, "mass": 1 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("stiffness")),
+            "missing spring stiffness error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn zero_spring_mass_is_an_error() {
+        // mass <= 0 makes omega = sqrt(stiffness/mass) divide by zero -> NaN.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 10, "stiffness": 100, "mass": 0 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("mass")),
+            "missing spring mass error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn spring_inside_a_keyframes_effect_is_also_checked() {
+        // Springs aren't only on presets: a `keyframes` effect's per-Animation
+        // `spring` field feeds the exact same solver.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{
+                    "name": "keyframes",
+                    "keyframes": [{
+                        "property": "scale",
+                        "easing": "spring",
+                        "spring": { "damping": -1, "stiffness": 100, "mass": 1 },
+                        "keyframes": [{ "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }]
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("damping")),
+            "missing spring damping error inside a keyframes effect: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn positive_spring_values_are_accepted() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
     fn positive_time_scale_is_accepted() {
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "flex",
@@ -567,6 +729,37 @@ mod style_warning_tests {
         let mut warnings = Vec::new();
         validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn completion_budget_does_not_add_start_at_to_delay_plus_duration() {
+        // Constat #4: `start_at` gates *visibility* only (PR #27) — the
+        // engine resolves `animation.delay`/`duration` in absolute scene
+        // time regardless of `start_at`, so an entrance that finishes at
+        // delay+duration=1.0s in a 2.0s scene is fine even if the node isn't
+        // visible until start_at=1.5s (it simply appears already-settled).
+        // The old formula added them (`start_at + delay + duration` =
+        // 1.5+0+1.0 = 2.5 > 2.0), rejecting this valid scenario.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "position": "absolute",
+            "x": 100, "y": 100,
+            "start_at": 1.5,
+            "style": {
+                "width": "100px", "height": "100px",
+                "animation": [{ "name": "slide_in_left", "delay": 0.0, "duration": 1.0 }]
+            },
+            "fill": "#ff0000"
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 2.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().all(|e| !e.contains("animation finishes")),
+            "start_at must not be added to the completion budget: {errors:?}"
+        );
     }
 }
 

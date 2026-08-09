@@ -1182,6 +1182,7 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                     &built.root.children,
                     &layouts,
                     &built.stagger_delays,
+                    &built.time_params,
                     viewport,
                     vi,
                     si,
@@ -1206,6 +1207,7 @@ fn walk_anim(
     boxes: &[BoxNode],
     layouts: &LayoutResult,
     stagger_delays: &[f64],
+    time_params: &[(f64, f64)],
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -1257,8 +1259,26 @@ fn walk_anim(
             // resolves them at absolute scene `time` — no re-timing by
             // start_at, which would double-shift components that also
             // declare a matching `animation` delay.
+            //
+            // `time` above is *global* scene time; the renderer never
+            // resolves effects at that raw value once a `time_scale`/
+            // `time_offset`-bearing container is in the ancestor chain —
+            // `build_child` remaps it first (`box_builder.rs`:
+            // `t_local = scale * t_global + shift`). Constat #3: this walker
+            // used to skip that remap entirely, resolving effects at a time
+            // that never occurs at render — false positives when the
+            // container speeds the subtree up past the checked sample, false
+            // negatives when it slows it down. `built.time_params` carries
+            // the exact same accumulated `(scale, shift)` the renderer used,
+            // indexed by the same `NodeId`, so applying it here keeps this
+            // walker and the renderer in lockstep.
+            let (scale, shift) = time_params
+                .get(box_node.id as usize)
+                .copied()
+                .unwrap_or((1.0, 0.0));
+            let local_time = scale * time + shift;
             let props = match effective_effects(&child.component, stagger_delay) {
-                Some(effects) => resolve_props_for_effects(&effects, time, scene_duration),
+                Some(effects) => resolve_props_for_effects(&effects, local_time, scene_duration),
                 None => AnimatedProperties::default(),
             };
             let raw_bbox = bbox_of(layout);
@@ -1307,6 +1327,7 @@ fn walk_anim(
                 &box_node.children,
                 layouts,
                 stagger_delays,
+                time_params,
                 viewport,
                 vi,
                 si,
@@ -1897,6 +1918,61 @@ mod tests {
             violations
         );
         assert_eq!(v.unwrap().axis, Axis::X);
+    }
+
+    #[test]
+    fn strict_anim_respects_a_containers_time_offset_remap() {
+        // Constat #3: `walk_anim` used to resolve effects at raw *global*
+        // scene time, ignoring any `time_scale`/`time_offset` remap
+        // accumulated from ancestor containers — even though the renderer
+        // (`box_builder::build_child`) always resolves at the *local*
+        // remapped time (`t_local = scale * t_global + shift`).
+        //
+        // Here the shape's `slide_in_left` (delay=0, duration=1.0) sits
+        // inside a `flex` with `time_offset: -5.0`, which (per
+        // `rustmotion/src/tests.rs`'s time-remap tests) shifts local time to
+        // `t_local = t_global + 5.0`. Every sample in this 2s scene
+        // (t_global in [0, 2]) therefore resolves at local time in [5, 7] —
+        // 5-7s past the 1s animation window, fully settled at rest (x=100,
+        // well inside the 1920px-wide viewport). A walker that ignores the
+        // remap instead resolves at raw t_global in [0, 2], still inside the
+        // animation's own [0, 1] window for the first half of the scene,
+        // and reports a slide-in overflow that never actually happens at
+        // render time.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "children": [{
+                    "type": "flex",
+                    "time_offset": -5.0,
+                    "style": { "width": "1920px", "height": "1080px" },
+                    "children": [{
+                        "type": "shape",
+                        "shape": "rect",
+                        "position": "absolute",
+                        "x": 100, "y": 100,
+                        "style": {
+                            "width": "100px", "height": "100px",
+                            "animation": [{ "name": "slide_in_left", "delay": 0, "duration": 1.0 }]
+                        },
+                        "fill": "#ff0000"
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry_animated(&scenario);
+        let overflow: Vec<_> = violations
+            .iter()
+            .filter(|v| v.kind == ViolationKind::AnimatedTextOverflow)
+            .collect();
+        assert!(
+            overflow.is_empty(),
+            "time_offset=-5.0 settles the slide-in 5-7s before any sampled instant; a \
+             walker that honours the remap must report zero overflows, got: {:?}",
+            overflow
+        );
     }
 
     #[test]
