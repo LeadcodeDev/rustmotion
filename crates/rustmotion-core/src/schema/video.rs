@@ -377,10 +377,113 @@ impl AnimationTiming {
     }
 }
 
+/// Constat #4: every `property` name `engine::animator::{apply_property,
+/// get_property_value}` (read-only for this workstream — the solver logic
+/// itself stays there) actually recognises for `wiggle`/`keyframes`
+/// animations. Anything outside this set has always been a silent no-op in
+/// the solver (`_ => {}` / `_ => 0.0`): the animation plays as if the
+/// property doesn't exist, with no error and no visual signal that
+/// something is wrong. `WiggleConfig.property` and `Animation.property`
+/// (the latter via `KeyframesConfig.keyframes`'s `deserialize_with`, since
+/// `Animation` itself lives in `schema/animation.rs`, which this workstream
+/// may only touch for `deny_unknown_fields`) are validated against this set
+/// at parse time instead — turning the silent no-op into a named error, so
+/// a mixed-convention typo (`"translateX"`, `"positionX"`, `"Rotation"`) or
+/// a wholesale unsupported name is caught immediately.
+///
+/// `"color"` is included because `resolve_animations` special-cases
+/// `anim.property == "color"` outside `apply_property`/`get_property_value`
+/// — it is a real, solver-recognised value for `Animation`, just resolved on
+/// a different path than the numeric properties.
+const KNOWN_MOTION_PROPERTIES: &[&str] = &[
+    "opacity",
+    "position.x",
+    "translate_x",
+    "position.y",
+    "translate_y",
+    "scale",
+    "scale.x",
+    "scale.y",
+    "rotation",
+    "rotate_x",
+    "rotate_y",
+    "blur",
+    "visible_chars",
+    "visible_chars_progress",
+    "border_radius",
+    "font_size",
+    "width",
+    "height",
+    "gap",
+    "padding",
+    "stroke_width",
+    "shadow_blur",
+    "glow_radius",
+    "glow_intensity",
+    "perspective",
+    "draw_progress",
+    "motion_progress",
+    "color",
+];
+
+/// Reject a `property` value the solver doesn't recognise, with a
+/// "did-you-mean" nudge when the only mismatch is casing/separator
+/// convention (`translateX` / `translate-x` vs `translate_x`) — the exact
+/// trap constat #4 names: this project mixes kebab-case (CSS-style, most of
+/// `CssStyle`) and snake_case (these property names) conventions, and an
+/// author reasoning from the former naturally reaches for the latter's
+/// kebab or camelCase spelling.
+fn validate_motion_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
+    if KNOWN_MOTION_PROPERTIES.contains(&value) {
+        return Ok(());
+    }
+    let normalize = |s: &str| s.replace(['-', ' '], "_").to_lowercase();
+    let normalized = normalize(value);
+    if let Some(suggestion) = KNOWN_MOTION_PROPERTIES
+        .iter()
+        .find(|known| normalize(known) == normalized)
+    {
+        Err(E::custom(format!(
+            "unknown animation property '{value}' — did you mean '{suggestion}'?"
+        )))
+    } else {
+        Err(E::custom(format!(
+            "unknown animation property '{value}': expected one of {}",
+            KNOWN_MOTION_PROPERTIES.join(", ")
+        )))
+    }
+}
+
+fn deserialize_motion_property<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    validate_motion_property::<D::Error>(&s)?;
+    Ok(s)
+}
+
+/// Validates every keyframe's `property` the same way
+/// [`deserialize_motion_property`] does for `WiggleConfig` — `Animation`
+/// itself lives in `schema/animation.rs`, out of reach for anything beyond
+/// `deny_unknown_fields` in this workstream, so the check is applied here,
+/// at the one field that actually consumes `Vec<Animation>` in this file.
+fn deserialize_validated_keyframes<'de, D>(deserializer: D) -> Result<Vec<Animation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let animations = Vec::<Animation>::deserialize(deserializer)?;
+    for anim in &animations {
+        validate_motion_property::<D::Error>(&anim.property)?;
+    }
+    Ok(animations)
+}
+
 /// Custom keyframe animations configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KeyframesConfig {
+    #[serde(deserialize_with = "deserialize_validated_keyframes")]
     pub keyframes: Vec<Animation>,
     #[serde(default)]
     pub delay: f64,
@@ -503,6 +606,7 @@ fn default_orbit_depth() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WiggleConfig {
+    #[serde(deserialize_with = "deserialize_motion_property")]
     pub property: String,
     pub amplitude: f64,
     pub frequency: f64,
@@ -757,4 +861,121 @@ fn default_shadow_blur() -> f32 {
 
 fn default_text_bg_padding() -> f32 {
     8.0
+}
+
+#[cfg(test)]
+mod motion_property_tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- constat #4: `WiggleConfig.property` / `Animation.property` (via
+    // `KeyframesConfig.keyframes`) are free strings the solver silently
+    // no-ops on when unrecognised (RED first). ----
+
+    #[test]
+    fn wiggle_known_property_still_works() {
+        let json = json!({
+            "name": "wiggle",
+            "property": "translate_x",
+            "amplitude": 10.0,
+            "frequency": 1.0
+        });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::Wiggle(cfg) => assert_eq!(cfg.property, "translate_x"),
+            other => panic!("expected Wiggle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wiggle_unknown_property_is_a_named_error_not_a_silent_no_op() {
+        // A wholly unsupported name — the animation would otherwise play,
+        // resolve every frame, and simply never touch any rendered
+        // property: no error, no visible effect, no signal at all.
+        let json = json!({
+            "name": "wiggle",
+            "property": "skew",
+            "amplitude": 10.0,
+            "frequency": 1.0
+        });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("an unrecognised wiggle property must be rejected, not silently inert");
+        assert!(err.to_string().contains("skew"), "got: {err}");
+    }
+
+    #[test]
+    fn wiggle_kebab_case_property_gets_a_did_you_mean() {
+        // The exact trap named in constat #4: this project mixes kebab-case
+        // (CSS-style, most of `CssStyle`) and snake_case (these property
+        // names) conventions across files, so an author reasoning in
+        // kebab-case naturally writes `translate-x` instead of the
+        // solver's `translate_x` — silently inert before this fix.
+        let json = json!({
+            "name": "wiggle",
+            "property": "translate-x",
+            "amplitude": 10.0,
+            "frequency": 1.0
+        });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("kebab-case must not silently resolve to a snake_case no-op");
+        let msg = err.to_string();
+        assert!(msg.contains("translate-x"), "got: {msg}");
+        assert!(
+            msg.contains("translate_x"),
+            "expected a did-you-mean nudge toward the correct spelling, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn keyframes_animation_known_property_still_works() {
+        let json = json!({
+            "name": "keyframes",
+            "keyframes": [
+                { "property": "opacity", "keyframes": [
+                    { "time": 0.0, "value": 0.0 },
+                    { "time": 1.0, "value": 1.0 }
+                ]}
+            ]
+        });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::Keyframes(cfg) => assert_eq!(cfg.keyframes[0].property, "opacity"),
+            other => panic!("expected Keyframes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyframes_animation_unknown_property_is_a_named_error() {
+        let json = json!({
+            "name": "keyframes",
+            "keyframes": [
+                { "property": "positionX", "keyframes": [
+                    { "time": 0.0, "value": 0.0 },
+                    { "time": 1.0, "value": 1.0 }
+                ]}
+            ]
+        });
+        let err = serde_json::from_value::<AnimationEffect>(json).expect_err(
+            "an unrecognised keyframe animation property must be rejected, not silently inert",
+        );
+        assert!(err.to_string().contains("positionX"), "got: {err}");
+    }
+
+    #[test]
+    fn keyframes_animation_color_property_still_works() {
+        // "color" is solver-recognised (special-cased in
+        // `resolve_animations`, outside `apply_property`), not a numeric
+        // motion property — must not be rejected.
+        let json = json!({
+            "name": "keyframes",
+            "keyframes": [
+                { "property": "color", "keyframes": [
+                    { "time": 0.0, "value": "#000000" },
+                    { "time": 1.0, "value": "#ffffff" }
+                ]}
+            ]
+        });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        assert!(matches!(effect, AnimationEffect::Keyframes(_)));
+    }
 }
