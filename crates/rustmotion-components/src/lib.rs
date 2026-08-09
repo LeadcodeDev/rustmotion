@@ -126,16 +126,171 @@ pub use waveform::Waveform;
 
 // --- Position mode ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Constat #8: `PositionMode::Named(String)` accepts any string, but
+/// [`ChildComponent::absolute_position`] only ever treats the literal
+/// `"absolute"` specially — every other value (including the CSS-legitimate
+/// `"relative"`/`"static"`, which an LLM reasoning in CSS terms naturally
+/// reaches for) silently drops `x`/`y`: the component is taken out of flow
+/// (`is_flow()` is false for any `Some(position)`) but never receives an
+/// absolute offset either, since only `"absolute"` is matched. `x`/`y` are
+/// top-level sibling fields on `ChildComponent`, not on `PositionMode`
+/// itself, so this can't detect *whether* they were actually set — only
+/// that, if they were, they are about to be silently ignored. `"absolute"`
+/// stays completely silent (the common, correct case); anything else warns.
+pub fn is_recognized_position_name(s: &str) -> bool {
+    s == "absolute"
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PositionMode {
     Absolute { x: f32, y: f32 },
     Named(String),
 }
 
+impl<'de> Deserialize<'de> for PositionMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Absolute { x: f32, y: f32 },
+            Named(String),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Absolute { x, y } => PositionMode::Absolute { x, y },
+            Raw::Named(s) => {
+                if !is_recognized_position_name(&s) && warn_once_for(&s) {
+                    eprintln!(
+                        "Warning: position: \"{s}\" is not \"absolute\" — this component-level \
+                         `position` shorthand only honours the literal \"absolute\" (paired with \
+                         `x`/`y`); any other value, including CSS-legitimate ones like \
+                         \"relative\"/\"static\", is accepted but silently drops `x`/`y` instead \
+                         of positioning the element (it still removes the component from flex \
+                         flow). Use `style.position` for real CSS relative/static semantics."
+                    );
+                }
+                PositionMode::Named(s)
+            }
+        })
+    }
+}
+
+/// True the first time this exact `position` value is seen, false afterwards.
+///
+/// `render_scene_frame` calls `prepare_scene` — and therefore re-runs this
+/// `Deserialize` over the whole scene tree — once **per frame**. An unguarded
+/// warning here would print the same line once per offending component per
+/// frame: over a thousand times on a 1200-frame render, drowning out anything
+/// else on stderr. Keyed by the value rather than a plain `Once` so a scenario
+/// with several distinct bad values still hears about each of them.
+fn warn_once_for(value: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+        .lock()
+        .map(|mut seen| seen.insert(value.to_owned()))
+        .unwrap_or(false)
+}
+
 impl Default for PositionMode {
     fn default() -> Self {
         Self::Absolute { x: 0.0, y: 0.0 }
+    }
+}
+
+#[cfg(test)]
+mod position_mode_tests {
+    use super::*;
+
+    // ---- constat #8 (RED first) ----
+
+    #[test]
+    fn absolute_is_recognized() {
+        assert!(is_recognized_position_name("absolute"));
+    }
+
+    #[test]
+    fn relative_and_static_and_typos_are_not_recognized() {
+        for s in ["relative", "static", "fixed", "sticky", "Absolute", "abs"] {
+            assert!(
+                !is_recognized_position_name(s),
+                "'{s}' must not be treated as the recognised \"absolute\" value"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_object_form_still_carries_x_y() {
+        let json =
+            r#"{ "position": { "x": 10.0, "y": 20.0 }, "type": "shape", "shape": "circle" }"#;
+        let child: ChildComponent = serde_json::from_str(json).unwrap();
+        assert_eq!(child.absolute_position(), Some((10.0, 20.0)));
+    }
+
+    #[test]
+    fn absolute_string_form_with_sibling_x_y_still_carries_them() {
+        let json =
+            r#"{ "position": "absolute", "x": 5.0, "y": 7.0, "type": "shape", "shape": "circle" }"#;
+        let child: ChildComponent = serde_json::from_str(json).unwrap();
+        assert_eq!(child.absolute_position(), Some((5.0, 7.0)));
+    }
+
+    #[test]
+    fn relative_still_parses_but_drops_x_y_and_the_helper_flags_it() {
+        // The legitimate-CSS trap named in constat #8: an LLM writes
+        // `"position": "relative"` (valid CSS) with `x`/`y` alongside it,
+        // expecting a positioned element. The parse must not fail — this is
+        // legitimate JSON per the schema's own untagged catch-all — but the
+        // coordinates are provably dropped (`absolute_position()` is
+        // `None`), and `is_recognized_position_name` is the named,
+        // independently testable signal the warning path uses to detect
+        // this instead of staying silent.
+        let json =
+            r#"{ "position": "relative", "x": 5.0, "y": 7.0, "type": "shape", "shape": "circle" }"#;
+        let child: ChildComponent = serde_json::from_str(json).unwrap();
+        assert!(
+            !is_recognized_position_name("relative"),
+            "this is exactly the case the warning fires for"
+        );
+        assert_eq!(
+            child.absolute_position(),
+            None,
+            "x/y are indeed dropped for a non-\"absolute\" position — this is the silent \
+             behaviour being made loud, not a new regression"
+        );
+        // The component is still taken out of flow, same as before.
+        assert!(!child.is_flow());
+    }
+
+    /// `prepare_scene` re-runs this `Deserialize` over the whole scene tree
+    /// once per frame, so the warning must be deduplicated or a 1200-frame
+    /// render prints it 1200 times. Distinct values still each get a line.
+    #[test]
+    fn the_warning_fires_once_per_distinct_value_not_once_per_frame() {
+        let value = "position-value-used-only-by-this-test";
+        assert!(warn_once_for(value), "first sighting must warn");
+        for _ in 0..1000 {
+            assert!(
+                !warn_once_for(value),
+                "re-parsing the same value must stay silent"
+            );
+        }
+        assert!(
+            warn_once_for("a-different-position-value-for-this-test"),
+            "a different bad value must still get its own warning"
+        );
+    }
+
+    #[test]
+    fn no_position_set_is_a_normal_flow_child() {
+        let json = r#"{ "type": "shape", "shape": "circle" }"#;
+        let child: ChildComponent = serde_json::from_str(json).unwrap();
+        assert!(child.is_flow());
+        assert_eq!(child.absolute_position(), None);
     }
 }
 

@@ -257,17 +257,6 @@ pub fn apply_variables(
                 map.remove("config");
             }
             substitute(value, &merged, path)?;
-
-            // Check for unresolved references
-            let unresolved = find_unresolved(value);
-            if let Some(name) = unresolved.into_iter().next() {
-                return Err(RustmotionError::UnresolvedVariable {
-                    name,
-                    path: path.to_string(),
-                });
-            }
-
-            Ok(())
         }
         None => {
             // No config block. If overrides were supplied (e.g. from the CLI for an HTML
@@ -277,9 +266,44 @@ pub fn apply_variables(
                     substitute(value, ovr, path)?;
                 }
             }
-            Ok(())
         }
     }
+
+    // Constat #7: `find_unresolved` used to run — and hard-fail the whole
+    // render/validate on its first hit — *only* inside the `Some(defs)`
+    // branch above, so the exact same leftover `$word` (a price tag, a
+    // terminal `$PATH`, a shell `$HOME`) was harmless in a document with no
+    // `config` block and fatal the moment an unrelated `config` block
+    // existed anywhere else in the same file. `find_unresolved` cannot
+    // structurally tell a genuine unresolved-reference typo apart from
+    // incidental literal-`$` content — by construction, every name in
+    // `defs` above is always present in `merged` (defaults ∪ overrides), so
+    // `substitute` can never leave a *declared* variable name unresolved;
+    // everything `find_unresolved` can still find here is, definitionally,
+    // *not* one of the variables this document declared. So: run the same
+    // scan unconditionally (fixing the "depends on an unrelated key"
+    // inconsistency), but report it as a loud warning rather than aborting
+    // the whole document — same fail-loud-not-silent contract already used
+    // elsewhere in this workstream (see `css::units::px_or_warn`), applied
+    // here because a hard rejection would break any existing scenario that
+    // legitimately has a `$` in its content and would newly break every one
+    // of those the moment it also gained a `config` block.
+    for name in find_unresolved(value) {
+        // Reuse `UnresolvedVariable`'s existing `Display` message (see
+        // `error.rs`) for the warning text instead of hand-rolling a new
+        // one — this is the same diagnostic, just no longer fatal.
+        let diagnostic = RustmotionError::UnresolvedVariable {
+            name,
+            path: path.to_string(),
+        };
+        eprintln!(
+            "Warning: {diagnostic} — either a typo'd variable name or literal '$' content (a \
+             price, a shell $PATH, ...); the literal text is kept as-is instead of failing the \
+             render."
+        );
+    }
+
+    Ok(())
 }
 
 /// For standalone rendering: apply defaults only (no overrides).
@@ -460,5 +484,118 @@ mod tests {
         vars.insert("num".to_string(), json!(42));
         substitute(&mut val, &vars, "test").unwrap();
         assert_eq!(val["text"], json!("Count: 42 items"));
+    }
+
+    // ---- constat #7: literal `$` fatality must not depend on an unrelated
+    // `config` key (RED first) ----
+
+    /// A document with **no** `config` block and a literal `$` in unrelated
+    /// content (a `terminal` line's `$PATH`) — this already succeeds today
+    /// (the bug is the *other* direction; this locks in it keeps working).
+    fn doc_with_literal_dollar_no_config() -> serde_json::Value {
+        json!({
+            "video": { "width": 1080, "height": 1920 },
+            "scenes": [{
+                "duration": 3.0,
+                "children": [
+                    { "type": "terminal", "lines": ["echo $PATH", "cd $HOME/project"] },
+                    { "type": "text", "content": "Price: $100 today only" }
+                ]
+            }]
+        })
+    }
+
+    /// The exact same literal-`$` content, but the document also happens to
+    /// declare an unrelated `config` block (e.g. because it's a reusable
+    /// template with one templated field). Before the fix, this made
+    /// `apply_variables` return `Err(UnresolvedVariable)` and abort the
+    /// entire render/validate — for content the config block has nothing to
+    /// do with.
+    fn doc_with_literal_dollar_and_unrelated_config() -> serde_json::Value {
+        json!({
+            "config": {
+                "title": { "type": "string", "default": "Demo" }
+            },
+            "video": { "width": 1080, "height": 1920 },
+            "scenes": [{
+                "duration": 3.0,
+                "children": [
+                    { "type": "text", "content": "$title" },
+                    { "type": "terminal", "lines": ["echo $PATH", "cd $HOME/project"] },
+                    { "type": "text", "content": "Price: $100 today only" }
+                ]
+            }]
+        })
+    }
+
+    #[test]
+    fn literal_dollar_without_config_block_already_succeeds() {
+        let mut doc = doc_with_literal_dollar_no_config();
+        apply_defaults(&mut doc).expect(
+            "a literal '$' in terminal/text content with no config block must not be fatal",
+        );
+        // Content is left as-is: nothing declared these as variables.
+        assert_eq!(
+            doc["scenes"][0]["children"][0]["lines"][0],
+            json!("echo $PATH")
+        );
+    }
+
+    #[test]
+    fn literal_dollar_with_unrelated_config_block_must_not_be_fatal() {
+        // RED before the fix: this currently returns
+        // `Err(UnresolvedVariable { name: "PATH", .. })` (or "HOME", or
+        // "100", whichever `find_unresolved` reaches first) purely because
+        // *some* config block exists elsewhere in the same document — the
+        // exact inconsistency named in constat #7. The declared `$title`
+        // variable must still resolve correctly either way.
+        let mut doc = doc_with_literal_dollar_and_unrelated_config();
+        apply_defaults(&mut doc).expect(
+            "a literal '$' in unrelated content must not become fatal just because the \
+             document also happens to declare an unrelated `config` block",
+        );
+        assert_eq!(doc["scenes"][0]["children"][0]["content"], json!("Demo"));
+        assert_eq!(
+            doc["scenes"][0]["children"][1]["lines"][0],
+            json!("echo $PATH")
+        );
+        assert_eq!(
+            doc["scenes"][0]["children"][2]["content"],
+            json!("Price: $100 today only")
+        );
+    }
+
+    #[test]
+    fn undeclared_override_is_still_a_hard_error_unaffected_by_the_fix() {
+        // The other half of `apply_variables`'s error surface (an override
+        // key that doesn't match any declared variable) is a genuine,
+        // unambiguous user error — unrelated to the literal-`$`-in-content
+        // ambiguity — and must remain a hard error.
+        let mut doc = json!({
+            "config": { "title": { "type": "string", "default": "Demo" } },
+            "video": { "width": 1, "height": 1 },
+            "scenes": []
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("nope".to_string(), json!("x"));
+        let err = apply_variables(&mut doc, Some(&overrides), "test.json")
+            .expect_err("an override referencing an undeclared variable must still be rejected");
+        assert!(matches!(
+            err,
+            crate::error::RustmotionError::UndefinedVariable { .. }
+        ));
+    }
+
+    #[test]
+    fn declared_variable_reference_still_resolves_with_no_override() {
+        let mut doc = json!({
+            "config": { "greeting": { "type": "string", "default": "Hello" } },
+            "video": { "width": 1, "height": 1 },
+            "scenes": [{ "duration": 1.0, "children": [
+                { "type": "text", "content": "$greeting" }
+            ]}]
+        });
+        apply_defaults(&mut doc).unwrap();
+        assert_eq!(doc["scenes"][0]["children"][0]["content"], json!("Hello"));
     }
 }
