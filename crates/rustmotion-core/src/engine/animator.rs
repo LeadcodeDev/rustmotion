@@ -43,8 +43,23 @@ pub struct ResolvedCharAnimation {
 /// Extracted and categorized animation effects from an AnimationEffect slice.
 pub struct ExtractedEffects<'a> {
     pub presets: Vec<(AnimationPreset, PresetConfig)>,
-    pub keyframes: Vec<&'a Animation>,
-    pub owned_keyframes: Vec<Animation>,
+    /// Every `keyframes`/`tilt_in` effect's animations, in the order their
+    /// source effects appear in `style.animation` (constat #5: this used to
+    /// be split into two buckets — routed purely by whether the effect's
+    /// `delay` happened to be nonzero — resolved and merged separately,
+    /// which made "sum vs last-wins" on a shared property depend on that
+    /// unrelated field. Now there is one bucket, resolved in one
+    /// `resolve_animations` call, so the composition rule is always
+    /// "last effect in the array wins on a shared property" — a CSS-cascade
+    /// rule, independent of `delay`).
+    pub keyframe_animations: Vec<Animation>,
+    /// True when any contributing `keyframes`/`tilt_in` effect requested
+    /// `"loop": true` (constat #7). Applied uniformly to the whole
+    /// `keyframe_animations` bucket — see the doc comment on
+    /// `resolve_props_for_effects` for the same caveat presets already have
+    /// (multiple effects with different loop settings on the same property
+    /// is an unsupported edge case, not new to this fix).
+    pub keyframes_loop: bool,
     pub wiggles: Vec<&'a WiggleConfig>,
     pub orbits: Vec<&'a OrbitConfig>,
     pub glow: Option<&'a GlowConfig>,
@@ -73,8 +88,8 @@ pub fn find_glow_effect(effects: &[AnimationEffect]) -> Option<&GlowConfig> {
 pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
     let mut result = ExtractedEffects {
         presets: Vec::new(),
-        keyframes: Vec::new(),
-        owned_keyframes: Vec::new(),
+        keyframe_animations: Vec::new(),
+        keyframes_loop: false,
         wiggles: Vec::new(),
         orbits: Vec::new(),
         glow: None,
@@ -122,24 +137,23 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                     result.orbits.push(config);
                 }
                 AnimationEffect::Keyframes(config) => {
-                    if config.delay.abs() > 1e-9 {
-                        // Keyframe times are absolute scene seconds; the
-                        // config-level delay shifts them (it used to be
-                        // silently ignored, breaking timeline/stagger shifts
-                        // on keyframes effects).
-                        result
-                            .owned_keyframes
-                            .extend(config.keyframes.iter().map(|anim| {
-                                let mut a = anim.clone();
-                                for kf in &mut a.keyframes {
-                                    kf.time += config.delay;
-                                }
-                                a
-                            }));
-                    } else {
-                        for kf in &config.keyframes {
-                            result.keyframes.push(kf);
-                        }
+                    // Keyframe times are absolute scene seconds; the
+                    // config-level delay shifts them (applied unconditionally
+                    // — a no-op when `delay == 0` — so every `keyframes`
+                    // effect lands in the same bucket regardless of its
+                    // delay; see the `ExtractedEffects::keyframe_animations`
+                    // doc comment for why that used to matter).
+                    result
+                        .keyframe_animations
+                        .extend(config.keyframes.iter().map(|anim| {
+                            let mut a = anim.clone();
+                            for kf in &mut a.keyframes {
+                                kf.time += config.delay;
+                            }
+                            a
+                        }));
+                    if config.repeat {
+                        result.keyframes_loop = true;
                     }
                 }
                 AnimationEffect::TiltIn(config) => {
@@ -149,7 +163,7 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                     let ry = config.rotate_y.unwrap_or(-15.0);
                     let persp = config.perspective.unwrap_or(1000.0);
                     let sc = config.scale_from.unwrap_or(0.9);
-                    result.owned_keyframes.extend([
+                    result.keyframe_animations.extend([
                         kf_anim(
                             "opacity",
                             delay,
@@ -163,6 +177,9 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                         kf_anim("perspective", delay, persp, end, persp, EasingType::Linear),
                         kf_anim("scale", delay, sc, end, 1.0, EasingType::EaseOutCubic),
                     ]);
+                    if config.repeat {
+                        result.keyframes_loop = true;
+                    }
                 }
                 AnimationEffect::MotionBlur(config) => {
                     result.motion_blur = Some(config.intensity);
@@ -322,10 +339,22 @@ fn ease_in_out_cubic(t: f64) -> f64 {
 
 /// Solve spring animation at time t (seconds).
 /// Returns a value between 0.0 and 1.0 representing progress.
+///
+/// Constat #6: `SpringConfig` accepts any `f64` (it's schema-level, not
+/// range-checked at parse time), and `rustmotion validate` used to check
+/// nothing about it either. `mass <= 0` or `stiffness <= 0` fed straight into
+/// `sqrt`/division below produced NaN (sqrt of a negative/undefined ratio,
+/// or division by zero), and negative `damping` flipped the decay
+/// exponent's sign so the "settling" oscillation diverged to +-infinity
+/// instead. Either poisons every transform/opacity value downstream once it
+/// merges into `AnimatedProperties`. `validate_schema.rs` now rejects these
+/// combinations as errors (belt), and this floor keeps the solver itself
+/// finite and bounded even if an out-of-band caller skips validation
+/// (suspenders) — see `spring_robustness_tests` below.
 pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
-    let damping = config.damping;
-    let stiffness = config.stiffness;
-    let mass = config.mass;
+    let damping = config.damping.max(0.0);
+    let stiffness = config.stiffness.max(1e-6);
+    let mass = config.mass.max(1e-6);
 
     let omega = (stiffness / mass).sqrt();
     let zeta = damping / (2.0 * (stiffness * mass).sqrt());
@@ -534,15 +563,27 @@ pub fn resolve_props_for_effects(
         let p = resolve_animations(&[], Some(preset), Some(preset_config), time, scene_duration);
         props.merge(&p);
     }
-    // owned_keyframes (generated by TiltIn etc.) are merged first so that explicit
-    // user keyframes take priority via the multiplicative merge() semantics.
-    if !extracted.owned_keyframes.is_empty() {
-        let kp = resolve_animations(&extracted.owned_keyframes, None, None, time, scene_duration);
-        props.merge(&kp);
-    }
-    if !extracted.keyframes.is_empty() {
-        let kf: Vec<Animation> = extracted.keyframes.iter().copied().cloned().collect();
-        let kp = resolve_animations(&kf, None, None, time, scene_duration);
+    // Every `keyframes`/`tilt_in` effect is resolved together in one call
+    // (constat #5): within a single `resolve_animations` call, multiple
+    // `Animation`s targeting the same property are applied in list order via
+    // `apply_property` (assignment, not addition), so the *last* effect in
+    // `style.animation` wins on a shared property — deterministic, and
+    // independent of any effect's `delay`. `keyframes_loop` (constat #7)
+    // carries `"loop": true` from any contributing effect into the solver,
+    // which `resolve_animations` used to never see (it was always called
+    // with `preset_config = None`, i.e. `repeat = false`).
+    if !extracted.keyframe_animations.is_empty() {
+        let loop_cfg = PresetConfig {
+            repeat: extracted.keyframes_loop,
+            ..Default::default()
+        };
+        let kp = resolve_animations(
+            &extracted.keyframe_animations,
+            None,
+            Some(&loop_cfg),
+            time,
+            scene_duration,
+        );
         props.merge(&kp);
     }
     if !extracted.wiggles.is_empty() {
@@ -1283,16 +1324,34 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
         ],
 
         // ── Effets continus ──────────────────────────────────────────────
-        AnimationPreset::Pulse => vec![kf_anim_loop("scale", 0.95, 1.05)],
-        AnimationPreset::Float => vec![kf_anim_3kf(
+        // `delay`/`duration` used to be decorative here: the keyframes were
+        // pinned to literal times 0.0/0.25/0.5/1.0 regardless of what the
+        // scenario authored (constat #2), so every pulsing/floating/shaking/
+        // spinning element in a scene shared one hardcoded 1-second cycle
+        // starting at t=0. `delay` now shifts the cycle's start and
+        // `duration` sets its length, exactly like every other preset.
+        AnimationPreset::Pulse => vec![kf_anim_3kf_over(
+            "scale",
+            delay,
+            end,
+            0.95,
+            1.05,
+            0.95,
+            EasingType::EaseInOut,
+        )],
+        AnimationPreset::Float => vec![kf_anim_3kf_over(
             "position.y",
+            delay,
+            end,
             0.0,
             -10.0,
             0.0,
             EasingType::EaseInOut,
         )],
-        AnimationPreset::Shake => vec![kf_anim_4kf(
+        AnimationPreset::Shake => vec![kf_anim_4kf_over(
             "position.x",
+            delay,
+            end,
             0.0,
             10.0,
             -10.0,
@@ -1301,9 +1360,9 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
         )],
         AnimationPreset::Spin => vec![kf_anim(
             "rotation",
+            delay,
             0.0,
-            0.0,
-            1.0,
+            end,
             360.0,
             EasingType::Linear,
         )],
@@ -1546,36 +1605,30 @@ fn kf_anim_3kf_over(
     }
 }
 
-fn kf_anim_3kf(property: &str, v0: f64, v1: f64, v2: f64, easing: EasingType) -> Animation {
-    Animation {
-        property: property.to_string(),
-        keyframes: vec![kf(0.0, v0), kf(0.5, v1), kf(1.0, v2)],
-        easing,
-        spring: None,
-    }
-}
-
-fn kf_anim_4kf(
+/// Four-keyframe oscillation (quarter/half/end split) laid out over an
+/// explicit `start..end` window — the `shake` counterpart to
+/// `kf_anim_3kf_over`.
+#[allow(clippy::too_many_arguments)]
+fn kf_anim_4kf_over(
     property: &str,
+    start: f64,
+    end: f64,
     v0: f64,
     v1: f64,
     v2: f64,
     v3: f64,
     easing: EasingType,
 ) -> Animation {
+    let quarter = (end - start) / 4.0;
     Animation {
         property: property.to_string(),
-        keyframes: vec![kf(0.0, v0), kf(0.25, v1), kf(0.5, v2), kf(1.0, v3)],
+        keyframes: vec![
+            kf(start, v0),
+            kf(start + quarter, v1),
+            kf(start + quarter * 2.0, v2),
+            kf(end, v3),
+        ],
         easing,
-        spring: None,
-    }
-}
-
-fn kf_anim_loop(property: &str, min: f64, max: f64) -> Animation {
-    Animation {
-        property: property.to_string(),
-        keyframes: vec![kf(0.0, min), kf(0.5, max), kf(1.0, min)],
-        easing: EasingType::EaseInOut,
         spring: None,
     }
 }
@@ -1821,6 +1874,389 @@ mod glow_tests {
         assert_eq!(
             props.glow_intensity,
             AnimatedProperties::default().glow_intensity
+        );
+    }
+}
+
+#[cfg(test)]
+mod float3d_amplitude_tests {
+    //! Constat #1: `PresetConfig::amplitude` is read by `expand_preset_inner`
+    //! (`config.amplitude.unwrap_or(12.0)`) but `AnimationTiming::to_preset_config`
+    //! used to hardcode `amplitude: None`, so any author-supplied amplitude on
+    //! a `float_3d` effect never reached the solver — every element bobbed by
+    //! the same hardcoded 12px regardless of what was authored.
+    use super::*;
+    use crate::schema::AnimationEffect;
+
+    /// Peak absolute `translate_y` reached while sampling densely across one
+    /// cycle — proxy for the oscillation's amplitude actually resolved.
+    fn peak_translate_y(effects: &[AnimationEffect], window: f64) -> f64 {
+        let mut peak = 0.0f64;
+        let steps = 200;
+        for i in 0..=steps {
+            let t = window * i as f64 / steps as f64;
+            let y = resolve_props_for_effects(effects, t, window + 1.0).translate_y as f64;
+            if y.abs() > peak.abs() {
+                peak = y;
+            }
+        }
+        peak
+    }
+
+    #[test]
+    fn author_supplied_amplitude_reaches_the_solver() {
+        // Parsed from raw JSON, not built in Rust — proves the value survives
+        // serde all the way to the resolver, not merely that the struct has a
+        // field for it.
+        let default_fx: AnimationEffect =
+            serde_json::from_str(r#"{ "name": "float_3d", "duration": 1.0 }"#).unwrap();
+        let big_fx: AnimationEffect =
+            serde_json::from_str(r#"{ "name": "float_3d", "duration": 1.0, "amplitude": 60 }"#)
+                .unwrap();
+
+        let default_peak = peak_translate_y(&[default_fx], 1.0);
+        let big_peak = peak_translate_y(&[big_fx], 1.0);
+
+        assert!(
+            (default_peak.abs() - 12.0).abs() < 0.5,
+            "default float_3d amplitude must stay ~12px, got {default_peak}"
+        );
+        assert!(
+            big_peak.abs() > 50.0,
+            "amplitude=60 must reach the solver (peak translate_y near 60px), got {big_peak} \
+             (default was {default_peak})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod continuous_preset_timing_tests {
+    //! Constat #2: `pulse` / `float` / `shake` / `spin` used to fabricate
+    //! keyframes at literal times 0.0/0.25/0.5/1.0, ignoring `config.delay`
+    //! and `config.duration` entirely — every element sharing one of these
+    //! presets moved in lockstep on a fixed 1-second cycle no matter what the
+    //! scenario authored.
+    use super::*;
+    use crate::schema::AnimationEffect;
+
+    fn timing(delay: f64, duration: f64) -> AnimationTimingFixture {
+        AnimationTimingFixture { delay, duration }
+    }
+
+    /// Minimal JSON round-trip helper — keeps every case going through serde,
+    /// like the author's JSON would.
+    struct AnimationTimingFixture {
+        delay: f64,
+        duration: f64,
+    }
+
+    impl AnimationTimingFixture {
+        fn json(&self, name: &str) -> String {
+            format!(
+                r#"{{ "name": "{}", "delay": {}, "duration": {} }}"#,
+                name, self.delay, self.duration
+            )
+        }
+    }
+
+    #[test]
+    fn pulse_honours_delay_and_duration() {
+        let t = timing(1.0, 2.0);
+        let fx: AnimationEffect = serde_json::from_str(&t.json("pulse")).unwrap();
+        // Before its delay, the cycle has not started: the resolver clamps to
+        // the first keyframe's value (the 0.95 trough) at every pre-delay
+        // instant — it must be identical at two different pre-delay times,
+        // not moving. Before the fix, delay/duration were ignored and the
+        // preset ran its own literal 0..1s cycle regardless, so t=0.1 and
+        // t=0.9 fell in different oscillation phases and disagreed.
+        let early = resolve_props_for_effects(std::slice::from_ref(&fx), 0.1, 10.0).scale_x as f64;
+        let late = resolve_props_for_effects(std::slice::from_ref(&fx), 0.9, 10.0).scale_x as f64;
+        assert!(
+            (early - late).abs() < 1e-6,
+            "pulse must be frozen before its delay=1.0 (not yet oscillating): \
+             t=0.1 -> {early}, t=0.9 -> {late}"
+        );
+        assert!(
+            (early - 0.95).abs() < 0.01,
+            "pulse before its delay must clamp to the first keyframe (0.95), got {early}"
+        );
+        // At the midpoint of its cycle (delay + duration/2 = 2.0): near the peak (1.05).
+        let mid = resolve_props_for_effects(&[fx], 2.0, 10.0).scale_x as f64;
+        assert!(
+            mid > 1.03,
+            "pulse at t=2.0 (cycle midpoint) must be near peak scale ~1.05, got {mid}"
+        );
+    }
+
+    #[test]
+    fn float_honours_delay_and_duration() {
+        let t = timing(1.0, 2.0);
+        let fx: AnimationEffect = serde_json::from_str(&t.json("float")).unwrap();
+        let before =
+            resolve_props_for_effects(std::slice::from_ref(&fx), 0.5, 10.0).translate_y as f64;
+        assert!(
+            before.abs() < 0.1,
+            "float at t=0.5 (before delay=1.0) must be at rest y=0, got {before}"
+        );
+        let mid = resolve_props_for_effects(&[fx], 2.0, 10.0).translate_y as f64;
+        assert!(
+            mid < -8.0,
+            "float at t=2.0 (cycle midpoint) must be near peak y=-10, got {mid}"
+        );
+    }
+
+    #[test]
+    fn shake_honours_delay_and_duration() {
+        let t = timing(1.0, 2.0);
+        let fx: AnimationEffect = serde_json::from_str(&t.json("shake")).unwrap();
+        let before =
+            resolve_props_for_effects(std::slice::from_ref(&fx), 0.5, 10.0).translate_x as f64;
+        assert!(
+            before.abs() < 0.1,
+            "shake at t=0.5 (before delay=1.0) must be at rest x=0, got {before}"
+        );
+        // Quarter point of the cycle (delay + duration/4 = 1.5): near +10 peak.
+        let quarter = resolve_props_for_effects(&[fx], 1.5, 10.0).translate_x as f64;
+        assert!(
+            quarter > 8.0,
+            "shake at t=1.5 (cycle quarter) must be near peak x=+10, got {quarter}"
+        );
+    }
+
+    #[test]
+    fn spin_honours_delay_and_duration() {
+        let t = timing(1.0, 2.0);
+        let fx: AnimationEffect = serde_json::from_str(&t.json("spin")).unwrap();
+        let before =
+            resolve_props_for_effects(std::slice::from_ref(&fx), 0.5, 10.0).rotation as f64;
+        assert!(
+            before.abs() < 0.1,
+            "spin at t=0.5 (before delay=1.0) must be at rest rotation=0, got {before}"
+        );
+        // Halfway through its own cycle (delay + duration/2 = 2.0): ~180deg.
+        let mid = resolve_props_for_effects(&[fx], 2.0, 10.0).rotation as f64;
+        assert!(
+            (mid - 180.0).abs() < 5.0,
+            "spin at t=2.0 (cycle midpoint) must be near 180deg, got {mid}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod keyframes_composition_tests {
+    //! Constat #5: two `keyframes` effects targeting the same property used
+    //! to be routed into one of two buckets purely by whether `delay != 0`
+    //! (`owned_keyframes` vs `keyframes` in `extract_effects`), each bucket
+    //! resolved by its own `resolve_animations` call and combined via
+    //! `AnimatedProperties::merge` — which *sums* additive properties like
+    //! `translate_x` across buckets, while two effects landing in the *same*
+    //! bucket instead overwrite (last one in the list wins, since
+    //! `apply_property` assigns rather than adds). So the composition rule
+    //! depended entirely on an incidental field (`delay`) with no relation to
+    //! authoring intent.
+    //!
+    //! Chosen semantic: every `keyframes`/`tilt_in` effect is resolved
+    //! together in one `resolve_animations` call, in the order the effects
+    //! appear in `style.animation` — like a CSS cascade, the *last* effect
+    //! in the array wins on a shared property. This is deterministic and
+    //! independent of `delay`.
+    use super::*;
+    use crate::schema::{Animation, AnimationEffect, Keyframe, KeyframeValue, KeyframesConfig};
+
+    /// A `keyframes` effect with one property ramping `0 -> value` over
+    /// `[0, 1]` (pre-shift), then shifted by `delay`.
+    fn ramp(property: &str, value: f64, delay: f64) -> AnimationEffect {
+        AnimationEffect::Keyframes(KeyframesConfig {
+            keyframes: vec![Animation {
+                property: property.to_string(),
+                keyframes: vec![
+                    Keyframe {
+                        time: 0.0,
+                        value: KeyframeValue::Number(0.0),
+                        easing: None,
+                    },
+                    Keyframe {
+                        time: 1.0,
+                        value: KeyframeValue::Number(value),
+                        easing: None,
+                    },
+                ],
+                easing: EasingType::Linear,
+                spring: None,
+            }],
+            delay,
+            duration: 0.8,
+            repeat: false,
+        })
+    }
+
+    #[test]
+    fn last_declared_effect_wins_regardless_of_which_one_carries_the_delay() {
+        // Case 1: A (delay=0) declared first, B (delay=0.5) declared second.
+        let a1 = ramp("translate_x", 100.0, 0.0);
+        let b1 = ramp("translate_x", 40.0, 0.5);
+        let combined_1 = resolve_props_for_effects(&[a1, b1.clone()], 1.0, 5.0).translate_x as f64;
+        let b1_alone = resolve_props_for_effects(&[b1], 1.0, 5.0).translate_x as f64;
+        assert!(
+            (combined_1 - b1_alone).abs() < 1e-4,
+            "B (declared last) must alone determine translate_x at t=1.0: combined={combined_1}, B-alone={b1_alone}"
+        );
+
+        // Case 2: swap which one carries the delay, keep declaration order
+        // (A first, B second) — the outcome must be identical in shape: B
+        // (still last) wins alone, this time using B's own (now delay=0)
+        // timing.
+        let a2 = ramp("translate_x", 100.0, 0.5);
+        let b2 = ramp("translate_x", 40.0, 0.0);
+        let combined_2 = resolve_props_for_effects(&[a2, b2.clone()], 1.0, 5.0).translate_x as f64;
+        let b2_alone = resolve_props_for_effects(&[b2], 1.0, 5.0).translate_x as f64;
+        assert!(
+            (combined_2 - b2_alone).abs() < 1e-4,
+            "B (declared last) must alone determine translate_x at t=1.0 even with delay swapped: \
+             combined={combined_2}, B-alone={b2_alone}"
+        );
+
+        // The two cases must NOT collapse to the same number (sanity check
+        // that this test isn't vacuous — B's own resolved value genuinely
+        // differs between the two delay assignments).
+        assert!(
+            (combined_1 - combined_2).abs() > 1.0,
+            "sanity: the two cases must differ (B's own timing changed): {combined_1} vs {combined_2}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod keyframes_loop_tests {
+    //! Constat #7: `"loop": true` on a `keyframes` effect or on `tilt_in`
+    //! never reached the solver. `resolve_props_for_effects` always called
+    //! `resolve_animations(&kfs, None, None, ...)` for both keyframe buckets
+    //! — passing `preset_config = None` means `resolve_animations` falls back
+    //! to `PresetConfig::default()`, whose `repeat` is `false`, so
+    //! `loop_time` was never invoked no matter what `KeyframesConfig::repeat`
+    //! / `TiltInConfig::repeat` said.
+    use super::*;
+    use crate::schema::{Animation, AnimationEffect, Keyframe, KeyframeValue, KeyframesConfig};
+
+    #[test]
+    fn keyframes_loop_true_wraps_time_past_the_last_keyframe() {
+        let looping = AnimationEffect::Keyframes(KeyframesConfig {
+            keyframes: vec![Animation {
+                property: "opacity".to_string(),
+                keyframes: vec![
+                    Keyframe {
+                        time: 0.0,
+                        value: KeyframeValue::Number(0.0),
+                        easing: None,
+                    },
+                    Keyframe {
+                        time: 1.0,
+                        value: KeyframeValue::Number(1.0),
+                        easing: None,
+                    },
+                ],
+                easing: EasingType::Linear,
+                spring: None,
+            }],
+            delay: 0.0,
+            duration: 0.8,
+            repeat: true,
+        });
+        // t=2.5 is past the keyframe's own last time (1.0). Without looping,
+        // the resolver clamps to the last keyframe's value (1.0) forever.
+        // With looping (start=0, end=1, duration=1), t=2.5 wraps to 0.5 ->
+        // opacity should be ~0.5, not 1.0.
+        let opacity = resolve_props_for_effects(&[looping], 2.5, 5.0).opacity as f64;
+        assert!(
+            (opacity - 0.5).abs() < 0.05,
+            "looping keyframes at t=2.5 must wrap to local t=0.5 (opacity ~0.5), got {opacity}"
+        );
+    }
+
+    #[test]
+    fn tilt_in_loop_true_keeps_tilting_past_its_settle_time() {
+        let looping_tilt: AnimationEffect = serde_json::from_str(
+            r#"{ "name": "tilt_in", "delay": 0.0, "duration": 0.4, "loop": true }"#,
+        )
+        .unwrap();
+        let settled: AnimationEffect =
+            serde_json::from_str(r#"{ "name": "tilt_in", "delay": 0.0, "duration": 0.4 }"#)
+                .unwrap();
+
+        // Well past the settle time (0.4s): without loop, scale is pinned at
+        // the final resting value (1.0). With loop (cycle 0..0.4), t=1.0
+        // wraps to local t=0.2 (t=1.0 % 0.4 = 0.2), mid-tilt, scale != 1.0.
+        let settled_scale = resolve_props_for_effects(&[settled], 1.0, 5.0).scale_x as f64;
+        let looping_scale = resolve_props_for_effects(&[looping_tilt], 1.0, 5.0).scale_x as f64;
+
+        assert!(
+            (settled_scale - 1.0).abs() < 1e-3,
+            "non-looping tilt_in at t=1.0 (past settle) must be resting at scale 1.0, got {settled_scale}"
+        );
+        assert!(
+            (looping_scale - 1.0).abs() > 0.01,
+            "looping tilt_in at t=1.0 must still be mid-cycle (scale != 1.0 rest), got {looping_scale}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod spring_robustness_tests {
+    //! Constat #6: `spring_value` fed `mass`/`stiffness`/`damping` straight
+    //! into `sqrt`/division with no floor, so `mass <= 0` or `stiffness <= 0`
+    //! produced NaN (division by zero or sqrt of a negative number), and
+    //! negative `damping` flipped the decay exponent's sign, diverging to
+    //! +-infinity instead of settling. A NaN/inf progress value then flows
+    //! into transform math (translate/scale) and contaminates the whole
+    //! subtree it touches.
+    use super::*;
+
+    #[test]
+    fn zero_mass_does_not_produce_nan() {
+        let config = SpringConfig {
+            damping: 10.0,
+            stiffness: 100.0,
+            mass: 0.0,
+        };
+        for i in 0..=20 {
+            let t = i as f64 * 0.25;
+            let v = spring_value(t, &config);
+            assert!(
+                v.is_finite(),
+                "spring_value(t={t}) with mass=0 must be finite, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_stiffness_does_not_produce_nan() {
+        let config = SpringConfig {
+            damping: 10.0,
+            stiffness: 0.0,
+            mass: 1.0,
+        };
+        for i in 0..=20 {
+            let t = i as f64 * 0.25;
+            let v = spring_value(t, &config);
+            assert!(
+                v.is_finite(),
+                "spring_value(t={t}) with stiffness=0 must be finite, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_damping_stays_bounded_instead_of_diverging() {
+        let config = SpringConfig {
+            damping: -20.0,
+            stiffness: 100.0,
+            mass: 1.0,
+        };
+        let v_at_5s = spring_value(5.0, &config);
+        assert!(
+            v_at_5s.is_finite() && v_at_5s.abs() < 100.0,
+            "spring_value(t=5.0) with damping=-20 must stay bounded (finite and reasonably \
+             small), got {v_at_5s} — negative damping must not diverge to +-infinity"
         );
     }
 }
