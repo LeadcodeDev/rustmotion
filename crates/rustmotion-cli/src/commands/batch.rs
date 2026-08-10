@@ -426,6 +426,10 @@ fn render_row(
         crf,
         format.map(str::to_string),
         transparent,
+        // `batch` has no `--hardware-acceleration` flag of its own (Lot D's
+        // scope stops at commands/render.rs; wiring one into `cmd_batch`
+        // touches this file). Always software here.
+        false,
     )
 }
 

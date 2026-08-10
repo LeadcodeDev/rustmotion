@@ -1,4 +1,5 @@
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -9,6 +10,153 @@ use crate::schema::ResolvedScenario as Scenario;
 
 use super::tasks::{build_frame_tasks, render_frame_task};
 use super::EncodeProgress;
+
+/// A hardware encoder family ffmpeg can drive, in probe priority order.
+/// Deliberately not gated by `cfg(target_os)`: the machine that compiled
+/// rustmotion is not necessarily the machine that will run it, a macOS box
+/// can have a VideoToolbox-less ffmpeg build, and a Linux box can have an
+/// nvenc-capable ffmpeg without a working NVIDIA driver. `probe_ffmpeg_encoders`
+/// asks the actual binary instead of guessing from the target triple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HwEncoderFamily {
+    VideoToolbox,
+    Nvenc,
+    Qsv,
+    Amf,
+}
+
+impl HwEncoderFamily {
+    const ALL: [HwEncoderFamily; 4] = [
+        HwEncoderFamily::VideoToolbox,
+        HwEncoderFamily::Nvenc,
+        HwEncoderFamily::Qsv,
+        HwEncoderFamily::Amf,
+    ];
+
+    /// The concrete ffmpeg encoder name for this family + base codec, or
+    /// `None` when this family has no hardware path for that codec. vp9 and
+    /// prores stay software-only here: their hardware paths are far less
+    /// standard across ffmpeg builds than h264/h265's, and getting one
+    /// wrong means a confusing ffmpeg failure instead of a clean fallback.
+    fn encoder_name(self, codec: &str) -> Option<&'static str> {
+        use HwEncoderFamily::*;
+        match (self, codec) {
+            (VideoToolbox, "h264") => Some("h264_videotoolbox"),
+            (VideoToolbox, "h265" | "hevc") => Some("hevc_videotoolbox"),
+            (Nvenc, "h264") => Some("h264_nvenc"),
+            (Nvenc, "h265" | "hevc") => Some("hevc_nvenc"),
+            (Qsv, "h264") => Some("h264_qsv"),
+            (Qsv, "h265" | "hevc") => Some("hevc_qsv"),
+            (Amf, "h264") => Some("h264_amf"),
+            (Amf, "h265" | "hevc") => Some("hevc_amf"),
+            _ => None,
+        }
+    }
+}
+
+/// What `ffmpeg_args` should do about hardware acceleration, decided once
+/// up front and passed in as a plain value. Kept separate from the probe
+/// (machine-dependent I/O, see `probe_ffmpeg_encoders`) so the *decision*
+/// — which family to pick, and why not when none applies — is a pure
+/// function (`select_hardware_encoder`) testable with a fake availability
+/// set, no ffmpeg binary required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HardwareSelection {
+    /// Use this concrete ffmpeg encoder (e.g. "h264_videotoolbox").
+    Use(String),
+    /// `--hardware-acceleration` was not requested.
+    NotRequested,
+    /// Requested, but this codec/transparency combination has no hardware
+    /// path at all — no known hardware encoder here produces an alpha
+    /// channel, and vp9/prores have no hardware family wired in.
+    Unsupported { reason: String },
+    /// Requested, and the codec supports it in principle, but this
+    /// machine's `ffmpeg -encoders` didn't list any of the candidates.
+    Unavailable { tried: Vec<String> },
+}
+
+/// Decide which hardware encoder (if any) to use. Pure: everything
+/// machine-dependent comes in through `is_available`, so this is exercised
+/// in tests with a fake set instead of a real probe.
+fn select_hardware_encoder(
+    requested: bool,
+    codec: &str,
+    transparent: bool,
+    is_available: impl Fn(&str) -> bool,
+) -> HardwareSelection {
+    if !requested {
+        return HardwareSelection::NotRequested;
+    }
+    if transparent {
+        return HardwareSelection::Unsupported {
+            reason: "no supported hardware encoder produces an alpha channel".to_string(),
+        };
+    }
+    let mut tried = Vec::new();
+    let mut any_family_supports_codec = false;
+    for family in HwEncoderFamily::ALL {
+        if let Some(name) = family.encoder_name(codec) {
+            any_family_supports_codec = true;
+            if is_available(name) {
+                return HardwareSelection::Use(name.to_string());
+            }
+            tried.push(name.to_string());
+        }
+    }
+    if !any_family_supports_codec {
+        return HardwareSelection::Unsupported {
+            reason: format!("no known hardware encoder exists for codec '{codec}'"),
+        };
+    }
+    HardwareSelection::Unavailable { tried }
+}
+
+/// Parse the encoder names out of `ffmpeg -encoders` output. Pure — the
+/// real probe (`probe_ffmpeg_encoders`) is the only caller that touches a
+/// process; this half is exercised with a captured sample of real ffmpeg
+/// output, no binary required.
+///
+/// Each encoder line looks like ` V..... h264_videotoolbox   VideoToolbox
+/// H.264 Encoder` (a flags column, the name, then a free-text description);
+/// the legend above it looks like ` V..... = Video`, which has the same
+/// flags shape but a bare `=` where a name would be — filtered out
+/// explicitly rather than relied on to fail some other check.
+fn parse_encoder_names(text: &str) -> HashSet<String> {
+    text.lines()
+        .filter_map(|line| {
+            // `split_whitespace` already skips leading whitespace.
+            let mut parts = line.split_whitespace();
+            let flags = parts.next()?;
+            if flags.len() < 2 || !flags.chars().all(|c| c == '.' || c.is_ascii_uppercase()) {
+                return None;
+            }
+            let name = parts.next()?;
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect()
+}
+
+/// Ask this machine's actual ffmpeg what it offers, rather than assuming
+/// from the compiled target platform (see `HwEncoderFamily`'s doc comment
+/// for why that assumption is unsafe). Returns an empty set — never an
+/// error — when ffmpeg can't be run or produces unexpected output: an
+/// empty set makes `select_hardware_encoder` report `Unavailable`, which
+/// falls back to software. Probing must never be the reason an encode that
+/// would otherwise have worked in software fails outright.
+fn probe_ffmpeg_encoders() -> HashSet<String> {
+    let output = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            parse_encoder_names(&String::from_utf8_lossy(&out.stdout))
+        }
+        _ => HashSet::new(),
+    }
+}
 
 /// Assemble FFmpeg's argument vector.
 ///
@@ -30,6 +178,7 @@ fn ffmpeg_args(
     codec: &str,
     crf_val: u8,
     transparent: bool,
+    hw_encoder: Option<&str>,
     audio_input: Option<&str>,
     output_path: &str,
 ) -> Vec<String> {
@@ -68,44 +217,68 @@ fn ffmpeg_args(
             without
         }
     };
-    match codec {
-        "h265" | "hevc" => {
-            push(
-                &["-c:v", "libx265", "-crf", &crf, "-preset", "medium"],
-                &mut args,
-            );
-            push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
-        }
-        "vp9" => {
-            push(
-                &["-c:v", "libvpx-vp9", "-crf", &crf, "-b:v", "0"],
-                &mut args,
-            );
-            push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
-        }
-        "prores" => {
-            push(&["-c:v", "prores_ks", "-profile:v", "4"], &mut args);
-            push(
-                &["-pix_fmt", alpha_fmt("yuva444p10le", "yuv422p10le")],
-                &mut args,
-            );
-        }
-        _ => {
-            push(
-                &[
-                    "-c:v",
-                    "libx264",
-                    "-crf",
-                    &crf,
-                    "-preset",
-                    "medium",
-                    "-profile:v",
-                    "high10",
-                    "-pix_fmt",
-                    "yuv420p10le",
-                ],
-                &mut args,
-            );
+    if let Some(hw_name) = hw_encoder {
+        // Hardware encoders are quality/bitrate-driven, not CRF-driven —
+        // VideoToolbox reasons in `-q:v`, NVENC in `-cq`/`-b:v`, QSV/AMF in
+        // `-global_quality`/`-b:v` — and the mapping between "CRF 23" and
+        // each of those is not a clean, verifiable translation. Emitting
+        // none of them and letting the encoder use its own default rate
+        // control is more honest than inventing one; `check_crf` tells the
+        // caller up front that `--crf` has no effect on this path.
+        //
+        // Likewise `-preset`/`-profile:v` are libx264/libx265 AVOptions —
+        // several hardware encoders (VideoToolbox in particular) reject an
+        // unrecognized option outright and abort, so the software knobs are
+        // not reused here at all, not even as a best-effort translation.
+        //
+        // None of the families wired into `HwEncoderFamily` support an
+        // alpha channel, so this branch always targets a fixed opaque
+        // `yuv420p` — `select_hardware_encoder` already refuses to select a
+        // hardware encoder when `transparent` is set, forcing the software
+        // branch below instead, so `transparent` is never silently dropped
+        // here.
+        push(&["-c:v", hw_name], &mut args);
+        push(&["-pix_fmt", "yuv420p"], &mut args);
+    } else {
+        match codec {
+            "h265" | "hevc" => {
+                push(
+                    &["-c:v", "libx265", "-crf", &crf, "-preset", "medium"],
+                    &mut args,
+                );
+                push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
+            }
+            "vp9" => {
+                push(
+                    &["-c:v", "libvpx-vp9", "-crf", &crf, "-b:v", "0"],
+                    &mut args,
+                );
+                push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
+            }
+            "prores" => {
+                push(&["-c:v", "prores_ks", "-profile:v", "4"], &mut args);
+                push(
+                    &["-pix_fmt", alpha_fmt("yuva444p10le", "yuv422p10le")],
+                    &mut args,
+                );
+            }
+            _ => {
+                push(
+                    &[
+                        "-c:v",
+                        "libx264",
+                        "-crf",
+                        &crf,
+                        "-preset",
+                        "medium",
+                        "-profile:v",
+                        "high10",
+                        "-pix_fmt",
+                        "yuv420p10le",
+                    ],
+                    &mut args,
+                );
+            }
         }
     }
 
@@ -117,7 +290,11 @@ fn ffmpeg_args(
     args
 }
 
-/// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency)
+/// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency).
+///
+/// Software-only. Kept with its original signature so existing callers
+/// (the studio's exporter among them) are unaffected by hardware
+/// acceleration support; see [`encode_with_ffmpeg_hw`] for the switch.
 pub fn encode_with_ffmpeg(
     scenario: &Scenario,
     output_path: &str,
@@ -125,6 +302,36 @@ pub fn encode_with_ffmpeg(
     codec: &str,
     crf: Option<u8>,
     transparent: bool,
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    encode_with_ffmpeg_hw(
+        scenario,
+        output_path,
+        quiet,
+        codec,
+        crf,
+        transparent,
+        false,
+        on_progress,
+    )
+}
+
+/// Same as [`encode_with_ffmpeg`], with an opt-in `hardware_acceleration`
+/// switch. When set, probes this machine's ffmpeg for a matching hardware
+/// encoder (see `select_hardware_encoder` / `probe_ffmpeg_encoders`) and
+/// uses it if found; otherwise — or when the codec/transparency combination
+/// has no hardware path at all — falls back to the software encoder and
+/// says so on stderr unless `quiet`. Never fails just because hardware
+/// acceleration was requested but unavailable.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_with_ffmpeg_hw(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    codec: &str,
+    crf: Option<u8>,
+    transparent: bool,
+    hardware_acceleration: bool,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
     let config = &scenario.video;
@@ -189,6 +396,49 @@ pub fn encode_with_ffmpeg(
     // Build FFmpeg command
     let crf_val = crf.unwrap_or(23);
 
+    // Probing shells out to `ffmpeg -encoders`, so it only runs when
+    // hardware acceleration was actually requested — an unconditional probe
+    // would pay that cost on every encode for nothing.
+    let available_encoders = if hardware_acceleration {
+        Some(probe_ffmpeg_encoders())
+    } else {
+        None
+    };
+    let hw_selection = select_hardware_encoder(hardware_acceleration, codec, transparent, |name| {
+        available_encoders
+            .as_ref()
+            .is_some_and(|set| set.contains(name))
+    });
+    let hw_encoder = match hw_selection {
+        HardwareSelection::Use(name) => {
+            if !quiet {
+                eprintln!("Hardware acceleration: using {name}");
+            }
+            Some(name)
+        }
+        HardwareSelection::NotRequested => None,
+        HardwareSelection::Unsupported { reason } => {
+            if !quiet {
+                eprintln!(
+                    "Hardware acceleration requested but not applicable here ({reason}); \
+                     continuing with the software encoder."
+                );
+            }
+            None
+        }
+        HardwareSelection::Unavailable { tried } => {
+            if !quiet {
+                eprintln!(
+                    "Hardware acceleration requested but this machine's ffmpeg does not offer \
+                     any of the candidate encoders (tried: {}); continuing with the software \
+                     encoder.",
+                    tried.join(", ")
+                );
+            }
+            None
+        }
+    };
+
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(ffmpeg_args(
         width,
@@ -197,6 +447,7 @@ pub fn encode_with_ffmpeg(
         codec,
         crf_val,
         transparent,
+        hw_encoder.as_deref(),
         audio_input.as_deref(),
         output_path,
     ));
@@ -339,7 +590,7 @@ pub fn encode_with_ffmpeg(
 
 #[cfg(test)]
 mod tests {
-    use super::ffmpeg_args;
+    use super::{ffmpeg_args, parse_encoder_names, select_hardware_encoder, HardwareSelection};
 
     /// Every option that describes the *output* has to sit after the last `-i`.
     /// Put one before it and ffmpeg attaches it to the following input instead,
@@ -357,7 +608,17 @@ mod tests {
     #[test]
     fn the_audio_input_is_declared_before_every_output_option() {
         for codec in ["h264", "h265", "vp9", "prores"] {
-            let args = ffmpeg_args(320, 240, 30, codec, 23, false, Some("/tmp/a.raw"), "o.mp4");
+            let args = ffmpeg_args(
+                320,
+                240,
+                30,
+                codec,
+                23,
+                false,
+                None,
+                Some("/tmp/a.raw"),
+                "o.mp4",
+            );
             let inputs = input_positions(&args);
             assert_eq!(
                 inputs.len(),
@@ -399,7 +660,7 @@ mod tests {
 
     #[test]
     fn a_silent_scenario_declares_a_single_input_and_no_audio_codec() {
-        let args = ffmpeg_args(320, 240, 30, "h264", 23, false, None, "o.mp4");
+        let args = ffmpeg_args(320, 240, 30, "h264", 23, false, None, None, "o.mp4");
         assert_eq!(input_positions(&args).len(), 1);
         assert!(!args.iter().any(|s| s == "-c:a" || s == "-b:a"));
         assert_eq!(args.last().unwrap(), "o.mp4");
@@ -413,13 +674,189 @@ mod tests {
             ("prores", "yuv422p10le", "yuva444p10le"),
         ] {
             let pix = |t: bool| {
-                let a = ffmpeg_args(320, 240, 30, codec, 23, t, None, "o.mov");
+                let a = ffmpeg_args(320, 240, 30, codec, 23, t, None, None, "o.mov");
                 let i = a.iter().position(|s| s == "-pix_fmt").unwrap();
                 a[i + 1].clone()
             };
             assert_eq!(pix(false), opaque, "{codec} opaque");
             assert_eq!(pix(true), alpha, "{codec} transparent");
         }
+    }
+
+    // ── Hardware acceleration: pure argument construction ───────────────────
+    // No ffmpeg binary involved — `hw_encoder` is a plain `Option<&str>` the
+    // caller already resolved, exactly like `select_hardware_encoder`'s
+    // tests below resolve it without a real probe.
+
+    #[test]
+    fn a_hardware_encoder_replaces_the_software_codec_and_its_rate_control() {
+        let args = ffmpeg_args(
+            320,
+            240,
+            30,
+            "h264",
+            23,
+            false,
+            Some("h264_videotoolbox"),
+            None,
+            "o.mp4",
+        );
+        let cv_pos = args
+            .iter()
+            .position(|s| s == "-c:v")
+            .expect("-c:v must be present");
+        assert_eq!(args[cv_pos + 1], "h264_videotoolbox");
+
+        // Software-only AVOptions: several hardware encoders (VideoToolbox
+        // among them) reject an unrecognized option outright and abort, so
+        // none of these may be reused as-is on the hardware path.
+        for absent in ["-crf", "-preset", "-profile:v"] {
+            assert!(
+                !args.iter().any(|s| s == absent),
+                "hardware path must not emit {absent}: {args:?}"
+            );
+        }
+        assert_eq!(args.last().unwrap(), "o.mp4");
+    }
+
+    #[test]
+    fn a_hardware_encoder_still_sits_after_the_audio_input() {
+        // Same load-bearing ordering invariant as the software path: an
+        // output option before the last `-i` gets attached to that input by
+        // ffmpeg and aborts the process.
+        let args = ffmpeg_args(
+            320,
+            240,
+            30,
+            "h264",
+            23,
+            false,
+            Some("h264_nvenc"),
+            Some("/tmp/a.raw"),
+            "o.mp4",
+        );
+        let audio_i = input_positions(&args)[1];
+        let cv_pos = args.iter().position(|s| s == "-c:v").unwrap();
+        assert!(
+            cv_pos > audio_i,
+            "-c:v (hardware) at {cv_pos} must come after the audio -i at {audio_i}"
+        );
+    }
+
+    #[test]
+    fn no_hardware_encoder_falls_back_to_the_existing_software_branch() {
+        // `hw_encoder: None` must reproduce byte-for-byte what the pre-hardware
+        // code emitted — the software branch is untouched, only wrapped.
+        let with_none = ffmpeg_args(320, 240, 30, "h264", 23, false, None, None, "o.mp4");
+        assert!(with_none.iter().any(|s| s == "libx264"));
+        assert!(with_none.iter().any(|s| s == "-crf"));
+    }
+
+    // ── Hardware acceleration: encoder selection (pure, no probe) ───────────
+
+    #[test]
+    fn selection_is_a_noop_when_not_requested() {
+        assert_eq!(
+            select_hardware_encoder(false, "h264", false, |_| true),
+            HardwareSelection::NotRequested
+        );
+    }
+
+    #[test]
+    fn selection_refuses_transparent_even_when_every_encoder_is_available() {
+        let selection = select_hardware_encoder(true, "h264", true, |_| true);
+        assert!(
+            matches!(selection, HardwareSelection::Unsupported { .. }),
+            "got {selection:?}"
+        );
+    }
+
+    #[test]
+    fn selection_refuses_codecs_with_no_hardware_family() {
+        for codec in ["vp9", "prores"] {
+            let selection = select_hardware_encoder(true, codec, false, |_| true);
+            assert!(
+                matches!(selection, HardwareSelection::Unsupported { .. }),
+                "{codec}: got {selection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_picks_the_first_available_family_in_priority_order() {
+        // Only nvenc and amf "available" — videotoolbox and qsv are tried
+        // first (per `HwEncoderFamily::ALL`) but rejected, so nvenc wins.
+        let selection = select_hardware_encoder(true, "h264", false, |name| {
+            matches!(name, "h264_nvenc" | "h264_amf")
+        });
+        assert_eq!(selection, HardwareSelection::Use("h264_nvenc".to_string()));
+    }
+
+    #[test]
+    fn selection_reports_unavailable_with_every_candidate_tried_when_none_match() {
+        let selection = select_hardware_encoder(true, "h264", false, |_| false);
+        match selection {
+            HardwareSelection::Unavailable { tried } => {
+                assert_eq!(
+                    tried,
+                    vec!["h264_videotoolbox", "h264_nvenc", "h264_qsv", "h264_amf"]
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selection_covers_h265_and_hevc_as_the_same_codec() {
+        for codec in ["h265", "hevc"] {
+            let selection =
+                select_hardware_encoder(true, codec, false, |name| name == "hevc_videotoolbox");
+            assert_eq!(
+                selection,
+                HardwareSelection::Use("hevc_videotoolbox".to_string()),
+                "{codec}"
+            );
+        }
+    }
+
+    // ── Hardware acceleration: `ffmpeg -encoders` parsing (pure) ────────────
+
+    #[test]
+    fn parses_encoder_names_out_of_realistic_ffmpeg_encoders_output() {
+        // A trimmed, representative capture of `ffmpeg -hide_banner -encoders`:
+        // a legend (flags-shaped but no real name, just "="), a separator
+        // line, and a handful of real entries including the hardware ones
+        // this module knows about.
+        let sample = "\
+Encoders:
+ V..... = Video
+ A..... = Audio
+ S..... = Subtitle
+ ------
+ V..... a64_multi            Multicolor charset for Commodore 64 (codec a64_multi)
+ V....S alias_pix            Alias/Wavefront PIX image
+ V..... libx264              libx264 H.264 / AVC / MPEG-4 AVC (codec h264)
+ V..... h264_videotoolbox    VideoToolbox H.264 Encoder
+ V..... hevc_videotoolbox    VideoToolbox H.265 Encoder
+ V..... h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
+ A..... aac                  AAC (Advanced Audio Coding)
+";
+        let names = parse_encoder_names(sample);
+        for expect in [
+            "libx264",
+            "h264_videotoolbox",
+            "hevc_videotoolbox",
+            "h264_nvenc",
+            "aac",
+            "a64_multi",
+            "alias_pix",
+        ] {
+            assert!(names.contains(expect), "missing {expect}: {names:?}");
+        }
+        // The legend's bare "=" and the "Encoders:"/"------" scaffolding
+        // must never be mistaken for encoder names.
+        assert!(!names.contains("="));
+        assert!(names.iter().all(|n| n != "Video" && n != "Audio"));
     }
 
     // ── Integration test (gated on ffmpeg + ffprobe) ────────────────────────
@@ -568,6 +1005,87 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&wav_path);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    // ── Hardware acceleration: machine-dependent, gated on ffmpeg ───────────
+    //
+    // These exercise the real probe (`probe_ffmpeg_encoders`) and the real
+    // spawn against whatever this machine's ffmpeg actually offers — unlike
+    // the pure tests above, their outcome legitimately varies by machine, so
+    // neither asserts a specific encoder was picked. What they do assert
+    // (the probe doesn't panic; the encode succeeds and produces a file
+    // either way) holds on any machine, hardware-capable or not, which is
+    // what makes them safe to run in CI even though CI has no GPU.
+
+    #[test]
+    fn hardware_probe_reports_what_this_machine_actually_offers() {
+        if !ffmpeg_on_path() {
+            eprintln!(
+                "hardware_probe_reports_what_this_machine_actually_offers: ffmpeg not found — skipping"
+            );
+            return;
+        }
+        let available = super::probe_ffmpeg_encoders();
+        let selection =
+            super::select_hardware_encoder(true, "h264", false, |name| available.contains(name));
+        match selection {
+            HardwareSelection::Use(name) => {
+                eprintln!("this machine's ffmpeg offers hardware encoder: {name}");
+            }
+            other => {
+                eprintln!(
+                    "this machine's ffmpeg offers no known h264 hardware encoder ({other:?}); \
+                     the fallback path is covered by the pure tests above"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encode_with_ffmpeg_hw_succeeds_whether_or_not_this_machine_has_a_hardware_encoder() {
+        if !ffmpeg_on_path() {
+            eprintln!(
+                "encode_with_ffmpeg_hw_succeeds_whether_or_not_this_machine_has_a_hardware_encoder: \
+                 ffmpeg not found — skipping"
+            );
+            return;
+        }
+        let json = r#"{"video": {"width": 32, "height": 32, "fps": 10},
+             "scenes": [{"duration": 0.5, "children": []}]}"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_ffmpeg_hw_it_out_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&out);
+
+        super::encode_with_ffmpeg_hw(
+            &scenario,
+            out.to_str().unwrap(),
+            true,
+            "h264",
+            None,
+            false,
+            true,
+            None,
+        )
+        .expect(
+            "hardware_acceleration=true must never fail the encode outright — available or \
+                 not, it must fall back to software rather than abort",
+        );
+
+        assert!(out.exists(), "output MP4 must exist");
+        assert!(
+            std::fs::metadata(&out).unwrap().len() > 0,
+            "output MP4 must not be empty"
+        );
+
         let _ = std::fs::remove_file(&out);
     }
 }
