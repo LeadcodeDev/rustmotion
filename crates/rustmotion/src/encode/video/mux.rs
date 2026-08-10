@@ -6,6 +6,19 @@ use crate::error::Result;
 use crate::schema::ResolvedScenario as Scenario;
 
 /// Mux H.264 data (with optional audio) into an MP4 file.
+///
+/// `h264_data` covers `segment_duration` seconds starting at `segment_start`
+/// seconds into the scenario's own timeline (`segment_start = 0.0` and
+/// `segment_duration == scenario_total_duration` for a full, non-ranged
+/// render — the two call sites in `h264.rs` that mux the entire scenario
+/// pass exactly that). Audio is windowed to match via
+/// `mix_audio_tracks_segment`, so a segment that starts partway through the
+/// scenario carries the audio that plays at that point instead of audio
+/// restarted from t=0 — see that function's doc for why
+/// `scenario_total_duration` has to stay a separate parameter from
+/// `segment_duration` (fades key off the scenario's own bound, not this
+/// segment's edges).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mux_h264_to_mp4(
     h264_data: &[u8],
     output_path: &str,
@@ -13,7 +26,9 @@ pub(super) fn mux_h264_to_mp4(
     height: u32,
     fps: u32,
     scenario: &Scenario,
-    total_duration: f64,
+    segment_duration: f64,
+    scenario_total_duration: f64,
+    segment_start: f64,
 ) -> Result<()> {
     // Collect audio from embedded video components and merge with scenario.audio.
     let video_tracks = super::super::video_audio::collect_video_audio_tracks(scenario);
@@ -24,7 +39,12 @@ pub(super) fn mux_h264_to_mp4(
     };
 
     let pcm_data = if !merged_audio.is_empty() {
-        super::super::audio::mix_audio_tracks(&merged_audio, total_duration)?
+        super::super::audio::mix_audio_tracks_segment(
+            &merged_audio,
+            scenario_total_duration,
+            segment_start,
+            segment_duration,
+        )?
     } else {
         None
     };

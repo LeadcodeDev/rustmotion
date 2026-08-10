@@ -224,6 +224,9 @@ pub enum RustmotionError {
     #[error("Frame {frame} is out of range (total frames: {total})")]
     FrameOutOfRange { frame: u32, total: u32 },
 
+    #[error("Frame range {start}-{end} is out of range (total frames: {total})")]
+    FrameRangeOutOfRange { start: u32, end: u32, total: u32 },
+
     #[error("Time {time:.2}s is beyond video duration")]
     TimeOutOfRange { time: f64 },
 

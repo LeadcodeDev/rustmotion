@@ -8,7 +8,7 @@ use crate::engine::prefetch_icons;
 use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
 
-use super::tasks::{build_frame_tasks, render_frame_task};
+use super::tasks::{build_frame_tasks, build_frame_tasks_range, render_frame_task};
 use super::EncodeProgress;
 
 /// A hardware encoder family ffmpeg can drive, in probe priority order.
@@ -332,6 +332,65 @@ pub fn encode_with_ffmpeg_hw(
     crf: Option<u8>,
     transparent: bool,
     hardware_acceleration: bool,
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    encode_with_ffmpeg_hw_impl(
+        scenario,
+        output_path,
+        quiet,
+        codec,
+        crf,
+        transparent,
+        hardware_acceleration,
+        None,
+        on_progress,
+    )
+}
+
+/// Same as [`encode_with_ffmpeg_hw`], restricted to the inclusive frame
+/// index range `[frame_range.0, frame_range.1]` — the same index space
+/// `--frame N` already addresses via `build_frame_tasks(...).get(N)`. This
+/// is the default (ffmpeg-driven) render path — the one actually used
+/// unless ffmpeg is absent from `PATH` — so it, not just the native
+/// `encode_video_range`, has to window its audio the same way: see
+/// `mix_audio_tracks_segment`'s doc for why a segment carries the audio
+/// that plays at that point in the *full* scenario instead of audio
+/// restarted from t=0.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_with_ffmpeg_hw_range(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    codec: &str,
+    crf: Option<u8>,
+    transparent: bool,
+    hardware_acceleration: bool,
+    frame_range: (u32, u32),
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    encode_with_ffmpeg_hw_impl(
+        scenario,
+        output_path,
+        quiet,
+        codec,
+        crf,
+        transparent,
+        hardware_acceleration,
+        Some(frame_range),
+        on_progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_with_ffmpeg_hw_impl(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    codec: &str,
+    crf: Option<u8>,
+    transparent: bool,
+    hardware_acceleration: bool,
+    frame_range: Option<(u32, u32)>,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
     let config = &scenario.video;
@@ -344,16 +403,30 @@ pub fn encode_with_ffmpeg_hw(
     }
     analyze_scenario_audio(scenario);
 
-    let tasks = build_frame_tasks(scenario);
+    let (tasks, full_total_frames, segment_start_frame) = match frame_range {
+        Some((start, end)) => {
+            let (tasks, total) = build_frame_tasks_range(scenario, start, end)?;
+            (tasks, total, start)
+        }
+        None => {
+            let tasks = build_frame_tasks(scenario);
+            let total = tasks.len() as u32;
+            if total == 0 {
+                return Err(RustmotionError::NoFrames);
+            }
+            (tasks, total, 0)
+        }
+    };
     let total_frames = tasks.len() as u32;
 
-    if total_frames == 0 {
-        return Err(RustmotionError::NoFrames);
-    }
-
     // Process audio — merge scenario.audio with tracks extracted from embedded
-    // video components.
-    let total_duration = total_frames as f64 / fps as f64;
+    // video components. `scenario_total_duration` stays separate from
+    // `segment_duration`: a track with no explicit `end` plays until the end
+    // of the *scenario*, and fades key off that same bound (see
+    // `mix_audio_tracks_segment`'s doc) — not this segment's own edges.
+    let scenario_total_duration = full_total_frames as f64 / fps as f64;
+    let segment_duration = total_frames as f64 / fps as f64;
+    let segment_start = segment_start_frame as f64 / fps as f64;
     let video_tracks = super::super::video_audio::collect_video_audio_tracks(scenario);
     let merged_audio: Vec<crate::schema::AudioTrack> = {
         let mut all = scenario.audio.clone();
@@ -361,8 +434,20 @@ pub fn encode_with_ffmpeg_hw(
         all
     };
 
+    // PID alone is not a unique directory name: several audio-bearing
+    // encodes can run concurrently *within* one process (parallel test
+    // threads today; `--frames` segments rendered concurrently by a future
+    // distributed worker tomorrow — the exact shape this feature exists to
+    // enable). Two calls sharing a PID-only path would each `create_dir_all`
+    // the same directory, then whichever finishes first would
+    // `remove_dir_all` it out from under the other mid-write, surfacing as
+    // a bare `NotFound` on `std::fs::write` below. A monotonic counter on
+    // top of PID makes every call's directory distinct regardless of
+    // timing.
+    static AUDIO_TMP_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
     let audio_tmp_dir = if !merged_audio.is_empty() {
-        Some(std::env::temp_dir().join(format!("rustmotion_audio_{}", std::process::id())))
+        let seq = AUDIO_TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        Some(std::env::temp_dir().join(format!("rustmotion_audio_{}_{seq}", std::process::id())))
     } else {
         None
     };
@@ -370,7 +455,12 @@ pub fn encode_with_ffmpeg_hw(
         if let Some(ref tmp_dir) = audio_tmp_dir {
             std::fs::create_dir_all(tmp_dir)?;
         }
-        super::super::audio::mix_audio_tracks(&merged_audio, total_duration)?
+        super::super::audio::mix_audio_tracks_segment(
+            &merged_audio,
+            scenario_total_duration,
+            segment_start,
+            segment_duration,
+        )?
     } else {
         None
     };
@@ -582,6 +672,113 @@ pub fn encode_with_ffmpeg_hw(
         tee_stderr();
         return Err(RustmotionError::FfmpegFailed {
             stderr: stderr_summary,
+        });
+    }
+
+    Ok(())
+}
+
+/// Join MP4 segments — such as ones produced by consecutive `render
+/// --frames a-b` calls against the same scenario — into one file via
+/// ffmpeg's concat demuxer, remuxing (`-c copy`) instead of re-encoding.
+///
+/// ## Why the demuxer, not a raw H.264 bitstream join
+///
+/// The other way to concatenate video segments is to concatenate their raw
+/// Annex-B H.264 bitstreams directly and mux the result once. That only
+/// works when every segment's bitstream is independently decodable at its
+/// boundary — in practice, every frame at every segment boundary has to be
+/// a keyframe, and the segments' encoder settings (profile, resolution,
+/// pixel format) have to match exactly. `encode_video_range` (the native
+/// openh264 path) happens to force an intra frame on *every* output frame
+/// already (`encoder.force_intra_frame()`, unrelated to frame ranges — it
+/// predates this feature), so its segments would trivially qualify. But
+/// this function's actual callers go through the ffmpeg path
+/// (`encode_with_ffmpeg_hw_range`), the one `render` actually uses whenever
+/// ffmpeg is on `PATH` (the CLI's default): that path hands GOP structure
+/// to libx264/libx265 with no per-frame intra control at all, so segment
+/// boundaries are not guaranteed keyframes and a raw bitstream join would
+/// silently produce an undecodable or corrupted joint at some cuts. Making
+/// bitstream concatenation reliable needs an encoding-side change (forcing
+/// a keyframe at every segment boundary, or exposing a GOP-alignment knob)
+/// that does not exist yet.
+///
+/// The concat demuxer sidesteps all of that: it trusts each segment's own
+/// container-level framing and restitches the streams, so it works
+/// regardless of GOP layout. The cost is an extra remux pass — cheap
+/// (`-c copy` touches no pixels, so no re-encode and no quality loss) — and
+/// the requirement that every segment share codec, resolution, and pixel
+/// format, which segments of the *same* scenario rendered with the *same*
+/// `render` flags always do.
+pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> Result<()> {
+    if inputs.is_empty() {
+        return Err(RustmotionError::Generic(
+            "concat requires at least one input segment".to_string(),
+        ));
+    }
+
+    // The concat demuxer reads a text list of `file '<path>'` lines. Paths
+    // are canonicalized so the list works regardless of the process's
+    // current directory, and single quotes are escaped the way ffmpeg's own
+    // docs prescribe for its concat protocol.
+    let mut list_contents = String::new();
+    for input in inputs {
+        let abs = input
+            .canonicalize()
+            .map_err(|e| RustmotionError::FileRead {
+                path: input.display().to_string(),
+                source: e,
+            })?;
+        let escaped = abs.to_string_lossy().replace('\'', r"'\''");
+        list_contents.push_str(&format!("file '{escaped}'\n"));
+    }
+
+    let list_path = std::env::temp_dir().join(format!(
+        "rustmotion_concat_{}_{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(&list_path, &list_contents)?;
+
+    let output = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+        ])
+        .arg(&list_path)
+        .args(["-c", "copy"])
+        .arg(output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| RustmotionError::FfmpegSpawn {
+            reason: e.to_string(),
+        })?;
+
+    let _ = std::fs::remove_file(&list_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = stderr
+            .lines()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(RustmotionError::FfmpegFailed {
+            stderr: (!summary.trim().is_empty()).then_some(summary),
         });
     }
 
@@ -1087,5 +1284,228 @@ Encoders:
         );
 
         let _ = std::fs::remove_file(&out);
+    }
+
+    // ── Frame-range render + concat: the brief's "test that matters most" ──
+    //
+    // "rendre un scénario en un seul morceau, puis le même en N segments
+    // concaténés, et comparer. Les deux doivent avoir le même nombre de
+    // frames et la même durée audio." A scenario with an audio track is
+    // part of this test on purpose — it is the only way to exercise the
+    // segment-audio-offset fix (`mix_audio_tracks_segment`) through the
+    // actual default (ffmpeg) render path, not just the pure mixer unit
+    // tests in `encode::audio`.
+
+    fn ffprobe_frame_count(path: &str) -> Option<u32> {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u32>()
+            .ok()
+    }
+
+    /// Extract the frame at `time_s` into `path` as a PNG and return its
+    /// center pixel's RGB. Accurate (post-`-i`) seeking, not the fast
+    /// keyframe-snapping `-ss`-before`-i` form — this scenario's scenes are
+    /// each a full second of one flat color, so any frame within a scene's
+    /// window has the same color regardless of exactly which one lands, but
+    /// accurate seeking keeps the test honest about which scene it read.
+    fn extract_center_pixel(path: &str, time_s: f64) -> Option<(u8, u8, u8)> {
+        let png_path = std::env::temp_dir().join(format!(
+            "rm_frame_range_pixel_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos()
+        ));
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-i", path, "-ss"])
+            .arg(time_s.to_string())
+            .args(["-frames:v", "1"])
+            .arg(&png_path)
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+        let img = image::open(&png_path).ok()?.to_rgba8();
+        let (w, h) = img.dimensions();
+        let px = img.get_pixel(w / 2, h / 2);
+        let _ = std::fs::remove_file(&png_path);
+        Some((px[0], px[1], px[2]))
+    }
+
+    #[test]
+    fn full_render_and_three_segments_concatenated_match_frame_count_and_audio_duration() {
+        if !ffmpeg_on_path() || !ffprobe_on_path() {
+            eprintln!(
+                "full_render_and_three_segments_concatenated_match_frame_count_and_audio_duration: \
+                 ffmpeg/ffprobe not found — skipping"
+            );
+            return;
+        }
+
+        // 3 scenes x 1.0s x 10fps = 30 frames, no transitions, so segment
+        // boundaries land exactly on scene boundaries: (0,9)=red, (10,19)=green,
+        // (20,29)=blue. Frame-range indices are the same index space
+        // `build_frame_tasks` (and `--frame N`) already use.
+        let fps = 10u32;
+        let width = 64u32;
+        let height = 64u32;
+
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_frame_range_audio_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // 3.0s of audio at the video's own duration, so a whole-track (no
+        // explicit `end`) plays across all three segments — exactly the
+        // shape that needs the segment-audio-offset fix to sound right.
+        write_minimal_wav(&wav_path, 22_050, 22_050 * 3);
+
+        let json = format!(
+            r##"{{"video": {{"width": {width}, "height": {height}, "fps": {fps}}},
+            "audio": [{{"src": "{}"}}],
+            "scenes": [
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#ff0000",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}},
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#00ff00",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}},
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#0000ff",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}}
+            ]}}"##,
+            wav_path.to_str().unwrap().replace('\\', "\\\\")
+        );
+        let scenario = crate::loader::load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let expected_total_frames = super::build_frame_tasks(&scenario).len() as u32;
+        assert_eq!(expected_total_frames, 30, "3 scenes x 1.0s x 10fps");
+
+        let pid = std::process::id();
+        let full_out = std::env::temp_dir().join(format!("rm_frame_range_full_{pid}.mp4"));
+        let seg_outs: Vec<std::path::PathBuf> = (0..3)
+            .map(|i| std::env::temp_dir().join(format!("rm_frame_range_seg{i}_{pid}.mp4")))
+            .collect();
+        let concat_out = std::env::temp_dir().join(format!("rm_frame_range_concat_{pid}.mp4"));
+        for p in [&full_out, &concat_out].into_iter().chain(seg_outs.iter()) {
+            let _ = std::fs::remove_file(p);
+        }
+
+        // 1. Render the whole scenario in one piece.
+        super::encode_with_ffmpeg_hw(
+            &scenario,
+            full_out.to_str().unwrap(),
+            true,
+            "h264",
+            None,
+            false,
+            false,
+            None,
+        )
+        .expect("full render must succeed");
+
+        // 2. Render the same scenario as three independent frame-range segments.
+        for (i, (start, end)) in [(0u32, 9u32), (10, 19), (20, 29)].into_iter().enumerate() {
+            super::encode_with_ffmpeg_hw_range(
+                &scenario,
+                seg_outs[i].to_str().unwrap(),
+                true,
+                "h264",
+                None,
+                false,
+                false,
+                (start, end),
+                None,
+            )
+            .unwrap_or_else(|e| panic!("segment {i} ({start}-{end}) render must succeed: {e}"));
+        }
+
+        // 3. Concatenate the three segments.
+        super::concat_mp4_segments(&seg_outs, concat_out.to_str().unwrap())
+            .expect("concat must succeed");
+
+        // 4. Same frame count.
+        let full_frames = ffprobe_frame_count(full_out.to_str().unwrap())
+            .expect("ffprobe must report the full render's frame count");
+        let concat_frames = ffprobe_frame_count(concat_out.to_str().unwrap())
+            .expect("ffprobe must report the concatenated render's frame count");
+        assert_eq!(
+            full_frames, expected_total_frames,
+            "full render must have exactly the frames build_frame_tasks predicts"
+        );
+        assert_eq!(
+            concat_frames, full_frames,
+            "concatenated segments must have the exact same frame count as the full render"
+        );
+
+        // 5. Same audio duration.
+        let full_audio_dur = ffprobe_stream_duration(full_out.to_str().unwrap(), "a:0")
+            .expect("full render must have an audio stream");
+        let concat_audio_dur = ffprobe_stream_duration(concat_out.to_str().unwrap(), "a:0")
+            .expect("concatenated render must have an audio stream");
+        assert!(
+            (full_audio_dur - concat_audio_dur).abs() < 0.05,
+            "audio duration must match within 50ms: full={full_audio_dur:.3}s \
+             concat={concat_audio_dur:.3}s"
+        );
+
+        // 6. Pixel check at the middle of segment 2 (t=1.5s, inside the solid-
+        // green scene): the concatenated output's content there must match
+        // the full render's, proving the split didn't shift which frames
+        // land where.
+        let full_px = extract_center_pixel(full_out.to_str().unwrap(), 1.5)
+            .expect("must extract a frame from the full render");
+        let concat_px = extract_center_pixel(concat_out.to_str().unwrap(), 1.5)
+            .expect("must extract a frame from the concatenated render");
+        let close = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+            (a.0 as i32 - b.0 as i32).abs() <= 20
+                && (a.1 as i32 - b.1 as i32).abs() <= 20
+                && (a.2 as i32 - b.2 as i32).abs() <= 20
+        };
+        assert!(
+            close(full_px, concat_px),
+            "pixel at t=1.5s must match between full and concatenated renders: \
+             full={full_px:?} concat={concat_px:?}"
+        );
+        assert!(
+            close(full_px, (0, 255, 0)),
+            "t=1.5s sits inside the solid-green second scene: expected ~green, \
+             got full={full_px:?}"
+        );
+
+        for p in [&full_out, &concat_out].into_iter().chain(seg_outs.iter()) {
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = std::fs::remove_file(&wav_path);
     }
 }

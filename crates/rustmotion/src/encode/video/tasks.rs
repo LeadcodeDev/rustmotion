@@ -1,5 +1,5 @@
 use crate::engine::transition::{apply_transition, camera_pan_transition};
-use crate::error::Result;
+use crate::error::{Result, RustmotionError};
 use crate::schema::{
     EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType, VideoConfig,
     ViewType,
@@ -503,6 +503,30 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     }
 
     tasks
+}
+
+/// `build_frame_tasks`, restricted to the inclusive index range `[start,
+/// end]` — the same index space `render --frame N` already addresses via
+/// `build_frame_tasks(scenario).get(N)`. Returns the sliced tasks alongside
+/// the *full* scenario's total frame count, since callers (the encoders'
+/// mux step in particular) need it to compute the segment's time offset
+/// into the scenario, not just the segment's own length.
+///
+/// Errors with `FrameRangeOutOfRange` when `start > end` or `end` falls
+/// outside `0..total`, naming both the requested range and the actual
+/// total — the same contract `render_single_frame`'s `--frame` error gives
+/// for a single out-of-range index.
+pub fn build_frame_tasks_range(
+    scenario: &Scenario,
+    start: u32,
+    end: u32,
+) -> Result<(Vec<FrameTask>, u32)> {
+    let tasks = build_frame_tasks(scenario);
+    let total = tasks.len() as u32;
+    if start > end || end >= total {
+        return Err(RustmotionError::FrameRangeOutOfRange { start, end, total });
+    }
+    Ok((tasks[start as usize..=end as usize].to_vec(), total))
 }
 
 /// Frames actually spent on the transition from `scenes[i]` into

@@ -6,9 +6,10 @@ pub mod tui;
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::loader::load_input;
+use rustmotion::schema::ResolvedScenario;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -55,6 +56,19 @@ enum Commands {
         /// Render a single frame instead of full video (0-indexed)
         #[arg(long)]
         frame: Option<u32>,
+
+        /// Render only frames START..=END (0-indexed, inclusive) as a
+        /// standalone segment instead of the full video — e.g. `0-149` for
+        /// this scenario's first 150 frames. Bounds are validated against
+        /// the scenario's actual total frame count once it is loaded.
+        /// Segments carry their own windowed slice of the scenario's audio
+        /// (they do not restart every track from t=0), so segments from the
+        /// same scenario can be joined with `rustmotion concat` afterwards.
+        /// Mutually exclusive with --frame and --watch. Only mp4/webm/mov
+        /// output is implemented for a range today — png-seq/gif/raw are
+        /// not (see --format).
+        #[arg(long, value_name = "START-END", conflicts_with_all = ["frame", "watch"])]
+        frames: Option<FrameRangeArg>,
 
         /// Output format for machine consumption
         #[arg(long, value_enum)]
@@ -122,6 +136,22 @@ enum Commands {
         /// --var takes precedence over --props for the same key.
         #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
         var: Vec<String>,
+    },
+
+    /// Join MP4 segments — e.g. ones produced by several `render --frames
+    /// a-b` calls against the same scenario — into one file. Remuxes via
+    /// ffmpeg's concat demuxer (`-c copy`, no re-encoding); every input must
+    /// share codec, resolution, and pixel format, which segments of the
+    /// same scenario rendered with the same `render` flags always do.
+    /// Requires ffmpeg on PATH.
+    Concat {
+        /// Segment files to join, in order.
+        #[arg(required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
+
+        /// Output file path
+        #[arg(short, long, default_value = "concat.mp4")]
+        output: PathBuf,
     },
 
     /// Export a single frame as a still image (PNG, JPEG, WebP)
@@ -355,6 +385,41 @@ pub(crate) enum OutputFormat {
     Json,
 }
 
+/// `--frames START-END`: an inclusive, 0-indexed frame range. Parsed eagerly
+/// (format + `start <= end`) by clap via `FromStr`; whether `end` actually
+/// fits the scenario's total frame count can only be checked once the
+/// scenario is loaded, so that half lives in
+/// `RustmotionError::FrameRangeOutOfRange` instead.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FrameRangeArg {
+    start: u32,
+    end: u32,
+}
+
+impl std::str::FromStr for FrameRangeArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (a, b) = s.split_once('-').ok_or_else(|| {
+            format!("--frames '{s}' must look like START-END (e.g. 0-149), got no '-'")
+        })?;
+        let start: u32 = a
+            .trim()
+            .parse()
+            .map_err(|_| format!("--frames '{s}': '{a}' is not a valid frame number"))?;
+        let end: u32 = b
+            .trim()
+            .parse()
+            .map_err(|_| format!("--frames '{s}': '{b}' is not a valid frame number"))?;
+        if start > end {
+            return Err(format!(
+                "--frames '{s}': start ({start}) must be <= end ({end})"
+            ));
+        }
+        Ok(FrameRangeArg { start, end })
+    }
+}
+
 /// Parse `--var key=value` flags into a map. Values that parse as valid JSON
 /// scalars or objects are stored as their JSON type; bare strings that are not
 /// valid JSON are stored as JSON strings.
@@ -437,6 +502,143 @@ fn build_overrides(
     Ok(Some(map))
 }
 
+/// Render frames `[frame_range.0, frame_range.1]` (inclusive, 0-indexed) of
+/// `scenario` as a standalone segment file, instead of the full video.
+///
+/// Deliberately separate from `commands::cmd_render` rather than an added
+/// parameter on it: `cmd_render` is also called from `commands::batch`,
+/// outside this change's file scope, so its signature stays untouched.
+/// Only the two output kinds `render --frames` actually supports
+/// (mp4/webm/mov, native or ffmpeg-driven) are implemented here —
+/// png-seq/gif/raw frame-range support does not exist yet (see the
+/// `--frames` help text) and this function says so instead of silently
+/// ignoring the range for those formats.
+#[allow(clippy::too_many_arguments)]
+fn render_frame_range(
+    scenario: ResolvedScenario,
+    output: &Path,
+    frame_range: (u32, u32),
+    output_format: Option<&OutputFormat>,
+    quiet: bool,
+    codec: Option<String>,
+    crf: Option<u8>,
+    format: Option<String>,
+    transparent: bool,
+    hardware_acceleration: bool,
+) -> Result<()> {
+    let start_time = std::time::Instant::now();
+
+    if !scenario.fonts.is_empty() {
+        rustmotion::engine::renderer::load_custom_fonts(&scenario.fonts);
+    }
+
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let fmt = format
+        .as_deref()
+        .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
+
+    if matches!(fmt, "png-seq" | "gif" | "raw") {
+        return Err(RustmotionError::Generic(format!(
+            "--frames does not support --format {fmt} yet; only mp4/webm/mov segment output is \
+             implemented. Render the full video in that format instead, or drop --format for the \
+             default mp4 container."
+        )));
+    }
+
+    let output_str = output
+        .to_str()
+        .ok_or_else(|| RustmotionError::NonUtf8Path {
+            path: output.to_string_lossy().into_owned(),
+        })?;
+
+    let ffmpeg_available = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let codec_str = codec.as_deref().unwrap_or("h264");
+
+    let mut cb = |p: rustmotion::encode::EncodeProgress| {
+        if quiet {
+            return;
+        }
+        match p {
+            rustmotion::encode::EncodeProgress::Rendering(c, t) => {
+                eprint!(
+                    "\rRendering frames {}-{}: {}/{}",
+                    frame_range.0, frame_range.1, c, t
+                );
+            }
+            rustmotion::encode::EncodeProgress::Encoding(c, t) => {
+                eprint!("\rEncoding: {}/{}          ", c, t);
+            }
+            rustmotion::encode::EncodeProgress::Muxing => {
+                eprint!("\rMuxing...                          ");
+            }
+        }
+    };
+
+    if ffmpeg_available {
+        rustmotion::encode::video::encode_with_ffmpeg_hw_range(
+            &scenario,
+            output_str,
+            quiet,
+            codec_str,
+            crf,
+            transparent,
+            hardware_acceleration,
+            frame_range,
+            Some(&mut cb),
+        )?;
+    } else {
+        if hardware_acceleration && !quiet {
+            eprintln!(
+                "Hardware acceleration requested but ffmpeg was not found on PATH (only ffmpeg \
+                 can drive a hardware encoder); continuing with the bundled software encoder."
+            );
+        }
+        rustmotion::encode::video::encode_video_range(
+            &scenario,
+            output_str,
+            quiet,
+            frame_range,
+            Some(&mut cb),
+        )?;
+    }
+
+    if !quiet {
+        eprintln!();
+        eprintln!(
+            "Frames {}-{} saved to {}",
+            frame_range.0,
+            frame_range.1,
+            output.display()
+        );
+    }
+
+    let elapsed = start_time.elapsed();
+    if let Some(OutputFormat::Json) = output_format {
+        let result = serde_json::json!({
+            "status": "success",
+            "output": output.to_string_lossy(),
+            "frame_start": frame_range.0,
+            "frame_end": frame_range.1,
+            "duration_ms": elapsed.as_millis(),
+        });
+        println!("{}", serde_json::to_string(&result)?);
+    }
+
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -458,6 +660,7 @@ pub fn run() -> Result<()> {
             json,
             output,
             frame,
+            frames,
             output_format,
             codec,
             crf,
@@ -538,19 +741,50 @@ pub fn run() -> Result<()> {
                     }
                 }
 
-                commands::cmd_render(
-                    loaded.scenario,
-                    &output,
-                    frame,
-                    output_format.as_ref(),
-                    cli.quiet,
-                    codec,
-                    crf,
-                    format,
-                    transparent,
-                    hardware_acceleration,
-                )
+                if let Some(range) = frames {
+                    render_frame_range(
+                        loaded.scenario,
+                        &output,
+                        (range.start, range.end),
+                        output_format.as_ref(),
+                        cli.quiet,
+                        codec,
+                        crf,
+                        format,
+                        transparent,
+                        hardware_acceleration,
+                    )
+                } else {
+                    commands::cmd_render(
+                        loaded.scenario,
+                        &output,
+                        frame,
+                        output_format.as_ref(),
+                        cli.quiet,
+                        codec,
+                        crf,
+                        format,
+                        transparent,
+                        hardware_acceleration,
+                    )
+                }
             }
+        }
+        Commands::Concat { inputs, output } => {
+            let output_str = output
+                .to_str()
+                .ok_or_else(|| RustmotionError::NonUtf8Path {
+                    path: output.to_string_lossy().into_owned(),
+                })?;
+            rustmotion::encode::video::concat_mp4_segments(&inputs, output_str)?;
+            if !cli.quiet {
+                eprintln!(
+                    "Joined {} segment(s) into {}",
+                    inputs.len(),
+                    output.display()
+                );
+            }
+            Ok(())
         }
         Commands::Still {
             file,
