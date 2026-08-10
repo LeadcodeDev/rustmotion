@@ -86,6 +86,36 @@ pub struct SpringConfig {
     pub stiffness: f64,
     #[serde(default = "default_mass")]
     pub mass: f64,
+    /// Force the spring to *visually* settle at exactly this many seconds
+    /// (issue #167 lot E), instead of leaving the settle time as an
+    /// emergent, hard-to-predict consequence of `damping`/`stiffness`/
+    /// `mass`. Implemented as a linear rescale of the time axis fed to the
+    /// physics solver (`engine::animator::spring_value`): the spring's
+    /// *shape* — number of oscillations, overshoot amplitude — is a
+    /// function of `damping`/`stiffness`/`mass` alone and is unchanged;
+    /// only how fast that shape plays back changes. `None` (default)
+    /// leaves the natural, emergent settle time in place.
+    ///
+    /// This does not resize the enclosing keyframe segment (the
+    /// `delay`/`duration` on the surrounding `AnimationTiming`, or the
+    /// author's own keyframe times on a `keyframes` effect): those still
+    /// decide when the segment starts and how long it spans. Set that
+    /// enclosing span to at least `duration` (`rustmotion info` reports the
+    /// computed settle time so you don't have to guess), or the segment's
+    /// own end will still cut the spring's motion short.
+    #[serde(default)]
+    pub duration: Option<f64>,
+    /// How close to the target counts as "at rest", as a fraction of the
+    /// total 0→1 travel (e.g. `0.01` = 1%). Defaults to
+    /// `engine::animator::DEFAULT_SPRING_REST_THRESHOLD` (0.5%) when unset.
+    /// Read by `engine::animator::spring_rest_time` — the "how long until
+    /// this spring settles" measurement `rustmotion info` surfaces — and,
+    /// when `duration` is set, by the remap above to know what "settled"
+    /// means. A critically- or over-damped spring approaches its target
+    /// asymptotically and never reaches it exactly, which is precisely why
+    /// this threshold exists.
+    #[serde(default)]
+    pub rest_threshold: Option<f64>,
 }
 
 impl Default for SpringConfig {
@@ -94,6 +124,8 @@ impl Default for SpringConfig {
             damping: 15.0,
             stiffness: 100.0,
             mass: 1.0,
+            duration: None,
+            rest_threshold: None,
         }
     }
 }
