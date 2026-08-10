@@ -300,14 +300,32 @@ pub fn check_codec(codec: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Validate `--crf` is in the H.264/H.265 valid range. Defaults to OK if None.
-pub fn check_crf(crf: Option<u8>) -> Result<()> {
+/// Validate `--crf` is in the H.264/H.265 valid range, and flag when it is
+/// paired with `--hardware-acceleration`. Returns `Ok(Some(warning))` for
+/// that combination: hardware encoders (VideoToolbox/NVENC/QSV/AMF) are
+/// bitrate/quality-driven, not CRF-driven, and `ffmpeg_args`'s hardware
+/// branch does not emit `-crf` at all — passing `--crf` there silently does
+/// nothing unless ffmpeg falls back to the software encoder, in which case
+/// it applies after all. The caller decides whether/how to print the
+/// warning (e.g. respecting `--quiet`); this function stays pure so the
+/// combination is testable without capturing stderr.
+///
+/// Still returns `Err` for an out-of-range value regardless of
+/// `hardware_acceleration` — an invalid CRF is invalid on any path.
+pub fn check_crf(crf: Option<u8>, hardware_acceleration: bool) -> Result<Option<String>> {
     if let Some(v) = crf {
         if v > 51 {
             return Err(RustmotionError::InvalidCrf { value: v });
         }
+        if hardware_acceleration {
+            return Ok(Some(format!(
+                "--crf {v} has no effect if a hardware encoder ends up being used under \
+                 --hardware-acceleration (VideoToolbox/NVENC/QSV/AMF are bitrate/quality-driven, \
+                 not CRF-driven); it still applies if ffmpeg falls back to the software encoder."
+            )));
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Print a report to stderr in the same format as `cmd_validate`.
@@ -492,4 +510,39 @@ pub fn warn_strict_attrs_is_now_default() {
          component attributes have been errors by default since the attribute \
          checker was hardened; you can drop the flag."
     );
+}
+
+#[cfg(test)]
+mod check_crf_tests {
+    use super::check_crf;
+
+    #[test]
+    fn no_crf_is_always_fine() {
+        assert_eq!(check_crf(None, false).unwrap(), None);
+        assert_eq!(check_crf(None, true).unwrap(), None);
+    }
+
+    #[test]
+    fn crf_without_hardware_acceleration_warns_about_nothing() {
+        assert_eq!(check_crf(Some(23), false).unwrap(), None);
+    }
+
+    #[test]
+    fn crf_with_hardware_acceleration_returns_a_warning_naming_the_value() {
+        let warning = check_crf(Some(23), true).unwrap().expect("must warn");
+        assert!(
+            warning.contains("23"),
+            "warning should name the ignored value: {warning}"
+        );
+        assert!(
+            warning.contains("--hardware-acceleration"),
+            "warning should name the flag responsible: {warning}"
+        );
+    }
+
+    #[test]
+    fn out_of_range_crf_still_errors_even_with_hardware_acceleration() {
+        assert!(check_crf(Some(52), true).is_err());
+        assert!(check_crf(Some(52), false).is_err());
+    }
 }

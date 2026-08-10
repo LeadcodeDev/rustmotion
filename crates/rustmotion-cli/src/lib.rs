@@ -76,6 +76,17 @@ enum Commands {
         #[arg(long)]
         transparent: bool,
 
+        /// Try this machine's hardware video encoder (VideoToolbox on macOS,
+        /// NVENC/QSV/AMF elsewhere) for h264/h265, probed live via `ffmpeg
+        /// -encoders` — never assumed from the platform this binary was
+        /// built for. Falls back to the software encoder, with a message,
+        /// when unavailable, unsupported for the chosen codec, or combined
+        /// with --transparent (no hardware encoder here produces an alpha
+        /// channel). `--crf` has no effect once a hardware encoder is
+        /// actually used; see the warning `check_crf` prints for that case.
+        #[arg(long)]
+        hardware_acceleration: bool,
+
         /// Watch the input file for changes and re-render automatically
         #[arg(short, long)]
         watch: bool,
@@ -452,6 +463,7 @@ pub fn run() -> Result<()> {
             crf,
             format,
             transparent,
+            hardware_acceleration,
             watch,
             no_validate,
             lenient,
@@ -462,7 +474,11 @@ pub fn run() -> Result<()> {
         } => {
             // Validate codec / CRF up-front so we never spawn an encoder with bad args.
             commands::validation::check_codec(codec.as_deref())?;
-            commands::validation::check_crf(crf)?;
+            if let Some(warning) = commands::validation::check_crf(crf, hardware_acceleration)? {
+                if !cli.quiet {
+                    eprintln!("Warning: {warning}");
+                }
+            }
 
             let overrides = build_overrides(props.as_ref(), &var)?;
 
@@ -483,6 +499,7 @@ pub fn run() -> Result<()> {
                     crf,
                     format,
                     transparent,
+                    hardware_acceleration,
                     no_validate,
                     lenient,
                     strict_anim,
@@ -531,6 +548,7 @@ pub fn run() -> Result<()> {
                     crf,
                     format,
                     transparent,
+                    hardware_acceleration,
                 )
             }
         }
@@ -596,7 +614,10 @@ pub fn run() -> Result<()> {
             jobs,
         } => {
             commands::validation::check_codec(codec.as_deref())?;
-            commands::validation::check_crf(crf)?;
+            // `batch` has no `--hardware-acceleration` flag of its own (out of
+            // this workstream's file scope: wiring it into `cmd_batch` touches
+            // commands/batch.rs), so this combination can never fire here.
+            commands::validation::check_crf(crf, false)?;
             commands::cmd_batch(
                 &file,
                 &data,

@@ -40,6 +40,7 @@ fn load_for_watch(
     Ok(loaded.scenario)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_render(
     scenario: ResolvedScenario,
     output: &Path,
@@ -50,6 +51,7 @@ pub fn cmd_render(
     crf: Option<u8>,
     format: Option<String>,
     transparent: bool,
+    hardware_acceleration: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
 
@@ -105,6 +107,13 @@ pub fn cmd_render(
             )
             .ok()
         };
+
+        if hardware_acceleration && matches!(fmt, "png-seq" | "gif" | "raw") && !quiet {
+            eprintln!(
+                "Warning: --hardware-acceleration has no effect on `{fmt}` output — only the \
+                 ffmpeg-driven video encode step (mp4/webm/mov) can use a hardware encoder."
+            );
+        }
 
         match fmt {
             "png-seq" => {
@@ -166,19 +175,27 @@ pub fn cmd_render(
                             }
                         }
                     };
-                    encode::encode_with_ffmpeg(
+                    encode::video::encode_with_ffmpeg_hw(
                         &scenario,
                         output_str,
                         quiet,
                         codec_str,
                         crf,
                         transparent,
+                        hardware_acceleration,
                         Some(&mut cb),
                     )?;
                     if let Some(ref mut t) = tui {
                         t.finish("Done!");
                     }
                 } else {
+                    if hardware_acceleration && !quiet {
+                        eprintln!(
+                            "Hardware acceleration requested but ffmpeg was not found on PATH \
+                             (only ffmpeg can drive a hardware encoder); continuing with the \
+                             bundled software encoder."
+                        );
+                    }
                     let mut tui = make_tui("h264");
                     let mut cb = |p: encode::EncodeProgress| {
                         if let Some(ref mut t) = tui {
@@ -226,6 +243,7 @@ pub fn cmd_watch(
     crf: Option<u8>,
     format: Option<String>,
     transparent: bool,
+    hardware_acceleration: bool,
     no_validate: bool,
     lenient: bool,
     strict_anim: bool,
@@ -234,13 +252,20 @@ pub fn cmd_watch(
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
 
-    // Determine if we can use incremental rendering (native h264 only)
+    // Determine if we can use incremental rendering (native h264 only).
+    // Hardware acceleration is an ffmpeg-only feature (see
+    // `encode::video::encode_with_ffmpeg_hw`): the incremental/native path
+    // never shells out to ffmpeg at all, so routing a hardware-acceleration
+    // request there would silently do nothing. Forcing `use_ffmpeg` here
+    // keeps that request meaningful under `--watch` too, same as it already
+    // is for `codec`/`format`/`transparent`.
     let fmt = format
         .as_deref()
         .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
     let use_ffmpeg = codec.as_deref().is_some_and(|c| c != "h264")
         || matches!(fmt, "webm" | "mov")
-        || transparent;
+        || transparent
+        || hardware_acceleration;
     let can_incremental =
         frame.is_none() && !matches!(fmt, "png-seq" | "gif" | "raw") && !use_ffmpeg;
 
@@ -337,6 +362,7 @@ pub fn cmd_watch(
                     crf,
                     format.clone(),
                     transparent,
+                    hardware_acceleration,
                 ) {
                     eprintln!("Render error: {}", e);
                 }
@@ -491,6 +517,7 @@ pub fn cmd_watch(
                         crf,
                         format.clone(),
                         transparent,
+                        hardware_acceleration,
                     ) {
                         eprintln!("Render error: {}", e);
                     }
