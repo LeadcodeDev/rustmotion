@@ -23,7 +23,15 @@ pub(super) fn render_codeblock(
 ) {
     let time = ctx.time;
     let font_family = layer.style.font_family_or("JetBrains Mono");
-    let font_size = layer.style.font_size_px_or(14.0);
+    // Resolved once, against the real per-frame viewport (`rem`/`vw`/`vh` on
+    // `font-size` now resolve instead of silently dropping to 0px — lot B,
+    // wave S) and threaded through every `compute_code_dimensions` call
+    // below instead of each one re-deriving its own (previously identical
+    // only by coincidence) value.
+    let font_size = layer.style.font_size_px_ctx(
+        &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+        14.0,
+    );
     let font_weight = match &layer.style.font_weight {
         Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => FontWeight::Bold,
         Some(CssFontWeight::Number(n)) if *n >= 600 => FontWeight::Bold,
@@ -68,25 +76,69 @@ pub(super) fn render_codeblock(
     // still computed (so we know whether to auto-scroll), but the box footprint
     // is taken from the laid-out BoxLayout, not the legacy `layer.size`.
     let natural_height = if let Some(ref trans) = transition {
-        let dims_a = compute_code_dimensions(&trans.code_a, &font, padding, chrome_height, layer);
-        let dims_b = compute_code_dimensions(&trans.code_b, &font, padding, chrome_height, layer);
+        let dims_a = compute_code_dimensions(
+            &trans.code_a,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        );
+        let dims_b = compute_code_dimensions(
+            &trans.code_b,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        );
         lerp(
             dims_a.total_height,
             dims_b.total_height,
             trans.progress as f32,
         )
     } else {
-        compute_code_dimensions(&current_code, &font, padding, chrome_height, layer).total_height
+        compute_code_dimensions(
+            &current_code,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        )
+        .total_height
     };
 
     let gutter_width = if max_gutter_width > 0.0 {
         max_gutter_width
     } else if let Some(ref trans) = transition {
-        let dims_a = compute_code_dimensions(&trans.code_a, &font, padding, chrome_height, layer);
-        let dims_b = compute_code_dimensions(&trans.code_b, &font, padding, chrome_height, layer);
+        let dims_a = compute_code_dimensions(
+            &trans.code_a,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        );
+        let dims_b = compute_code_dimensions(
+            &trans.code_b,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        );
         f32::max(dims_a.gutter_width, dims_b.gutter_width)
     } else {
-        compute_code_dimensions(&current_code, &font, padding, chrome_height, layer).gutter_width
+        compute_code_dimensions(
+            &current_code,
+            &font,
+            font_size,
+            padding,
+            chrome_height,
+            layer,
+        )
+        .gutter_width
     };
 
     let total_width = layout.width.round();

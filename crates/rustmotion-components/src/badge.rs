@@ -112,35 +112,42 @@ rustmotion_core::impl_traits!(Badge {
 });
 
 impl Badge {
-    fn resolved_font_size(&self) -> f32 {
-        self.style.font_size_px_or(self.badge_size.params().0)
+    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
+    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
+    /// S). `em`/`%` on `font-size` itself remain approximate — see
+    /// `crate::intrinsic::font_size_ctx`'s doc comment.
+    fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            self.badge_size.params().0,
+        )
     }
 
     /// Returns (h_padding, v_padding, icon_size) scaled proportionally
     /// to the resolved font size. If style.font_size overrides the default,
     /// padding and icon scale with it.
-    fn resolved_params(&self) -> (f32, f32, f32) {
+    fn resolved_params(&self, ctx: &PaintCtx) -> (f32, f32, f32) {
         let (default_fs, h_pad, v_pad, icon_size) = self.badge_size.params();
-        let actual_fs = self.resolved_font_size();
+        let actual_fs = self.resolved_font_size(ctx);
         let ratio = actual_fs / default_fs;
         (h_pad * ratio, v_pad * ratio, icon_size * ratio)
     }
 
-    fn make_font(&self) -> Option<skia_safe::Font> {
+    fn make_font(&self, ctx: &PaintCtx) -> Option<skia_safe::Font> {
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
         Some(skia_safe::Font::from_typeface(
             typeface,
-            self.resolved_font_size(),
+            self.resolved_font_size(ctx),
         ))
     }
 }
 
 impl Badge {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64, ctx: &PaintCtx) {
         let color = self.style.background_color_str().unwrap_or("#3B82F6");
-        let (h_pad, _v_pad, icon_size) = self.resolved_params();
+        let (h_pad, _v_pad, icon_size) = self.resolved_params(ctx);
 
         let w = layout_w;
         let h = layout_h;
@@ -224,7 +231,7 @@ impl Badge {
             let dst = Rect::from_xywh(x_offset, icon_y, icon_size, icon_size);
             canvas.draw_image_rect(img, None, dst, &Paint::default());
 
-            let ratio = self.resolved_font_size() / self.badge_size.params().0;
+            let ratio = self.resolved_font_size(ctx) / self.badge_size.params().0;
             x_offset += icon_size + 6.0 * ratio;
         }
 
@@ -234,10 +241,10 @@ impl Badge {
         } else {
             color
         };
-        let Some(font) = self.make_font() else {
+        let Some(font) = self.make_font(ctx) else {
             return;
         };
-        let font_size = self.resolved_font_size();
+        let font_size = self.resolved_font_size(ctx);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let mut text_paint = paint_from_hex(text_color);
         text_paint.set_anti_alias(true);
@@ -348,7 +355,7 @@ impl Painter for Badge {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
+        self.paint(canvas, layout.width, layout.height, ctx.time, ctx);
     }
 }
 
@@ -385,5 +392,60 @@ mod tests {
     fn explicit_align_self_is_respected() {
         let badge = parse(r#"{"type":"badge","text":"v1","style":{"align-self":"center"}}"#);
         assert_eq!(badge.style.align_self, Some(AlignSelf::Center));
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let mut badge = parse(r#"{"type":"badge","text":"v1"}"#);
+        badge.style.font_size = Some(rustmotion_core::css::Length::String("2rem".into()));
+        const W: i32 = 200;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            badge.paint(canvas, 150.0, 60.0, 0.0, &test_ctx());
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Solid variant text is always white — probe for white ink
+        // specifically, since the pill background paints regardless.
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count();
+        assert!(
+            text_ink > 5,
+            "badge at font-size: 2rem must paint visible text, got {text_ink} pixels"
+        );
     }
 }

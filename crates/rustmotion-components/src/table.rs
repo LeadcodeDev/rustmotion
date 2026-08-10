@@ -77,15 +77,17 @@ rustmotion_core::impl_traits!(Table {
 });
 
 impl Table {
-    fn font_size(&self) -> f32 {
-        self.style.font_size_px_or(14.0)
+    /// `font_size` is resolved once by the caller (`paint`, against a real
+    /// `LengthContext`) and passed in — this used to be a zero-argument
+    /// method independently re-deriving the value via the context-free
+    /// `font_size_px_or` at every call site (`row_height`, `make_font`,
+    /// `paint` itself), which is exactly the kind of duplicate computation
+    /// that let a relative unit silently diverge (lot B, wave S).
+    fn row_height(&self, font_size: f32) -> f32 {
+        font_size * 2.5
     }
 
-    fn row_height(&self) -> f32 {
-        self.font_size() * 2.5
-    }
-
-    fn make_font(&self, bold: bool) -> Option<skia_safe::Font> {
+    fn make_font(&self, bold: bool, font_size: f32) -> Option<skia_safe::Font> {
         let font_style = if bold {
             skia_safe::FontStyle::bold()
         } else {
@@ -94,7 +96,7 @@ impl Table {
 
         let family = self.style.font_family.as_deref().unwrap_or("Inter");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
-        Some(skia_safe::Font::from_typeface(typeface, self.font_size()))
+        Some(skia_safe::Font::from_typeface(typeface, font_size))
     }
 
     /// Resolve column widths: use explicit widths if provided, else equal distribution.
@@ -135,11 +137,23 @@ impl Table {
 }
 
 impl Table {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) {
         let w = layout_w;
+        // Resolved once, against the real per-frame viewport (`rem`/`vw`/
+        // `vh` on `font-size` now resolve instead of silently dropping to
+        // 0px — lot B, wave S) and threaded through every call below that
+        // used to independently re-derive it via `font_size_px_or`.
+        let font_size = self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(
+                ctx.video_width as f32,
+                ctx.video_height as f32,
+                w.max(0.0),
+            ),
+            14.0,
+        );
         let col_count = self.headers.len().max(1);
         let col_widths = self.resolve_column_widths(w);
-        let row_h = self.row_height();
+        let row_h = self.row_height(font_size);
 
         let header_color = self.header_color.as_deref().unwrap_or("#374151");
         let border_color = self.border_color.as_deref().unwrap_or("#4B5563");
@@ -157,10 +171,10 @@ impl Table {
 
         // Resolve fonts before the optional clip below so an early return on
         // font failure keeps canvas save/restore balanced.
-        let Some(header_font) = self.make_font(true) else {
+        let Some(header_font) = self.make_font(true, font_size) else {
             return;
         };
-        let Some(body_font) = self.make_font(false) else {
+        let Some(body_font) = self.make_font(false, font_size) else {
             return;
         };
 
@@ -175,7 +189,6 @@ impl Table {
         }
 
         // Header row
-        let font_size = self.font_size();
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, header_metrics) = header_font.metrics();
         let header_ascent = -header_metrics.ascent;
@@ -192,7 +205,7 @@ impl Table {
             let cw = col_widths.get(i).copied().unwrap_or(0.0);
             let text_w = measure_text_with_fallback(header, &header_font, &emoji_font, 0.0);
             let x = self.align_text_x(i, col_x, cw, text_w);
-            let y = (row_h - self.font_size()) / 2.0 + header_ascent;
+            let y = (row_h - font_size) / 2.0 + header_ascent;
 
             draw_text_with_fallback(
                 canvas,
@@ -233,7 +246,7 @@ impl Table {
                 let cw = col_widths.get(col_idx).copied().unwrap_or(0.0);
                 let text_w = measure_text_with_fallback(cell, &body_font, &emoji_font, 0.0);
                 let x = self.align_text_x(col_idx, cx, cw, text_w);
-                let y = y_base + (row_h - self.font_size()) / 2.0 + body_ascent;
+                let y = y_base + (row_h - font_size) / 2.0 + body_ascent;
 
                 draw_text_with_fallback(
                     canvas,
@@ -285,8 +298,84 @@ impl Painter for Table {
         canvas: &Canvas,
         layout: &BoxLayout,
         _props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height);
+        self.paint(canvas, layout.width, layout.height, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::Length;
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let table = Table {
+            headers: vec!["A".to_string(), "B".to_string()],
+            rows: vec![vec!["1".to_string(), "2".to_string()]],
+            header_color: None,
+            row_colors: None,
+            border_color: None,
+            header_text_color: None,
+            column_widths: None,
+            column_align: None,
+            cell_padding: DEFAULT_CELL_PADDING,
+            show_borders: true,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let ctx = PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        };
+        {
+            let canvas = surface.canvas();
+            table.paint(canvas, W as f32, H as f32, &ctx);
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Header text is white (#FFFFFF) on a #374151 header background —
+        // probe specifically for near-white text ink rather than any lit
+        // pixel (the header/row backgrounds paint regardless of font-size).
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count();
+        assert!(
+            text_ink > 10,
+            "table at font-size: 2rem must paint visible header/cell text, got {text_ink} pixels"
+        );
     }
 }

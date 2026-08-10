@@ -56,8 +56,13 @@ rustmotion_core::impl_traits!(GradientText {
 });
 
 impl GradientText {
-    fn resolve_font(&self) -> Option<(Font, Option<Font>)> {
-        let font_size = self.style.font_size_px_or(48.0);
+    /// `font_size` is resolved once by the caller (`paint`, against a real
+    /// `LengthContext`) and passed in here — this used to independently
+    /// recompute it via the context-free `font_size_px_or`, a second site
+    /// that could silently diverge from `paint`'s own resolution once one of
+    /// the two learned to handle relative units and the other didn't (lot B,
+    /// wave S).
+    fn resolve_font(&self, font_size: f32) -> Option<(Font, Option<Font>)> {
         let font_family = self.style.font_family_or("Inter");
 
         let slant = match self.style.font_style {
@@ -88,14 +93,21 @@ impl GradientText {
             return;
         }
 
-        let Some((font, emoji_font)) = self.resolve_font() else {
+        // `font-size` itself now resolves through `LengthContext` too (lot B,
+        // wave S) — it used to stay context-free (`font_size_px_or`),
+        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
+        // `font-size` itself remain approximate — see
+        // `crate::intrinsic::font_size_ctx`'s doc comment (cascade.rs
+        // doesn't track the real parent font-size).
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            layout_width.max(0.0),
+        );
+        let font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
+        let Some((font, emoji_font)) = self.resolve_font(font_size) else {
             return;
         };
-        // `font-size` stays context-free — see the identical note in
-        // `text.rs`'s `paint`: resolving its own `em`/`%` correctly needs a
-        // cascade.rs change (parent font-size as a resolved px value, not a
-        // raw `Length`), which is out of scope here (issue #125 §2).
-        let font_size = self.style.font_size_px_or(48.0);
         // `letter-spacing`/`line-height`'s `em`/`%` are relative to this
         // element's own font-size, no cascade dependency — a real
         // `LengthContext` is available here, so use the context-aware
@@ -107,11 +119,8 @@ impl GradientText {
         // #125 §1 describes elsewhere. It's threaded through consistently
         // now.
         let type_ctx = rustmotion_core::css::units::LengthContext {
-            viewport_width: ctx.video_width as f32,
-            viewport_height: ctx.video_height as f32,
-            parent_size: layout_width.max(0.0),
             font_size,
-            root_font_size: 16.0,
+            ..base_ctx
         };
         let line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
         let letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
@@ -347,6 +356,38 @@ mod tests {
         assert!(
             has_ink_in(&grid, W, 0, W, 55, H),
             "wrapped gradient_text must spill onto a second line within the box width"
+        );
+    }
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`, so `resolve_font` built a 0px font
+        // and nothing measurable painted.
+        let gt = GradientText {
+            content: "HELLO".into(),
+            colors: default_colors(),
+            angle: default_angle(),
+            animate_angle: false,
+            speed: default_speed(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        gt.paint(canvas, 300.0, 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            has_ink_in(&grid, W, 0, W, 0, 60),
+            "gradient_text at font-size: 2rem must paint visible ink"
         );
     }
 }

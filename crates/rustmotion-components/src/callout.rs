@@ -68,8 +68,15 @@ impl Callout {
         self.style.border_radius_px_or(8.0)
     }
 
-    fn font_size(&self) -> f32 {
-        self.style.font_size_px_or(16.0)
+    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
+    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
+    /// S). `em`/`%` on `font-size` itself remain approximate — see
+    /// `crate::intrinsic::font_size_ctx`'s doc comment.
+    fn font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            16.0,
+        )
     }
 
     fn bubble_rect(&self, w: f32, h: f32) -> Rect {
@@ -127,11 +134,11 @@ impl Callout {
 }
 
 impl Callout {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) -> Result<()> {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) -> Result<()> {
         let w = layout_w;
         let h = layout_h;
         let radius = self.radius();
-        let font_size = self.font_size();
+        let font_size = self.font_size(ctx);
 
         // Draw bubble body
         let bubble = self.bubble_rect(w, h);
@@ -188,8 +195,83 @@ impl Painter for Callout {
         canvas: &Canvas,
         layout: &BoxLayout,
         _props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, layout.height);
+        let _ = self.paint(canvas, layout.width, layout.height, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::CssStyle;
+    use rustmotion_core::css::Length;
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let callout = Callout {
+            text: "hello".to_string(),
+            arrow_direction: ArrowDirection::default(),
+            arrow_size: default_arrow_size(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            callout
+                .paint(canvas, W as f32, H as f32, &test_ctx())
+                .expect("paint succeeds");
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Text is white (#FFFFFF default) on a dark #333333 bubble — probe
+        // for near-white ink specifically, since the bubble background
+        // paints regardless of font-size.
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count();
+        assert!(
+            text_ink > 10,
+            "callout at font-size: 2rem must paint visible text, got {text_ink} pixels"
+        );
     }
 }

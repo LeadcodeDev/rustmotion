@@ -101,12 +101,19 @@ impl Notification {
             .unwrap_or_else(|| self.variant.default_color())
     }
 
-    fn title_font_size(&self) -> f32 {
-        self.style.font_size_px_or(16.0)
+    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
+    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
+    /// S). `em`/`%` on `font-size` itself remain approximate — see
+    /// `crate::intrinsic::font_size_ctx`'s doc comment.
+    fn title_font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            16.0,
+        )
     }
 
-    fn message_font_size(&self) -> f32 {
-        self.style.font_size_px_or(16.0) * 0.85
+    fn message_font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.title_font_size(ctx) * 0.85
     }
 
     fn make_font(&self, bold: bool, size: f32) -> Option<skia_safe::Font> {
@@ -216,7 +223,14 @@ impl Notification {
 }
 
 impl Notification {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) -> Result<()> {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_w: f32,
+        layout_h: f32,
+        time: f64,
+        ctx: &PaintCtx,
+    ) -> Result<()> {
         let w = layout_w;
         let h = layout_h;
         let opacity = self.compute_opacity(time);
@@ -227,7 +241,7 @@ impl Notification {
 
         // Resolve the title font before any canvas.save() so an early return
         // on font failure keeps save/restore balanced.
-        let Some(title_font) = self.make_font(true, self.title_font_size()) else {
+        let Some(title_font) = self.make_font(true, self.title_font_size(ctx)) else {
             return Ok(());
         };
 
@@ -286,7 +300,7 @@ impl Notification {
         // Content area
         let h_pad = 16.0;
         let v_pad = 16.0;
-        let icon_size = self.title_font_size() * 1.5;
+        let icon_size = self.title_font_size(ctx) * 1.5;
         let mut content_x = accent_width + h_pad;
 
         // Icon
@@ -297,7 +311,7 @@ impl Notification {
         }
 
         // Title
-        let title_fs = self.title_font_size();
+        let title_fs = self.title_font_size(ctx);
         let emoji_font_title =
             emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, title_fs));
         let title_color = self.style.color_str_or("#FFFFFF");
@@ -320,7 +334,7 @@ impl Notification {
 
         // Message
         if let Some(message) = &self.message {
-            let msg_fs = self.message_font_size();
+            let msg_fs = self.message_font_size(ctx);
             if let Some(msg_font) = self.make_font(false, msg_fs) {
                 let emoji_font_msg =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, msg_fs));
@@ -359,6 +373,89 @@ impl Painter for Notification {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, layout.height, ctx.time);
+        let _ = self.paint(canvas, layout.width, layout.height, ctx.time, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::CssStyle;
+    use rustmotion_core::css::Length;
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 1.0,
+            scene_duration: 2.0,
+            frame_index: 30,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let notification = Notification {
+            title: "Hello".to_string(),
+            message: None,
+            icon: None,
+            variant: NotificationVariant::Info,
+            width: default_width(),
+            slide_in_at: 0.0,
+            slide_out_at: None,
+            slide_duration: default_slide_duration(),
+            accent_color: None,
+            push_at: Vec::new(),
+            stack_gap: default_stack_gap(),
+            wait_for_push: false,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            notification
+                .paint(canvas, 360.0, 100.0, 1.0, &test_ctx())
+                .expect("paint succeeds");
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Title text is white (#FFFFFF default) on a dark #1E293B card —
+        // probe for near-white ink specifically.
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count();
+        assert!(
+            text_ink > 10,
+            "notification at font-size: 2rem must paint visible text, got {text_ink} pixels"
+        );
     }
 }
