@@ -337,6 +337,26 @@ fn ease_in_out_cubic(t: f64) -> f64 {
 
 // ─── Spring solver ──────────────────────────────────────────────────────────
 
+/// Default `rest_threshold` (fraction of the 0→1 travel) used by
+/// `spring_rest_time`/the `duration` remap in `spring_value` when a
+/// `SpringConfig` does not set one explicitly. 0.5% is tight enough that
+/// "at rest" reads as visually still, without demanding the numeric search
+/// chase an asymptote that (for a critically- or over-damped spring) is
+/// never reached exactly.
+pub const DEFAULT_SPRING_REST_THRESHOLD: f64 = 0.005;
+
+/// Hard cap, in seconds, on how far into the future `spring_settle_time`
+/// searches for a rest point. A very lightly damped spring can take an
+/// arbitrarily long time to decay under `rest_threshold` — in the limit
+/// (`damping == 0`) it never does, oscillating forever at constant
+/// amplitude — so the search needs a bound or it would not terminate. When
+/// the cap is hit, the spring is reported as resting at the cap itself: a
+/// defined, tested "has not settled by then" answer (see
+/// `spring_duration_tests::undamped_spring_is_capped_not_infinite` and
+/// `spring_duration_tests::very_lightly_damped_spring_is_also_capped_when_beyond_the_bound`)
+/// rather than an unbounded loop.
+pub const MAX_SPRING_SEARCH_SECONDS: f64 = 30.0;
+
 /// Solve spring animation at time t (seconds).
 /// Returns a value between 0.0 and 1.0 representing progress.
 ///
@@ -351,11 +371,51 @@ fn ease_in_out_cubic(t: f64) -> f64 {
 /// combinations as errors (belt), and this floor keeps the solver itself
 /// finite and bounded even if an out-of-band caller skips validation
 /// (suspenders) — see `spring_robustness_tests` below.
+///
+/// `duration` (issue #167 lot E, `SpringConfig::duration`): when set, `t` is
+/// linearly rescaled before it reaches the physics below — not the physical
+/// parameters themselves — so that `spring_rest_time` on the *unscaled*
+/// spring lands exactly on `duration`. The spring's shape (oscillation
+/// count, overshoot amplitude) is entirely a function of
+/// `damping`/`stiffness`/`mass`, so rescaling only the time axis preserves
+/// it; see `spring_duration_tests::duration_remap_preserves_shape`. This
+/// does *not* resize whatever keyframe segment `spring_value` is being
+/// evaluated within — see the `duration` field's doc comment on
+/// `SpringConfig` for why that is a separate, author-owned concern.
 pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
     let damping = config.damping.max(0.0);
     let stiffness = config.stiffness.max(1e-6);
     let mass = config.mass.max(1e-6);
 
+    match config.duration {
+        Some(duration) if duration > 0.0 => {
+            let threshold = spring_rest_threshold(config);
+            let natural_rest = spring_settle_time(
+                damping,
+                stiffness,
+                mass,
+                threshold,
+                MAX_SPRING_SEARCH_SECONDS,
+            );
+            if natural_rest < 1e-9 {
+                // Degenerate: the spring starts at distance 1.0 from its
+                // target, so in practice `natural_rest` is never this
+                // small — fall back to unscaled rather than divide by ~0.
+                spring_value_raw(t, damping, stiffness, mass)
+            } else {
+                let time_scale = natural_rest / duration;
+                spring_value_raw(t * time_scale, damping, stiffness, mass)
+            }
+        }
+        _ => spring_value_raw(t, damping, stiffness, mass),
+    }
+}
+
+/// The physics solver itself, unscaled by any `duration` remap. Takes
+/// already-floored parameters (see `spring_value`'s constat #6 doc comment)
+/// so `spring_settle_time`'s search can call it directly without redoing
+/// the floor on every sample.
+fn spring_value_raw(t: f64, damping: f64, stiffness: f64, mass: f64) -> f64 {
     let omega = (stiffness / mass).sqrt();
     let zeta = damping / (2.0 * (stiffness * mass).sqrt());
 
@@ -376,6 +436,125 @@ pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
         let c2 = -s1 / (s2 - s1);
         let c1 = 1.0 - c2;
         1.0 - (c1 * (s1 * t).exp() + c2 * (s2 * t).exp())
+    }
+}
+
+/// Lower bound on the number of samples `spring_settle_time` takes across
+/// `[0, max_t]` — enough to resolve slow (critically-/over-damped) decays
+/// even when the natural oscillation period doesn't drive the sample count
+/// up on its own.
+const SPRING_SETTLE_MIN_SAMPLES: usize = 2_000;
+/// Upper bound on samples, regardless of how short the oscillation period
+/// is — keeps `spring_settle_time` (called on every `spring_value` sample
+/// when `duration` is set) bounded-cost for very stiff/fast springs.
+const SPRING_SETTLE_MAX_SAMPLES: usize = 20_000;
+/// Target sample density within one oscillation period, chosen empirically
+/// (see the workstream report) to keep the coarse-then-bisect search within
+/// ~0.1% of a brute-force reference across a broad random sweep of
+/// damping/stiffness/mass. Shallow, near-tangential graze-and-return
+/// excursions across the threshold band (a spring that dips back below the
+/// line by a razor-thin margin on a secondary oscillation) can still be
+/// missed — `spring_rest_time`/`spring_settle_time` are a documented
+/// numeric approximation, not an exact guarantee.
+const SPRING_SETTLE_SAMPLES_PER_PERIOD: f64 = 48.0;
+
+/// First `t >= 0` from which `spring_value_raw` stays within `threshold` of
+/// its target (1.0) forever after. Implements the "mesure du repos" from
+/// issue #167 lot E: `spring_value_raw` is closed-form, so a coarse scan to
+/// bracket the last exceedance, refined by bisection, is enough — no need
+/// to integrate anything.
+///
+/// Two regimes get explicit handling (both required by the workstream
+/// brief, both exercised in `spring_duration_tests`):
+/// - an overdamped (or critically damped) spring never touches its target
+///   exactly, only approaches it asymptotically — the scan terminates via
+///   `threshold`, never via an exact equality check;
+/// - a very lightly damped spring can take arbitrarily long to settle (an
+///   undamped spring, `damping == 0`, never does — it oscillates forever at
+///   constant amplitude). `max_t` bounds the search; if the last sample is
+///   still outside `threshold`, `max_t` itself is returned — defined,
+///   tested behaviour instead of an unbounded search.
+fn spring_settle_time(damping: f64, stiffness: f64, mass: f64, threshold: f64, max_t: f64) -> f64 {
+    let threshold = threshold.max(1e-9);
+    let omega = (stiffness / mass).sqrt();
+    let period = if omega > 1e-9 {
+        std::f64::consts::TAU / omega
+    } else {
+        max_t
+    };
+    let desired_steps = (max_t / (period / SPRING_SETTLE_SAMPLES_PER_PERIOD)).ceil() as usize;
+    let steps = desired_steps.clamp(SPRING_SETTLE_MIN_SAMPLES, SPRING_SETTLE_MAX_SAMPLES);
+    let dt = max_t / steps as f64;
+
+    let mut last_exceed_idx: usize = 0;
+    for i in 0..=steps {
+        let t = i as f64 * dt;
+        if (spring_value_raw(t, damping, stiffness, mass) - 1.0).abs() > threshold {
+            last_exceed_idx = i;
+        }
+    }
+
+    if last_exceed_idx >= steps {
+        // Still exceeding at (or past) max_t: capped, "not settled".
+        return max_t;
+    }
+
+    // Refine within (last_exceed, last_exceed + dt]: the coarse scan found
+    // this as the last sample outside the threshold band, so bisect for the
+    // point within this bracket where it steps inside for good.
+    let mut lo = last_exceed_idx as f64 * dt;
+    let mut hi = (lo + dt).min(max_t);
+    for _ in 0..40 {
+        let mid = 0.5 * (lo + hi);
+        if (spring_value_raw(mid, damping, stiffness, mass) - 1.0).abs() > threshold {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
+}
+
+/// The `rest_threshold` a `SpringConfig` resolves to: the author's value if
+/// set, else `DEFAULT_SPRING_REST_THRESHOLD`, floored so `spring_settle_time`
+/// always has a well-defined (nonzero) target — the same belt-and-suspenders
+/// pattern `spring_value` already applies to `damping`/`stiffness`/`mass`.
+/// `rustmotion-cli`'s `check_spring_config` rejects non-positive or absurd
+/// (`>= 1.0`) values at the author-facing layer; this floor is the
+/// solver-side backstop.
+fn spring_rest_threshold(config: &SpringConfig) -> f64 {
+    config
+        .rest_threshold
+        .unwrap_or(DEFAULT_SPRING_REST_THRESHOLD)
+        .max(1e-9)
+}
+
+/// Public "measure du repos" (issue #167 lot E): the instant, in seconds,
+/// at which this spring settles within `rest_threshold` of its target and
+/// stays there — what `rustmotion info` surfaces so an author can size a
+/// scene/preset duration around a spring instead of discovering it by
+/// trial and error.
+///
+/// When `config.duration` is set, this *is* that duration, exactly — that
+/// is the point of the time remap `spring_value` performs (see its doc
+/// comment). Otherwise it is the natural settle time computed from
+/// `damping`/`stiffness`/`mass` alone via `spring_settle_time`.
+pub fn spring_rest_time(config: &SpringConfig) -> f64 {
+    match config.duration {
+        Some(d) if d > 0.0 => d,
+        _ => {
+            let damping = config.damping.max(0.0);
+            let stiffness = config.stiffness.max(1e-6);
+            let mass = config.mass.max(1e-6);
+            let threshold = spring_rest_threshold(config);
+            spring_settle_time(
+                damping,
+                stiffness,
+                mass,
+                threshold,
+                MAX_SPRING_SEARCH_SECONDS,
+            )
+        }
     }
 }
 
@@ -980,6 +1159,21 @@ fn is_motion_property(property: &str) -> bool {
 /// - more than 2 keyframes with identical endpoints (continuous oscillators:
 ///   pulse, shake, float): untouched — a spring toward the same value is a
 ///   no-op and would freeze the effect.
+///
+/// `spring.duration` (issue #167 lot E) is *not* consulted here to resize
+/// the keyframe pair's own span: the pair's `[delay, end]` still comes from
+/// `AnimationTiming::delay`/`duration` (the same preset-level timing every
+/// other easing uses), untouched by whatever `SpringConfig::duration` says.
+/// `spring_value` — not this function — is where `duration` acts, by
+/// rescaling the *physics* time axis it is fed. Consequently, if the
+/// preset's own `duration` is shorter than `spring.duration`, the segment
+/// still ends (and the property still snaps to its final keyframe value) at
+/// the preset's `end`, before the spring has visually settled — exactly the
+/// pre-existing behaviour for any other easing curve given too short a
+/// segment. Pin `AnimationTiming::duration` (or the `keyframes` effect's own
+/// keyframe span, for the other call site in `resolve_animation_value_full`)
+/// to at least `spring_rest_time` to avoid that cutoff; `rustmotion info`
+/// reports `spring_rest_time` for exactly this purpose.
 fn apply_spring_to_motion(animations: &mut [Animation], spring: &SpringConfig) {
     for anim in animations.iter_mut() {
         if !is_motion_property(&anim.property) || anim.keyframes.len() < 2 {
@@ -1569,6 +1763,7 @@ fn kf_anim_spring(property: &str, t0: f64, v0: f64, t1: f64, v1: f64) -> Animati
             damping: 12.0,
             stiffness: 100.0,
             mass: 1.0,
+            ..Default::default()
         }),
     }
 }
@@ -1582,6 +1777,7 @@ fn kf_anim_spring_underdamped(property: &str, t0: f64, v0: f64, t1: f64, v1: f64
             damping: 6.0,
             stiffness: 120.0,
             mass: 1.0,
+            ..Default::default()
         }),
     }
 }
@@ -1655,6 +1851,7 @@ mod spring_preset_tests {
             damping: 8.0,
             stiffness: 120.0,
             mass: 1.0,
+            ..Default::default()
         }
     }
 
@@ -1738,6 +1935,7 @@ mod spring_preset_tests {
             damping: 40.0,
             stiffness: 100.0,
             mass: 1.0,
+            ..Default::default()
         };
         let d = scale_at(None, 0.3);
         let c = scale_at(Some(overdamped), 0.3);
@@ -2217,6 +2415,7 @@ mod spring_robustness_tests {
             damping: 10.0,
             stiffness: 100.0,
             mass: 0.0,
+            ..Default::default()
         };
         for i in 0..=20 {
             let t = i as f64 * 0.25;
@@ -2234,6 +2433,7 @@ mod spring_robustness_tests {
             damping: 10.0,
             stiffness: 0.0,
             mass: 1.0,
+            ..Default::default()
         };
         for i in 0..=20 {
             let t = i as f64 * 0.25;
@@ -2251,12 +2451,327 @@ mod spring_robustness_tests {
             damping: -20.0,
             stiffness: 100.0,
             mass: 1.0,
+            ..Default::default()
         };
         let v_at_5s = spring_value(5.0, &config);
         assert!(
             v_at_5s.is_finite() && v_at_5s.abs() < 100.0,
             "spring_value(t=5.0) with damping=-20 must stay bounded (finite and reasonably \
              small), got {v_at_5s} — negative damping must not diverge to +-infinity"
+        );
+    }
+}
+
+#[cfg(test)]
+mod spring_duration_tests {
+    //! Issue #167 lot E: `SpringConfig::duration` forces a spring to settle
+    //! (see `rest_threshold`) at exactly that many seconds by rescaling the
+    //! time axis fed to the physics solver; `spring_rest_time` is the
+    //! public "measure du repos" `rustmotion info` surfaces.
+    use super::*;
+
+    /// Reference settle time via a fine linear scan of the actual
+    /// implemented formula (`spring_value_raw`), independent of
+    /// `spring_settle_time`'s coarse-then-bisect implementation — these
+    /// tests check the algorithm against ground truth, not against itself.
+    fn brute_force_settle_time(
+        damping: f64,
+        stiffness: f64,
+        mass: f64,
+        threshold: f64,
+        max_t: f64,
+        steps: usize,
+    ) -> f64 {
+        let dt = max_t / steps as f64;
+        let mut last_exceed = 0.0;
+        for i in 0..=steps {
+            let t = i as f64 * dt;
+            if (spring_value_raw(t, damping, stiffness, mass) - 1.0).abs() > threshold {
+                last_exceed = t;
+            }
+        }
+        last_exceed
+    }
+
+    #[test]
+    fn red_phase_duration_is_ignored_by_the_raw_physical_solver() {
+        // Captured red-phase numbers (issue #167 lot E, before `duration`
+        // existed on `SpringConfig`): a spring's settle time was purely
+        // emergent from damping/stiffness/mass. `spring_value_raw` is
+        // exactly that pre-existing, unscaled solver — by construction it
+        // does not know about `duration`.
+        //
+        // damping=6, stiffness=120, mass=1 (the same "underdamped" preset
+        // this file already uses for elastic_in / kf_anim_spring_underdamped)
+        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.043467 — 4.35%
+        // past the target, an order of magnitude outside any reasonable
+        // rest_threshold (default 0.5%). An author asking this spring to
+        // "finish at 0.8s" got a value nowhere near rest.
+        let v = spring_value_raw(0.8, 6.0, 120.0, 1.0);
+        assert!(
+            (v - 1.043467).abs() < 1e-5,
+            "captured red-phase reference value drifted: got {v}, expected ~1.043467"
+        );
+        assert!(
+            (v - 1.0).abs() > 0.04,
+            "red-phase claim: at t=duration the unscaled spring must still be far from rest \
+             (got diff {:.6}, expected > 0.04)",
+            (v - 1.0).abs()
+        );
+    }
+
+    #[test]
+    fn duration_makes_the_spring_settle_exactly_there() {
+        let config = SpringConfig {
+            damping: 6.0,
+            stiffness: 120.0,
+            mass: 1.0,
+            duration: Some(0.8),
+            rest_threshold: None,
+        };
+        let threshold = DEFAULT_SPRING_REST_THRESHOLD;
+
+        // Green phase: the same (damping, stiffness, mass) that the
+        // red-phase test above showed is 4.35% off at t=0.8s without a
+        // `duration` must now be within `threshold` of rest at t=0.8s.
+        let v_at_duration = spring_value(0.8, &config);
+        assert!(
+            (v_at_duration - 1.0).abs() <= threshold,
+            "spring_value(0.8, ..) with duration=Some(0.8) must be within {threshold} of rest, \
+             got {v_at_duration} (diff {})",
+            (v_at_duration - 1.0).abs()
+        );
+
+        // And it must not already be at rest well before `duration` —
+        // this is a genuine rescale, not "duration happens to be late
+        // enough not to matter".
+        let v_at_half = spring_value(0.4, &config);
+        assert!(
+            (v_at_half - 1.0).abs() > threshold,
+            "sanity: spring must not already be at rest at half of duration, got diff {}",
+            (v_at_half - 1.0).abs()
+        );
+    }
+
+    #[test]
+    fn spring_rest_time_returns_duration_verbatim_when_set() {
+        let config = SpringConfig {
+            damping: 6.0,
+            stiffness: 120.0,
+            mass: 1.0,
+            duration: Some(0.8),
+            rest_threshold: None,
+        };
+        assert_eq!(spring_rest_time(&config), 0.8);
+    }
+
+    #[test]
+    fn spring_rest_time_matches_a_brute_force_reference_without_duration() {
+        let cases: [(f64, f64, f64, &str); 5] = [
+            (15.0, 100.0, 1.0, "default"),
+            (12.0, 100.0, 1.0, "kf_anim_spring"),
+            (6.0, 120.0, 1.0, "underdamped elastic_in-like"),
+            (
+                20.0,
+                100.0,
+                1.0,
+                "critically damped (damping = 2*sqrt(stiffness*mass))",
+            ),
+            (60.0, 100.0, 1.0, "overdamped"),
+        ];
+        for (damping, stiffness, mass, label) in cases {
+            let config = SpringConfig {
+                damping,
+                stiffness,
+                mass,
+                duration: None,
+                rest_threshold: None,
+            };
+            let threshold = DEFAULT_SPRING_REST_THRESHOLD;
+            let got = spring_rest_time(&config);
+            let reference = brute_force_settle_time(
+                damping,
+                stiffness,
+                mass,
+                threshold,
+                MAX_SPRING_SEARCH_SECONDS,
+                400_000,
+            );
+            let abs_err = (got - reference).abs();
+            assert!(
+                abs_err < 0.05,
+                "{label}: spring_rest_time={got:.5}s vs brute-force reference={reference:.5}s \
+                 (|err|={abs_err:.5}s, expected < 0.05s)"
+            );
+        }
+    }
+
+    #[test]
+    fn overdamped_spring_never_reaches_target_exactly_but_settle_time_is_found() {
+        // Pitfall called out in the brief: an overdamped spring approaches
+        // its target asymptotically and never touches it. The search must
+        // terminate via `rest_threshold`, not by looking for an exact hit.
+        let config = SpringConfig {
+            damping: 200.0,
+            stiffness: 100.0,
+            mass: 1.0,
+            duration: None,
+            rest_threshold: None,
+        };
+        let t = spring_rest_time(&config);
+        assert!(
+            t > 0.0 && t < MAX_SPRING_SEARCH_SECONDS,
+            "expected a finite, non-degenerate settle time, got {t}"
+        );
+
+        // Confirm it genuinely never hits exactly 1.0 — the asymptotic
+        // property `rest_threshold` exists to work around.
+        for i in 1..=200 {
+            let sample_t = t + i as f64 * 0.1;
+            let v = spring_value_raw(sample_t, 200.0, 100.0, 1.0);
+            assert_ne!(
+                v, 1.0,
+                "an overdamped spring must never hit its target exactly (t={sample_t})"
+            );
+        }
+    }
+
+    #[test]
+    fn undamped_spring_is_capped_not_infinite() {
+        // Pitfall: damping=0 means the spring oscillates forever at
+        // constant amplitude — it never settles. The search must return the
+        // defined cap (`MAX_SPRING_SEARCH_SECONDS`), not loop forever.
+        let config = SpringConfig {
+            damping: 0.0,
+            stiffness: 100.0,
+            mass: 1.0,
+            duration: None,
+            rest_threshold: None,
+        };
+        let t = spring_rest_time(&config);
+        assert_eq!(
+            t, MAX_SPRING_SEARCH_SECONDS,
+            "an undamped spring must be reported as capped at the search bound, got {t}"
+        );
+    }
+
+    #[test]
+    fn very_lightly_damped_spring_is_also_capped_when_beyond_the_bound() {
+        // Not literally undamped, but damped so lightly it does not reach a
+        // 0.5% rest threshold within the search bound — same defined-cap
+        // behaviour as the fully undamped case, exercised with nonzero
+        // damping so the `zeta == 0` special case isn't the only path
+        // that's actually bounded.
+        let config = SpringConfig {
+            damping: 0.05,
+            stiffness: 100.0,
+            mass: 1.0,
+            duration: None,
+            rest_threshold: None,
+        };
+        let t = spring_rest_time(&config);
+        assert_eq!(
+            t, MAX_SPRING_SEARCH_SECONDS,
+            "expected the search to hit its cap, got {t}"
+        );
+    }
+
+    #[test]
+    fn duration_remap_preserves_shape() {
+        // The whole point of a spring's `duration` is to keep its shape —
+        // oscillation count, overshoot amplitude — and only rescale how
+        // fast it plays back. Compare the natural (no-duration) curve to a
+        // duration-remapped curve of the *same* underlying spring, sampled
+        // at matching fractions of each one's own settle time: if the remap
+        // were instead clipping the tail (shortening, not rescaling), these
+        // would diverge.
+        let damping = 6.0;
+        let stiffness = 120.0;
+        let mass = 1.0;
+        let natural = SpringConfig {
+            damping,
+            stiffness,
+            mass,
+            duration: None,
+            rest_threshold: None,
+        };
+        let natural_rest = spring_rest_time(&natural);
+
+        let pinned_duration = 2.5; // deliberately different from natural_rest
+        let pinned = SpringConfig {
+            damping,
+            stiffness,
+            mass,
+            duration: Some(pinned_duration),
+            rest_threshold: None,
+        };
+
+        let mut natural_overshoots = 0;
+        let mut pinned_overshoots = 0;
+        let mut max_natural_overshoot = 0.0_f64;
+        let mut max_pinned_overshoot = 0.0_f64;
+        let mut prev_natural_over = false;
+        let mut prev_pinned_over = false;
+
+        for i in 0..=1000 {
+            let frac = i as f64 / 1000.0;
+            let v_natural = spring_value(frac * natural_rest, &natural);
+            let v_pinned = spring_value(frac * pinned_duration, &pinned);
+
+            // Same fraction of each spring's own settle time must produce
+            // the same progress value — that is the shape being preserved,
+            // only the clock speed differs.
+            assert!(
+                (v_natural - v_pinned).abs() < 1e-9,
+                "shape mismatch at fraction {frac}: natural={v_natural} pinned={v_pinned}"
+            );
+
+            let natural_over = v_natural > 1.0;
+            if natural_over && !prev_natural_over {
+                natural_overshoots += 1;
+            }
+            prev_natural_over = natural_over;
+            max_natural_overshoot = max_natural_overshoot.max(v_natural - 1.0);
+
+            let pinned_over = v_pinned > 1.0;
+            if pinned_over && !prev_pinned_over {
+                pinned_overshoots += 1;
+            }
+            prev_pinned_over = pinned_over;
+            max_pinned_overshoot = max_pinned_overshoot.max(v_pinned - 1.0);
+        }
+
+        assert!(
+            natural_overshoots > 0,
+            "expected this underdamped spring to overshoot at least once"
+        );
+        assert_eq!(
+            natural_overshoots, pinned_overshoots,
+            "oscillation count must be identical with/without duration"
+        );
+        assert!(
+            (max_natural_overshoot - max_pinned_overshoot).abs() < 1e-9,
+            "overshoot amplitude must be identical with/without duration: natural={max_natural_overshoot} pinned={max_pinned_overshoot}"
+        );
+    }
+
+    #[test]
+    fn duration_does_not_change_delay_semantics() {
+        // `spring_value`'s `t` argument is already local to the enclosing
+        // segment (time since the segment/keyframe start — `delay` is
+        // baked into where that segment begins, upstream of this call).
+        // `duration` must not reinterpret that: t=0 must still be the
+        // spring's own start regardless of `duration`.
+        let config = SpringConfig {
+            damping: 6.0,
+            stiffness: 120.0,
+            mass: 1.0,
+            duration: Some(0.8),
+            rest_threshold: None,
+        };
+        assert_eq!(
+            spring_value(0.0, &config),
+            spring_value_raw(0.0, 6.0, 120.0, 1.0)
         );
     }
 }

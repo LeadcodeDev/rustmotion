@@ -378,6 +378,14 @@ fn check_color_str(s: &str, label: &str, path: &str, errors: &mut Vec<String>) {
 /// floors these defensively (belt and suspenders — see `spring_value`'s doc
 /// comment), but catching it here gives the author an actionable error
 /// instead of a silently broken render.
+///
+/// Issue #167 lot E adds `duration`/`rest_threshold`: a non-positive
+/// `duration` would make `spring_value`'s remap divide by zero or invert
+/// time (both silently ignored by the solver rather than rejected — see its
+/// `Some(duration) if duration > 0.0` guard), and a `rest_threshold` outside
+/// `(0.0, 1.0)` is either meaningless (<=0: never satisfied except in the
+/// limit) or vacuous (>=1.0: satisfied from t=0, before the spring has
+/// moved at all — the whole 0→1 travel is "close enough").
 fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<String>) {
     if spring.mass <= 0.0 {
         errors.push(format!(
@@ -399,6 +407,28 @@ fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<Strin
              diverge instead of settle",
             spring.damping
         ));
+    }
+    if let Some(duration) = spring.duration {
+        if duration <= 0.0 {
+            errors.push(format!(
+                "{path}: spring.duration must be > 0 when set (got {duration}) — a zero or \
+                 negative duration cannot be mapped to a settle time"
+            ));
+        }
+    }
+    if let Some(rest_threshold) = spring.rest_threshold {
+        if rest_threshold <= 0.0 {
+            errors.push(format!(
+                "{path}: spring.rest_threshold must be > 0 when set (got {rest_threshold}) — a \
+                 zero or negative threshold is never satisfied, so the spring would never be \
+                 considered at rest"
+            ));
+        } else if rest_threshold >= 1.0 {
+            errors.push(format!(
+                "{path}: spring.rest_threshold must be < 1.0 when set (got {rest_threshold}) — \
+                 a threshold this large is satisfied at t=0, before the spring has moved"
+            ));
+        }
     }
 }
 
@@ -707,6 +737,108 @@ mod style_warning_tests {
             "content": "hi",
             "style": {
                 "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    // ---- issue #167 lot E: `spring.duration`/`spring.rest_threshold` ----
+
+    #[test]
+    fn zero_spring_duration_is_an_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1, "duration": 0.0 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("spring.duration") && e.contains("> 0")),
+            "missing spring.duration error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn negative_spring_duration_is_an_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "bounce_in", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1, "duration": -0.5 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("spring.duration")),
+            "missing spring.duration error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn zero_or_negative_rest_threshold_is_an_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1, "rest_threshold": -0.01 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("spring.rest_threshold")),
+            "missing spring.rest_threshold error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn absurdly_large_rest_threshold_is_an_error() {
+        // >= 1.0 is satisfied at t=0, before the spring has moved at all —
+        // "at rest" from the first frame is not a meaningful measurement.
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1, "rest_threshold": 1.0 } }]
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().any(|e| e.contains("spring.rest_threshold")),
+            "missing spring.rest_threshold error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn positive_spring_duration_and_rest_threshold_are_accepted() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{
+                    "name": "fade_in_up",
+                    "duration": 0.8,
+                    "spring": { "damping": 15, "stiffness": 100, "mass": 1, "duration": 0.8, "rest_threshold": 0.01 }
+                }]
             }
         }))
         .unwrap();

@@ -1,6 +1,9 @@
+use rustmotion::components::{ChildComponent, Component};
+use rustmotion::engine::animator::spring_rest_time;
+use rustmotion::engine::render::deserialize_children;
 use rustmotion::error::Result;
 use rustmotion::loader::load_input;
-use rustmotion::schema;
+use rustmotion::schema::{self, AnimationEffect, ResolvedScenario, SpringConfig};
 use std::path::PathBuf;
 
 pub fn cmd_info(input: &PathBuf) -> Result<()> {
@@ -55,5 +58,195 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
         }
     }
 
+    let springs = collect_springs(&scenario);
+    if !springs.is_empty() {
+        println!("Springs:");
+        for report in &springs {
+            println!("  {}", report.describe());
+        }
+    }
+
     Ok(())
+}
+
+/// Where a `SpringConfig` was found, and the settle time computed for it —
+/// the "measure du repos" issue #167 lot E asks `rustmotion info` to
+/// surface, so an author can size the enclosing animation's `duration`
+/// around a spring instead of guessing (see `SpringConfig::duration`'s doc
+/// comment for why the two are not automatically kept in sync).
+#[derive(Debug)]
+struct SpringReport {
+    label: String,
+    rest_seconds: f64,
+    duration_was_set: bool,
+}
+
+impl SpringReport {
+    fn describe(&self) -> String {
+        if self.duration_was_set {
+            format!(
+                "{}: settles at {:.3}s (spring.duration set explicitly)",
+                self.label, self.rest_seconds
+            )
+        } else {
+            format!(
+                "{}: settles at {:.3}s (natural — no spring.duration set; \
+                 pin the enclosing animation's duration to at least this to \
+                 avoid cutting the spring short)",
+                self.label, self.rest_seconds
+            )
+        }
+    }
+}
+
+fn collect_springs(scenario: &ResolvedScenario) -> Vec<SpringReport> {
+    let mut out = Vec::new();
+    for (vi, view) in scenario.views.iter().enumerate() {
+        for (si, scene) in view.scenes.iter().enumerate() {
+            let children = deserialize_children(scene);
+            let path = format!("view {} / scene {}", vi + 1, si + 1);
+            collect_springs_in_children(&children, &path, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_springs_in_children(
+    children: &[ChildComponent],
+    path: &str,
+    out: &mut Vec<SpringReport>,
+) {
+    for (i, child) in children.iter().enumerate() {
+        let p = format!("{path} / layer {}", i + 1);
+        if let Some(anim) = child.component.as_animatable() {
+            for effect in anim.animation_effects() {
+                if let Some((_, timing)) = effect.as_preset() {
+                    if let Some(spring) = &timing.spring {
+                        out.push(spring_report(&p, spring));
+                    }
+                }
+                if let AnimationEffect::Keyframes(k) = effect {
+                    for kf_anim in &k.keyframes {
+                        if let Some(spring) = &kf_anim.spring {
+                            out.push(spring_report(&p, spring));
+                        }
+                    }
+                }
+            }
+        }
+        match &child.component {
+            Component::Card(c) => collect_springs_in_children(&c.children, &p, out),
+            Component::Flex(c) => collect_springs_in_children(&c.children, &p, out),
+            Component::Grid(c) => collect_springs_in_children(&c.children, &p, out),
+            Component::Positioned(c) => collect_springs_in_children(&c.children, &p, out),
+            Component::Container(c) => collect_springs_in_children(&c.children, &p, out),
+            _ => {}
+        }
+    }
+}
+
+fn spring_report(label: &str, spring: &SpringConfig) -> SpringReport {
+    SpringReport {
+        label: label.to_string(),
+        rest_seconds: spring_rest_time(spring),
+        duration_was_set: spring.duration.is_some(),
+    }
+}
+
+#[cfg(test)]
+mod spring_report_tests {
+    //! Issue #167 lot E: `rustmotion info` must surface the settle time of
+    //! every spring it finds, recursing into containers the same way
+    //! `validate_schema::validate_children` already does.
+    use super::*;
+    use rustmotion::components::ChildComponent;
+
+    #[test]
+    fn finds_a_spring_on_a_top_level_preset() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "bounce_in", "duration": 0.6, "spring": { "damping": 12, "stiffness": 100, "mass": 1 } }]
+            }
+        }))
+        .unwrap();
+        let mut out = Vec::new();
+        collect_springs_in_children(&[child], "test", &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "expected exactly one spring report: {:?}",
+            out.iter().map(|r| &r.label).collect::<Vec<_>>()
+        );
+        assert!(out[0].rest_seconds > 0.0);
+        assert!(!out[0].duration_was_set);
+    }
+
+    #[test]
+    fn finds_a_spring_nested_inside_a_card() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "card",
+            "children": [{
+                "type": "text",
+                "content": "hi",
+                "style": {
+                    "animation": [{ "name": "fade_in_up", "duration": 0.6, "spring": { "damping": 15, "stiffness": 100, "mass": 1 } }]
+                }
+            }]
+        }))
+        .unwrap();
+        let mut out = Vec::new();
+        collect_springs_in_children(&[child], "test", &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "spring nested inside a card must be found: {out:?}"
+        );
+        assert!(
+            out[0].label.contains("layer 1"),
+            "expected the nested layer to be labelled: {}",
+            out[0].label
+        );
+    }
+
+    #[test]
+    fn reports_the_pinned_duration_when_spring_duration_is_set() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{
+                    "name": "bounce_in",
+                    "duration": 0.6,
+                    "spring": { "damping": 6, "stiffness": 120, "mass": 1, "duration": 0.8 }
+                }]
+            }
+        }))
+        .unwrap();
+        let mut out = Vec::new();
+        collect_springs_in_children(&[child], "test", &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].duration_was_set);
+        assert!(
+            (out[0].rest_seconds - 0.8).abs() < 1e-9,
+            "spring.duration must be reported verbatim as the settle time, got {}",
+            out[0].rest_seconds
+        );
+    }
+
+    #[test]
+    fn no_springs_produces_an_empty_report() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "text",
+            "content": "hi",
+            "style": {
+                "animation": [{ "name": "fade_in_up", "duration": 0.6 }]
+            }
+        }))
+        .unwrap();
+        let mut out = Vec::new();
+        collect_springs_in_children(&[child], "test", &mut out);
+        assert!(out.is_empty(), "unexpected spring reports: {out:?}");
+    }
 }
