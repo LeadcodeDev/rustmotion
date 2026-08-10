@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::components::{ChildComponent, Component};
 use crate::schema::Scene;
-use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, video_frame_cache};
+use rustmotion_core::engine::renderer::{
+    asset_cache, fetch_icon_svg, ffmpeg_available, icon_cache_dir, icon_cache_key,
+    video_frame_cache,
+};
 use rustmotion_core::traits::{Styled, Timed};
 
 /// Pre-fetch and cache all icon components before rendering.
@@ -77,19 +80,28 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 
     let cache = asset_cache();
+    // Issue #166: icons that genuinely cannot be resolved (checked both the
+    // disk cache and the network, inside `fetch_icon_svg`) are collected
+    // instead of merely logged — a scene that silently renders without an
+    // icon is exactly the "valid but wrong" outcome this project treats as
+    // worse than a hard failure. Parse/rasterize errors (a malformed SVG
+    // response, not a missing icon) stay warnings: they are not what "icon
+    // remains unresolvable" means here, and are rare enough downstream
+    // provider bugs that they don't warrant aborting the whole render.
+    let mut unresolved: Vec<String> = Vec::new();
     for (icon, color, w, h) in &seen {
-        let cache_key = format!("icon:{}:{}:{}x{}", icon, color, w, h);
+        // Same formula the painter (`icon.rs`) uses at paint time — see
+        // `icon_cache_key`'s doc for why these used to disagree (issue #166).
+        let (render_w, render_h, cache_key) = icon_cache_key(icon, color, *w, *h);
         if cache.contains_key(&cache_key) {
             continue;
         }
-        match fetch_icon_svg(icon, color, *w, *h) {
+        match fetch_icon_svg(icon, color, render_w, render_h) {
             Ok(svg_data) => {
                 let opt = usvg::Options::default();
                 match usvg::Tree::from_data(&svg_data, &opt) {
                     Ok(tree) => {
                         let svg_size = tree.size();
-                        let render_w = (*w).max(1);
-                        let render_h = (*h).max(1);
                         if let Some(mut pixmap) = tiny_skia::Pixmap::new(render_w, render_h) {
                             let scale_x = render_w as f32 / svg_size.width();
                             let scale_y = render_h as f32 / svg_size.height();
@@ -117,15 +129,43 @@ pub fn prefetch_icons(scenes: &[Scene]) {
                 }
             }
             Err(e) => {
-                eprintln!("Warning: failed to fetch icon '{}': {}", icon, e);
+                unresolved.push(format!("'{icon}' (color {color}, target {w}x{h}px): {e}"));
             }
         }
+    }
+
+    if !unresolved.is_empty() {
+        panic!(
+            "rustmotion: {} icon(s) could not be preloaded — checked the disk cache at \
+             {} and the network, both failed:\n  - {}\n\
+             A render must not silently omit an icon: fix the identifier(s), or connect to \
+             the network so they can be downloaded once and cached for offline use.",
+            unresolved.len(),
+            icon_cache_dir().display(),
+            unresolved.join("\n  - ")
+        );
     }
 }
 
 /// Pre-extract all needed frames from video sources in a single ffmpeg pass.
 /// Called before the render loop to populate the video frame cache.
+///
+/// Item 3 (issue #167): this used to fail in total silence — `ffmpeg`
+/// missing, or a single extraction failing, both fell into `_ => {}` with no
+/// trace anywhere, leaving affected `video` components entirely blank.
+/// Replicates the `ffmpeg_available()` + one-time-warning discipline PR #151
+/// already established for embedded-video *audio* extraction
+/// (`encode::video_audio::collect_video_audio_tracks`), which this frame
+/// path never inherited.
 pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
+    if !ffmpeg_available() {
+        eprintln!(
+            "rustmotion: ffmpeg not found — video components will render blank frames. \
+             Install ffmpeg to decode embedded video sources."
+        );
+        return;
+    }
+
     fn collect_videos(child: &ChildComponent, scene_frames: u32, fps: u32) {
         if let Component::Video(video) = &child.component {
             use rustmotion_core::css::style::Size as CSize;
@@ -209,7 +249,21 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
 
                     cache.insert(cache_key, Arc::new(frames));
                 }
-                _ => {}
+                Ok(output) => {
+                    eprintln!(
+                        "rustmotion: video frame preextraction: ffmpeg failed to decode \
+                         frames from '{}' (exit status: {}). This video will render blank \
+                         for the affected frames.",
+                        video.src, output.status
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "rustmotion: video frame preextraction: could not spawn ffmpeg for \
+                         '{}': {}. This video will render blank for the affected frames.",
+                        video.src, e
+                    );
+                }
             }
         }
 
@@ -238,5 +292,36 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
         for child in &children {
             collect_videos(child, scene_frames, fps);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unresolvable_icon_must_fail_the_preload_not_be_swallowed() {
+        // `fetch_icon_svg` fails deterministically (no network needed) for
+        // an icon id with no ':' — `InvalidIconFormat`. Pre-fix,
+        // `prefetch_icons` catches this in its `Err(e) => eprintln!(...)`
+        // arm and returns normally: the render proceeds as if nothing were
+        // wrong, and the icon silently never paints.
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 1.0,
+            "children": [
+                {"type": "icon", "icon": "not-a-valid-icon-id-no-colon"}
+            ]
+        }))
+        .expect("scene must deserialize");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prefetch_icons(std::slice::from_ref(&scene));
+        }));
+
+        assert!(
+            result.is_err(),
+            "prefetch_icons must panic (or otherwise hard-fail) when an icon cannot be \
+             resolved via disk cache or network, instead of silently continuing"
+        );
     }
 }
