@@ -88,8 +88,18 @@ struct SpanFontInfo {
 /// component-level style for anything a span doesn't override. `None` at
 /// index `i` means the span's font failed to load — that span is skipped
 /// during tokenization (same behaviour as the original `filter_map`).
-fn resolve_span_fonts(spans: &[RichTextSpan], style: &CssStyle) -> Vec<Option<SpanFontInfo>> {
-    let default_size = style.font_size_px_or(48.0);
+///
+/// `default_size` is resolved by the caller (once, against a real
+/// `LengthContext` where one is available) rather than re-derived here —
+/// this used to call the context-free `style.font_size_px_or(48.0)`
+/// independently of `compute_layout`'s own resolution of the same value, a
+/// duplicate computation that silently diverged for relative units (lot B,
+/// wave S).
+fn resolve_span_fonts(
+    spans: &[RichTextSpan],
+    style: &CssStyle,
+    default_size: f32,
+) -> Vec<Option<SpanFontInfo>> {
     let default_color = style.color_str_or("#FFFFFF");
     let default_family = style.font_family_or("Inter");
     let default_weight = match &style.font_weight {
@@ -163,15 +173,30 @@ impl RichText {
     /// behaviour); the exact inter-word spacing of source whitespace is not
     /// preserved, matching how `wrap_text_with_fallback` already treats
     /// plain `text` content.
+    ///
+    /// `viewport_width`/`viewport_height` resolve `rem`/`vw`/`vh` on
+    /// `style.font-size` (lot B, wave S — this used to go through the
+    /// context-free `font_size_px_or`, which silently resolved those units
+    /// to 0px). Callers with no real per-frame viewport (intrinsic
+    /// measurement, which runs before layout) should pass a stand-in — see
+    /// `intrinsic::measure_time_font_size_ctx`'s doc comment for why 0px is
+    /// worse than an approximation.
     pub fn compute_layout(
         spans: &[RichTextSpan],
         style: &CssStyle,
+        viewport_width: f32,
+        viewport_height: f32,
         wrap_width: Option<f32>,
         visible_chars_progress: f32,
     ) -> RichTextLayout {
-        let default_size = style.font_size_px_or(48.0);
-        let line_height_val = style.line_height_for(default_size);
-        let span_fonts = resolve_span_fonts(spans, style);
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            viewport_width,
+            viewport_height,
+            wrap_width.unwrap_or(0.0),
+        );
+        let (default_size, _letter_spacing_unused, line_height_val) =
+            style.typography_px_ctx(&base_ctx, 48.0);
+        let span_fonts = resolve_span_fonts(spans, style, default_size);
         let emoji_tf = emoji_typeface();
 
         // Typewriter truncation operates on each span's text by char count
@@ -305,7 +330,13 @@ impl RichText {
         }
     }
 
-    fn paint(&self, canvas: &Canvas, layout_width: f32, props: &AnimatedProperties) {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_width: f32,
+        props: &AnimatedProperties,
+        ctx: &PaintCtx,
+    ) {
         let align = match self.style.text_align {
             Some(CssTextAlign::Center) => TextAlign::Center,
             Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
@@ -324,6 +355,8 @@ impl RichText {
         let layout = RichText::compute_layout(
             &self.spans,
             &self.style,
+            ctx.video_width as f32,
+            ctx.video_height as f32,
             wrap_width,
             props.visible_chars_progress,
         );
@@ -331,7 +364,19 @@ impl RichText {
             return;
         }
 
-        let span_fonts = resolve_span_fonts(&self.spans, &self.style);
+        // Same `default_size` resolution `compute_layout` used above (real
+        // viewport, same `wrap_width`-derived parent size) — kept as a
+        // second call rather than threading `span_fonts` back out of
+        // `RichTextLayout`, but now via the same context-aware accessor so
+        // the two can no longer diverge on a relative `font-size` the way
+        // they structurally could before (lot B, wave S).
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            wrap_width.unwrap_or(0.0),
+        );
+        let default_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
+        let span_fonts = resolve_span_fonts(&self.spans, &self.style, default_size);
         let emoji_tf = emoji_typeface();
 
         let align_width = if layout_width.is_finite() && layout_width > 0.0 {
@@ -380,9 +425,9 @@ impl Painter for RichText {
         canvas: &Canvas,
         layout: &BoxLayout,
         props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, props);
+        self.paint(canvas, layout.width, props, ctx);
     }
 }
 
@@ -418,14 +463,14 @@ mod tests {
             "the quick brown fox jumps over the lazy dog and keeps going",
         )];
         let s = style(24.0);
-        let unconstrained = RichText::compute_layout(&spans, &s, None, -1.0);
+        let unconstrained = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, -1.0);
         assert_eq!(
             unconstrained.lines.len(),
             1,
             "unconstrained width must fit on one line"
         );
 
-        let constrained = RichText::compute_layout(&spans, &s, Some(150.0), -1.0);
+        let constrained = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, Some(150.0), -1.0);
         assert!(
             constrained.lines.len() > 1,
             "a single long span must wrap into multiple lines at 150px, got {} line(s)",
@@ -448,7 +493,7 @@ mod tests {
         // already in the third span.
         let glued = vec![span("Total:"), span("42"), span(" items")];
         let s = style(20.0);
-        let layout = RichText::compute_layout(&glued, &s, None, -1.0);
+        let layout = RichText::compute_layout(&glued, &s, 1920.0, 1080.0, None, -1.0);
         assert_eq!(layout.lines.len(), 1);
         let tokens = &layout.lines[0].tokens;
         assert_eq!(
@@ -471,9 +516,9 @@ mod tests {
     fn typewriter_truncation_hides_tail_tokens() {
         let spans = vec![span("Hello "), span("world")];
         let s = style(20.0);
-        let full = RichText::compute_layout(&spans, &s, None, -1.0);
-        let half = RichText::compute_layout(&spans, &s, None, 0.5);
-        let none = RichText::compute_layout(&spans, &s, None, 0.0);
+        let full = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, -1.0);
+        let half = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, 0.5);
+        let none = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, 0.0);
 
         let full_tokens: usize = full.lines.iter().map(|l| l.tokens.len()).sum();
         let half_tokens: usize = half.lines.iter().map(|l| l.tokens.len()).sum();
@@ -491,7 +536,7 @@ mod tests {
     fn empty_spans_produce_one_empty_line_not_a_panic() {
         let spans: Vec<RichTextSpan> = vec![];
         let s = style(20.0);
-        let layout = RichText::compute_layout(&spans, &s, None, -1.0);
+        let layout = RichText::compute_layout(&spans, &s, 1920.0, 1080.0, None, -1.0);
         assert_eq!(layout.lines.len(), 1);
         assert_eq!(layout.max_width, 0.0);
     }

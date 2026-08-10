@@ -24,6 +24,70 @@ use crate::gradient_text::GradientText;
 use crate::kbd::Kbd;
 use crate::text::Text;
 
+// ─── Shared `font-size` context resolution (deployment of `font_size_px_ctx`
+// / `typography_px_ctx`, css/style.rs, across every component that still
+// resolved `font-size` with the context-free `font_size_px_or`) ───────────
+//
+// `font_size_px_or`/`.px()` cannot resolve `%`/`em`/`rem`/`vw`/`vh` — for a
+// `Some(Length::String(_))` that parses as one of those units, `.px()` warns
+// and returns `0.0`, and since the field itself is `Some`, the `_or`
+// fallback default never kicks in either. A `text` with `"font-size":
+// "2rem"` therefore measured *and* painted at 0px: `validate` passed (only
+// warnings), but the rendered frame had no visible text (paint_pass's
+// `height <= 0.0` guard skips the node once the intrinsic measures it at
+// zero).
+//
+// `rustmotion_core::css::style::CssStyle::font_size_px_ctx` (and
+// `typography_px_ctx`, which resolves `font-size`, `letter-spacing`, and
+// `line-height` together, honouring CSS's two different `em` bases) already
+// exist and are tested — nothing in the engine called them. These two
+// helpers build the `LengthContext` every call site below feeds them,
+// so the context-building logic lives in exactly one place instead of being
+// copied into ~15 components.
+use rustmotion_core::css::units::LengthContext;
+
+/// `LengthContext` for resolving `font-size` (and, through
+/// [`CssStyle::typography_px_ctx`], `letter-spacing`/`line-height` derived
+/// from it) against a real, per-frame viewport. Use from `Painter::
+/// paint_content` and friends, which have a real `PaintCtx` (`video_width`/
+/// `video_height`) on hand.
+///
+/// `rem`/`vw`/`vh` resolve correctly through this. `em`/`%` on `font-size`
+/// itself do not: per CSS they're relative to the *parent's* computed
+/// font-size, but `cascade.rs` inherits `font-size` down the tree as a raw,
+/// unresolved `Length`, not a resolved px value (see the module note above
+/// `CssStyle::font_size_px_ctx`) — no caller in this workstream's scope can
+/// supply the real cascaded value. `font_size: 16.0` here is the CSS root
+/// default used as the best available stand-in; it makes `em`/`%` on
+/// `font-size` *resolve* (no longer silently drop to 0px) without making
+/// them *correct* against an actual parent font-size. Fixing that fully
+/// needs a `cascade.rs` change, out of scope here.
+pub fn font_size_ctx(viewport_width: f32, viewport_height: f32, parent_size: f32) -> LengthContext {
+    LengthContext {
+        viewport_width,
+        viewport_height,
+        parent_size,
+        font_size: 16.0,
+        root_font_size: 16.0,
+    }
+}
+
+/// Same as [`font_size_ctx`], for the `Intrinsic` measurers in this module:
+/// they run at `box_builder`/`geometry` construction time, before layout, so
+/// there is no real per-frame viewport to hand (see the pre-existing note on
+/// `TextIntrinsic::from_parts`, which has the same limitation for
+/// `letter-spacing`/`line-height`). Falls back to the engine-wide default
+/// 1920×1080 (same as `LengthContext::default()`) so `rem` — which does not
+/// depend on the viewport at all — still resolves exactly, and `vw`/`vh` get
+/// a reasonable non-zero approximation instead of silently dropping to 0.
+/// This can diverge from what `Painter::paint_content` resolves via
+/// [`font_size_ctx`] for `vw`/`vh` specifically, on videos that aren't
+/// 1920×1080 — closing that fully needs the real `VideoConfig` threaded
+/// through `box_builder.rs`/`geometry.rs`, both outside this workstream.
+pub fn measure_time_font_size_ctx(parent_size: f32) -> LengthContext {
+    font_size_ctx(1920.0, 1080.0, parent_size)
+}
+
 /// Skia-backed intrinsic measurer for [`Text`] (audit #10: despite the name
 /// this module's doc header suggests, this uses `skia_safe::Font::
 /// measure_str` via `engine::renderer::text`'s fallback-aware helpers — the
@@ -71,30 +135,24 @@ impl TextIntrinsic {
         // wave; the geometry validator re-measures via this exact type and
         // must keep agreeing with it byte-for-byte, so changing what it
         // needs to pass in is not a call to make unilaterally here).
+        // `measure_time_font_size_ctx` falls back to the engine-wide default
+        // viewport (1920×1080) for this reason — see its doc comment.
         //
-        // But `letter-spacing`'s and `line-height`'s `em`/`%` resolve
-        // against this element's *own* font-size (not the parent's, not the
-        // viewport) — CSS spec, also documented on
-        // `CssStyle::letter_spacing_px_ctx`/`line_height_for_ctx` — and that
-        // own font-size is already known right here, with zero signature
-        // change needed. Building a `LengthContext` carrying just that
-        // resolved `font_size` (defaults for everything else) and using the
-        // `_ctx` resolvers closes the measure-vs-paint divergence for `em`/
-        // `%` specifically (`Text`/`Caption`'s painters already resolve
-        // these two properties with the real `PaintCtx`'s viewport, but
-        // `em`/`%` on them don't read the viewport at all, so the two agree
-        // regardless of what viewport this default carries). `vw`/`vh`/
-        // `rem` on `letter-spacing`/`line-height` remain unresolved against
-        // the *real* viewport here (they fall back to this struct's default
-        // 1920×1080/16px root) — closing that fully needs the real
-        // `VideoConfig` plumbed through `box_builder.rs`/`geometry.rs`,
-        // still out of scope for the reasons above.
-        let font_size = style.font_size_px_or(48.0);
-        let own_ctx = rustmotion_core::css::units::LengthContext {
-            font_size,
-            ..rustmotion_core::css::units::LengthContext::default()
-        };
-        let line_height_resolved = style.line_height_for_ctx(font_size, &own_ctx);
+        // `font-size` itself, and `letter-spacing`/`line-height`'s `em`/`%`
+        // (relative to this element's *own*, just-resolved font-size — CSS
+        // spec, also documented on `CssStyle::letter_spacing_px_ctx`/
+        // `line_height_for_ctx`) are resolved together by
+        // `typography_px_ctx`, which re-derives the right context between
+        // the two steps. `Text`/`Caption`'s painters resolve the same three
+        // properties with the real `PaintCtx`'s viewport (lot B, wave S), so
+        // `rem` (viewport-independent) always agrees between measure and
+        // paint; `vw`/`vh` can diverge on videos that aren't 1920×1080 —
+        // closing that fully needs the real `VideoConfig` plumbed through
+        // `box_builder.rs`/`geometry.rs`, still out of scope for the reasons
+        // above.
+        let base_ctx = measure_time_font_size_ctx(0.0);
+        let (font_size, letter_spacing, line_height_resolved) =
+            style.typography_px_ctx(&base_ctx, 48.0);
         Self {
             content: content.to_string(),
             font_family: style.font_family.clone(),
@@ -102,7 +160,7 @@ impl TextIntrinsic {
             line_height_resolved,
             weight: weight_to_u16(style.font_weight.as_ref()),
             italic: matches!(style.font_style, Some(CssFontStyle::Italic)),
-            letter_spacing: style.letter_spacing_px_ctx(&own_ctx),
+            letter_spacing,
             max_width,
             wrap: true,
         }
@@ -287,7 +345,9 @@ pub struct KbdIntrinsic {
 
 impl KbdIntrinsic {
     pub fn from_kbd(k: &Kbd) -> Self {
-        let fs = k.style.font_size_px_or(k.font_size);
+        let fs = k
+            .style
+            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), k.font_size);
         let synthetic_style = synthesize_text_style(&k.style, fs, "SF Mono");
         Self {
             text: TextIntrinsic::from_parts_with_wrap(&k.key, &synthetic_style, None, false),
@@ -354,7 +414,9 @@ pub struct BadgeIntrinsic {
 impl BadgeIntrinsic {
     pub fn from_badge(b: &Badge) -> Self {
         let (default_fs, h_pad, v_pad, icon_size) = badge_size_params(&b.badge_size);
-        let font_size = b.style.font_size_px_or(default_fs);
+        let font_size = b
+            .style
+            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), default_fs);
         let ratio = font_size / default_fs;
         let h_padding = h_pad * ratio;
         let v_padding = v_pad * ratio;
@@ -451,7 +513,9 @@ pub struct TerminalIntrinsic {
 
 impl TerminalIntrinsic {
     pub fn from_terminal(t: &Terminal) -> Self {
-        let font_size = t.style.font_size_px_or(TERM_FONT_SIZE);
+        let font_size = t
+            .style
+            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), TERM_FONT_SIZE);
         let line_height = (font_size * TERM_LINE_HEIGHT / TERM_FONT_SIZE).ceil();
         let chrome_height = if t.show_chrome { CHROME_HEIGHT } else { 0.0 };
 
@@ -530,7 +594,9 @@ pub struct TableIntrinsic {
 
 impl TableIntrinsic {
     pub fn from_table(t: &Table) -> Self {
-        let font_size = t.style.font_size_px_or(TABLE_FONT_SIZE);
+        let font_size = t
+            .style
+            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), TABLE_FONT_SIZE);
         let row_height = font_size * DEFAULT_ROW_HEIGHT_RATIO;
 
         let total_width = Self::compute_width(t, font_size);
@@ -625,7 +691,9 @@ pub struct CodeblockIntrinsic {
 impl CodeblockIntrinsic {
     pub fn from_codeblock(c: &Codeblock) -> Self {
         let font_family = c.style.font_family_or("JetBrains Mono");
-        let font_size = c.style.font_size_px_or(14.0);
+        let font_size = c
+            .style
+            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), 14.0);
         let font_weight = match &c.style.font_weight {
             Some(CssFontWeight2::Keyword(CssFontWeightKw2::Bold | CssFontWeightKw2::Bolder)) => {
                 FontWeight::Bold
@@ -657,7 +725,7 @@ impl CodeblockIntrinsic {
             0.0
         };
 
-        let dims = compute_code_dimensions(&c.code, &font, padding, chrome_height, c);
+        let dims = compute_code_dimensions(&c.code, &font, font_size, padding, chrome_height, c);
 
         Self {
             natural_width: dims.total_width,
@@ -733,7 +801,8 @@ impl IntrinsicMeasure for RichTextIntrinsic {
             }
         };
 
-        let layout = RichText::compute_layout(&self.spans, &self.style, max_width, -1.0);
+        let layout =
+            RichText::compute_layout(&self.spans, &self.style, 1920.0, 1080.0, max_width, -1.0);
         let line_count = layout.lines.len().max(1) as f32;
         (layout.max_width, line_count * layout.line_height)
     }
@@ -1010,7 +1079,7 @@ mod tests {
             (None, None),
             (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
         );
-        let layout = RichText::compute_layout(&spans, &style, None, -1.0);
+        let layout = RichText::compute_layout(&spans, &style, 1920.0, 1080.0, None, -1.0);
         assert_eq!(w, layout.max_width);
         assert_eq!(h, layout.lines.len().max(1) as f32 * layout.line_height);
     }

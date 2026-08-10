@@ -83,11 +83,18 @@ rustmotion_core::impl_traits!(PillNav {
 });
 
 impl PillNav {
-    fn resolved_font_size(&self) -> f32 {
-        self.style.font_size_px_or(14.0)
+    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
+    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
+    /// S). `em`/`%` on `font-size` itself remain approximate — see
+    /// `crate::intrinsic::font_size_ctx`'s doc comment.
+    fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            14.0,
+        )
     }
 
-    fn make_font(&self, bold: bool) -> Option<skia_safe::Font> {
+    fn make_font(&self, bold: bool, ctx: &PaintCtx) -> Option<skia_safe::Font> {
         let font_style = if bold {
             skia_safe::FontStyle::bold()
         } else {
@@ -97,13 +104,13 @@ impl PillNav {
         let typeface = typeface_with_fallback(family, font_style).ok()?;
         Some(skia_safe::Font::from_typeface(
             typeface,
-            self.resolved_font_size(),
+            self.resolved_font_size(ctx),
         ))
     }
 
-    fn compute_tab_layout(&self) -> Option<(f32, Vec<f32>, Vec<f32>)> {
-        let font = self.make_font(false)?;
-        let font_size = self.resolved_font_size();
+    fn compute_tab_layout(&self, ctx: &PaintCtx) -> Option<(f32, Vec<f32>, Vec<f32>)> {
+        let font = self.make_font(false, ctx)?;
+        let font_size = self.resolved_font_size(ctx);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let h_pad = font_size * 1.2;
 
@@ -158,7 +165,7 @@ impl PillNav {
 }
 
 impl PillNav {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64, ctx: &PaintCtx) {
         if self.items.is_empty() {
             return;
         }
@@ -174,7 +181,7 @@ impl PillNav {
         bg_paint.set_anti_alias(true);
         canvas.draw_rrect(outer_rrect, &bg_paint);
 
-        let Some((_total_w, tab_positions, tab_widths)) = self.compute_tab_layout() else {
+        let Some((_total_w, tab_positions, tab_widths)) = self.compute_tab_layout(ctx) else {
             return;
         };
         let (active, transition_info) = self.active_at_time(time);
@@ -206,10 +213,10 @@ impl PillNav {
         canvas.draw_rrect(pill_rrect, &pill_paint);
 
         // Tab labels
-        let Some(font) = self.make_font(false) else {
+        let Some(font) = self.make_font(false, ctx) else {
             return;
         };
-        let font_size = self.resolved_font_size();
+        let font_size = self.resolved_font_size(ctx);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();
         let text_y = (h + (-metrics.ascent)) / 2.0;
@@ -249,6 +256,81 @@ impl Painter for PillNav {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
+        self.paint(canvas, layout.width, layout.height, ctx.time, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::CssStyle;
+    use rustmotion_core::css::Length;
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let nav = PillNav {
+            items: vec!["Home".to_string(), "About".to_string()],
+            active_index: 0,
+            transitions: Vec::new(),
+            pill_color: default_pill_color(),
+            text_color: default_text_color(),
+            inactive_text_color: default_inactive_text_color(),
+            background_color: default_background_color(),
+            height: default_height(),
+            border_radius: default_border_radius(),
+            gap: default_gap(),
+            transition_duration: default_transition_duration(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            nav.paint(canvas, 300.0, 44.0, 0.0, &test_ctx());
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let lit = buf.chunks_exact(4).filter(|p| p[3] > 0).count();
+        assert!(
+            lit > 20,
+            "pill_nav at font-size: 2rem must paint visible ink, got {lit} lit pixels"
+        );
     }
 }

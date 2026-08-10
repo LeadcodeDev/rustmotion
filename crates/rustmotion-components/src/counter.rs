@@ -90,7 +90,18 @@ impl Counter {
     ) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
-        let font_size = self.style.font_size_px_or(48.0);
+        // Lot B (wave S): `font-size` now resolves through the same
+        // context-aware machinery `text-shadow` already used below (see
+        // `lctx`) — it used to stay on the context-free `font_size_px_or`,
+        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
+        // `font-size` itself remain approximate — see
+        // `crate::intrinsic::font_size_ctx`'s doc comment.
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            layout_width.max(0.0),
+        );
+        let font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
         // Animated color (timeline style-state transitions) overrides the
         // static style color.
         let color = props
@@ -146,7 +157,14 @@ impl Counter {
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        let letter_spacing = self.style.letter_spacing_px();
+        // This element's own resolved font-size as the `em`/`%` base for
+        // `letter-spacing` and (below) `text-shadow` — same context reused
+        // for both instead of each rebuilding an equivalent one.
+        let own_ctx = rustmotion_core::css::units::LengthContext {
+            font_size,
+            ..base_ctx
+        };
+        let letter_spacing = self.style.letter_spacing_px_ctx(&own_ctx);
 
         let advance_width =
             measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
@@ -195,14 +213,7 @@ impl Counter {
         let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
             vec![s.clone()]
         } else if let Some(list) = &self.style.text_shadow {
-            let lctx = rustmotion_core::css::units::LengthContext {
-                viewport_width: ctx.video_width as f32,
-                viewport_height: ctx.video_height as f32,
-                parent_size: layout_width.max(0.0),
-                font_size,
-                root_font_size: 16.0,
-            };
-            list.iter().map(|s| s.to_schema(&lctx)).collect()
+            list.iter().map(|s| s.to_schema(&own_ctx)).collect()
         } else {
             Vec::new()
         };
@@ -345,5 +356,56 @@ mod tests {
     fn a_zero_or_negative_duration_falls_back_to_the_scene() {
         let c = counter(Some(0.0), None);
         assert!((c.ramp_progress(2.0, 4.0) - 0.5).abs() < 1e-9);
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px on the
+        // context-free `font_size_px_or` path.
+        let mut c = counter(None, None);
+        c.style.font_size = Some(rustmotion_core::css::Length::String("2rem".into()));
+        c.style.color = Some(rustmotion_core::css::style::Color::String("#FFFFFF".into()));
+
+        const W: i32 = 300;
+        const H: i32 = 150;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let ctx = PaintCtx {
+            time: 1.0,
+            scene_duration: 2.0,
+            frame_index: 30,
+            fps: 30,
+            video_width: 300,
+            video_height: 150,
+            stagger_offset: 0.0,
+        };
+        let props = AnimatedProperties::default();
+        {
+            let canvas = surface.canvas();
+            c.paint(canvas, 200.0, 1.0, 2.0, &props, &ctx)
+                .expect("paint succeeds");
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let lit = buf.chunks_exact(4).filter(|p| p[3] > 0).count();
+        assert!(
+            lit > 20,
+            "counter at font-size: 2rem must paint visible ink, got {lit} lit pixels"
+        );
     }
 }

@@ -87,8 +87,19 @@ rustmotion_core::impl_traits!(Kbd {
 });
 
 impl Kbd {
-    fn make_font(&self) -> Option<skia_safe::Font> {
-        let fs = self.style.font_size_px_or(self.font_size);
+    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
+    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
+    /// S). `em`/`%` on `font-size` itself remain approximate — see
+    /// `crate::intrinsic::font_size_ctx`'s doc comment.
+    fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
+        self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            self.font_size,
+        )
+    }
+
+    fn make_font(&self, ctx: &PaintCtx) -> Option<skia_safe::Font> {
+        let fs = self.resolved_font_size(ctx);
         let font_style = skia_safe::FontStyle::normal();
         let family = self.style.font_family.as_deref().unwrap_or("SF Mono");
         let typeface = typeface_with_fallback(family, font_style).ok()?;
@@ -97,7 +108,7 @@ impl Kbd {
 }
 
 impl Kbd {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) {
         let w = layout_w;
         let h = layout_h;
         let radius = 6.0;
@@ -138,10 +149,10 @@ impl Kbd {
         canvas.draw_rrect(face_rrect, &border_paint);
 
         // Text centered
-        let Some(font) = self.make_font() else {
+        let Some(font) = self.make_font(ctx) else {
             return;
         };
-        let fs = self.style.font_size_px_or(self.font_size);
+        let fs = self.resolved_font_size(ctx);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, fs));
 
         let text_color = self.style.color_str().unwrap_or(&self.text_color);
@@ -172,9 +183,9 @@ impl Painter for Kbd {
         canvas: &Canvas,
         layout: &BoxLayout,
         _props: &AnimatedProperties,
-        _ctx: &PaintCtx,
+        ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height);
+        self.paint(canvas, layout.width, layout.height, ctx);
     }
 }
 
@@ -184,6 +195,18 @@ mod tests {
 
     fn parse(json: &str) -> Kbd {
         serde_json::from_str(json).expect("kbd should deserialize")
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        }
     }
 
     #[test]
@@ -236,7 +259,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((20.0, 5.0));
-            kbd.paint(canvas, box_w, box_h);
+            kbd.paint(canvas, box_w, box_h, &test_ctx());
         }
         let snapshot = surface.image_snapshot();
         let info = skia_safe::ImageInfo::new(
@@ -266,5 +289,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`.
+        let kbd = Kbd {
+            key: "K".to_string(),
+            font_size: default_font_size(),
+            background_color: default_bg_color(),
+            border_color: default_border_color(),
+            text_color: default_text_color(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(rustmotion_core::css::Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 200;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            kbd.paint(canvas, 100.0, 60.0, &test_ctx());
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Text is near-white (#E2E8F0 default `text_color`) on a dark key
+        // face — probe for near-white ink specifically, since the face/
+        // border/shadow paint regardless of font-size.
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[0] > 180 && p[1] > 180 && p[2] > 180)
+            .count();
+        assert!(
+            text_ink > 5,
+            "kbd at font-size: 2rem must paint visible text, got {text_ink} pixels"
+        );
     }
 }

@@ -360,26 +360,38 @@ impl Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) -> Result<()> {
-        // `font-size` stays on the context-free accessor: resolving a
-        // relative unit here correctly (`em`/`%`) would need the parent's
-        // *actual computed* font-size, which `cascade.rs` doesn't provide
-        // today (it inherits `font-size` as a raw, unresolved `Length` —
-        // see the module note on `CssStyle::font_size_px_ctx`, issue #125
-        // §2). That cascade fix stays out of scope here; `vw`/`vh`/`rem`
-        // font-size still fall back to 0px with a loud warning via `.px()`.
-        let font_size = self.style.font_size_px_or(48.0);
-        // `letter-spacing` and `line-height`'s `em`/`%` are relative to this
-        // element's *own* (just-resolved) font-size, which has no cascade
-        // dependency — a real `LengthContext` is available here (real
-        // viewport dims from `ctx`, `font_size` just above), so these use
-        // the context-aware resolvers and correctly handle `vw`/`vh`/`rem`/
-        // line-height-`%` (issue #125 §2).
+        // `font-size` itself, plus `letter-spacing`/`line-height`'s `em`/`%`
+        // (relative to this element's *own*, just-resolved font-size) are
+        // now all resolved together against a real `LengthContext` (real
+        // viewport dims from `ctx`) via `typography_px_ctx`, which re-derives
+        // the right base between the two steps (lot B, wave S — this used to
+        // stop at the context-free `font_size_px_or`, so `rem`/`vw`/`vh`
+        // font-size silently fell back to 0px with only a loud warning).
+        //
+        // `em`/`%` *on `font-size` itself* are the one case this still
+        // doesn't get right: per CSS they're relative to the *parent's*
+        // actual computed font-size, but `cascade.rs` inherits `font-size`
+        // down the tree as a raw, unresolved `Length`, not a resolved px
+        // value (see the module note on `CssStyle::font_size_px_ctx`) — no
+        // caller here can supply the real cascaded value, so `base_ctx`
+        // below uses the CSS root default (16px) as the best available
+        // stand-in. `rem` (always relative to a fixed root, not a per-
+        // ancestor chain) and `vw`/`vh` (relative to the real viewport,
+        // available here via `ctx`) do not have this problem.
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            layout_width.max(0.0),
+        );
+        let (font_size, letter_spacing, line_height_val) =
+            self.style.typography_px_ctx(&base_ctx, 48.0);
+        // This element's *own* resolved font-size as the `em`/`%` base —
+        // needed below for `text-shadow` (its blur/offset are relative to
+        // the shadow owner's own font-size, same rule as letter-spacing/
+        // line-height, not the parent-proxy `base_ctx` above).
         let type_ctx = rustmotion_core::css::units::LengthContext {
-            viewport_width: ctx.video_width as f32,
-            viewport_height: ctx.video_height as f32,
-            parent_size: layout_width.max(0.0),
             font_size,
-            root_font_size: 16.0,
+            ..base_ctx
         };
         // Animated color (timeline style-state transitions) overrides the
         // static style color.
@@ -406,8 +418,6 @@ impl Text {
             Some(CssTextAlign::Right | CssTextAlign::End) => TextAlign::Right,
             _ => TextAlign::Left,
         };
-        let line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
-        let letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
 
         let slant = match font_style_type {
             FontStyleType::Normal => skia_safe::font_style::Slant::Upright,
@@ -810,6 +820,84 @@ mod tests {
         assert!(
             has_ink_in(&grid, W, 0, W, 55, H),
             "wrapped text must spill onto a second line within the box width"
+        );
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px (the
+        // context-free `font_size_px_or` cannot resolve `rem`), so
+        // `TextIntrinsic` measured a 0-height box and `paint_pass`'s
+        // `height <= 0.0` guard skipped painting this node entirely —
+        // `validate` reported success with only a warning.
+        let text = Text {
+            content: "HELLO".into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("2rem".into())),
+                color: Some(rustmotion_core::css::style::Color::String("#FFFFFF".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, 300.0, 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+
+        // 2rem against the 16px CSS root default = 32px — comfortably tall
+        // enough to show up in the first 60 rows.
+        assert!(
+            has_ink_in(&grid, W, 0, W, 0, 60),
+            "font-size: 2rem must paint visible ink (32px glyphs), got none"
+        );
+    }
+
+    #[test]
+    fn vh_font_size_paints_visible_ink_scaled_to_the_real_viewport() {
+        // `vh` needs the real per-frame viewport (`ctx.video_height`), not
+        // just a fixed root size — a different resolution path from `rem`.
+        // `test_ctx()` sets `video_height: 200`, so `20vh` = 40px.
+        let text = Text {
+            content: "HI".into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::String("20vh".into())),
+                color: Some(rustmotion_core::css::style::Color::String("#FFFFFF".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, 300.0, 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            has_ink_in(&grid, W, 0, W, 0, 70),
+            "font-size: 20vh (40px against a 200px-tall test viewport) must paint visible ink"
         );
     }
 

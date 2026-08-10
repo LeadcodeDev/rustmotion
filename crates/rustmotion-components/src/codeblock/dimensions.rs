@@ -15,11 +15,18 @@ pub(crate) struct CodeDimensions {
 pub(crate) fn compute_code_dimensions(
     code: &str,
     font: &Font,
+    font_size: f32,
     padding: (f32, f32, f32, f32),
     chrome_height: f32,
     layer: &Codeblock,
 ) -> CodeDimensions {
-    let font_size = layer.style.font_size_px_or(14.0);
+    // `font_size` is now a caller-supplied parameter instead of being
+    // re-derived here from `layer.style` — the caller (`render.rs`,
+    // `intrinsic.rs`) already resolved it once (with the real `LengthContext`
+    // where one is available) to build `font`; re-deriving it a second time
+    // with the context-free accessor was exactly the kind of duplicate
+    // computation that let this and the caller's value silently diverge for
+    // relative units (lot B, wave S).
     let actual_line_height = layer.style.line_height_for(font_size);
     let lines: Vec<&str> = code.lines().collect();
     let line_count = lines.len().max(1);

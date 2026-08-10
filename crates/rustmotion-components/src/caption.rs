@@ -49,7 +49,19 @@ rustmotion_core::impl_traits!(Caption {
 impl Caption {
     fn paint(&self, canvas: &Canvas, layout_width: f32, layout_height: f32, ctx: &PaintCtx) {
         let time = ctx.time;
-        let font_size = self.style.font_size_px_or(48.0);
+        // #9 / lot B (wave S): `font-size` itself now resolves through the
+        // same context-aware machinery as `letter-spacing`/`line-height`
+        // below — it used to stay on the context-free `font_size_px_or`,
+        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
+        // `font-size` itself remain approximate (see
+        // `crate::intrinsic::font_size_ctx`'s doc comment) — cascade.rs
+        // doesn't track the real parent font-size.
+        let base_ctx = crate::intrinsic::font_size_ctx(
+            ctx.video_width as f32,
+            ctx.video_height as f32,
+            layout_width.max(0.0),
+        );
+        let font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
 
@@ -58,11 +70,8 @@ impl Caption {
         // the real viewport, available here via `ctx` (mirrors
         // `text.rs::paint`'s `type_ctx`).
         let type_ctx = LengthContext {
-            viewport_width: ctx.video_width as f32,
-            viewport_height: ctx.video_height as f32,
-            parent_size: layout_width.max(0.0),
             font_size,
-            root_font_size: 16.0,
+            ..base_ctx
         };
 
         // #9: derive weight/slant from `style.font-weight`/`font-style`
@@ -711,6 +720,29 @@ mod tests {
             loose_maxy > tight_maxy + 50,
             "line-height: 2.0 must spread lines much further than 0.9 \
              (tight bottom={tight_maxy}, loose bottom={loose_maxy})"
+        );
+    }
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px on the
+        // context-free `font_size_px_or` path — `CaptionIntrinsic` (via
+        // `TextIntrinsic`) measured a 0-height box and nothing painted.
+        let mut caption = make_caption_with_max_width("hello world", None, Some(300.0));
+        caption.style.font_size = Some(Length::String("2rem".into()));
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            caption.paint(canvas, 300.0, H as f32, &test_ctx(0.5));
+        }
+        let bounds = ink_bounds(&mut surface, W, H);
+        assert!(
+            bounds.is_some(),
+            "caption at font-size: 2rem must paint visible ink"
         );
     }
 

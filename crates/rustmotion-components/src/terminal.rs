@@ -147,14 +147,18 @@ pub(crate) fn resolve_typeface(style: &CssStyle) -> Option<skia_safe::Typeface> 
 }
 
 impl Terminal {
-    fn make_font(&self) -> Option<skia_safe::Font> {
+    /// `font_size` is resolved once by the caller (`paint`, against a real
+    /// `LengthContext`) and threaded through here and [`Self::line_height`]
+    /// instead of each independently re-deriving it via the context-free
+    /// `font_size_px_or` — four separate call sites used to do exactly that,
+    /// which is how a relative unit could silently diverge between them
+    /// (lot B, wave S).
+    fn make_font(&self, font_size: f32) -> Option<skia_safe::Font> {
         let typeface = resolve_typeface(&self.style)?;
-        let size = self.style.font_size_px_or(FONT_SIZE);
-        Some(skia_safe::Font::from_typeface(typeface, size))
+        Some(skia_safe::Font::from_typeface(typeface, font_size))
     }
 
-    fn line_height(&self) -> f32 {
-        let font_size = self.style.font_size_px_or(FONT_SIZE);
+    fn line_height(&self, font_size: f32) -> f32 {
         (font_size * LINE_HEIGHT / FONT_SIZE).ceil()
     }
 
@@ -229,9 +233,19 @@ impl Terminal {
 }
 
 impl Terminal {
-    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
+    fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, ctx: &PaintCtx) {
+        let time = ctx.time;
         let w = layout_w;
         let h = layout_h;
+
+        // Resolved once, against the real per-frame viewport (`rem`/`vw`/
+        // `vh` on `font-size` now resolve instead of silently dropping to
+        // 0px — lot B, wave S) and threaded through every call below that
+        // used to independently re-derive it.
+        let font_size = self.style.font_size_px_ctx(
+            &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
+            FONT_SIZE,
+        );
 
         // Background
         let bg_rect = Rect::from_xywh(0.0, 0.0, w, h);
@@ -243,7 +257,7 @@ impl Terminal {
 
         // Resolve the terminal font up front — bail before any canvas.save()
         // so save/restore stays balanced if no font is available.
-        let Some(font) = self.make_font() else {
+        let Some(font) = self.make_font(font_size) else {
             return;
         };
 
@@ -278,7 +292,6 @@ impl Terminal {
 
             // Title
             if let Some(title) = &self.title {
-                let font_size = self.style.font_size_px_or(FONT_SIZE);
                 let emoji_font =
                     emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
                 let mut title_paint = paint_from_hex(self.theme.title_color());
@@ -302,7 +315,6 @@ impl Terminal {
         let (visible_lines, partial_chars, last_line_opacity) = self.compute_reveal(time);
 
         // Lines
-        let font_size = self.style.font_size_px_or(FONT_SIZE);
         let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
@@ -321,7 +333,7 @@ impl Terminal {
             true,
         );
         if self.auto_scroll {
-            let line_h = self.line_height();
+            let line_h = self.line_height(font_size);
             let content_h = visible_lines as f32 * line_h + PADDING * 2.0 + chrome_h;
             let overflow = content_h - h;
             if overflow > 0.0 {
@@ -437,7 +449,7 @@ impl Terminal {
                 }
             }
 
-            y_offset += self.line_height();
+            y_offset += self.line_height(font_size);
         }
 
         canvas.restore(); // close inner content clip
@@ -453,6 +465,82 @@ impl Painter for Terminal {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, layout.height, ctx.time);
+        self.paint(canvas, layout.width, layout.height, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
+
+    #[test]
+    fn rem_font_size_paints_visible_ink() {
+        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
+        // context-free `font_size_px_or`, at all four call sites that used
+        // to independently re-derive it in `paint`.
+        let terminal = Terminal {
+            lines: vec![TerminalLine {
+                text: "hello world".to_string(),
+                line_type: TerminalLineType::Output,
+                color: None,
+            }],
+            theme: TerminalTheme::default(),
+            title: None,
+            show_chrome: false,
+            reveal: None,
+            auto_scroll: true,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(rustmotion_core::css::Length::String("2rem".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let ctx = PaintCtx {
+            time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 400,
+            video_height: 200,
+            stagger_offset: 0.0,
+        };
+        {
+            let canvas = surface.canvas();
+            terminal.paint(canvas, W as f32, H as f32, &ctx);
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        // Background always paints (opaque bg_rrect), so probe for text ink
+        // specifically: pixels that are not the dark theme background color
+        // (#1E1E1E) and not fully transparent.
+        let text_ink = buf
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && !(p[0] < 40 && p[1] < 40 && p[2] < 40))
+            .count();
+        assert!(
+            text_ink > 20,
+            "terminal at font-size: 2rem must paint visible text ink, got {text_ink} pixels"
+        );
     }
 }
