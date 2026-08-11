@@ -30,18 +30,21 @@ fn announced_duration(scenario: &ResolvedScenario) -> f64 {
 /// Why `--fix` must not write over this input.
 ///
 /// `--fix` serialises `LoadedScenario::raw`, which is the document *after*
-/// variable substitution and `include` resolution — not the document on disk. For
-/// a plain JSON scenario the two coincide and writing back is faithful. For
-/// anything templated they do not, and the write silently replaces the source
-/// with its own expansion: the `config` block and every `$var` disappear, includes
-/// get inlined into the parent, and an HTML input is replaced by JSON outright.
+/// variable substitution, `for-each`/`use` expansion, and `include` resolution
+/// — not the document on disk. For a plain JSON scenario the two coincide and
+/// writing back is faithful. For anything templated they do not, and the write
+/// silently replaces the source with its own expansion: the `config` block and
+/// every `$var` disappear, includes get inlined into the parent, `for-each`/
+/// `use` get inlined into their repeated/instantiated output, and an HTML
+/// input is replaced by JSON outright.
 ///
-/// One rule covers all three: only write back a source `--fix` can reproduce.
+/// One rule covers all four: only write back a source `--fix` can reproduce.
 #[derive(Debug, PartialEq, Eq)]
 enum FixRefusal {
     HtmlSource,
     Templated,
     UsesInclude,
+    UsesTemplateDirectives,
 }
 
 impl FixRefusal {
@@ -62,6 +65,13 @@ impl FixRefusal {
                 "--fix cannot rewrite {p}: it uses `include`, and the fixer would write back the \
                  resolved tree — inlining the included files into the parent and patching by a \
                  path that no longer means the same node. Fix the included file directly."
+            ),
+            Self::UsesTemplateDirectives => format!(
+                "--fix cannot rewrite {p}: it uses `for-each`/`use` (or declares `components`), \
+                 and the fixer would write back the expanded tree — inlining every repeated \
+                 instance and patching by a path that no longer means the same source node, \
+                 exactly like `include`. Fix the `components` definition or the `for-each` \
+                 template directly."
             ),
         }
     }
@@ -84,6 +94,16 @@ fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     }
     if raw_source.contains("\"include\"") {
         return Some(FixRefusal::UsesInclude);
+    }
+    // Same conservative, raw-substring detection as `UsesInclude` above (not
+    // a full walk of the tree): `components`/`for-each`/`use` can appear at
+    // any depth, and `--fix` must refuse before it ever gets far enough to
+    // find out whether they're actually reachable.
+    if source.get("components").is_some()
+        || raw_source.contains("\"for-each\"")
+        || raw_source.contains("\"use\"")
+    {
+        return Some(FixRefusal::UsesTemplateDirectives);
     }
     None
 }
@@ -583,7 +603,7 @@ mod tests {
     }
 
     /// `--fix` writes back the *resolved* tree. Anything the resolution erased is
-    /// erased on disk too, so these three inputs must be refused rather than
+    /// erased on disk too, so these inputs must be refused rather than
     /// silently rewritten.
     mod fix_refusals {
         use super::super::{refuse_fix, FixRefusal};
@@ -638,12 +658,39 @@ mod tests {
         }
 
         #[test]
+        fn a_scenario_using_for_each_is_refused() {
+            // No `$` anywhere in this fixture on purpose — proves the
+            // detection is driven by the `for-each` marker itself, not by
+            // piggybacking on the pre-existing `$`-content check.
+            let with_for_each = r##"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"for-each":[1,2],"template":{"type":"text","content":"static"}}
+                ]}]}"##;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_for_each),
+                Some(FixRefusal::UsesTemplateDirectives)
+            );
+        }
+
+        #[test]
+        fn a_scenario_declaring_components_is_refused_even_with_no_use_site_yet() {
+            let with_components = r##"{"video":{"width":320,"height":240,"fps":30},
+                "components":{"card":{"params":{},"template":{"type":"text","content":"hi"}}},
+                "scenes":[{"duration":1.0,"children":[]}]}"##;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_components),
+                Some(FixRefusal::UsesTemplateDirectives)
+            );
+        }
+
+        #[test]
         fn every_refusal_names_the_file_and_says_what_to_do_instead() {
             let p = Path::new("scenes/hero.json");
             for r in [
                 FixRefusal::HtmlSource,
                 FixRefusal::Templated,
                 FixRefusal::UsesInclude,
+                FixRefusal::UsesTemplateDirectives,
             ] {
                 let msg = r.explain(p);
                 assert!(msg.contains("scenes/hero.json"), "{msg}");
@@ -787,6 +834,59 @@ mod tests {
                 "parent file must be byte-identical after a refused --fix"
             );
             assert_eq!(part_after, part, "included file must be untouched too");
+        }
+
+        /// Same failure mode as `include`, for the sibling mechanism: `for-each`
+        /// expanding to more than one node shifts every later `children[N]`
+        /// index, so a path-based `--fix` patch would land on the wrong
+        /// (or a nonexistent) sibling if it were allowed to write back the
+        /// expanded tree. It must be refused outright instead.
+        #[test]
+        fn cmd_validate_fix_refuses_to_overwrite_a_scenario_using_for_each_and_leaves_the_file_untouched(
+        ) {
+            let path = std::env::temp_dir().join(format!(
+                "rm_validate_fix_for_each_{}.json",
+                std::process::id()
+            ));
+            let original = r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{
+                    "duration": 1.0,
+                    "children": [{
+                        "for-each": [
+                            { "label": "short" },
+                            { "label": "this string is too long to fit in its card" }
+                        ],
+                        "template": {
+                            "type": "card",
+                            "x": 100, "y": 100,
+                            "style": { "width": "200px", "height": "200px", "background": "#222244" },
+                            "children": [{
+                                "type": "text",
+                                "content": "$label",
+                                "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap" }
+                            }]
+                        }
+                    }]
+                }]
+            }"##;
+            std::fs::write(&path, original).expect("write fixture");
+
+            let result = cmd_validate(&path, None, /*fix=*/ true, false, false, false, None);
+
+            let after = std::fs::read_to_string(&path).expect("read back fixture");
+            std::fs::remove_file(&path).ok();
+
+            assert!(
+                result.is_err(),
+                "--fix on a for-each-using scenario with a real violation must be refused"
+            );
+            assert_eq!(
+                after, original,
+                "the file must be byte-identical after a refused --fix — the two `for-each` \
+                 iterations expand into two card siblings, so a path-based patch would not even \
+                 land on the right one"
+            );
         }
     }
 }

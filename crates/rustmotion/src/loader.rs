@@ -1,6 +1,6 @@
 use crate::error::{Result, RustmotionError};
 use crate::schema::{ResolvedScenario, Scenario};
-use crate::{include, variables};
+use crate::{expand, include, variables};
 use std::path::PathBuf;
 
 pub fn load_scenario(input: &PathBuf) -> Result<ResolvedScenario> {
@@ -21,7 +21,9 @@ pub fn load_scenario_with_vars(
     let mut json_value: serde_json::Value =
         serde_json::from_str(&json_str).map_err(RustmotionError::from)?;
 
-    variables::apply_variables(&mut json_value, overrides, &input.display().to_string())?;
+    let label = input.display().to_string();
+    variables::apply_variables(&mut json_value, overrides, &label)?;
+    expand::expand_directives(&mut json_value, &label)?;
 
     let scenario: Scenario = serde_json::from_value(json_value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
@@ -47,6 +49,7 @@ pub fn load_scenario_from_source_with_vars(
             let mut json_value: serde_json::Value =
                 serde_json::from_str(json_str).map_err(RustmotionError::from)?;
             variables::apply_variables(&mut json_value, overrides, "<inline>")?;
+            expand::expand_directives(&mut json_value, "<inline>")?;
             let scenario: Scenario =
                 serde_json::from_value(json_value).map_err(RustmotionError::from)?;
             include::resolve_includes(scenario, &include::IncludeSource::Inline)
@@ -94,7 +97,9 @@ pub fn load_scenario_from_html_with_vars(
     // Variable substitution happens post-transpilation so $name in HTML text
     // content is resolved. HTML has no config block, so undeclared overrides
     // are applied as raw value substitutions (no-config path in apply_variables).
-    variables::apply_variables(&mut value, overrides, &input.display().to_string())?;
+    let label = input.display().to_string();
+    variables::apply_variables(&mut value, overrides, &label)?;
+    expand::expand_directives(&mut value, &label)?;
     let scenario: Scenario = serde_json::from_value(value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }

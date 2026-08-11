@@ -1,6 +1,7 @@
 // Re-export core and components for downstream users
 pub use rustmotion_core as core;
 pub use rustmotion_core::error;
+pub use rustmotion_core::expand;
 pub use rustmotion_core::schema;
 pub use rustmotion_core::traits;
 pub use rustmotion_core::variables;
