@@ -12,6 +12,7 @@
 
 use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
+use rustmotion::expand;
 use rustmotion::include::{self, IncludeSource};
 use rustmotion::schema::{ResolvedScenario, Scenario};
 use rustmotion::variables;
@@ -170,6 +171,14 @@ pub fn load_with_vars(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<inline>".to_string());
     variables::apply_variables(&mut json_value, overrides, &label)?;
+    // Expand `for-each`/`use` (and consume `components`) *before* `raw` is
+    // captured below, so `LoadedScenario::raw` — what geometry checks walk
+    // and what `--fix` would serialise — is already the expanded tree. This
+    // is the same reason `include::resolve_includes` runs before this
+    // function returns: a validator that reasons about the pre-expansion
+    // document would be validating something other than what actually
+    // renders.
+    expand::expand_directives(&mut json_value, &label)?;
 
     let scenario: Scenario = serde_json::from_value(json_value.clone())?;
     let resolved = include::resolve_includes(scenario, &include_source)?;
@@ -510,6 +519,84 @@ pub fn warn_strict_attrs_is_now_default() {
          component attributes have been errors by default since the attribute \
          checker was hardened; you can drop the flag."
     );
+}
+
+/// Proves `validate` reasons about the *expanded* tree, not the
+/// pre-expansion `for-each`/`use` directives — the same requirement the
+/// workstream brief states for `include`-produced scenes ("le validateur
+/// doit voir l'arbre expansé"). If `load_with_vars` only expanded directives
+/// for rendering but validated the raw, unexpanded document, a geometry
+/// violation baked into one of several `for-each`-generated items would be
+/// invisible: the un-expanded document has no `text`/`card` components at
+/// all at that position, only a directive object geometry checks don't know
+/// how to measure.
+#[cfg(test)]
+mod expanded_tree_is_what_gets_validated {
+    use super::*;
+
+    #[test]
+    fn a_geometry_violation_inside_a_for_each_generated_item_is_detected() {
+        // Two iterations: the first is short and fits, the second is a
+        // narrow-card/nowrap-text combination guaranteed to overflow — the
+        // same violation shape `NARROW_CARD_JSON` uses elsewhere in this
+        // crate's tests.
+        let json = serde_json::json!({
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [
+                        { "label": "ok" },
+                        { "label": "this string is far too long to fit in this narrow card" }
+                    ],
+                    "template": {
+                        "type": "card",
+                        "x": 100, "y": 100,
+                        "style": { "width": "200px", "height": "200px", "background": "#222244" },
+                        "children": [{
+                            "type": "text",
+                            "content": "$label",
+                            "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap" }
+                        }]
+                    }
+                }]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+
+        // The raw tree `--fix` would act on must already be expanded: no
+        // `for-each` directive marker survives, and there are 2 concrete
+        // children where the source only wrote 1 directive.
+        let raw_children = loaded.raw["scenes"][0]["children"].as_array().unwrap();
+        assert_eq!(
+            raw_children.len(),
+            2,
+            "loaded.raw must hold the 2 expanded cards, not the 1 for-each directive"
+        );
+        assert!(
+            raw_children.iter().all(|c| c.get("for-each").is_none()),
+            "no for-each directive marker must survive into loaded.raw: {raw_children:?}"
+        );
+
+        let report = run_checks(&loaded, false);
+        assert_eq!(
+            report.geom_violations.len(),
+            1,
+            "exactly one of the two for-each-generated cards overflows; a validator that only \
+             saw the pre-expansion directive could not have found this at all: {:?}",
+            report.geom_violations
+        );
+        // The violation's path must point at the *second* expanded card
+        // (children[1]), proving the geometry walker is indexing into the
+        // expanded array, not some placeholder.
+        assert!(
+            report.geom_violations[0].path.contains("children[1]"),
+            "expected the violation to be attributed to the second expanded card: {}",
+            report.geom_violations[0].path
+        );
+    }
 }
 
 #[cfg(test)]

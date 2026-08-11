@@ -37,7 +37,20 @@ fn merge_variables(
 }
 
 /// Recursively substitute variable references in a JSON value tree.
-fn substitute(value: &mut Value, vars: &HashMap<String, Value>, path: &str) -> Result<()> {
+///
+/// `pub(crate)` (not private) so `crate::expand` can reuse the exact same
+/// `$name` / `{"$var": "name"}` / interpolation semantics for component-param
+/// and `for-each` item/index bindings, rather than re-implementing a second,
+/// subtly-different substitution pass. Same reason `"config"` is skipped here
+/// (see the loop below): a component-template clone can itself contain a
+/// nested `use`'s `props` block — deliberately *not* named `config`, so this
+/// skip does not swallow it (see `expand.rs` module doc for why `props` was
+/// chosen over `config` for that field).
+pub(crate) fn substitute(
+    value: &mut Value,
+    vars: &HashMap<String, Value>,
+    path: &str,
+) -> Result<()> {
     match value {
         Value::String(s) => {
             // Check for exact match "$name" (whole-string replacement, preserves type)
@@ -206,7 +219,24 @@ fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
                 }
             }
             for (key, v) in map {
-                if key != "config" {
+                // `config` holds the declarations themselves, never references.
+                //
+                // `template` / `props` / `components` hold the bodies of the
+                // template directives, whose `$name`s are bound by
+                // `expand::expand_directives` — which runs *after* this pass.
+                // Scanning them here reports every correct binding as an
+                // unresolved typo: the canonical `for-each` example emits six
+                // such warnings, each accusing the author of a mistake they
+                // did not make. Warnings that are reliably wrong teach the
+                // reader to ignore warnings, which would cost more than the
+                // scan is worth.
+                //
+                // Nothing is lost: `expand_directives` re-runs this same scan
+                // once expansion is done and these keys no longer exist, so a
+                // genuine typo inside a template is still reported — with the
+                // benefit of naming it after substitution, where the leftover
+                // is unambiguous.
+                if !matches!(key.as_str(), "config" | "template" | "props" | "components") {
                     find_unresolved_recursive(v, out);
                 }
             }

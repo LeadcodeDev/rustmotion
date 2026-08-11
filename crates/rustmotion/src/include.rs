@@ -148,6 +148,13 @@ fn fetch_and_resolve(
         directive.config.as_ref(),
         &directive.include,
     )?;
+    // `components` (and any `for-each`/`use` inside this file's own scenes)
+    // is scoped to this document: expanded here, per included file, using
+    // ONLY this file's own `components` block — never the parent's, and
+    // never visible to the parent's own `use` sites. See
+    // `rustmotion_core::expand`'s module doc for why that scoping was
+    // chosen over a cross-file component registry.
+    crate::expand::expand_directives(&mut json_value, &directive.include)?;
 
     let child_scenario: Scenario =
         serde_json::from_value(json_value).map_err(RustmotionError::from)?;

@@ -148,6 +148,61 @@ pub enum RustmotionError {
     #[error("Cannot interpolate non-string variable '${name}' into string in '{path}'")]
     VariableInterpolationTypeError { name: String, path: String },
 
+    // --- Templates: `components` / `use` / `for-each` (see rustmotion_core::expand) ---
+    #[error("'components' at '{path}' must be an object mapping names to definitions")]
+    ComponentsBlockNotObject { path: String },
+
+    #[error("Component definition '{name}' at '{path}' is invalid: {reason}")]
+    ComponentDefinitionInvalid {
+        name: String,
+        path: String,
+        reason: String,
+    },
+
+    #[error("'use' directive at '{path}' is invalid: {reason}")]
+    UseDirectiveInvalid { path: String, reason: String },
+
+    #[error(
+        "Unknown component '{name}' referenced via 'use' at '{path}' — no such name in this \
+         file's 'components' block"
+    )]
+    UnknownComponent { name: String, path: String },
+
+    #[error(
+        "Missing required parameter '{param}' for component '{component}' at '{path}' — it has \
+         no default and was not supplied via 'props'"
+    )]
+    ComponentParamMissing {
+        component: String,
+        param: String,
+        path: String,
+    },
+
+    #[error(
+        "Unknown parameter '{param}' passed to component '{component}' at '{path}' — not \
+         declared in its 'params'"
+    )]
+    UnknownComponentParam {
+        component: String,
+        param: String,
+        path: String,
+    },
+
+    #[error("Component instantiation cycle at '{path}': {chain}")]
+    ComponentCycle { chain: String, path: String },
+
+    #[error("'for-each' directive at '{path}' is invalid: {reason}")]
+    ForEachDirectiveInvalid { path: String, reason: String },
+
+    #[error("'for-each' at '{path}' must resolve to an array; found {found}")]
+    ForEachNotArray { path: String, found: String },
+
+    #[error(
+        "Template/component expansion depth limit ({limit}) exceeded at '{path}' — likely a \
+         runaway nested 'use'/'for-each' template"
+    )]
+    ExpansionDepthExceeded { limit: u32, path: String },
+
     // --- Encoding ---
     #[error("No frames to render (total duration is 0)")]
     NoFrames,
