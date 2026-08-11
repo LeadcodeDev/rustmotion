@@ -1,6 +1,7 @@
 use crate::schema::{
     Animation, AnimationEffect, AnimationPreset, CharAnimPreset, EasingType, GlowConfig, Keyframe,
-    KeyframeValue, OrbitConfig, PresetConfig, SpringConfig, TextAnimGranularity, WiggleConfig,
+    KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig, TextAnimGranularity,
+    WiggleConfig,
 };
 
 /// Safe division that returns `fallback` when the denominator is too small to
@@ -62,6 +63,12 @@ pub struct ExtractedEffects<'a> {
     pub keyframes_loop: bool,
     pub wiggles: Vec<&'a WiggleConfig>,
     pub orbits: Vec<&'a OrbitConfig>,
+    /// Every `motion_path` effect, resolved by `apply_motion_paths` into
+    /// `translate_x`/`translate_y` (and, when `orient` is set,
+    /// `rotation`) — the same additive-into-`props` treatment `orbits`
+    /// already gets, and for the same reason: multiple path effects on one
+    /// node compose by simple vector addition, not last-wins.
+    pub motion_paths: Vec<&'a MotionPathConfig>,
     pub glow: Option<&'a GlowConfig>,
     pub motion_blur: Option<f32>,
     pub char_animation: Option<ResolvedCharAnimation>,
@@ -92,6 +99,7 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
         keyframes_loop: false,
         wiggles: Vec::new(),
         orbits: Vec::new(),
+        motion_paths: Vec::new(),
         glow: None,
         motion_blur: None,
         char_animation: None,
@@ -183,6 +191,9 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                 }
                 AnimationEffect::MotionBlur(config) => {
                     result.motion_blur = Some(config.intensity);
+                }
+                AnimationEffect::MotionPath(config) => {
+                    result.motion_paths.push(config);
                 }
                 _ => {} // preset variants already handled above
             }
@@ -773,6 +784,10 @@ pub fn resolve_props_for_effects(
         let orbits: Vec<_> = extracted.orbits.iter().copied().cloned().collect();
         apply_orbits(&mut props, &orbits, time);
     }
+    if !extracted.motion_paths.is_empty() {
+        let motion_paths: Vec<_> = extracted.motion_paths.iter().copied().cloned().collect();
+        apply_motion_paths(&mut props, &motion_paths, time);
+    }
     if extracted.char_animation.is_some() {
         props.char_animation = extracted.char_animation;
     }
@@ -1123,6 +1138,181 @@ pub fn apply_orbits(props: &mut AnimatedProperties, orbits: &[OrbitConfig], time
             let opacity_factor = 1.0 - orbit.opacity_depth * (1.0 - depth_sin) * 0.5;
             props.opacity *= opacity_factor as f32;
         }
+    }
+}
+
+// ─── Motion path ────────────────────────────────────────────────────────────
+
+/// Below this measured path length (in px), a `motion_path` is treated as
+/// the "zero length" degenerate case: the component holds at its single
+/// point instead of travelling, and `orient` contributes no rotation (a
+/// tangent is undefined at zero length). Not `0.0` exactly — `PathMeasure`
+/// is a numeric approximation, and a path whose segments collapse onto one
+/// point within float precision (e.g. two near-coincident cubic control
+/// points) should degrade the same defined way a literal single-point path
+/// does, rather than pass through as a very short, jittery "real" travel.
+pub const MOTION_PATH_MIN_LENGTH: f32 = 1e-3;
+
+/// Parse `path_data` and measure its length, in px — the shared primitive
+/// `apply_motion_paths` (render time) and `validate_schema.rs`'s advisory
+/// zero-length check (author time) both build on, so the two never
+/// disagree about what "degenerate" means.
+///
+/// Returns `None` when `path_data` is empty or not valid SVG path data.
+/// Every `motion_path` effect reachable through `AnimationEffect` already
+/// has this ruled out at JSON-parse time
+/// (`schema/video.rs::deserialize_motion_path_data`), so in practice `None`
+/// only fires if a caller builds a `MotionPathConfig` directly in Rust,
+/// bypassing that gate. `Some(0.0)` (or a value below
+/// `MOTION_PATH_MIN_LENGTH`) is returned for a syntactically valid path
+/// with (near-)zero measured length — a well-defined, distinct case from
+/// "invalid", per `MotionPathConfig`'s "Degenerate paths" doc section.
+pub fn motion_path_length(path_data: &str) -> Option<f32> {
+    let path = skia_safe::Path::from_svg(path_data)?;
+    if path.count_points() == 0 {
+        return None;
+    }
+    let mut measure = skia_safe::PathMeasure::new(&path, false, None);
+    Some(measure.length())
+}
+
+/// Progress along a `motion_path` effect's own timeline, already eased, in
+/// `[0, 1]`. Mirrors the delay/duration semantics every other timed effect
+/// in this file uses: before `delay`, progress is pinned to `0.0` (the path
+/// hasn't started — the component sits at the path's start point, the same
+/// "hold at the entrance state" every preset already does before its own
+/// delay elapses); at/after `delay + duration` it is pinned to `1.0` (holds
+/// at the path's end) unless `repeat` wraps it back into `[0, 1)` instead.
+///
+/// `safe_div`'s fallback (`1.0`) makes a non-positive `duration` behave as
+/// "already complete the instant `delay` elapses" — finite and defined,
+/// never a NaN/∞ division — the same belt-and-suspenders posture
+/// `spring_value` already takes on its own denominators.
+/// `validate_schema.rs::check_motion_path_config` additionally rejects
+/// `duration <= 0` as an author-facing error, so this fallback is a second
+/// line of defence, not the only one.
+fn motion_path_progress(cfg: &MotionPathConfig, time: f64) -> f64 {
+    let elapsed = time - cfg.delay;
+    if elapsed <= 0.0 {
+        return 0.0;
+    }
+    let raw = safe_div(elapsed, cfg.duration, 1.0);
+    let progress = if cfg.repeat {
+        raw.rem_euclid(1.0)
+    } else {
+        raw.clamp(0.0, 1.0)
+    };
+    ease(progress, &cfg.easing)
+}
+
+/// One `motion_path` effect's contribution at `time`: a translate delta (in
+/// the component-local coordinate space `MotionPathConfig` documents) and a
+/// tangent-derived rotation in degrees (`0.0` when `orient` is unset, or
+/// when the path is the zero-length degenerate case).
+struct MotionPathSample {
+    dx: f32,
+    dy: f32,
+    angle_deg: f32,
+}
+
+/// Sample a `motion_path` effect at `time`. Never returns a NaN/infinite
+/// component, for any input — the three degenerate cases the workstream
+/// brief names are each handled explicitly rather than falling through to
+/// whatever the underlying float operation happens to produce:
+///
+/// - **empty/unparsable path**: `AnimationEffect::MotionPath` cannot carry
+///   one past `schema/video.rs::deserialize_motion_path_data`'s parse-time
+///   rejection, but this function stays defensive anyway (`(0.0, 0.0,
+///   0.0)`, i.e. no displacement) rather than assuming that gate always ran
+///   — e.g. a future direct `MotionPathConfig` construction in Rust code
+///   would bypass serde entirely.
+/// - **single point** (`"M50,50"`) and **zero-length** (every segment
+///   collapses onto one point, e.g. `"M10,10 L10,10"`): both measure to
+///   (near-)zero length. Position holds at that single point (read via
+///   `Path::get_point(0)`) for the entire timeline; orientation is `0.0`
+///   regardless of `orient` — a tangent is undefined at zero length, so
+///   `atan2(0.0, 0.0)`'s technically-zero-but-meaningless result is never
+///   computed or relied on.
+fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
+    let zero = MotionPathSample {
+        dx: 0.0,
+        dy: 0.0,
+        angle_deg: 0.0,
+    };
+    let Some(path) = skia_safe::Path::from_svg(&cfg.path) else {
+        return zero;
+    };
+    if path.count_points() == 0 {
+        return zero;
+    }
+
+    let mut measure = skia_safe::PathMeasure::new(&path, false, None);
+    let length = measure.length();
+
+    // Verified empirically (not just assumed): `PathMeasure::pos_tan` on a
+    // zero-length contour returns `None` in this skia-safe build, which the
+    // `None` arm below would also catch — this early return is kept anyway
+    // as the one place the degenerate case is *named*, rather than an
+    // undocumented cross-version PathMeasure behaviour a reader would have
+    // to intuit, and it skips constructing/querying the measure entirely
+    // for the single most common degenerate input (a single-point path).
+    if length <= MOTION_PATH_MIN_LENGTH {
+        let (x, y) = path.get_point(0).map_or((0.0, 0.0), |p| (p.x, p.y));
+        return MotionPathSample {
+            dx: x,
+            dy: y,
+            angle_deg: 0.0,
+        };
+    }
+
+    let progress = motion_path_progress(cfg, time) as f32;
+    let distance = (length * progress).clamp(0.0, length);
+
+    match measure.pos_tan(distance) {
+        Some((pos, tangent)) => {
+            let angle_deg = if cfg.orient {
+                tangent.y.atan2(tangent.x).to_degrees() + cfg.orient_offset as f32
+            } else {
+                0.0
+            };
+            MotionPathSample {
+                dx: pos.x,
+                dy: pos.y,
+                angle_deg,
+            }
+        }
+        // `0 <= distance <= length` on a >0-length path should always
+        // report a position; if Skia ever declines anyway, hold at the
+        // path's start rather than let a missing sample surface as a jump
+        // to the component's untranslated origin or a NaN.
+        None => {
+            let (x, y) = path.get_point(0).map_or((0.0, 0.0), |p| (p.x, p.y));
+            MotionPathSample {
+                dx: x,
+                dy: y,
+                angle_deg: 0.0,
+            }
+        }
+    }
+}
+
+/// Apply every `motion_path` effect additively to `props.translate_x`/
+/// `translate_y` (and, when `orient` is set, `props.rotation`) — the same
+/// treatment `apply_orbits`/`apply_wiggles` already give their own
+/// continuous effects, and critically, fields `css::animation::
+/// apply_animated_props` already bridges into `css.transform`'s
+/// `translate`/`rotate` functions. That bridge — not a new one — is what
+/// makes a `motion_path` excursion past the viewport visible to
+/// `--strict-anim` (`rustmotion-cli::commands::geometry::
+/// apply_static_node_transform`, which folds `css.transform` to detect
+/// overflow): this function must never write position/orientation anywhere
+/// else, or that detection silently stops seeing it.
+pub fn apply_motion_paths(props: &mut AnimatedProperties, paths: &[MotionPathConfig], time: f64) {
+    for cfg in paths {
+        let sample = motion_path_sample(cfg, time);
+        props.translate_x += sample.dx;
+        props.translate_y += sample.dy;
+        props.rotation += sample.angle_deg;
     }
 }
 
@@ -2805,6 +2995,278 @@ mod spring_duration_tests {
         assert_eq!(
             spring_value(0.0, &config),
             spring_value_raw(0.0, 6.0, 120.0, 1.0)
+        );
+    }
+}
+
+#[cfg(test)]
+mod motion_path_tests {
+    use super::*;
+
+    fn cfg(path: &str) -> MotionPathConfig {
+        MotionPathConfig {
+            path: path.to_string(),
+            delay: 0.0,
+            duration: 1.0,
+            repeat: false,
+            orient: false,
+            orient_offset: 0.0,
+            easing: EasingType::Linear,
+        }
+    }
+
+    // ─── The decisive property: on the curve, not the chord ──────────────
+
+    /// A bent two-segment polyline ("M0,0 L100,0 L100,100", total length
+    /// 200) makes this trivial to prove without any bezier arithmetic:
+    /// halfway along the *path* (distance 100) lands exactly on the corner
+    /// (100, 0). The *chord* between the two endpoints (0,0)→(100,100) has
+    /// its own midpoint at (50, 50) — a linear interpolation between
+    /// endpoints (what a buggy "lerp the bounding box" implementation would
+    /// produce) would land there instead. Asserting the real result is far
+    /// from (50, 50) and exactly at (100, 0) is what distinguishes "walks
+    /// the path" from "interpolates the endpoints" — checking only t=0/t=1
+    /// bounds would pass either implementation.
+    #[test]
+    fn mid_path_progress_lands_on_the_curve_not_on_the_endpoint_chord() {
+        let c = cfg("M0,0 L100,0 L100,100");
+        let sample = motion_path_sample(&c, 0.5);
+
+        assert!(
+            (sample.dx - 100.0).abs() < 0.5,
+            "expected dx≈100 (on the path's corner), got {}",
+            sample.dx
+        );
+        assert!(
+            (sample.dy - 0.0).abs() < 0.5,
+            "expected dy≈0 (on the path's corner), got {}",
+            sample.dy
+        );
+
+        let chord_x = 50.0f32;
+        let chord_y = 50.0f32;
+        let dist_from_chord_midpoint =
+            ((sample.dx - chord_x).powi(2) + (sample.dy - chord_y).powi(2)).sqrt();
+        assert!(
+            dist_from_chord_midpoint > 40.0,
+            "t=0.5 must not land near the endpoint-to-endpoint chord midpoint (50,50) — got \
+             ({}, {}), which would also pass under a plain linear-interpolation bug",
+            sample.dx,
+            sample.dy
+        );
+    }
+
+    // ─── Endpoints, as a sanity boundary (not the decisive test on its own) ──
+
+    #[test]
+    fn progress_zero_and_one_land_on_the_paths_own_endpoints() {
+        let c = cfg("M10,20 L310,20 L310,220");
+        let start = motion_path_sample(&c, 0.0);
+        assert!((start.dx - 10.0).abs() < 0.5 && (start.dy - 20.0).abs() < 0.5);
+
+        let end = motion_path_sample(&c, 1.0);
+        assert!((end.dx - 310.0).abs() < 0.5 && (end.dy - 220.0).abs() < 0.5);
+    }
+
+    // ─── Coordinate space: deltas relative to the laid-out position ──────
+
+    /// The path's own coordinates are used literally as the translate delta
+    /// — not normalized so the path's first point becomes (0,0). A path
+    /// that starts away from the origin therefore starts the component
+    /// already displaced by that much, on top of wherever layout placed it.
+    #[test]
+    fn path_coordinates_are_used_literally_as_the_translate_delta() {
+        let c = cfg("M100,50 L300,50");
+        let sample = motion_path_sample(&c, 0.0);
+        assert!(
+            (sample.dx - 100.0).abs() < 0.5 && (sample.dy - 50.0).abs() < 0.5,
+            "expected the raw path start point (100, 50) as the delta, got ({}, {})",
+            sample.dx,
+            sample.dy
+        );
+    }
+
+    // ─── The channel: translate_x/translate_y/rotation, additive ─────────
+
+    #[test]
+    fn apply_motion_paths_writes_translate_and_rotation_additively() {
+        let mut props = AnimatedProperties {
+            translate_x: 5.0,
+            translate_y: -5.0,
+            ..AnimatedProperties::default()
+        };
+        let mut c = cfg("M0,0 L100,0");
+        c.orient = true;
+        apply_motion_paths(&mut props, &[c], 0.0);
+
+        // Path start is (0,0), so translate ends up unchanged from the
+        // pre-existing (5, -5) contribution — proves this is additive, not
+        // an overwrite.
+        assert!((props.translate_x - 5.0).abs() < 0.5);
+        assert!((props.translate_y - (-5.0)).abs() < 0.5);
+        // Horizontal rightward tangent ⇒ 0 degrees.
+        assert!(props.rotation.abs() < 0.5, "got {}", props.rotation);
+    }
+
+    #[test]
+    fn orient_false_never_touches_rotation() {
+        // A vertical segment has a 90°-ish tangent; if `orient` leaked
+        // through despite being false, rotation would move off 0.
+        let c = cfg("M0,0 L0,100");
+        let mut props = AnimatedProperties::default();
+        apply_motion_paths(&mut props, &[c], 0.5);
+        assert_eq!(props.rotation, 0.0);
+    }
+
+    #[test]
+    fn orient_true_rotates_toward_the_tangent_and_offset_is_additive() {
+        let mut vertical = cfg("M0,0 L0,100");
+        vertical.orient = true;
+        let sample = motion_path_sample(&vertical, 0.5);
+        // Downward tangent (Skia is Y-down): atan2(1, 0) = 90°.
+        assert!(
+            (sample.angle_deg - 90.0).abs() < 1.0,
+            "got {}",
+            sample.angle_deg
+        );
+
+        let mut with_offset = vertical.clone();
+        with_offset.orient_offset = 10.0;
+        let offset_sample = motion_path_sample(&with_offset, 0.5);
+        assert!(
+            (offset_sample.angle_deg - 100.0).abs() < 1.0,
+            "orient_offset must add on top of the tangent angle, got {}",
+            offset_sample.angle_deg
+        );
+    }
+
+    // ─── Degenerate cases: defined, finite, never NaN ─────────────────────
+
+    #[test]
+    fn single_point_path_holds_position_and_never_produces_nan() {
+        let mut c = cfg("M50,50");
+        c.orient = true;
+        for t in [-1.0, 0.0, 0.3, 0.5, 1.0, 2.0] {
+            let sample = motion_path_sample(&c, t);
+            assert!(sample.dx.is_finite() && sample.dy.is_finite() && sample.angle_deg.is_finite());
+            assert!((sample.dx - 50.0).abs() < 0.5 && (sample.dy - 50.0).abs() < 0.5);
+            assert_eq!(
+                sample.angle_deg, 0.0,
+                "orientation is undefined at zero length and must default to 0, not NaN"
+            );
+        }
+    }
+
+    #[test]
+    fn coincident_points_zero_length_path_holds_without_nan() {
+        let mut c = cfg("M10,10 L10,10 L10,10");
+        c.orient = true;
+        let sample = motion_path_sample(&c, 0.5);
+        assert!(sample.dx.is_finite() && sample.dy.is_finite() && sample.angle_deg.is_finite());
+        assert!((sample.dx - 10.0).abs() < 0.5 && (sample.dy - 10.0).abs() < 0.5);
+        assert_eq!(sample.angle_deg, 0.0);
+    }
+
+    #[test]
+    fn empty_path_data_never_panics_or_produces_nan() {
+        // Bypasses `deserialize_motion_path_data`'s parse-time rejection on
+        // purpose (constructed directly in Rust) — the runtime sampler must
+        // still be safe on its own, defence in depth.
+        let c = cfg("");
+        let sample = motion_path_sample(&c, 0.5);
+        assert_eq!((sample.dx, sample.dy, sample.angle_deg), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn unparsable_path_data_never_panics_or_produces_nan() {
+        let c = cfg("definitely not svg path data");
+        let sample = motion_path_sample(&c, 0.5);
+        assert!(sample.dx.is_finite() && sample.dy.is_finite() && sample.angle_deg.is_finite());
+    }
+
+    #[test]
+    fn zero_or_negative_duration_never_produces_nan() {
+        for duration in [0.0, -1.0, -0.5] {
+            let mut c = cfg("M0,0 L100,0");
+            c.duration = duration;
+            for t in [0.0, 0.5, 1.0, 5.0] {
+                let sample = motion_path_sample(&c, t);
+                assert!(
+                    sample.dx.is_finite() && sample.dy.is_finite() && sample.angle_deg.is_finite(),
+                    "duration={duration} time={t} produced a non-finite sample: dx={} dy={}",
+                    sample.dx,
+                    sample.dy
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn motion_path_length_reports_none_for_empty_or_unparsable_input() {
+        assert_eq!(motion_path_length(""), None);
+        assert_eq!(motion_path_length("not a path"), None);
+    }
+
+    #[test]
+    fn motion_path_length_reports_near_zero_for_a_single_point() {
+        let len = motion_path_length("M50,50").expect("single point is a valid, parseable path");
+        assert!(len <= MOTION_PATH_MIN_LENGTH, "got {len}");
+    }
+
+    #[test]
+    fn motion_path_length_reports_the_real_length_for_a_real_path() {
+        let len = motion_path_length("M0,0 L100,0").expect("valid path");
+        assert!((len - 100.0).abs() < 0.5, "got {len}");
+    }
+
+    // ─── Loop semantics ────────────────────────────────────────────────────
+
+    #[test]
+    fn looping_wraps_progress_back_toward_the_start() {
+        let mut c = cfg("M0,0 L100,0 L100,100");
+        c.repeat = true;
+        c.duration = 1.0;
+        // 1.5s in, with a 1s loop period, is equivalent to t=0.5 within the
+        // loop — same corner-of-the-L assertion as the non-looping test.
+        let sample = motion_path_sample(&c, 1.5);
+        assert!((sample.dx - 100.0).abs() < 0.5 && (sample.dy - 0.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn non_looping_holds_at_the_end_past_delay_plus_duration() {
+        let c = cfg("M0,0 L100,0 L100,100");
+        let at_end = motion_path_sample(&c, 1.0);
+        let past_end = motion_path_sample(&c, 5.0);
+        assert_eq!(at_end.dx, past_end.dx);
+        assert_eq!(at_end.dy, past_end.dy);
+    }
+
+    // ─── Determinism: same time in, same result out ───────────────────────
+
+    #[test]
+    fn sampling_is_deterministic_across_repeated_calls() {
+        let c = cfg("M0,0 C50,-100 150,-100 200,0");
+        let first = motion_path_sample(&c, 0.37);
+        for _ in 0..25 {
+            let again = motion_path_sample(&c, 0.37);
+            assert_eq!(first.dx, again.dx);
+            assert_eq!(first.dy, again.dy);
+            assert_eq!(first.angle_deg, again.angle_deg);
+        }
+    }
+
+    #[test]
+    fn resolve_props_for_effects_is_deterministic_and_reaches_translate() {
+        let effect = AnimationEffect::MotionPath(cfg("M0,0 L400,0"));
+        let effects = vec![effect];
+        let a = resolve_props_for_effects(&effects, 0.5, 1.0);
+        let b = resolve_props_for_effects(&effects, 0.5, 1.0);
+        assert_eq!(a.translate_x, b.translate_x);
+        assert_eq!(a.translate_y, b.translate_y);
+        assert!(
+            (a.translate_x - 200.0).abs() < 1.0,
+            "expected ~halfway along a straight 400px path, got {}",
+            a.translate_x
         );
     }
 }

@@ -150,6 +150,42 @@ mod tests {
         assert!(css.perspective.is_none());
     }
 
+    /// `motion_path` (`engine::animator::apply_motion_paths`) writes its
+    /// resolved position into `translate_x`/`translate_y` and its
+    /// tangent-derived orientation into `rotation` — the exact same fields
+    /// `orbit`/presets already write. This is the unit-level half of the
+    /// proof that a `motion_path` excursion reaches `css.transform` (and
+    /// therefore `--strict-anim`'s viewport check, which folds
+    /// `css.transform`): shape an `AnimatedProperties` the way that effect
+    /// would, at a moment where it has both moved *and* turned, and confirm
+    /// both land in the transform list in the documented translate→rotate
+    /// order — no new bridge, no separate channel.
+    #[test]
+    fn motion_path_shaped_translate_and_rotation_compose_into_one_transform_list() {
+        let mut css = CssStyle::default();
+        let props = AnimatedProperties {
+            translate_x: 120.0,
+            translate_y: -40.0,
+            rotation: 33.5,
+            ..AnimatedProperties::default()
+        };
+        apply_animated_props(&mut css, &props);
+
+        let tx = css.transform.expect("transform list created");
+        assert_eq!(tx.len(), 2, "expected translate + rotate, got {:?}", tx);
+        match &tx[0] {
+            TransformFn::Translate { x, y } => {
+                assert!(matches!(x, LengthPercentage::Px(v) if (*v - 120.0).abs() < 1e-6));
+                assert!(matches!(y, LengthPercentage::Px(v) if (*v + 40.0).abs() < 1e-6));
+            }
+            other => panic!("expected Translate first, got {:?}", other),
+        }
+        match &tx[1] {
+            TransformFn::Rotate { deg } => assert!((*deg - 33.5).abs() < 1e-6),
+            other => panic!("expected Rotate second, got {:?}", other),
+        }
+    }
+
     #[test]
     fn blur_and_glow_compose_into_filter_list() {
         let mut css = CssStyle::default();
