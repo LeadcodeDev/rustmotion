@@ -60,7 +60,10 @@ use rustmotion::components::intrinsic::{
     TerminalIntrinsic, TextIntrinsic,
 };
 use rustmotion::components::{ChildComponent, Component};
-use rustmotion::core::css::style::{CssStyle, TransformFn, TransformOrigin, WhiteSpace};
+use rustmotion::core::css::style::{
+    CssStyle, TransformFn, TransformOrigin, WhiteSpace, MIN_LEGIBLE_FONT_RATIO,
+    TEXT_AUTOFIT_MIN_FONT_PX,
+};
 use rustmotion::core::css::taffy_bridge::ConversionContext;
 use rustmotion::core::css::units::{parse_origin_component, LengthContext, ParsedLength};
 use rustmotion::core::engine::box_tree::{AvailableSpace, BoxKind, BoxNode, IntrinsicMeasure};
@@ -757,11 +760,20 @@ fn check_unwrappable_text(
     if !nowrap {
         return;
     }
-    // Measure at the natural (unbounded) width via the same cosmic-text–
-    // backed intrinsic the layout engine uses.
+    // Measure via the same cosmic-text–backed intrinsic the layout engine
+    // uses. Width is bounded by the node's own resolved `bbox.w` (not
+    // `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
+    // see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic`
+    // arms and `CssStyle::text_autofit`'s doc comment. For a non-autofit
+    // node this changes nothing: `TextIntrinsic::measure` only reads the
+    // width constraint at all when `text_autofit` is on (see its early
+    // return), and `nowrap` already forces a single unwrapped line here
+    // regardless of what width is offered — so `natural_w` below is
+    // "natural" in the non-autofit case exactly as before, and "shrunk to
+    // fit, if that's enough" when the author declared it.
     let (natural_w, _) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(bbox.w), AvailableSpace::MaxContent),
     );
     if natural_w > bbox.w + 0.5 {
         let kind = component_kind(component);
@@ -831,9 +843,18 @@ fn check_content_overflows_box(
         return;
     }
 
+    // Height is bounded by the node's own resolved content-box height `ch`
+    // (not `MaxContent`) for the same reason width is bounded by `cw`: a
+    // `text-autofit: true` node can only try to shrink into a target it's
+    // actually told about. `TextIntrinsic::measure` only reads this height
+    // bound at all when `text_autofit` is on (see its early return right
+    // after the base, non-autofit measurement), so a non-autofit node's
+    // `measured_h` is unaffected — this is the same "safe to change
+    // unconditionally" argument as `check_unwrappable_text`'s width bound
+    // above.
     let (measured_w, measured_h) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(cw), AvailableSpace::Definite(ch)),
     );
 
     let eps = 0.5;
@@ -962,19 +983,12 @@ fn check_auto_scroll(
 // watched (embedded players, mobile feeds, thumbnails) unlike a web page,
 // which is usually viewed close to 1:1.
 //
-// Threshold justification (rendered evidence, not a guess): a 1920×1080
-// scenario was rendered with the same sample line at 8/10/11/12/13/14/16/18/
-// 20/22/24/28px, then the frame was scaled down 50% (a realistic "not
-// full-native" viewing size) to inspect. 8–13px degraded to an illegible
-// grey smear at that scale; 14px was the first size that stayed readable.
-// 0.012 (1.2% of output height) sits between those two bands — it equals
-// ~13px on a 1080p frame — and clears every built-in component default
-// already shipped (table/terminal/codeblock/pill_nav = 14px, badge `md` =
-// 14px, kbd = 14px, tooltip = 13px), so it does not fire on scenarios that
-// already validate clean today. Expressing it as a fraction of output
-// height (rather than an absolute px count) makes the same *visual* size
-// get flagged on a 4K or vertical-format canvas too.
-const MIN_LEGIBLE_FONT_RATIO: f32 = 0.012;
+// The calibration and its threshold now live on `MIN_LEGIBLE_FONT_RATIO`
+// itself, in `rustmotion_core::css::style` — relocated there (not
+// duplicated) so `CssStyle::text_autofit`'s shrink floor can reuse the exact
+// same calibrated ratio instead of inventing a second one; `rustmotion-core`
+// is a dependency of this crate, never the other way around, so that is the
+// only direction the constant can live in for both sides to share it.
 
 /// Check every text-bearing component's effective font size against
 /// [`MIN_LEGIBLE_FONT_RATIO`] of the output height. Always advisory (a
@@ -1034,6 +1048,29 @@ fn walk_legibility(
         }
     }
 
+    // The check above reads the *declared* size, which is the rendered size
+    // for every component except an autofitting one: `text-autofit` shrinks
+    // toward `TEXT_AUTOFIT_MIN_FONT_PX`, a constant pinned to a 1080-tall
+    // reference so that measure and paint cannot disagree about it (see that
+    // constant's doc comment). `min_px` here is relative to the *real* frame
+    // height, so on any canvas taller than 1080 the floor sits below the
+    // legibility threshold — and a declared 120px that shrinks to ~13px on a
+    // 2160-tall frame would otherwise pass this check in silence, which is
+    // the exact failure mode autofit exists to remove rather than relocate.
+    //
+    // Advisory and conditional: it fires only when the two genuinely diverge
+    // (taller-than-1080 canvases), and says "may" because resolving the
+    // actual shrunk size needs layout, which this pass does not run. The
+    // precise fix is a canvas-relative floor on both sides, which requires
+    // plumbing the frame height into `TextIntrinsic` — tracked separately.
+    if declares_text_autofit(component) && TEXT_AUTOFIT_MIN_FONT_PX < min_px - 0.05 {
+        out.push(format!(
+            "{path}: text-autofit may shrink this text to ~{TEXT_AUTOFIT_MIN_FONT_PX:.0}px, below \
+             the {min_px:.0}px legibility floor for a {video_h:.0}px-tall frame. Give it a wider \
+             or taller box so it settles above that, or check the rendered frame.",
+        ));
+    }
+
     if let Some(children) = container_children(component) {
         for (i, child) in children.iter().enumerate() {
             walk_legibility(
@@ -1053,6 +1090,18 @@ fn walk_legibility(
 /// defaults live in `rustmotion-components`, out of this workstream's
 /// scope). A component can report more than one size (e.g. a notification's
 /// title and message use different sizes).
+/// Whether this component's painter actually honours `style.text-autofit`.
+/// Deliberately the same two variants `TextIntrinsic::with_autofit` is called
+/// for — every other component ignores the field, so warning about them would
+/// be a false positive about a shrink that cannot happen.
+fn declares_text_autofit(component: &Component) -> bool {
+    match component {
+        Component::Text(t) => matches!(t.style.text_autofit, Some(true)),
+        Component::GradientText(t) => matches!(t.style.text_autofit, Some(true)),
+        _ => false,
+    }
+}
+
 fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
     match component {
         // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
@@ -3683,6 +3732,124 @@ mod tests {
             violations
         );
     }
+
+    // ─── text-autofit: Vérification point 4 ─────────────────────────────
+    //
+    // "Un scénario qui déborde aujourd'hui doit valider après, avec
+    // l'ajustement déclaré — et un scénario sans ajustement doit continuer
+    // à déborder et à être signalé." These reuse the exact same fixtures as
+    // the pre-existing `ContentOverflowsBox`/`UnwrappableTextOverflow`
+    // tests above (`wrapped_text_taller_than_its_fixed_height_card_is_flagged`,
+    // `unwrappable_text_in_narrow_card_is_flagged`), adding only
+    // `text-autofit: true`, so the "before"/"after" pair is a controlled
+    // comparison rather than two unrelated fixtures.
+
+    #[test]
+    fn text_autofit_resolves_a_content_overflow_that_would_otherwise_fire() {
+        // Same fixture as `wrapped_text_taller_than_its_fixed_height_card_is_flagged`
+        // (a paragraph that needs ~343px of height inside an 80px-tall
+        // card), with `text-autofit: true` added.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":200,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text",
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff","text-autofit":true}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ContentOverflowsBox),
+            "text-autofit: true must resolve the height overflow this exact fixture (minus the \
+             flag) triggers: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn without_text_autofit_the_same_fixture_still_overflows() {
+        // Control for the test above: identical fixture, no `text-autofit`
+        // — must still report `ContentOverflowsBox` exactly like
+        // `wrapped_text_taller_than_its_fixed_height_card_is_flagged`.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":200,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text",
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ContentOverflowsBox),
+            "control fixture (no text-autofit) must still report the overflow: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn text_autofit_does_not_silence_an_overflow_the_floor_cannot_fix() {
+        // The floor stops the shrink before it can ever make this fit: the
+        // same paragraph crammed into an 8px-tall card. `text-autofit`
+        // narrows the overflow class, it does not eliminate every
+        // overflow — this must stay reported, per the brief's explicit
+        // requirement that a still-too-small box remains a signalled
+        // violation, not a silence.
+        let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":330,"y":200,
+    "style":{"width":300,"height":8,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text",
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff","text-autofit":true}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::ContentOverflowsBox),
+            "text-autofit must not silence an overflow the legibility floor cannot resolve: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn text_autofit_resolves_an_unwrappable_nowrap_overflow() {
+        // Same fixture as `unwrappable_text_in_narrow_card_is_flagged` (a
+        // 96px nowrap line in a 200px-wide card), with `text-autofit: true`
+        // added — this is `check_unwrappable_text`'s territory, not
+        // `check_content_overflows_box`'s.
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "card",
+                    "x": 100, "y": 100,
+                    "style": { "width": "200px", "height": "200px", "background": "#222244" },
+                    "children": [{
+                        "type": "text",
+                        "content": "this string is too long to fit",
+                        "style": { "color": "#ffffff", "font-size": "96px", "white-space": "nowrap", "text-autofit": true }
+                    }]
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::UnwrappableTextOverflow),
+            "text-autofit: true must resolve the nowrap overflow this exact fixture (minus the \
+             flag) triggers: {:?}",
+            violations
+        );
+    }
 }
 
 /// M4 (issue #110 / #102): legibility floor tests.
@@ -3718,6 +3885,91 @@ mod legibility_tests {
             warnings[0].contains("views[0].scenes[0].children[0]"),
             "got: {}",
             warnings[0]
+        );
+    }
+
+    /// `text-autofit`'s shrink floor is pinned to a 1080-tall reference so
+    /// measure and paint agree on it; this legibility floor is relative to
+    /// the real frame. On a taller canvas the two diverge, and a declared
+    /// size well above the floor can still render illegibly. Without this
+    /// warning that case passes in silence — the exact failure mode autofit
+    /// is supposed to remove, not relocate.
+    #[test]
+    fn autofit_on_a_taller_than_1080_canvas_warns_that_it_may_shrink_below_legibility() {
+        let json = r##"{
+            "video": { "width": 3840, "height": 2160 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "a long headline that will not fit its narrow box",
+                    "style": {
+                        "width": "320px", "height": "90px",
+                        "color": "#ffffff", "font-size": "120px",
+                        "text-autofit": true
+                    }
+                }]
+            }]
+        }"##;
+        let warnings = check_legibility(&parse(json));
+        assert_eq!(warnings.len(), 1, "expected one warning: {warnings:?}");
+        assert!(
+            warnings[0].contains("text-autofit may shrink"),
+            "got: {}",
+            warnings[0]
+        );
+        // Both numbers must be named: what it can shrink to, and the floor
+        // it would fall under. A warning that says neither is unactionable.
+        assert!(warnings[0].contains("13px"), "got: {}", warnings[0]);
+        assert!(warnings[0].contains("26px"), "got: {}", warnings[0]);
+    }
+
+    /// The mirror case, and the reason the warning is conditional rather
+    /// than unconditional: at 1080 the pinned floor already sits at the
+    /// legibility threshold, so there is nothing to warn about and doing so
+    /// would be noise on every autofitting text in the common canvas.
+    #[test]
+    fn autofit_on_a_1080_canvas_does_not_warn() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "a long headline that will not fit its narrow box",
+                    "style": {
+                        "width": "320px", "height": "90px",
+                        "color": "#ffffff", "font-size": "120px",
+                        "text-autofit": true
+                    }
+                }]
+            }]
+        }"##;
+        assert!(
+            check_legibility(&parse(json)).is_empty(),
+            "no divergence at 1080, so no warning"
+        );
+    }
+
+    /// A component whose painter ignores `text-autofit` must never draw the
+    /// warning: it cannot shrink, so the shrink cannot make it illegible.
+    #[test]
+    fn autofit_declared_on_a_component_that_ignores_it_does_not_warn() {
+        let json = r##"{
+            "video": { "width": 3840, "height": 2160 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "caption",
+                    "mode": "highlight",
+                    "words": [{ "text": "hello", "start": 0.0, "end": 1.0 }],
+                    "style": { "font-size": "120px", "color": "#ffffff", "text-autofit": true }
+                }]
+            }]
+        }"##;
+        assert!(
+            check_legibility(&parse(json)).is_empty(),
+            "caption's painter never reads text-autofit"
         );
     }
 

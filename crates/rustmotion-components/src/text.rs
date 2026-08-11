@@ -356,6 +356,7 @@ impl Text {
         &self,
         canvas: &Canvas,
         layout_width: f32,
+        content_height: Option<f32>,
         time: f64,
         props: &AnimatedProperties,
         ctx: &PaintCtx,
@@ -383,16 +384,8 @@ impl Text {
             ctx.video_height as f32,
             layout_width.max(0.0),
         );
-        let (font_size, letter_spacing, line_height_val) =
+        let (mut font_size, mut letter_spacing, mut line_height_val) =
             self.style.typography_px_ctx(&base_ctx, 48.0);
-        // This element's *own* resolved font-size as the `em`/`%` base —
-        // needed below for `text-shadow` (its blur/offset are relative to
-        // the shadow owner's own font-size, same rule as letter-spacing/
-        // line-height, not the parent-proxy `base_ctx` above).
-        let type_ctx = rustmotion_core::css::units::LengthContext {
-            font_size,
-            ..base_ctx
-        };
         // Animated color (timeline style-state transitions) overrides the
         // static style color.
         let color = props
@@ -433,32 +426,74 @@ impl Text {
 
         let typeface = typeface_with_fallback(font_family, skia_font_style)?;
 
+        // The box's own resolved width — computed here (ahead of the
+        // `white-space: nowrap` wrap decision below) because `text-autofit`
+        // needs it as its width-fit target *regardless* of nowrap: a nowrap
+        // line still shrinks to fit this box once `text-autofit` is on (see
+        // `CssStyle::text_autofit`'s doc comment), it just never breaks
+        // across lines while doing it.
+        let nowrap = matches!(
+            self.style.white_space,
+            Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
+        );
+        let box_width = if layout_width.is_finite() && layout_width > 0.0 {
+            Some(match self.max_width {
+                Some(mw) => mw.min(layout_width),
+                None => layout_width,
+            })
+        } else {
+            self.max_width
+        };
+
+        // `text-autofit`: resolve the *actual* font-size/letter-spacing/
+        // line-height used for the rest of this function — the identical
+        // computation `TextIntrinsic::measure` runs for this same node (see
+        // `resolve_text_autofit`'s doc comment for the parity argument).
+        // Must happen before `type_ctx`/the final `Font` are built below so
+        // both reflect the resolved (possibly shrunk) size, not the
+        // requested one.
+        if matches!(self.style.text_autofit, Some(true)) {
+            let declared_height = content_height.filter(|h| *h > 0.0 && h.is_finite());
+            let (fs, ls, lh) = crate::intrinsic::resolve_text_autofit(
+                &self.content,
+                &typeface,
+                font_size,
+                letter_spacing,
+                line_height_val,
+                !nowrap,
+                box_width,
+                declared_height,
+            );
+            font_size = fs;
+            letter_spacing = ls;
+            line_height_val = lh;
+        }
+
+        // This element's *own* resolved font-size as the `em`/`%` base —
+        // needed below for `text-shadow` (its blur/offset are relative to
+        // the shadow owner's own font-size, same rule as letter-spacing/
+        // line-height, not the parent-proxy `base_ctx` above). Built from
+        // the post-autofit `font_size` so a shrunk headline's shadow shrinks
+        // with it instead of using the pre-shrink em/% base.
+        let type_ctx = rustmotion_core::css::units::LengthContext {
+            font_size,
+            ..base_ctx
+        };
+
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        // Use layout width as wrapping constraint, combined with max_width.
-        // M1: `white-space: nowrap|pre` disables wrapping entirely — the
-        // line may then exceed `layout_width`. That's the point: it makes
-        // the property mean something, and it's exactly the condition the
-        // geometry validator's `unwrappable_text_overflow` check (which
-        // re-measures via `TextIntrinsic::from_text`, now wrap-aware too)
-        // assumes the renderer can produce.
-        let nowrap = matches!(
-            self.style.white_space,
-            Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
-        );
-        let wrap_width = if nowrap {
-            None
-        } else if layout_width.is_finite() && layout_width > 0.0 {
-            match self.max_width {
-                Some(mw) => Some(mw.min(layout_width)),
-                None => Some(layout_width),
-            }
-        } else {
-            self.max_width
-        };
+        // Use the box width as the wrapping constraint (computed above, as
+        // `box_width`, ahead of the autofit step). M1: `white-space:
+        // nowrap|pre` disables wrapping entirely — the line may then exceed
+        // `layout_width`. That's the point: it makes the property mean
+        // something, and it's exactly the condition the geometry
+        // validator's `unwrappable_text_overflow` check (which re-measures
+        // via `TextIntrinsic::from_text`, now wrap-aware too) assumes the
+        // renderer can produce.
+        let wrap_width = if nowrap { None } else { box_width };
 
         // Apply typewriter effect: limit visible characters based on animation progress
         let content = if props.visible_chars_progress >= 0.0 {
@@ -683,15 +718,25 @@ impl Painter for Text {
         props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let _ = self.paint(canvas, layout.width, ctx.time, props, ctx);
+        // `text-autofit`'s height-fit target: the box's own content-box
+        // height, exactly as taffy resolved it for this frame's layout —
+        // `None` when it isn't a positive, finite number (an intrinsically-
+        // sized box that grew to fit its content, i.e. nothing to shrink
+        // for on this axis; see `CssStyle::text_autofit`'s doc comment).
+        let (_, _, _, content_height) = layout.content_box();
+        let content_height =
+            (content_height > 0.0 && content_height.is_finite()).then_some(content_height);
+        let _ = self.paint(canvas, layout.width, content_height, ctx.time, props, ctx);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intrinsic::TextIntrinsic;
     use rustmotion_core::css::style::CssStyle;
     use rustmotion_core::css::Length;
+    use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
     use rustmotion_core::schema::{CharAnimationTiming, EasingType};
 
     fn make_text(content: &str, white_space: Option<CssWhiteSpace>) -> Text {
@@ -778,7 +823,7 @@ mod tests {
         let canvas = surface.canvas();
         let ctx = test_ctx();
         let props = AnimatedProperties::default();
-        text.paint(canvas, 80.0, 0.0, &props, &ctx)
+        text.paint(canvas, 80.0, None, 0.0, &props, &ctx)
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
@@ -809,7 +854,7 @@ mod tests {
         let canvas = surface.canvas();
         let ctx = test_ctx();
         let props = AnimatedProperties::default();
-        text.paint(canvas, 80.0, 0.0, &props, &ctx)
+        text.paint(canvas, 80.0, None, 0.0, &props, &ctx)
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
@@ -853,7 +898,7 @@ mod tests {
         let canvas = surface.canvas();
         let ctx = test_ctx();
         let props = AnimatedProperties::default();
-        text.paint(canvas, 300.0, 0.0, &props, &ctx)
+        text.paint(canvas, 300.0, None, 0.0, &props, &ctx)
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
@@ -891,7 +936,7 @@ mod tests {
         let canvas = surface.canvas();
         let ctx = test_ctx();
         let props = AnimatedProperties::default();
-        text.paint(canvas, 300.0, 0.0, &props, &ctx)
+        text.paint(canvas, 300.0, None, 0.0, &props, &ctx)
             .expect("paint succeeds");
         let grid = alpha_grid(&mut surface, W, H);
 
@@ -977,7 +1022,7 @@ mod tests {
                 skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
             {
                 let canvas = surface.canvas();
-                text.paint(canvas, W as f32, t, &props, &ctx)
+                text.paint(canvas, W as f32, None, t, &props, &ctx)
                     .expect("paint succeeds");
             }
             alpha_grid(&mut surface, W, H)
@@ -1058,7 +1103,7 @@ mod tests {
                 skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
             {
                 let canvas = surface.canvas();
-                text.paint(canvas, W as f32, t, &props, &ctx)
+                text.paint(canvas, W as f32, None, t, &props, &ctx)
                     .expect("paint succeeds");
             }
             let grid = alpha_grid(&mut surface, W, H);
@@ -1099,7 +1144,7 @@ mod tests {
         let mut before = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = before.canvas();
-            text.paint(canvas, W as f32, 0.1, &props, &ctx)
+            text.paint(canvas, W as f32, None, 0.1, &props, &ctx)
                 .expect("paint succeeds");
         }
         let before_grid = alpha_grid(&mut before, W, H);
@@ -1113,7 +1158,7 @@ mod tests {
         let mut mid = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = mid.canvas();
-            text.paint(canvas, W as f32, 0.65, &props, &ctx)
+            text.paint(canvas, W as f32, None, 0.65, &props, &ctx)
                 .expect("paint succeeds");
         }
         let mid_grid = alpha_grid(&mut mid, W, H);
@@ -1128,6 +1173,270 @@ mod tests {
         assert!(
             !has_ink_in(&mid_grid, W, word1_end + 70, W, 0, H),
             "word 2 (starts at delay+stagger=1.1s) must still be fully invisible at t=0.65"
+        );
+    }
+
+    // ─── text-autofit ───────────────────────────────────────────────────
+
+    fn autofit_text(content: &str, font_size: f32, white_space: Option<CssWhiteSpace>) -> Text {
+        let mut t = make_text(content, white_space);
+        t.style.font_size = Some(Length::Px(font_size));
+        t.style.text_autofit = Some(true);
+        t
+    }
+
+    /// Rightmost painted column across the whole surface — the horizontal
+    /// extent of whatever ink was actually drawn.
+    fn max_ink_x(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        let mut max_x: Option<i32> = None;
+        for y in 0..height {
+            for x in (0..surface_width).rev() {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    max_x = Some(max_x.map_or(x, |m| m.max(x)));
+                    break;
+                }
+            }
+        }
+        max_x
+    }
+
+    /// Bottommost painted row across the whole surface — the vertical
+    /// extent of whatever ink was actually drawn.
+    fn max_ink_y(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        for y in (0..height).rev() {
+            for x in 0..surface_width {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    return Some(y);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn measure_and_paint_agree_on_a_shrunk_nowrap_line() {
+        // Trap #1 — the one the brief calls the only one that can ruin this
+        // work: `TextIntrinsic::measure` and `Text::paint` must resolve to
+        // the *same* font size for the same node, or the box the layout
+        // engine reserves stops matching what actually gets painted. Both
+        // delegate to `resolve_text_autofit` with identical inputs (see its
+        // doc comment); this proves that agreement operationally, on the
+        // real render path, not by re-deriving the expected size by hand
+        // (which would only test this test's own arithmetic).
+        let text = autofit_text(
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+            Some(CssWhiteSpace::Nowrap),
+        );
+        // 300px comfortably clears this sentence's floor-fit width (~252px
+        // — this string never reads shorter than the calibrated legibility
+        // floor allows), so the box is reachable by shrinking alone,
+        // distinct from the separate floor-behaviour tests in
+        // `intrinsic.rs`.
+        const BOX_W: f32 = 300.0;
+        const BOX_H: f32 = 60.0;
+
+        let (measured_w, _measured_h) = TextIntrinsic::from_text(&text).measure(
+            (None, None),
+            (
+                AvailableSpace::Definite(BOX_W),
+                AvailableSpace::Definite(BOX_H),
+            ),
+        );
+        // Sanity: at 90px this line would never fit a 300px box unshrunk —
+        // proves the shrink path is actually exercised here.
+        assert!(
+            measured_w <= BOX_W + 0.5,
+            "TextIntrinsic itself must report a fit once autofit is on, got {measured_w}"
+        );
+
+        const W: i32 = 900;
+        const H: i32 = 300;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let ctx = test_ctx();
+            let props = AnimatedProperties::default();
+            text.paint(canvas, BOX_W, Some(BOX_H), 0.0, &props, &ctx)
+                .expect("paint succeeds");
+        }
+        let grid = alpha_grid(&mut surface, W, H);
+        let ink_right = max_ink_x(&grid, W, H).expect("text must paint some ink");
+
+        assert!(
+            (ink_right as f32) <= measured_w + 3.0,
+            "painted ink (right edge {ink_right}) must not exceed the box TextIntrinsic reserved \
+             ({measured_w}) — a wider paint than measure is exactly the class of bug this \
+             workstream exists to close"
+        );
+        assert!(
+            (ink_right as f32) >= measured_w - 15.0,
+            "painted ink (right edge {ink_right}) should land close to what TextIntrinsic \
+             measured ({measured_w}); a big gap would mean the two disagree on the resolved \
+             font size in the other direction (paint drawing much smaller than reserved)"
+        );
+    }
+
+    #[test]
+    fn measure_and_paint_agree_on_a_shrunk_wrapped_paragraph_height() {
+        // Same agreement proof as above, on the height axis with wrapping
+        // on: a paragraph whose box has an explicit height too short for
+        // its natural (unshrunk) line count.
+        let text = autofit_text(
+            "the quick brown fox jumps over the lazy dog and then keeps going for quite a while longer",
+            60.0,
+            None,
+        );
+        const BOX_W: f32 = 300.0;
+        const BOX_H: f32 = 90.0;
+
+        let (_measured_w, measured_h) = TextIntrinsic::from_text(&text).measure(
+            (None, None),
+            (
+                AvailableSpace::Definite(BOX_W),
+                AvailableSpace::Definite(BOX_H),
+            ),
+        );
+        assert!(
+            measured_h <= BOX_H + 0.5,
+            "TextIntrinsic itself must report a fit once autofit is on, got {measured_h}"
+        );
+
+        const W: i32 = 500;
+        const H: i32 = 400;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let ctx = test_ctx();
+            let props = AnimatedProperties::default();
+            text.paint(canvas, BOX_W, Some(BOX_H), 0.0, &props, &ctx)
+                .expect("paint succeeds");
+        }
+        let grid = alpha_grid(&mut surface, W, H);
+        let ink_bottom = max_ink_y(&grid, W, H).expect("text must paint some ink");
+
+        assert!(
+            (ink_bottom as f32) <= measured_h + 6.0,
+            "painted ink (bottom edge {ink_bottom}) must not exceed the box TextIntrinsic \
+             reserved ({measured_h})"
+        );
+    }
+
+    #[test]
+    fn autofit_size_is_stable_across_frames_for_fixed_content() {
+        // Trap #2: nothing in the resolution may depend on `ctx.time` for
+        // fixed content — rendering it at two different times, same box,
+        // must be byte-identical.
+        let text = autofit_text(
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 900;
+        const H: i32 = 300;
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+
+        let render_at = |t: f64| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                text.paint(canvas, 250.0, Some(60.0), t, &props, &ctx)
+                    .expect("paint succeeds");
+            }
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let frame_a = render_at(0.0);
+        let frame_b = render_at(0.9);
+        assert_eq!(
+            frame_a, frame_b,
+            "fixed content in a fixed box must render byte-identically regardless of ctx.time — \
+             a per-frame drift here is exactly what the temporal-stability requirement forbids"
+        );
+    }
+
+    #[test]
+    fn autofit_size_does_not_drift_during_a_typewriter_reveal() {
+        // Trap #2's named example: a typewriter reveal
+        // (`visible_chars_progress`) must not make the resolved font size
+        // drift as more characters become visible — `resolve_text_autofit`
+        // is always fed the full, untruncated content, never the
+        // reveal-in-progress view (see its doc comment). Proof: the line's
+        // vertical footprint (driven by line-height, hence font size) must
+        // be identical at 30% and 100% reveal, even though the horizontal
+        // extent legitimately differs (fewer glyphs are visible yet).
+        let text = autofit_text(
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 900;
+        const H: i32 = 300;
+        let ctx = test_ctx();
+
+        let render_at = |progress: f32| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            let props = AnimatedProperties {
+                visible_chars_progress: progress,
+                ..Default::default()
+            };
+            {
+                let canvas = surface.canvas();
+                text.paint(canvas, 250.0, Some(60.0), 0.0, &props, &ctx)
+                    .expect("paint succeeds");
+            }
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let early = render_at(0.3);
+        let full = render_at(1.0);
+
+        let early_bottom = max_ink_y(&early, W, H).expect("some ink must paint at 30% reveal");
+        let full_bottom = max_ink_y(&full, W, H).expect("some ink must paint at full reveal");
+        assert_eq!(
+            early_bottom, full_bottom,
+            "the resolved font size (line height, hence vertical ink footprint) must not change \
+             as the typewriter reveal progresses: early={early_bottom}, full={full_bottom}"
+        );
+
+        // And the visible width at 30% must be meaningfully narrower than
+        // the full line — otherwise this test would not actually be
+        // exercising a partial reveal at all.
+        let early_right = max_ink_x(&early, W, H).expect("some ink at 30% reveal");
+        let full_right = max_ink_x(&full, W, H).expect("some ink at full reveal");
+        assert!(
+            early_right < full_right,
+            "test setup: 30% reveal should show measurably less horizontal ink than the full \
+             line (early={early_right}, full={full_right})"
+        );
+    }
+
+    #[test]
+    fn without_text_autofit_nowrap_still_bleeds_past_the_box_exactly_as_before() {
+        // Backward compatibility: a scenario that does not declare
+        // `text-autofit` must render exactly as it did before this feature
+        // existed, even now that `content_height` is threaded through —
+        // the render-level twin of
+        // `intrinsic::tests::text_intrinsic_ignores_autofit_target_when_the_flag_is_off`.
+        let text = make_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 900;
+        const H: i32 = 300;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        let ctx = test_ctx();
+        let props = AnimatedProperties::default();
+        text.paint(canvas, 250.0, Some(60.0), 0.0, &props, &ctx)
+            .expect("paint succeeds");
+        let grid = alpha_grid(&mut surface, W, H);
+        assert!(
+            has_ink_in(&grid, W, 260, W, 0, 45),
+            "without text-autofit, nowrap must still bleed past its box exactly as before"
         );
     }
 }

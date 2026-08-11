@@ -13,6 +13,51 @@ use super::units::{Length, LengthContext, LengthPercentage, ParsedLength};
 // shape either way — a css-local mirror would only duplicate the struct.
 use crate::schema::{deserialize_animation_effects, AnimationEffect, GradientBorder, InnerShadow};
 
+// ─── Legibility floor (relocated from `rustmotion-cli/src/commands/
+// geometry.rs`'s `check_legibility`, issue #110/#102 — moved here, not
+// duplicated, so `text-autofit` below can shrink down to the exact same
+// calibrated threshold instead of inventing a second one; `rustmotion-cli`
+// depends on `rustmotion-core`, never the other way around, so the shared
+// value has to live on this side of that boundary) ─────────────────────────
+//
+// Threshold justification (rendered evidence, not a guess): a 1920×1080
+// scenario was rendered with the same sample line at 8/10/11/12/13/14/16/18/
+// 20/22/24/28px, then the frame was scaled down 50% (a realistic "not
+// full-native" viewing size) to inspect. 8–13px degraded to an illegible
+// grey smear at that scale; 14px was the first size that stayed readable.
+// 0.012 (1.2% of output height) sits between those two bands — it equals
+// ~13px on a 1080p frame — and clears every built-in component default
+// already shipped (table/terminal/codeblock/pill_nav = 14px, badge `md` =
+// 14px, kbd = 14px, tooltip = 13px), so it does not fire on scenarios that
+// already validate clean today. Expressing it as a fraction of output
+// height (rather than an absolute px count) makes the same *visual* size
+// get flagged on a 4K or vertical-format canvas too.
+pub const MIN_LEGIBLE_FONT_RATIO: f32 = 0.012;
+
+/// [`MIN_LEGIBLE_FONT_RATIO`] evaluated at a fixed 1920×1080 reference
+/// canvas (≈12.96px) — `text-autofit`'s shrink floor.
+///
+/// This is deliberately **not** `MIN_LEGIBLE_FONT_RATIO * scenario.video.
+/// height`, unlike `check_legibility`'s own per-scenario check. Reason:
+/// `text-autofit` must resolve to the *identical* px value wherever it's
+/// computed (`TextIntrinsic::measure`, which runs pre-layout inside
+/// `box_builder.rs`, and `Text`/`GradientText`'s painters, which run
+/// post-layout with a real `PaintCtx`) — see the measure/paint parity
+/// argument on `CssStyle::text_autofit`. `box_builder.rs` does not thread
+/// the real `VideoConfig` down to where `TextIntrinsic` is constructed (out
+/// of this workstream's file scope), so the painter side cannot be allowed
+/// to use the real, more accurate `ctx.video_height` either — doing so would
+/// silently reintroduce exactly the measure-vs-paint divergence this
+/// workstream exists to prevent, just relocated from "the box" to "the
+/// floor". Pinning both sides to the same fixed reference trades per-canvas
+/// precision (a vertical 1080×2256 scenario's *true* 1.2%-of-height floor is
+/// larger than this) for the non-negotiable guarantee that they agree. This
+/// does not weaken `check_legibility` itself: that check still runs
+/// independently, against the real canvas, on whatever `font-size` was
+/// authored — it has no visibility into `text-autofit`'s runtime output
+/// either way (see the workstream report's "non traité" list).
+pub const TEXT_AUTOFIT_MIN_FONT_PX: f32 = MIN_LEGIBLE_FONT_RATIO * 1080.0;
+
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
 /// and lets the cascade fill in inherited / initial values.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -74,6 +119,57 @@ pub struct CssStyle {
     pub overflow_wrap: Option<OverflowWrap>,
     pub text_overflow: Option<TextOverflow>,
     pub text_decoration: Option<TextDecoration>,
+    /// When `true` on `text`/`gradient_text`, the effective `font-size` is
+    /// shrunk (never grown) until the content fits the box it was assigned,
+    /// instead of overflowing it. This is what lets an author declare "this
+    /// text must fit here" and closes `ContentOverflowsBox` as a possible
+    /// validator failure for that node — see `apply_fixes`
+    /// (`rustmotion-cli/src/commands/validate.rs`)'s comment on why it
+    /// deliberately refuses to auto-fix that violation today: growing the
+    /// box, shrinking the font, and shortening the copy are all legitimate
+    /// fixes, and picking one was never this tool's call to make silently.
+    /// `text-autofit` removes that ambiguity by having the *author* pick
+    /// "shrink the font" up front.
+    ///
+    /// **Which box.** Two independent axes, each opt-in on its own:
+    /// - *Width*: the box's resolved width — its own `width`/`max-width` if
+    ///   set, else whatever it inherited from its parent (exactly the value
+    ///   `text`/`gradient_text` already wrap against — see
+    ///   `TextIntrinsic`/`Text::paint`). Always present once the node is
+    ///   laid out, so the width axis is always a candidate for shrinking.
+    /// - *Height*: only when the node's own box resolves to a **definite**
+    ///   height (an explicit `height`, or a parent that hands it one, e.g. a
+    ///   fixed `flex-basis`) — never an implicit/inherited one. A box that
+    ///   grows to fit its content has, by construction, nothing to overflow
+    ///   on the height axis, so there is nothing to shrink for. See
+    ///   `TextIntrinsic::measure` / `Text::paint`'s `content_height` for
+    ///   exactly how this is read (the same taffy-resolved, padding/border-
+    ///   already-subtracted content-box value on both the pre-layout measure
+    ///   path and the post-layout paint path — this is what guarantees the
+    ///   two agree on the target, not just the algorithm).
+    ///
+    /// **`white-space: nowrap`.** Does not change: nowrap still means "never
+    /// break this into multiple lines". `text-autofit` composes with it
+    /// rather than overriding it — a `nowrap` line combined with
+    /// `text-autofit: true` shrinks the *one* line until it fits the box's
+    /// width (this is `text`/`gradient_text`'s answer to Remotion's
+    /// `fitText()`), it does not start wrapping.
+    ///
+    /// **`auto_scroll`** (`codeblock`/`terminal`). Unrelated: `text-autofit`
+    /// is only read by `text`/`gradient_text`'s own painter/intrinsic —
+    /// `codeblock`/`terminal` never look at this field, so there is no
+    /// precedence to resolve between the two; `auto_scroll` keeps scrolling
+    /// (never shrinking) exactly as documented in `CLAUDE.md`.
+    ///
+    /// **The floor.** Never shrinks below [`TEXT_AUTOFIT_MIN_FONT_PX`] — the
+    /// same calibrated legibility ratio `check_legibility`
+    /// (`rustmotion-cli/src/commands/geometry.rs`) already enforces, not a
+    /// new threshold. If the content still doesn't fit at the floor, the
+    /// floor size is used anyway (illegible-but-smallest beats an even
+    /// larger overflow) and the geometry validator's `ContentOverflowsBox`
+    /// still fires — `text-autofit` narrows that failure class, it does not
+    /// silence it.
+    pub text_autofit: Option<bool>,
 
     // ---- Visual ----
     pub background: Option<Background>,

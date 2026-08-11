@@ -1,4 +1,6 @@
+use rustmotion::components::intrinsic::{GradientTextIntrinsic, TextIntrinsic};
 use rustmotion::components::{ChildComponent, Component};
+use rustmotion::core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion::engine::animator::spring_rest_time;
 use rustmotion::engine::render::deserialize_children;
 use rustmotion::error::Result;
@@ -66,7 +68,130 @@ pub fn cmd_info(input: &PathBuf) -> Result<()> {
         }
     }
 
+    let text_sizes = collect_text_measurements(&scenario);
+    if !text_sizes.is_empty() {
+        println!("Text sizes:");
+        for report in &text_sizes {
+            println!("  {}", report.describe());
+        }
+    }
+
     Ok(())
+}
+
+/// "Quelle largeur/hauteur fait ce texte, à cette taille, dans cette
+/// police" (text-autofit workstream, lot text-autofit) exposed the same way
+/// `rustmotion info` already exposes spring settle times (see
+/// `SpringReport` above) rather than as a bespoke, separate command:
+/// `rustmotion info` walks the scenario and reports; this adds one more
+/// thing it reports.
+///
+/// The measurement is the natural (unconstrained) size at the declared
+/// `font-size`/family — via `TextIntrinsic`/`GradientTextIntrinsic`, the
+/// exact same Skia-backed measurer the layout engine and the geometry
+/// validator use, so this is never a second, independently-drifting
+/// estimate of what the same text measures elsewhere.
+struct TextMeasurement {
+    label: String,
+    kind: &'static str,
+    preview: String,
+    font_size: f32,
+    natural_width: f32,
+    natural_height: f32,
+    autofit: bool,
+}
+
+impl TextMeasurement {
+    fn describe(&self) -> String {
+        let autofit_note = if self.autofit {
+            " (text-autofit: true — shrinks further if its box is smaller than this)"
+        } else {
+            ""
+        };
+        format!(
+            "{}: {} \"{}\" @ {:.0}px → natural {:.0}×{:.0}px{}",
+            self.label,
+            self.kind,
+            self.preview,
+            self.font_size,
+            self.natural_width,
+            self.natural_height,
+            autofit_note,
+        )
+    }
+}
+
+fn collect_text_measurements(scenario: &ResolvedScenario) -> Vec<TextMeasurement> {
+    let mut out = Vec::new();
+    for (vi, view) in scenario.views.iter().enumerate() {
+        for (si, scene) in view.scenes.iter().enumerate() {
+            let children = deserialize_children(scene);
+            let path = format!("view {} / scene {}", vi + 1, si + 1);
+            collect_text_measurements_in_children(&children, &path, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_text_measurements_in_children(
+    children: &[ChildComponent],
+    path: &str,
+    out: &mut Vec<TextMeasurement>,
+) {
+    let natural = (AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+    for (i, child) in children.iter().enumerate() {
+        let p = format!("{path} / layer {}", i + 1);
+        match &child.component {
+            Component::Text(t) => {
+                let (w, h) = TextIntrinsic::from_text(t).measure((None, None), natural);
+                out.push(TextMeasurement {
+                    label: p.clone(),
+                    kind: "text",
+                    preview: preview(&t.content),
+                    font_size: t.style.font_size_px_or(48.0),
+                    natural_width: w,
+                    natural_height: h,
+                    autofit: matches!(t.style.text_autofit, Some(true)),
+                });
+            }
+            Component::GradientText(t) => {
+                let (w, h) =
+                    GradientTextIntrinsic::from_gradient_text(t).measure((None, None), natural);
+                out.push(TextMeasurement {
+                    label: p.clone(),
+                    kind: "gradient_text",
+                    preview: preview(&t.content),
+                    font_size: t.style.font_size_px_or(48.0),
+                    natural_width: w,
+                    natural_height: h,
+                    autofit: matches!(t.style.text_autofit, Some(true)),
+                });
+            }
+            _ => {}
+        }
+        match &child.component {
+            Component::Card(c) => collect_text_measurements_in_children(&c.children, &p, out),
+            Component::Flex(c) => collect_text_measurements_in_children(&c.children, &p, out),
+            Component::Grid(c) => collect_text_measurements_in_children(&c.children, &p, out),
+            Component::Positioned(c) => collect_text_measurements_in_children(&c.children, &p, out),
+            Component::Container(c) => collect_text_measurements_in_children(&c.children, &p, out),
+            _ => {}
+        }
+    }
+}
+
+/// Truncate a long content string for a single-line report — the full
+/// content is already visible in the source scenario file; this is a label,
+/// not a transcript.
+fn preview(content: &str) -> String {
+    const MAX_CHARS: usize = 40;
+    let char_count = content.chars().count();
+    if char_count <= MAX_CHARS {
+        content.to_string()
+    } else {
+        let truncated: String = content.chars().take(MAX_CHARS).collect();
+        format!("{truncated}…")
+    }
 }
 
 /// Where a `SpringConfig` was found, and the settle time computed for it —
