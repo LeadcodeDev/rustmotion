@@ -223,16 +223,40 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
                     applied += 1;
                 }
             }
+            ViolationKind::ContentOverflowsBox => {
+                // Growing the box, shrinking the font and shortening the copy
+                // are all legitimate answers with very different visual
+                // outcomes, so this arm used to do nothing rather than pick
+                // one. `style.text-autofit` removed that dilemma for the two
+                // components whose painters implement it: it declares the
+                // author's intent ("this must fit") without touching the
+                // declared box or the content, so nothing the author wrote is
+                // overwritten or lost — the same risk category as the two
+                // fixes above, both of which also change the render.
+                //
+                // Scoped to `text`/`gradient_text` deliberately. Every other
+                // component ignores the field, so writing it there would be a
+                // no-op the author could reasonably read as a fix, which is
+                // worse than leaving the violation to them.
+                let kind = target.get("type").and_then(|t| t.as_str());
+                if matches!(kind, Some("text") | Some("gradient_text")) {
+                    if let Some(style) = target
+                        .as_object_mut()
+                        .and_then(|o| o.get_mut("style"))
+                        .and_then(|s| s.as_object_mut())
+                    {
+                        if !style.contains_key("text-autofit") {
+                            style.insert("text-autofit".into(), serde_json::Value::Bool(true));
+                            applied += 1;
+                        }
+                    }
+                }
+            }
             ViolationKind::ViewportOverflow
             | ViolationKind::AnimatedTextOverflow
-            | ViolationKind::ContentOverflowsBox
             | ViolationKind::ContentOverflowsCard => {
                 // Position/size clamping is too risky to auto-fix without
-                // losing intent — leave it for the user. (ContentOverflowsBox
-                // /ContentOverflowsCard specifically: growing the box/card,
-                // shrinking the font, or shortening the copy are all
-                // legitimate fixes with very different visual outcomes — not
-                // ours to pick.)
+                // losing intent — leave it for the user.
             }
         }
     }
@@ -325,6 +349,67 @@ mod tests {
             viewport: (1920, 1080),
             hint: String::new(),
         }
+    }
+
+    fn overflow_box_violation(path: &str) -> GeometryViolation {
+        GeometryViolation {
+            kind: ViolationKind::ContentOverflowsBox,
+            ..unwrappable_violation(path)
+        }
+    }
+
+    /// `ContentOverflowsBox` had no fix because growing the box, shrinking
+    /// the font and shortening the copy are all legitimate and pick
+    /// different outcomes. `text-autofit` states the intent instead, without
+    /// overwriting anything the author declared.
+    #[test]
+    fn fix_declares_text_autofit_on_an_overflowing_text() {
+        let mut json: serde_json::Value = serde_json::from_str(NARROW_CARD_JSON).unwrap();
+        let path = "views[0].scenes[0].children[0].children[0]";
+        let applied = apply_fixes(&mut json, &[overflow_box_violation(path)]);
+        assert_eq!(applied, 1, "expected exactly one fix applied");
+
+        let target = navigate(&mut json, path).expect("path resolves");
+        assert_eq!(
+            target.get("style").and_then(|s| s.get("text-autofit")),
+            Some(&serde_json::Value::Bool(true))
+        );
+        // The declared box and the content are what the author wrote; a fix
+        // that rewrote either would be picking one of the outcomes this arm
+        // exists to avoid picking.
+        assert!(
+            target.get("content").is_some(),
+            "content must be untouched: {target}"
+        );
+    }
+
+    /// Every component other than `text`/`gradient_text` ignores the field.
+    /// Writing it there would look like a fix while changing nothing, which
+    /// is worse than leaving the violation visible.
+    #[test]
+    fn fix_leaves_overflowing_components_that_cannot_autofit_alone() {
+        let json_src = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{ "duration": 1.0, "children": [
+                { "type": "table", "headers": ["a"], "rows": [["b"]],
+                  "style": { "width": "40px", "font-size": 40 } }
+            ]}]
+        }"##;
+        let mut json: serde_json::Value = serde_json::from_str(json_src).unwrap();
+        let path = "views[0].scenes[0].children[0]";
+        assert_eq!(
+            apply_fixes(&mut json, &[overflow_box_violation(path)]),
+            0,
+            "a table cannot autofit, so nothing should be claimed as fixed"
+        );
+        let target = navigate(&mut json, path).expect("path resolves");
+        assert!(
+            target
+                .get("style")
+                .and_then(|s| s.get("text-autofit"))
+                .is_none(),
+            "must not write a field this painter ignores: {target}"
+        );
     }
 
     /// C1: `apply_fixes` must never write `style.wrap` (not a `CssStyle`

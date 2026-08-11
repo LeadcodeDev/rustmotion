@@ -1310,8 +1310,22 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
 
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             let scene_duration = scene.duration;
+            // A frozen scene renders nothing past `freeze_at` — every path
+            // now funnels through `SceneTime`, which clamps there (#164). So
+            // sampling beyond it evaluates transforms at instants the video
+            // never contains, which is how `--strict-anim` reports a
+            // violation that cannot happen. Bounding the sample list rather
+            // than clamping each `time` afterwards also avoids generating a
+            // run of identical post-freeze samples.
+            //
+            // `scene_duration` itself stays untouched below: duration-relative
+            // effects (contract from PR #27) must keep their real window —
+            // only the sampling ceiling moves.
+            let sample_until = scene
+                .freeze_at
+                .map_or(scene_duration, |f| f.clamp(0.0, scene_duration));
 
-            for time in anim_sample_times(scene_duration) {
+            for time in anim_sample_times(sample_until) {
                 let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
                 let anim = Some(BuildAnimationCtx {
                     time,
@@ -2600,6 +2614,48 @@ mod tests {
     // any other transform `apply_animated_props` bakes into `css.transform`),
     // not just translate_x/y and scale_x/y ─────────────────────────────────
 
+    /// Every render path now clamps at `scene.freeze_at` (#164, `SceneTime`),
+    /// so nothing past it is ever rendered. Sampling beyond it therefore
+    /// reports a violation the video cannot contain — a false positive that
+    /// blocks a correct scenario and sends a generator "fixing" something
+    /// that was never wrong.
+    ///
+    /// Same fixture as the spin test below, frozen at 0.05s: the square only
+    /// leaves the frame once the rotation has turned far enough, well after
+    /// the freeze.
+    #[test]
+    fn strict_anim_does_not_sample_past_freeze_at() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "freeze_at": 0.05,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 1810, "y": 490,
+                    "style": {
+                        "width": "100px", "height": "100px",
+                        "animation": [{ "name": "spin", "delay": 0, "duration": 2.0 }]
+                    },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let violations = validate_geometry_animated(&parse(json));
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::AnimatedTextOverflow),
+            "the frame that would overflow is never rendered — freeze_at is at \
+             0.05s: {violations:?}"
+        );
+    }
+
+    /// The mirror: without the freeze, the very same fixture must still be
+    /// caught. Otherwise the bound above would be silencing real overflow
+    /// rather than removing an unreachable sample.
     #[test]
     fn strict_anim_detects_a_spin_animation_pushing_a_square_off_screen() {
         // Same headline numbers as the static-transform regression
