@@ -219,8 +219,15 @@ pub struct CssStyle {
     #[serde(default, deserialize_with = "deserialize_animation_effects")]
     pub animation: Vec<AnimationEffect>,
     /// Smoothing for `timeline` style-state changes. Supported properties:
-    /// `opacity`, and `color` on text/counter; everything else snaps at the
-    /// step's `at`.
+    /// `opacity`; `color` on text/counter; `background` (solid colour only)
+    /// and `border-radius` (single uniform, absolute-px value only) — see
+    /// `box_builder.rs`'s `transition_keyframes`/
+    /// `resolve_transition_css_overrides`. Everything else — including a
+    /// `background`/`border-radius` value outside the shape those two
+    /// support (gradients, per-corner radii, `%`/`em`/`rem`/`vw`/`vh`) —
+    /// still snaps at the step's `at`; `rustmotion validate`'s
+    /// `check_transition_smoothing` (`validate_schema.rs`) reports exactly
+    /// which property and why whenever it would otherwise snap silently.
     pub transition: Option<StyleTransition>,
 
     // ---- Audio reactive binding ----
@@ -728,6 +735,30 @@ pub enum BorderRadius {
     },
 }
 
+impl BorderRadius {
+    /// The single uniform radius as an absolute pixel value, or `None` when
+    /// this isn't a shape a context-free (pre-layout) resolver can safely
+    /// interpolate: per-corner radii (which corner "wins" a 2-point
+    /// interpolation is undefined), or a unit that needs a
+    /// [`crate::css::units::LengthContext`] the caller doesn't have yet
+    /// (`%`/`em`/`rem`/`vw`/`vh` — see the "unités mixtes" decision in
+    /// `box_builder.rs`'s `resolve_transition_overrides`: resolved only
+    /// where both endpoints are unambiguous, refused otherwise rather than
+    /// guessed). Used by `box_builder.rs` (`style.transition` smoothing) and
+    /// `validate_schema.rs` (the matching diagnostic) — both must agree on
+    /// exactly which shapes are interpolable, which is why this lives here
+    /// once instead of being reimplemented on each side.
+    pub fn absolute_px(&self) -> Option<f32> {
+        match self {
+            BorderRadius::Uniform(lp) => match lp.try_parse() {
+                Some(crate::css::units::ParsedLength::Px(v)) => Some(v),
+                _ => None,
+            },
+            BorderRadius::Corners { .. } => None,
+        }
+    }
+}
+
 // ---- Flex ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1051,6 +1082,22 @@ pub enum Background {
     Color(Color),
     Layers(Vec<BackgroundLayer>),
     Single(BackgroundLayer),
+}
+
+impl Background {
+    /// The background's hex/rgba string when it's a plain solid colour, or
+    /// `None` for anything else (gradients, image layers, multi-layer
+    /// stacks) — those need real paint-time compositing to interpolate
+    /// correctly, which is out of reach for a pre-layout `CssStyle` value.
+    /// Same shared-predicate rationale as [`BorderRadius::absolute_px`]:
+    /// `box_builder.rs`'s smoothing and `validate_schema.rs`'s diagnostic
+    /// both call this so they can never disagree about what's interpolable.
+    pub fn solid_hex(&self) -> Option<String> {
+        match self {
+            Background::Color(c) => Some(c.to_css_string()),
+            Background::Layers(_) | Background::Single(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
