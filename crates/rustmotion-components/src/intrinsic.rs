@@ -5,11 +5,11 @@
 //! would otherwise cause text to wrap onto an extra line at paint time and
 //! overflow into the next sibling.
 
-use skia_safe::{Font, FontStyle as SkFontStyle};
+use skia_safe::{Font, FontStyle as SkFontStyle, Typeface};
 
 use rustmotion_core::css::style::{
     CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, LineHeight,
-    WhiteSpace,
+    WhiteSpace, TEXT_AUTOFIT_MIN_FONT_PX,
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
 use rustmotion_core::engine::renderer::{
@@ -104,6 +104,13 @@ pub struct TextIntrinsic {
     letter_spacing: f32,
     max_width: Option<f32>,
     wrap: bool,
+    /// `style.text-autofit == Some(true)`, but only ever set by
+    /// [`Self::from_text`] / [`GradientTextIntrinsic::from_gradient_text`] —
+    /// see [`Self::with_autofit`]'s doc comment for why `from_parts`/
+    /// `from_parts_with_wrap` (shared by `Caption`/`Kbd`/`Badge`/`Counter`,
+    /// none of whose painters read `text-autofit`) must never set this from
+    /// `style` directly.
+    text_autofit: bool,
 }
 
 impl TextIntrinsic {
@@ -120,6 +127,24 @@ impl TextIntrinsic {
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
         Self::from_parts_with_wrap(&text.content, &text.style, text.max_width, wrap)
+            .with_autofit(matches!(text.style.text_autofit, Some(true)))
+    }
+
+    /// Opt this instance into `text-autofit`. Deliberately a separate,
+    /// explicit step rather than something `from_parts`/`from_parts_with_wrap`
+    /// read off `style` themselves: those two constructors are shared by
+    /// every atomic/synthetic-style caller in this file (`Caption`, `Kbd`,
+    /// `Badge`, `Counter`) whose *painters* have no idea `text-autofit`
+    /// exists — if the flag leaked in through the shared style, `measure()`
+    /// would shrink the reserved box for one of those while the painter
+    /// went on drawing at the full requested size, which is exactly the
+    /// measure-vs-paint divergence this feature exists to prevent, not
+    /// reintroduce elsewhere. Only [`Self::from_text`] and
+    /// [`GradientTextIntrinsic::from_gradient_text`] call this, matching the
+    /// two painters (`Text`, `GradientText`) that actually implement it.
+    pub fn with_autofit(mut self, on: bool) -> Self {
+        self.text_autofit = on;
+        self
     }
 
     /// Generic constructor shared by [`GradientText`]/[`Caption`] intrinsics,
@@ -163,6 +188,7 @@ impl TextIntrinsic {
             letter_spacing,
             max_width,
             wrap: true,
+            text_autofit: false,
         }
     }
 
@@ -202,47 +228,260 @@ impl IntrinsicMeasure for TextIntrinsic {
             }
         };
 
-        let Some(font) = self.skia_font() else {
+        let Some(typeface) = self.typeface() else {
             return (0.0, 0.0);
         };
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
-
         let wrap_at = if self.wrap { max_width } else { None };
-        // Tracking-aware wrap (issue #125 §1): matches the real
-        // `letter_spacing` used to measure each line's width just below, so
-        // the box this measurer reserves and what `Text::paint` (also fixed,
-        // same tracking) actually paints agree on line count.
-        let lines = wrap_text_with_tracking(
+        let (base_w, base_h) = wrap_and_measure(
             &self.content,
-            &font,
-            &emoji_font,
+            &typeface,
+            self.font_size,
             wrap_at,
             self.letter_spacing,
+            self.line_height_resolved,
         );
 
-        let mut max_w = 0.0f32;
-        for line in &lines {
-            let w = measure_text_with_fallback(line, &font, &emoji_font, self.letter_spacing);
-            max_w = max_w.max(w);
+        if !self.text_autofit {
+            return (base_w, base_h);
         }
-        let line_count = lines.len().max(1) as f32;
-        (max_w, line_count * self.line_height_resolved)
+
+        // Height target: mirrors the `known`/`available` merge above for
+        // width — taffy hands a leaf its own `known`/`available` height
+        // already padding/border-subtracted (content-box space) whenever
+        // the node's own box resolves to a *definite* height, exactly the
+        // same protocol it uses for width. No separate hand-rolled read of
+        // `style.height` here: reusing this signal is what guarantees this
+        // agrees with `Text::paint`'s `content_height` (from the *same*
+        // taffy-resolved `BoxLayout::content_box()`, post-layout) — see
+        // `CssStyle::text_autofit`'s doc comment.
+        let target_height = match known.1 {
+            Some(h) => Some(h),
+            None => match available.1 {
+                AvailableSpace::Definite(h) => Some(h),
+                AvailableSpace::MaxContent => None,
+                AvailableSpace::MinContent => Some(0.0),
+            },
+        };
+
+        let (final_size, final_ls, final_lh) = resolve_text_autofit(
+            &self.content,
+            &typeface,
+            self.font_size,
+            self.letter_spacing,
+            self.line_height_resolved,
+            self.wrap,
+            max_width,
+            target_height,
+        );
+
+        if final_size >= self.font_size {
+            return (base_w, base_h);
+        }
+        let wrap_at = if self.wrap { max_width } else { None };
+        wrap_and_measure(
+            &self.content,
+            &typeface,
+            final_size,
+            wrap_at,
+            final_ls,
+            final_lh,
+        )
     }
 }
 
 impl TextIntrinsic {
-    fn skia_font(&self) -> Option<Font> {
+    fn sk_font_style(&self) -> SkFontStyle {
         let slant = if self.italic {
             skia_safe::font_style::Slant::Italic
         } else {
             skia_safe::font_style::Slant::Upright
         };
         let weight = skia_safe::font_style::Weight::from(self.weight as i32);
-        let sk_style = SkFontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
-        let family = self.font_family.as_deref().unwrap_or("Inter");
-        let typeface = typeface_with_fallback(family, sk_style).ok()?;
-        Some(Font::from_typeface(typeface, self.font_size))
+        SkFontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant)
     }
+
+    fn typeface(&self) -> Option<Typeface> {
+        let family = self.font_family.as_deref().unwrap_or("Inter");
+        typeface_with_fallback(family, self.sk_font_style()).ok()
+    }
+}
+
+/// Wrap `content` at `font_size` (with `letter_spacing`/`line_height`
+/// already resolved for that size) and return its `(max_line_width,
+/// total_height)` — the single wrap+measure routine `TextIntrinsic::measure`
+/// calls for both its base (requested-size) and, when `text-autofit` shrinks
+/// it, its final (resolved-size) measurement, so the two never drift apart
+/// from hand-duplicated logic.
+fn wrap_and_measure(
+    content: &str,
+    typeface: &Typeface,
+    font_size: f32,
+    wrap_at: Option<f32>,
+    letter_spacing: f32,
+    line_height: f32,
+) -> (f32, f32) {
+    let font = Font::from_typeface(typeface.clone(), font_size);
+    let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+    // Tracking-aware wrap (issue #125 §1): matches the real `letter_spacing`
+    // used to measure each line's width just below, so the box this
+    // measurer reserves and what the painter (also tracking-aware) actually
+    // paints agree on line count.
+    let lines = wrap_text_with_tracking(content, &font, &emoji_font, wrap_at, letter_spacing);
+    let mut max_w = 0.0f32;
+    for line in &lines {
+        max_w = max_w.max(measure_text_with_fallback(
+            line,
+            &font,
+            &emoji_font,
+            letter_spacing,
+        ));
+    }
+    let line_count = lines.len().max(1) as f32;
+    (max_w, line_count * line_height)
+}
+
+/// `text-autofit`'s shared shrink resolution — the single computation
+/// `TextIntrinsic::measure` and `Text`/`GradientText`'s painters all call
+/// with identical inputs, so the resolved size can never disagree between
+/// the box taffy reserves and the pixels actually painted into it (see
+/// `CssStyle::text_autofit`'s doc comment — this exact class of bug is what
+/// this workstream exists to close, not reopen).
+///
+/// Pure and stateless: the same `(content, typeface, requested_font_size,
+/// requested_letter_spacing, requested_line_height, wrap, box_width,
+/// declared_height)` always produces the same `(font_size, letter_spacing,
+/// line_height)`. That purity is *why* calling this fresh every paint call
+/// (frame) is stable rather than something that needs caching — see the two
+/// call sites' comments for what does and does not change frame to frame.
+/// The one input this deliberately never sees is the paint-time typewriter
+/// reveal (`AnimatedProperties::visible_chars_progress`): both call sites
+/// pass the full, untruncated content, so a reveal-in-progress can't make
+/// the resolved size drift as more characters become visible.
+///
+/// `letter_spacing`/`line_height` are rescaled proportionally with the
+/// chosen font size (`requested * chosen/requested`) rather than
+/// re-resolved from the original CSS declaration at each candidate size.
+/// This matches CSS exactly for the common declarations (a unitless
+/// `line-height` number, `%`/`em` line-height, or the engine's `1.3×`
+/// default all scale linearly with font-size by definition) and is a
+/// deliberate approximation for the rare case of an absolute
+/// (`px`/`rem`/`vw`/`vh`) `line-height`/`letter-spacing`, which CSS says
+/// should stay fixed regardless of font-size — getting that exactly right
+/// needs threading the full `CssStyle` (not just its already-resolved
+/// scalars) through both call sites, out of scope here.
+///
+/// `box_width`/`declared_height`: `None` means nothing to fit against on
+/// that axis (an unconstrained box cannot overflow); returns
+/// `requested_font_size` unchanged, without measuring anything, when both
+/// are `None`.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_text_autofit(
+    content: &str,
+    typeface: &Typeface,
+    requested_font_size: f32,
+    requested_letter_spacing: f32,
+    requested_line_height: f32,
+    wrap: bool,
+    box_width: Option<f32>,
+    declared_height: Option<f32>,
+) -> (f32, f32, f32) {
+    if requested_font_size <= 0.0 || (box_width.is_none() && declared_height.is_none()) {
+        return (
+            requested_font_size,
+            requested_letter_spacing,
+            requested_line_height,
+        );
+    }
+    let wrap_at = if wrap { box_width } else { None };
+    let measure_at = |size: f32| -> (f32, f32) {
+        let ratio = size / requested_font_size;
+        wrap_and_measure(
+            content,
+            typeface,
+            size,
+            wrap_at,
+            requested_letter_spacing * ratio,
+            requested_line_height * ratio,
+        )
+    };
+    let floor = TEXT_AUTOFIT_MIN_FONT_PX.min(requested_font_size);
+    let final_size = shrink_to_fit(
+        requested_font_size,
+        floor,
+        box_width,
+        declared_height,
+        measure_at,
+    );
+    if final_size >= requested_font_size {
+        (
+            requested_font_size,
+            requested_letter_spacing,
+            requested_line_height,
+        )
+    } else {
+        let ratio = final_size / requested_font_size;
+        (
+            final_size,
+            requested_letter_spacing * ratio,
+            requested_line_height * ratio,
+        )
+    }
+}
+
+/// Binary-search the largest font size in `[floor_px, requested_font_size]`
+/// whose `measure_at(size)` fits within `(target_width, target_height)`
+/// (either bound `None` = no constraint on that axis). Assumes `measure_at`
+/// is monotonically non-increasing as `size` shrinks — true for real text:
+/// smaller glyphs measure narrower, and a fixed pixel wrap width can only
+/// need the same or fewer lines as glyphs get smaller. 16 halvings of the
+/// search range give sub-0.01px precision for any realistic font size — this
+/// is a visual convenience, not a geometry-critical value, so that precision
+/// is far more than needed.
+///
+/// Never returns below `floor_px`: if the content doesn't fit there either,
+/// `floor_px` is returned anyway — illegible-but-smallest beats an even
+/// larger overflow — and the caller's own overflow signal (the geometry
+/// validator's `ContentOverflowsBox`) is left to fire. This function never
+/// silences that; it only tries to make it unnecessary.
+fn shrink_to_fit(
+    requested_font_size: f32,
+    floor_px: f32,
+    target_width: Option<f32>,
+    target_height: Option<f32>,
+    mut measure_at: impl FnMut(f32) -> (f32, f32),
+) -> f32 {
+    let eps = 0.5;
+    let fits = |w: f32, h: f32| {
+        target_width.is_none_or(|tw| w <= tw + eps) && target_height.is_none_or(|th| h <= th + eps)
+    };
+
+    let (w0, h0) = measure_at(requested_font_size);
+    if fits(w0, h0) {
+        return requested_font_size;
+    }
+
+    let floor_px = floor_px.min(requested_font_size).max(0.1);
+    if floor_px >= requested_font_size {
+        return requested_font_size;
+    }
+
+    let (mut lo, mut hi) = (floor_px, requested_font_size);
+    let (w_floor, h_floor) = measure_at(lo);
+    if !fits(w_floor, h_floor) {
+        // Doesn't fit even at the floor — stop there and let the caller's
+        // own overflow check fire; see this function's doc comment.
+        return lo;
+    }
+    for _ in 0..16 {
+        let mid = (lo + hi) / 2.0;
+        let (w, h) = measure_at(mid);
+        if fits(w, h) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 fn weight_to_u16(w: Option<&CssFontWeight>) -> u16 {
@@ -276,9 +515,10 @@ impl GradientTextIntrinsic {
             t.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
-        Self(TextIntrinsic::from_parts_with_wrap(
-            &t.content, &t.style, max_width, wrap,
-        ))
+        Self(
+            TextIntrinsic::from_parts_with_wrap(&t.content, &t.style, max_width, wrap)
+                .with_autofit(matches!(t.style.text_autofit, Some(true))),
+        )
     }
 }
 
@@ -1326,6 +1566,302 @@ mod tests {
             w_em > w_zero_tracking + 100.0,
             "em tracking must measurably widen the line versus zero tracking: em={w_em}, \
              zero={w_zero_tracking}"
+        );
+    }
+
+    // ─── text-autofit: `shrink_to_fit` (pure binary search, no Skia) ───────
+
+    #[test]
+    fn shrink_to_fit_is_a_noop_when_content_already_fits() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let size = shrink_to_fit(48.0, 12.0, Some(200.0), Some(100.0), |s| {
+            calls.borrow_mut().push(s);
+            (150.0, 80.0)
+        });
+        assert_eq!(size, 48.0);
+        assert_eq!(
+            *calls.borrow(),
+            vec![48.0],
+            "must measure only once (at the requested size) when it already fits"
+        );
+    }
+
+    #[test]
+    fn shrink_to_fit_is_a_noop_when_nothing_to_fit_against() {
+        // Both axes unconstrained: no target to shrink for, regardless of
+        // what `measure_at` reports.
+        let size = shrink_to_fit(48.0, 12.0, None, None, |_| (99999.0, 99999.0));
+        assert_eq!(size, 48.0);
+    }
+
+    #[test]
+    fn shrink_to_fit_finds_a_size_that_fits_the_width_target() {
+        // Fake linear model (width = size * 2), matching how real glyph
+        // widths scale roughly linearly with font size.
+        let target = 100.0;
+        let size = shrink_to_fit(120.0, 5.0, Some(target), None, |s| (s * 2.0, 10.0));
+        assert!(size < 120.0, "must have shrunk, got {size}");
+        assert!(size * 2.0 <= target + 0.5, "resolved size must fit: {size}");
+        // And it's close to the true boundary, not grossly under-shrunk: one
+        // more px would no longer fit.
+        assert!(
+            (size + 1.0) * 2.0 > target + 0.5,
+            "resolved size should be close to the fitting boundary, got {size}"
+        );
+    }
+
+    #[test]
+    fn shrink_to_fit_respects_both_axes_jointly() {
+        // Width alone would allow a much bigger size than height alone —
+        // the chosen size must satisfy the tighter of the two.
+        let size = shrink_to_fit(100.0, 5.0, Some(1000.0), Some(20.0), |s| (s, s * 2.0));
+        assert!(size * 2.0 <= 20.5, "must respect the height target: {size}");
+        assert!(
+            (size + 0.5) * 2.0 > 20.5,
+            "should converge close to the height boundary, got {size}"
+        );
+    }
+
+    #[test]
+    fn shrink_to_fit_never_returns_below_the_floor() {
+        // Content that never fits even at the floor: must stop exactly
+        // there, not silence the overflow by continuing to shrink.
+        let size = shrink_to_fit(120.0, 20.0, Some(10.0), None, |s| (s * 5.0, 10.0));
+        assert_eq!(size, 20.0, "must stop exactly at the floor, not lower");
+    }
+
+    #[test]
+    fn shrink_to_fit_is_deterministic_across_repeated_calls() {
+        // Same inputs, same deterministic binary search → same output every
+        // time. This is the purity property the temporal-stability argument
+        // (see `resolve_text_autofit`'s doc comment) rests on: nothing here
+        // depends on when or how many times it's called.
+        let run = || shrink_to_fit(90.0, 10.0, Some(137.0), Some(64.0), |s| (s * 1.7, s * 0.9));
+        let a = run();
+        let b = run();
+        assert_eq!(a, b);
+    }
+
+    // ─── text-autofit: `resolve_text_autofit` (real Skia fonts) ────────────
+
+    fn inter_typeface() -> Typeface {
+        typeface_with_fallback("Inter", SkFontStyle::normal()).expect("Inter resolves in tests")
+    }
+
+    #[test]
+    fn resolve_text_autofit_shrinks_to_fit_a_width_target() {
+        let typeface = inter_typeface();
+        let content = "A very long headline that will not fit in this box";
+        let requested = 80.0;
+        let box_width = 300.0;
+        let (fs, ls, lh) = resolve_text_autofit(
+            content,
+            &typeface,
+            requested,
+            0.0,
+            requested * 1.3,
+            false, // nowrap: single line
+            Some(box_width),
+            None,
+        );
+        assert!(fs < requested, "must shrink, got {fs}");
+        assert!(
+            fs >= TEXT_AUTOFIT_MIN_FONT_PX - 0.01,
+            "must not shrink past the calibrated floor, got {fs}"
+        );
+        // Prove the resolved size actually fits when wrapped/measured the
+        // same way the caller will — not just that a smaller number came out.
+        let (w, _) = wrap_and_measure(content, &typeface, fs, None, ls, lh);
+        assert!(
+            w <= box_width + 0.5,
+            "resolved size must actually fit: w={w}, target={box_width}"
+        );
+    }
+
+    #[test]
+    fn resolve_text_autofit_is_a_noop_when_it_already_fits() {
+        let typeface = inter_typeface();
+        let (fs, ls, lh) = resolve_text_autofit(
+            "hi",
+            &typeface,
+            24.0,
+            1.0,
+            30.0,
+            true,
+            Some(1000.0),
+            Some(1000.0),
+        );
+        assert_eq!(fs, 24.0);
+        assert_eq!(ls, 1.0);
+        assert_eq!(lh, 30.0);
+    }
+
+    #[test]
+    fn resolve_text_autofit_never_goes_below_the_calibrated_floor() {
+        let typeface = inter_typeface();
+        // Absurdly small box: even the floor doesn't fit, but the function
+        // must still stop exactly at the floor.
+        let (fs, _, _) = resolve_text_autofit(
+            "This sentence is far too long for a ten pixel wide box",
+            &typeface,
+            80.0,
+            0.0,
+            104.0,
+            true,
+            Some(10.0),
+            Some(10.0),
+        );
+        assert!(
+            (fs - TEXT_AUTOFIT_MIN_FONT_PX).abs() < 0.01,
+            "expected exactly the floor ({TEXT_AUTOFIT_MIN_FONT_PX}), got {fs}"
+        );
+    }
+
+    #[test]
+    fn resolve_text_autofit_rescales_letter_spacing_and_line_height_proportionally() {
+        let typeface = inter_typeface();
+        let (fs, ls, lh) = resolve_text_autofit(
+            "SHRINK ME PLEASE, THIS LINE IS QUITE LONG",
+            &typeface,
+            100.0,
+            5.0,
+            130.0,
+            false,
+            Some(150.0),
+            None,
+        );
+        assert!(fs < 100.0, "sanity: must have shrunk, got {fs}");
+        let ratio = fs / 100.0;
+        assert!((ls - 5.0 * ratio).abs() < 1e-3);
+        assert!((lh - 130.0 * ratio).abs() < 1e-3);
+    }
+
+    // ─── text-autofit: `TextIntrinsic` end to end ──────────────────────────
+
+    fn autofit_text(content: &str, font_size: f32) -> Text {
+        Text {
+            content: content.into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(font_size)),
+                text_autofit: Some(true),
+                white_space: Some(WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+        }
+    }
+
+    #[test]
+    fn text_intrinsic_shrinks_when_autofit_is_on_and_the_box_is_too_narrow() {
+        let text = autofit_text("the quick brown fox jumps over the lazy dog", 60.0);
+        let m = TextIntrinsic::from_text(&text);
+        let (w_unconstrained, _) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        // A box at half the natural width needs roughly a ~50% size
+        // reduction — comfortably above the legibility floor for a 60px
+        // request, so this exercises the "shrinks and fits" path distinctly
+        // from `..._still_overflows_when_even_the_floor_does_not_fit` below
+        // (which drives it all the way to the floor on purpose). Derived
+        // from the actual measured natural width rather than a hardcoded
+        // px guess, so it isn't sensitive to exactly which glyph widths
+        // this font ships.
+        let target = w_unconstrained / 2.0;
+        let (w_constrained, _) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(target), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w_constrained <= target + 0.5,
+            "autofit must shrink the nowrap line to fit {target}px, got {w_constrained}"
+        );
+        assert!(
+            w_constrained < w_unconstrained,
+            "must have actually shrunk from the natural width ({w_unconstrained}), got {w_constrained}"
+        );
+    }
+
+    #[test]
+    fn text_intrinsic_ignores_autofit_target_when_the_flag_is_off() {
+        let mut text = autofit_text("the quick brown fox jumps over the lazy dog", 60.0);
+        text.style.text_autofit = None;
+        let m = TextIntrinsic::from_text(&text);
+        let (w, _) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(200.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w > 200.0,
+            "without text-autofit, nowrap must still bleed past the box exactly as before, got {w}"
+        );
+    }
+
+    #[test]
+    fn text_intrinsic_autofit_still_overflows_when_even_the_floor_does_not_fit() {
+        let text = autofit_text(
+            "This is an extremely long sentence that will not fit no matter how much the font shrinks",
+            80.0,
+        );
+        let m = TextIntrinsic::from_text(&text);
+        let (w, _) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(5.0), AvailableSpace::MaxContent),
+        );
+        assert!(
+            w > 5.0,
+            "must not silently report a fit that never actually happened, got {w}"
+        );
+    }
+
+    #[test]
+    fn caption_intrinsic_never_autofits_even_if_style_declares_it() {
+        // Regression guard for the leak this feature must not reintroduce:
+        // `Caption`'s painter has no idea `text-autofit` exists (only
+        // `Text`/`GradientText`'s do), so its intrinsic must never shrink
+        // because of it, even if the field is present in `style` — see
+        // `TextIntrinsic::with_autofit`'s doc comment.
+        let caption = Caption {
+            words: "the quick brown fox jumps over the lazy dog"
+                .split_whitespace()
+                .map(|w| rustmotion_core::schema::CaptionWord {
+                    text: w.to_string(),
+                    start: 0.0,
+                    end: 10.0,
+                })
+                .collect(),
+            active_color: "#FFFF00".into(),
+            mode: Default::default(),
+            max_width: None,
+            pill_color: None,
+            style: CssStyle {
+                font_size: Some(Length::Px(60.0)),
+                text_autofit: Some(true),
+                white_space: Some(WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timing: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let m = CaptionIntrinsic::from_caption(&caption);
+        let (w_unconstrained, _) = m.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let (w_constrained, _) = m.measure(
+            (None, None),
+            (AvailableSpace::Definite(200.0), AvailableSpace::MaxContent),
+        );
+        assert_eq!(
+            w_constrained, w_unconstrained,
+            "caption must ignore text-autofit entirely (nowrap bleeds exactly as before)"
         );
     }
 }

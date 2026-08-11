@@ -56,13 +56,12 @@ rustmotion_core::impl_traits!(GradientText {
 });
 
 impl GradientText {
-    /// `font_size` is resolved once by the caller (`paint`, against a real
-    /// `LengthContext`) and passed in here — this used to independently
-    /// recompute it via the context-free `font_size_px_or`, a second site
-    /// that could silently diverge from `paint`'s own resolution once one of
-    /// the two learned to handle relative units and the other didn't (lot B,
-    /// wave S).
-    fn resolve_font(&self, font_size: f32) -> Option<(Font, Option<Font>)> {
+    /// Family/weight/style resolution only, independent of `font_size` — so
+    /// `text-autofit` (below) can build a fresh `Font` at each candidate
+    /// size from the same resolved typeface without re-resolving the
+    /// family/weight/style lookup per candidate. `paint` builds the actual
+    /// `Font` itself once the final (possibly autofit-shrunk) size is known.
+    fn resolve_typeface(&self) -> Option<skia_safe::Typeface> {
         let font_family = self.style.font_family_or("Inter");
 
         let slant = match self.style.font_style {
@@ -79,16 +78,19 @@ impl GradientText {
         };
         let skia_style = FontStyle::new(weight, skia_safe::font_style::Width::NORMAL, slant);
 
-        let typeface = typeface_with_fallback(font_family, skia_style).ok()?;
-
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        Some((font, emoji_font))
+        typeface_with_fallback(font_family, skia_style).ok()
     }
 }
 
 impl GradientText {
-    fn paint(&self, canvas: &Canvas, layout_width: f32, time: f64, ctx: &PaintCtx) {
+    fn paint(
+        &self,
+        canvas: &Canvas,
+        layout_width: f32,
+        content_height: Option<f32>,
+        time: f64,
+        ctx: &PaintCtx,
+    ) {
         if self.content.is_empty() || self.colors.is_empty() {
             return;
         }
@@ -104,8 +106,8 @@ impl GradientText {
             ctx.video_height as f32,
             layout_width.max(0.0),
         );
-        let font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
-        let Some((font, emoji_font)) = self.resolve_font(font_size) else {
+        let mut font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
+        let Some(typeface) = self.resolve_typeface() else {
             return;
         };
         // `letter-spacing`/`line-height`'s `em`/`%` are relative to this
@@ -122,23 +124,46 @@ impl GradientText {
             font_size,
             ..base_ctx
         };
-        let line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
-        let letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
+        let mut line_height_val = self.style.line_height_for_ctx(font_size, &type_ctx);
+        let mut letter_spacing = self.style.letter_spacing_px_ctx(&type_ctx);
 
         // M1: `white-space: nowrap|pre` keeps the whole content on one line
         // even past `layout_width` (it bleeds); anything else word-wraps at
-        // the box width — same rule `text.rs` uses.
+        // the box width — same rule `text.rs` uses. `gradient_text` has no
+        // `max_width` field of its own (unlike `text`/`caption`), so its box
+        // width is simply the resolved layout width, if any.
         let nowrap = matches!(
             self.style.white_space,
             Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
         );
-        let wrap_at = if nowrap {
-            None
-        } else if layout_width.is_finite() && layout_width > 0.0 {
-            Some(layout_width)
-        } else {
-            None
-        };
+        let box_width = (layout_width.is_finite() && layout_width > 0.0).then_some(layout_width);
+        let wrap_at = if nowrap { None } else { box_width };
+
+        // `text-autofit` — see `text.rs::Text::paint`'s identical step and
+        // `resolve_text_autofit`'s doc comment for the shared-computation
+        // parity argument with `TextIntrinsic::measure`. Resolved before
+        // building the real `Font` below so the rest of this function draws
+        // at the (possibly shrunk) resolved size.
+        if matches!(self.style.text_autofit, Some(true)) {
+            let declared_height = content_height.filter(|h| *h > 0.0 && h.is_finite());
+            let (fs, ls, lh) = crate::intrinsic::resolve_text_autofit(
+                &self.content,
+                &typeface,
+                font_size,
+                letter_spacing,
+                line_height_val,
+                !nowrap,
+                box_width,
+                declared_height,
+            );
+            font_size = fs;
+            letter_spacing = ls;
+            line_height_val = lh;
+        }
+
+        let font = Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
+
         // Tracking-aware wrap (issue #125 §1), consistent with the
         // real-tracking measurement/draw below.
         let lines =
@@ -241,7 +266,12 @@ impl Painter for GradientText {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        self.paint(canvas, layout.width, ctx.time, ctx);
+        // See `Text::paint_content`'s identical step for why `None` here
+        // means "nothing to fit against" rather than "fit to zero".
+        let (_, _, _, content_height) = layout.content_box();
+        let content_height =
+            (content_height > 0.0 && content_height.is_finite()).then_some(content_height);
+        self.paint(canvas, layout.width, content_height, ctx.time, ctx);
     }
 }
 
@@ -326,7 +356,7 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, 0.0, &test_ctx());
+        gt.paint(canvas, 80.0, None, 0.0, &test_ctx());
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -346,7 +376,7 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 80.0, 0.0, &test_ctx());
+        gt.paint(canvas, 80.0, None, 0.0, &test_ctx());
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
@@ -382,12 +412,130 @@ mod tests {
         const H: i32 = 200;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let canvas = surface.canvas();
-        gt.paint(canvas, 300.0, 0.0, &test_ctx());
+        gt.paint(canvas, 300.0, None, 0.0, &test_ctx());
         let grid = alpha_grid(&mut surface, W, H);
 
         assert!(
             has_ink_in(&grid, W, 0, W, 0, 60),
             "gradient_text at font-size: 2rem must paint visible ink"
+        );
+    }
+
+    // ─── text-autofit ───────────────────────────────────────────────────
+
+    fn autofit_gradient_text(
+        content: &str,
+        font_size: f32,
+        white_space: Option<CssWhiteSpace>,
+    ) -> GradientText {
+        let mut gt = make_gradient_text(content, white_space);
+        gt.style.font_size = Some(Length::Px(font_size));
+        gt.style.text_autofit = Some(true);
+        gt
+    }
+
+    fn max_ink_x(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        let mut max_x: Option<i32> = None;
+        for y in 0..height {
+            for x in (0..surface_width).rev() {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    max_x = Some(max_x.map_or(x, |m| m.max(x)));
+                    break;
+                }
+            }
+        }
+        max_x
+    }
+
+    #[test]
+    fn autofit_shrinks_a_nowrap_line_to_fit_and_paint_agrees_with_measure() {
+        use crate::intrinsic::GradientTextIntrinsic;
+        use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
+
+        let gt = autofit_gradient_text(
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const BOX_W: f32 = 300.0; // clears this sentence's floor-fit width
+
+        let (measured_w, _) = GradientTextIntrinsic::from_gradient_text(&gt).measure(
+            (None, None),
+            (AvailableSpace::Definite(BOX_W), AvailableSpace::MaxContent),
+        );
+        assert!(
+            measured_w <= BOX_W + 0.5,
+            "GradientTextIntrinsic itself must report a fit once autofit is on, got {measured_w}"
+        );
+
+        const W: i32 = 900;
+        const H: i32 = 300;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        gt.paint(canvas, BOX_W, None, 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+        let ink_right = max_ink_x(&grid, W, H).expect("gradient_text must paint some ink");
+
+        assert!(
+            (ink_right as f32) <= measured_w + 3.0,
+            "painted ink (right edge {ink_right}) must not exceed the box the intrinsic reserved \
+             ({measured_w})"
+        );
+        assert!(
+            (ink_right as f32) >= measured_w - 15.0,
+            "painted ink (right edge {ink_right}) should land close to the measured width \
+             ({measured_w}) — a big gap means measure and paint disagree on the resolved size"
+        );
+    }
+
+    #[test]
+    fn without_text_autofit_nowrap_still_bleeds_past_the_box_exactly_as_before() {
+        // Backward compatibility twin of `nowrap_paints_a_single_line_past_the_layout_width`,
+        // now also passing a real `content_height` — proves that alone
+        // doesn't trigger shrinking without the flag.
+        let gt = make_gradient_text(
+            "the quick brown fox jumps over the lazy dog",
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 600;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        let canvas = surface.canvas();
+        gt.paint(canvas, 80.0, Some(45.0), 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+
+        assert!(
+            has_ink_in(&grid, W, 300, W, 0, 45),
+            "without text-autofit, nowrap gradient_text must still bleed past its box"
+        );
+    }
+
+    #[test]
+    fn autofit_is_stable_across_frames_for_fixed_content() {
+        // Trap #2: `angle` can animate over time via `animate_angle`, but
+        // here it's static — the resolved font size must not depend on
+        // `time` at all for fixed content in a fixed box.
+        let gt = autofit_gradient_text(
+            "the quick brown fox jumps over the lazy dog",
+            90.0,
+            Some(CssWhiteSpace::Nowrap),
+        );
+        const W: i32 = 900;
+        const H: i32 = 300;
+
+        let render_at = |t: f64| -> Vec<u8> {
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            let canvas = surface.canvas();
+            gt.paint(canvas, 300.0, Some(60.0), t, &test_ctx());
+            alpha_grid(&mut surface, W, H)
+        };
+
+        let frame_a = render_at(0.0);
+        let frame_b = render_at(0.9);
+        assert_eq!(
+            frame_a, frame_b,
+            "fixed content in a fixed box must render byte-identically regardless of ctx.time"
         );
     }
 }
