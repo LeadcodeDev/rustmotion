@@ -845,6 +845,28 @@ enum ResolvedValue {
     Color(String),
 }
 
+/// Public wrapper around `resolve_animation_value_full` for callers outside
+/// this module that want to reuse the exact segment/easing/spring
+/// interpolation math (ordering, per-keyframe easing override, clamping at
+/// the ends) on a synthetic `Animation` they built themselves, without
+/// routing the result through `AnimatedProperties`/`apply_property`.
+///
+/// This is how `box_builder.rs`'s `style.transition` smoothing for
+/// `border-radius`/`background` is implemented: those two properties are
+/// paint-time `CssStyle` fields that every painter already reads directly
+/// (via `paint_pass.rs`, frozen) — there is no `AnimatedProperties` field
+/// for them to land in that anything downstream would ever look at, so
+/// resolving through the generic effects pipeline the way `opacity`/`color`
+/// do would be a dead end. Calling this directly and writing the resolved
+/// `CssStyle` field by hand instead reuses the proven interpolation math
+/// while staying entirely inside `box_builder.rs`'s own file scope.
+pub fn resolve_keyframe_track(anim: &Animation, time: f64) -> KeyframeValue {
+    match resolve_animation_value_full(anim, time) {
+        ResolvedValue::Number(n) => KeyframeValue::Number(n),
+        ResolvedValue::Color(c) => KeyframeValue::Color(c),
+    }
+}
+
 fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
     let keyframes = &anim.keyframes;
     if keyframes.is_empty() {
@@ -920,7 +942,7 @@ fn parse_hex_components(hex: &str) -> (f64, f64, f64, f64) {
 }
 
 /// Interpolate between two hex colors
-fn lerp_color(c1: &str, c2: &str, t: f64) -> String {
+pub fn lerp_color(c1: &str, c2: &str, t: f64) -> String {
     let (r1, g1, b1, a1) = parse_hex_components(c1);
     let (r2, g2, b2, a2) = parse_hex_components(c2);
     let r = (r1 + (r2 - r1) * t).clamp(0.0, 255.0) as u8;
@@ -967,6 +989,17 @@ fn apply_property(props: &mut AnimatedProperties, property: &str, value: f64) {
         _ => {} // Unknown property, ignore
     }
 }
+
+// Note: an earlier workstream (constat #4, `schema/video.rs`) already closed
+// the "unrecognized `Animation.property` is a silent no-op" gap this
+// function's catch-all (`_ => {}` above) would otherwise hide —
+// `KeyframesConfig.keyframes` deserializes through
+// `deserialize_validated_keyframes`/`validate_motion_property`, which
+// rejects any `property` outside `KNOWN_MOTION_PROPERTIES` (with a
+// did-you-mean suggestion) at parse time, before a scenario ever reaches
+// `validate`/render. This workstream verified that gap is closed rather
+// than reopening it with a second, redundant "known properties" list here;
+// see the workstream report's "generic interpolation" write-up.
 
 // ─── Wiggle resolution ──────────────────────────────────────────────────────
 

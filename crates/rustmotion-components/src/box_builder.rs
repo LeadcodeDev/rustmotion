@@ -285,6 +285,21 @@ fn build_ghosts<'a>(
             if steps.iter().any(|s| s.style.is_some()) {
                 let skip_opacity = css.transition.is_some();
                 apply_style_states(&mut css, steps, ghost_time - stagger_delay, skip_opacity);
+                // Same `border-radius`/`background` smoothing as the
+                // principal path in `build_child`, sampled at `ghost_time`
+                // so a motion-blur/trail ghost mid-transition matches what
+                // the principal will look like at that same instant.
+                let overrides = resolve_transition_css_overrides(
+                    child.component.as_styled().style_config(),
+                    steps,
+                    ghost_time - stagger_delay,
+                );
+                if let Some(br) = overrides.border_radius {
+                    css.border_radius = Some(br);
+                }
+                if let Some(bg) = overrides.background {
+                    css.background = Some(bg);
+                }
             }
         }
         // Resolve animation props at the *ghost* time.
@@ -478,6 +493,23 @@ fn build_child<'a>(
             let t = local_actx.map(|a| a.time).unwrap_or(0.0);
             let skip_opacity = css.transition.is_some();
             apply_style_states(&mut css, steps, t - stagger_delay, skip_opacity);
+            // `border-radius`/`background` (solid colour, uniform absolute
+            // px only — see `resolve_transition_css_overrides`'s doc
+            // comment) smooth the same way opacity does above, but land
+            // directly on `css` instead of through the generic effects
+            // pipeline: no `AnimatedProperties` field for them is ever read
+            // by a painter, so that pipeline is a dead end for these two.
+            let overrides = resolve_transition_css_overrides(
+                child.component.as_styled().style_config(),
+                steps,
+                t - stagger_delay,
+            );
+            if let Some(br) = overrides.border_radius {
+                css.border_radius = Some(br);
+            }
+            if let Some(bg) = overrides.background {
+                css.background = Some(bg);
+            }
         }
     }
 
@@ -802,6 +834,180 @@ pub(crate) fn transition_keyframes(
     };
     push_effect("opacity", opacity_kfs);
     push_effect("color", color_kfs);
+    out
+}
+
+/// Resolved `style.transition` smoothing for `border-radius`/`background`,
+/// ready to be written straight onto a `CssStyle`.
+pub(crate) struct TransitionCssOverrides {
+    pub border_radius: Option<rustmotion_core::css::style::BorderRadius>,
+    pub background: Option<rustmotion_core::css::style::Background>,
+}
+
+/// CSS-native smoothing for `border-radius` (uniform, absolute-px only) and
+/// `background` (solid colour only) timeline style-state changes.
+///
+/// Unlike `opacity`/`color` in `transition_keyframes` above, neither
+/// property has anywhere to land in `AnimatedProperties` that any painter or
+/// the CSS bridge (`css/animation.rs::apply_animated_props`) actually reads
+/// (see `KNOWN_ANIMATABLE_PROPERTIES`'s doc comment in `animator.rs`) —
+/// every painter reads `css.border_radius`/`css.background` straight off
+/// the node's own `CssStyle` (`paint_pass.rs`, frozen, already does this for
+/// the static case). So instead of synthesizing an `AnimationEffect` for the
+/// generic effects pipeline (a dead end for these two), this resolves the
+/// interpolated value directly and returns it for the caller to write onto
+/// the box's `CssStyle` by hand — reusing `animator::resolve_keyframe_track`
+/// for the actual segment/easing/spring math rather than reinventing it.
+///
+/// Gated on `style.transition` being set, mirroring `opacity`'s gate above
+/// (not `color`'s forced near-instant ramp — nothing downstream *requires*
+/// these two to smooth the way text painters require `color` to). Absent an
+/// explicit `style.transition`, this returns an all-`None` result, so every
+/// existing scenario without one renders byte-identical to before this
+/// workstream.
+///
+/// **"Unités mixtes" decision** (see workstream report): resolves only when
+/// *both* the origin and the target value are the exact shape
+/// `BorderRadius::absolute_px`/`Background::solid_hex` can resolve without a
+/// `LengthContext` — uniform absolute px, solid colour. Anything else
+/// (per-corner radii, `%`/`em`/`rem`/`vw`/`vh`, gradients, image layers) is
+/// refused rather than guessed: that property just falls back to
+/// `apply_style_states`'s existing snap. `validate_schema.rs` calls the
+/// exact same two predicates so the diagnostic and the runtime can never
+/// disagree about what's interpolable.
+pub(crate) fn resolve_transition_css_overrides(
+    base: &CssStyle,
+    steps: &[rustmotion_core::schema::TimelineStep],
+    t: f64,
+) -> TransitionCssOverrides {
+    use rustmotion_core::css::style::{Background, BorderRadius, Color};
+    use rustmotion_core::css::units::LengthPercentage as CssLP;
+    use rustmotion_core::engine::animator::resolve_keyframe_track;
+    use rustmotion_core::schema::{Animation, Keyframe, KeyframeValue};
+
+    let mut out = TransitionCssOverrides {
+        border_radius: None,
+        background: None,
+    };
+    let Some(tr) = base.transition.as_ref() else {
+        return out;
+    };
+    if tr.duration() <= 0.0 {
+        return out;
+    }
+    let duration = tr.duration();
+    let easing = tr.easing();
+
+    let mut sorted: Vec<&rustmotion_core::schema::TimelineStep> =
+        steps.iter().filter(|s| s.style.is_some()).collect();
+    sorted.sort_by(|a, b| a.at.total_cmp(&b.at));
+
+    let mut prev_radius = base
+        .border_radius
+        .as_ref()
+        .and_then(BorderRadius::absolute_px);
+    let mut prev_bg = base.background.as_ref().and_then(Background::solid_hex);
+    let mut radius_kfs: Vec<Keyframe> = Vec::new();
+    let mut bg_kfs: Vec<Keyframe> = Vec::new();
+
+    // Same ascending-time bookkeeping as `transition_keyframes`'s
+    // `push_pair` above (kept local — a shared closure can't easily borrow
+    // two different `Vec`s across both loops below without upsetting the
+    // borrow checker for no real benefit at this size).
+    let push_pair = |kfs: &mut Vec<Keyframe>, at: f64, from: Keyframe, to: Keyframe| {
+        let floor = kfs.last().map(|k| k.time + 1e-6).unwrap_or(f64::MIN);
+        let start = at.max(floor);
+        let mut from = from;
+        let mut to = to;
+        from.time = start;
+        to.time = to.time.max(start + 1e-6);
+        kfs.push(from);
+        kfs.push(to);
+    };
+
+    for step in sorted {
+        let style = step.style.as_deref().unwrap();
+        if let Some(br) = style.border_radius.as_ref() {
+            match br.absolute_px() {
+                Some(target) => {
+                    if prev_radius != Some(target) {
+                        if let Some(from) = prev_radius {
+                            push_pair(
+                                &mut radius_kfs,
+                                step.at,
+                                Keyframe {
+                                    time: step.at,
+                                    value: KeyframeValue::Number(from as f64),
+                                    easing: None,
+                                },
+                                Keyframe {
+                                    time: step.at + duration,
+                                    value: KeyframeValue::Number(target as f64),
+                                    easing: None,
+                                },
+                            );
+                        }
+                        prev_radius = Some(target);
+                    }
+                }
+                // Unresolvable shape (per-corner, %/em/rem/vw/vh) — lose the
+                // interpolation origin for *this* transition only;
+                // `validate_schema.rs` diagnoses this exact step, and a
+                // later resolvable value simply resumes smoothing from
+                // itself onward (see the doc comment above).
+                None => prev_radius = None,
+            }
+        }
+        if let Some(bg) = style.background.as_ref() {
+            match bg.solid_hex() {
+                Some(target) => {
+                    if prev_bg.as_deref() != Some(target.as_str()) {
+                        if let Some(from) = prev_bg.clone() {
+                            push_pair(
+                                &mut bg_kfs,
+                                step.at,
+                                Keyframe {
+                                    time: step.at,
+                                    value: KeyframeValue::Color(from),
+                                    easing: None,
+                                },
+                                Keyframe {
+                                    time: step.at + duration,
+                                    value: KeyframeValue::Color(target.clone()),
+                                    easing: None,
+                                },
+                            );
+                        }
+                        prev_bg = Some(target);
+                    }
+                }
+                None => prev_bg = None,
+            }
+        }
+    }
+
+    if !radius_kfs.is_empty() {
+        let anim = Animation {
+            property: "border_radius".to_string(),
+            keyframes: radius_kfs,
+            easing: easing.clone(),
+            spring: None,
+        };
+        if let KeyframeValue::Number(v) = resolve_keyframe_track(&anim, t) {
+            out.border_radius = Some(BorderRadius::Uniform(CssLP::Px(v as f32)));
+        }
+    }
+    if !bg_kfs.is_empty() {
+        let anim = Animation {
+            property: "background".to_string(),
+            keyframes: bg_kfs,
+            easing,
+            spring: None,
+        };
+        if let KeyframeValue::Color(c) = resolve_keyframe_track(&anim, t) {
+            out.background = Some(Background::Color(Color::String(c)));
+        }
+    }
     out
 }
 

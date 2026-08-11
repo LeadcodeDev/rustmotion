@@ -3,7 +3,7 @@
 
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
-    Background, BackgroundLayer, Color, CssStyle, Display as CssDisplay,
+    Background, BackgroundLayer, BorderRadius, Color, CssStyle, Display as CssDisplay,
 };
 use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario, SpringConfig};
 
@@ -98,6 +98,18 @@ fn validate_children(
         // same frozen `parse_css_color` entry point. This closes the loop by
         // catching it before anyone renders.
         check_style_colors(style, &p, errors);
+
+        // Generic interpolation (issue: "interpolation générique de
+        // n'importe quelle propriété"): `timeline` + `style.transition`
+        // accepts a transition on any CSS property and used to silently
+        // snap instead of animating it for everything except opacity and
+        // color (text/counter). This turns that silence into a named
+        // diagnostic — see the function's doc comment. (The sibling gap —
+        // an explicit `style.animation` keyframes effect naming an
+        // unrecognized `property` — turned out to already be closed at
+        // deserialize time by `schema/video.rs`'s
+        // `validate_motion_property`; verified, not reopened here.)
+        check_transition_smoothing(&child.component, &p, warnings);
 
         if let Some(timed) = child.component.as_timed() {
             let (start, end) = timed.timing();
@@ -369,6 +381,250 @@ fn check_color_str(s: &str, label: &str, path: &str, errors: &mut Vec<String>) {
              rgb()/rgba(...), hsl()/hsla(...), or a CSS named color) — it would render as opaque \
              magenta instead of {label}",
         ));
+    }
+}
+
+// ─── Generic interpolation of timeline/style.transition properties ────────
+//
+// Two independent silent-gap classes existed before this workstream, both
+// rooted in the same fact: `style.animation`/`timeline` accept a transition
+// on *any* named CSS/animation property, but the engine only actually knows
+// how to smoothly interpolate a handful of them. Everything else either (a)
+// snaps at the step's `at` instead of animating (`style.transition` +
+// `timeline` style states — see `box_builder.rs::apply_style_states`'s doc
+// comment), or (b) has no effect whatsoever, not even a snap (an explicit
+// `style.animation: [{ "name": "keyframes", "keyframes": [{ "property":
+// "…" }] }]` targeting a name `animator::apply_property` doesn't recognize).
+// `validate` used to say nothing about either. These two checks do.
+
+/// Classification of a CSS property with respect to `style.transition` +
+/// `timeline` style-state smoothing (`check_transition_smoothing` below).
+/// Mirrors real CSS's own interpolable/discrete split — see each variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransitionPropertyKind {
+    /// Already smoothed: `opacity` (always, when `style.transition` is
+    /// set), `color` (text/counter), `background`/`border-radius` (solid
+    /// colour / uniform absolute px — see the finer shape check in the
+    /// caller for when a *specific* value isn't one of those shapes).
+    Smoothed,
+    /// CSS-spec-discrete (keyword/enum-valued) — snapping is the correct,
+    /// expected behaviour, exactly like real CSS `transition-property`
+    /// would do. Still diagnosed (reassuring wording, not an alarm): an
+    /// author who set `style.transition` and sees a hard cut on this
+    /// property deserves a line saying that's expected, not silence either
+    /// way — "sauter et le dire" per the workstream brief.
+    Discrete,
+    /// Numeric/continuous but affects the layout box (size/position/flow).
+    /// Interpolating it would require the value to reach `run_layout` on
+    /// every sampled frame — out of reach without changing the frozen
+    /// `layout_pass.rs`/`paint_pass.rs`, and the reason this workstream
+    /// draws a hard line between paint-time and layout-time properties
+    /// (see the workstream report's "piège" section).
+    Layout,
+    /// Numeric/continuous, paint-time, but not yet wired up to interpolate
+    /// (includes the empty/unrecognized-name fallback below — a future
+    /// `CssStyle` field this table hasn't been taught about yet fails loud,
+    /// not silent).
+    UnsupportedPaint,
+}
+
+/// Classify a `CssStyle` field by its kebab-case JSON key (the wire name —
+/// matches what `apply_style_states`'s own `serde_json` merge keys on, and
+/// what an author actually typed under `style`/a `timeline[*].style`).
+fn classify_transition_property(name: &str) -> TransitionPropertyKind {
+    use TransitionPropertyKind::*;
+    match name {
+        "opacity" | "color" | "background" | "border-radius" => Smoothed,
+        "display"
+        | "position"
+        | "box-sizing"
+        | "flex-direction"
+        | "flex-wrap"
+        | "justify-content"
+        | "align-items"
+        | "align-self"
+        | "align-content"
+        | "justify-items"
+        | "justify-self"
+        | "grid-auto-flow"
+        | "font-family"
+        | "font-weight"
+        | "font-style"
+        | "text-align"
+        | "white-space"
+        | "overflow-wrap"
+        | "text-overflow"
+        | "text-decoration"
+        | "text-autofit"
+        | "mix-blend-mode"
+        | "clip-path"
+        | "overflow"
+        | "overflow-x"
+        | "overflow-y"
+        | "visibility"
+        | "z-index"
+        | "order"
+        | "grid-template-columns"
+        | "grid-template-rows"
+        | "grid-column"
+        | "grid-row" => Discrete,
+        "top" | "right" | "bottom" | "left" | "width" | "height" | "min-width" | "min-height"
+        | "max-width" | "max-height" | "margin" | "padding" | "border" | "aspect-ratio" | "gap"
+        | "flex-grow" | "flex-shrink" | "flex-basis" | "font-size" | "line-height"
+        | "letter-spacing" => Layout,
+        // "animation"/"transition"/"audio-reactive" are config, not visual
+        // state, and are filtered out of the walk before this is ever
+        // called (see `check_transition_smoothing`) — they never reach
+        // this match. Everything else — box-shadow, text-shadow,
+        // gradient-border, filter, backdrop-filter, transform,
+        // transform-origin, perspective, perspective-origin, depth,
+        // backdrop-blur, inner-shadow, and any `CssStyle` field added later
+        // that this table hasn't been taught about — fails loud here by
+        // design: an unrecognized name is treated as "known not to smooth"
+        // rather than silently passed through.
+        _ => UnsupportedPaint,
+    }
+}
+
+/// `style.transition` promises to smooth whichever CSS properties a
+/// `timeline` step changes — but `box_builder.rs`'s
+/// `apply_style_states`/`resolve_transition_css_overrides`/
+/// `transition_keyframes` only actually smooth `opacity`, `color`
+/// (text/counter), `background` (solid colour), and `border-radius`
+/// (uniform absolute px). Everything else still snaps at the step's `at`.
+///
+/// This walks the declared `timeline` in author order — not tied to any
+/// particular render time, unlike the runtime: a static check must catch
+/// every step-to-step (and base-to-first-step) diff, not just whichever one
+/// happens to be "due" at some sampled `t`. Only runs when `style.transition`
+/// is actually set: if it isn't, nothing was ever promised, and every
+/// property snapping is exactly the documented, expected behaviour (no
+/// diagnostic needed).
+fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut Vec<String>) {
+    let style = component.as_styled().style_config();
+    if style.transition.is_none() {
+        return;
+    }
+    let Some(animatable) = component.as_animatable() else {
+        return;
+    };
+    let mut relevant: Vec<&rustmotion::schema::TimelineStep> = animatable
+        .timeline_steps()
+        .iter()
+        .filter(|s| s.style.is_some())
+        .collect();
+    if relevant.is_empty() {
+        return;
+    }
+    relevant.sort_by(|a, b| a.at.total_cmp(&b.at));
+
+    let Ok(mut current) = serde_json::to_value(style) else {
+        return;
+    };
+    let mut warned: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for step in relevant {
+        let step_style = step.style.as_deref().unwrap();
+        let Ok(serde_json::Value::Object(state)) = serde_json::to_value(step_style) else {
+            continue;
+        };
+        let serde_json::Value::Object(cur_obj) = &current else {
+            continue;
+        };
+        let mut merged = cur_obj.clone();
+        for (k, v) in &state {
+            if v.is_null() || k == "animation" || k == "transition" || k == "audio-reactive" {
+                continue;
+            }
+            let changed = merged.get(k) != Some(v);
+            if changed && !warned.contains(k.as_str()) {
+                match classify_transition_property(k) {
+                    TransitionPropertyKind::Discrete => {
+                        // Still named, not silent: `display`/`position`/etc.
+                        // have no in-between value (real CSS can't animate
+                        // them either), so this is expected, correct
+                        // behaviour — not a gap. The wording deliberately
+                        // reads as reassurance, not an alarm, but the point
+                        // is that an author who set `style.transition`
+                        // expecting *something* to smooth still gets a line
+                        // telling them exactly which property didn't and
+                        // why, instead of silence either way.
+                        warnings.push(format!(
+                            "{path}: style.transition is set and timeline changes `{k}`, but \
+                             `{k}` is a discrete CSS property (no value exists in between the two \
+                             states) — it always snaps at the step's `at`, exactly like real CSS. \
+                             This is expected, not a rustmotion limitation."
+                        ));
+                        warned.insert(k.clone());
+                    }
+                    TransitionPropertyKind::Smoothed => {
+                        // `background`/`border-radius` only actually smooth
+                        // for a specific value shape (solid colour / uniform
+                        // absolute px) — anything else in the recognized-
+                        // property bucket must still be caught, or an
+                        // author using per-corner radii or a gradient would
+                        // get silence again, just one level deeper.
+                        let resolves = match k.as_str() {
+                            "border-radius" => {
+                                let mut probe = merged.clone();
+                                probe.insert(k.clone(), v.clone());
+                                serde_json::from_value::<CssStyle>(serde_json::Value::Object(probe))
+                                    .ok()
+                                    .and_then(|s| s.border_radius)
+                                    .and_then(|br| BorderRadius::absolute_px(&br))
+                                    .is_some()
+                            }
+                            "background" => {
+                                let mut probe = merged.clone();
+                                probe.insert(k.clone(), v.clone());
+                                serde_json::from_value::<CssStyle>(serde_json::Value::Object(probe))
+                                    .ok()
+                                    .and_then(|s| s.background)
+                                    .and_then(|bg| Background::solid_hex(&bg))
+                                    .is_some()
+                            }
+                            _ => true,
+                        };
+                        if !resolves {
+                            let hint = if k == "border-radius" {
+                                "only a single uniform px/unitless radius is smoothed today — \
+                                 per-corner radii and %/em/rem/vw/vh are not"
+                            } else {
+                                "only a solid colour is smoothed today — gradients and image \
+                                 layers are not"
+                            };
+                            warnings.push(format!(
+                                "{path}: style.transition is set and timeline changes `{k}`, but \
+                                 this value isn't a shape rustmotion can interpolate yet ({hint}) \
+                                 — it will snap instead of animating."
+                            ));
+                            warned.insert(k.clone());
+                        }
+                    }
+                    TransitionPropertyKind::Layout => {
+                        warnings.push(format!(
+                            "{path}: style.transition is set and timeline changes `{k}`, but \
+                             `{k}` affects layout (box size/position/flow) — rustmotion cannot \
+                             interpolate a layout property without re-running layout on every \
+                             sampled frame, so it will snap instead of animating. Consider \
+                             approximating the motion with `transform: translate`/`scale` \
+                             instead, which is paint-time and does interpolate."
+                        ));
+                        warned.insert(k.clone());
+                    }
+                    TransitionPropertyKind::UnsupportedPaint => {
+                        warnings.push(format!(
+                            "{path}: style.transition is set and timeline changes `{k}`, but \
+                             rustmotion does not yet know how to interpolate `{k}` — it will \
+                             snap instead of animating at the step's `at`."
+                        ));
+                        warned.insert(k.clone());
+                    }
+                }
+            }
+            merged.insert(k.clone(), v.clone());
+        }
+        current = serde_json::Value::Object(merged);
     }
 }
 
@@ -999,5 +1255,181 @@ mod color_validation_tests {
         let mut warnings = Vec::new();
         validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod transition_smoothing_tests {
+    use super::*;
+
+    fn warnings_for(json: serde_json::Value) -> Vec<String> {
+        let child: ChildComponent = serde_json::from_value(json).unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        warnings
+    }
+
+    #[test]
+    fn layout_property_change_under_transition_is_diagnosed() {
+        // `width` affects the layout box — smoothing it would require
+        // `run_layout` on every sampled frame, which this workstream leaves
+        // to a future one (see the "piège" in the workstream report). It
+        // must still snap, but `validate` must say so instead of staying
+        // silent about it, the way it always has until now.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "width": "100px", "transition": 0.5 },
+            "timeline": [{ "at": 1.0, "style": { "width": "300px" } }]
+        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("`width`") && w.contains("layout") && w.contains("snap")),
+            "expected a layout-property diagnostic naming `width`: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn unsupported_paint_property_change_under_transition_is_diagnosed() {
+        // `transform` is paint-time but this workstream deliberately did not
+        // implement list-shaped interpolation for it (see workstream
+        // report) — it must be diagnosed, not silently accepted just
+        // because it's "only" paint, not layout.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "transition": 0.5 },
+            "timeline": [{ "at": 1.0, "style": { "transform": [{ "fn": "scale", "x": 2, "y": 2 }] } }]
+        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("`transform`") && w.contains("snap")),
+            "expected an unsupported-paint diagnostic naming `transform`: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn discrete_property_change_under_transition_is_diagnosed_but_reassuringly() {
+        // `display` is CSS-spec-discrete — snapping is the correct,
+        // expected behaviour (real CSS can't animate it either) — but the
+        // brief is explicit that a discrete property must still "sauter et
+        // le dire", not sauter en silence: an author who set
+        // `style.transition` and sees `display` hard-cut deserves a line
+        // explaining that's expected, distinguishable from an actual gap.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "transition": 0.5, "display": "flex" },
+            "timeline": [{ "at": 1.0, "style": { "display": "block" } }]
+        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("`display`") && w.contains("expected")),
+            "expected a reassuring discrete-property diagnostic naming `display`: {warnings:?}"
+        );
+        // But it must read differently from an actual gap — never the
+        // "snap instead of animating" alarm wording the Layout/
+        // UnsupportedPaint branches use.
+        assert!(
+            warnings
+                .iter()
+                .filter(|w| w.contains("`display`"))
+                .all(|w| !w.contains("snap instead of animating")),
+            "a discrete property's diagnostic must not read like a gap: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn newly_smoothed_properties_are_not_diagnosed() {
+        // `border-radius` (uniform, absolute px) and `background` (solid
+        // colour) are exactly the two properties this workstream taught
+        // `box_builder.rs` to interpolate — they must not warn.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "transition": 0.5, "border-radius": 0, "background": "#000000" },
+            "timeline": [{ "at": 1.0, "style": { "border-radius": 40, "background": "#ffffff" } }]
+        }));
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.contains("border-radius") && !w.contains("`background`")),
+            "newly-smoothed properties must not be diagnosed: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn per_corner_border_radius_is_diagnosed_as_an_unresolvable_shape() {
+        // The interpolable set is "border-radius" by name, but only a
+        // uniform, absolute-px value actually resolves
+        // (`BorderRadius::absolute_px`) — a per-corner shape must still be
+        // caught, not pass silently just because the property name matches.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "transition": 0.5, "border-radius": 0 },
+            "timeline": [{
+                "at": 1.0,
+                "style": { "border-radius": { "top-left": 10, "top-right": 0, "bottom-right": 0, "bottom-left": 0 } }
+            }]
+        }));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("border-radius") && w.contains("per-corner")),
+            "expected a shape-mismatch diagnostic for per-corner border-radius: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn no_transition_configured_means_no_diagnostic_at_all() {
+        // Without `style.transition`, nothing was ever promised — every
+        // property snapping (including `width`) is exactly the documented,
+        // expected behaviour. No diagnostic should fire.
+        let warnings = warnings_for(serde_json::json!({
+            "type": "div",
+            "style": { "width": "100px" },
+            "timeline": [{ "at": 1.0, "style": { "width": "300px" } }]
+        }));
+        assert!(
+            warnings.iter().all(|w| !w.contains("width")),
+            "no style.transition means no diagnostic is expected: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_explicit_keyframes_property_is_rejected_at_parse_time_not_validate_time() {
+        // A sibling silent-gap hypothesis this workstream investigated and
+        // found already closed: an explicit `style.animation` keyframes
+        // effect naming a `property` `animator::apply_property` doesn't
+        // recognize (e.g. a CSS-ish `"background-color"` instead of the
+        // solver's `"background"`/`"color"`) used to *look* like the same
+        // "known property but not wired up" gap `check_transition_smoothing`
+        // covers above — but it isn't reachable that far: `schema/video.rs`'s
+        // `deserialize_validated_keyframes`/`validate_motion_property`
+        // (constat #4, an earlier workstream) already rejects it during
+        // `Component` deserialization, with a did-you-mean suggestion, well
+        // before a scenario ever reaches `validate_scenario`. This test
+        // pins that down instead of re-diagnosing something `validate`
+        // structurally cannot ever see.
+        let err = serde_json::from_value::<ChildComponent>(serde_json::json!({
+            "type": "div",
+            "style": {
+                "animation": [{
+                    "name": "keyframes",
+                    "keyframes": [{
+                        "property": "background-color",
+                        "keyframes": [
+                            { "time": 0.0, "value": "#000000" },
+                            { "time": 1.0, "value": "#ffffff" }
+                        ]
+                    }]
+                }]
+            }
+        }))
+        .expect_err("an unrecognized animation property must fail to deserialize");
+        assert!(
+            err.to_string().contains("background-color"),
+            "expected the parse error to name the offending property: {err}"
+        );
     }
 }
