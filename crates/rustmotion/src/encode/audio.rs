@@ -114,13 +114,57 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
 
 /// Mix multiple audio tracks into a single PCM i16 buffer for minimp4.
 /// Output: interleaved i16, stereo, 44100Hz.
+///
+/// Equivalent to [`mix_audio_tracks_segment`] with `segment_start = 0.0` and
+/// `segment_duration = total_duration` — i.e. "the whole scenario is the
+/// segment". Kept as its own entry point for API stability (existing
+/// callers, this module's own unit test).
 pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Option<Vec<u8>>> {
+    mix_audio_tracks_segment(tracks, total_duration, 0.0, total_duration)
+}
+
+/// Mix multiple audio tracks, but only materialize the samples that fall
+/// inside `[segment_start, segment_start + segment_duration)` of the
+/// *scenario's* own timeline — i.e. sample 0 of the returned buffer is
+/// `segment_start` seconds into the scenario, not into each track.
+///
+/// This is what makes a frame-range render (`rustmotion render --frames
+/// a-b`) carry the audio that actually plays at that point in the full
+/// scenario instead of the audio from t=0: without it, every segment's mux
+/// step called the same `mix_audio_tracks(tracks, segment_duration)` that
+/// the whole-video path uses, which always places sample 0 of every track
+/// at sample 0 of the output — correct for a full render, silently wrong
+/// for a segment starting anywhere past frame 0.
+///
+/// `scenario_total_duration` is deliberately a separate parameter from
+/// `segment_duration`: a track with no explicit `end` plays until the end
+/// of the *scenario*, not the end of this segment. Bounding it by
+/// `segment_duration` instead would make every segment boundary look like
+/// the track's own natural end and trigger its `fade_out` early, once per
+/// segment, instead of once at the point it actually ends.
+pub fn mix_audio_tracks_segment(
+    tracks: &[AudioTrack],
+    scenario_total_duration: f64,
+    segment_start: f64,
+    segment_duration: f64,
+) -> Result<Option<Vec<u8>>> {
     if tracks.is_empty() {
         return Ok(None);
     }
 
-    let total_samples = (total_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize;
-    let mut mix_buffer = vec![0.0f32; total_samples * TARGET_CHANNELS as usize];
+    let segment_samples = (segment_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize;
+    let mut mix_buffer = vec![0.0f32; segment_samples * TARGET_CHANNELS as usize];
+
+    // Absolute sample index (interleaved) of the segment's first sample
+    // within the scenario's own timeline — the anchor every track's
+    // scenario-relative `start`/`end` is translated against below.
+    let segment_offset_samples =
+        (segment_start * TARGET_SAMPLE_RATE as f64).round() as i64 * TARGET_CHANNELS as i64;
+
+    // Bound used when a track has no explicit `end`, and a clamp on an
+    // explicit one: the scenario's own length, never this segment's.
+    let scenario_samples = (scenario_total_duration * TARGET_SAMPLE_RATE as f64).ceil() as usize
+        * TARGET_CHANNELS as usize;
 
     for track in tracks {
         eprintln!("  Loading audio: {}", track.src);
@@ -137,25 +181,42 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
             stereo_samples
         };
 
-        // Calculate start and end offsets in the mix buffer
-        let start_sample =
+        // Track start/end, in absolute samples on the *scenario* timeline
+        // (not yet translated into this segment's buffer).
+        let track_start_abs =
             (track.start * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize;
-        let end_sample = track
+        let track_end_abs = track
             .end
             .map(|e| (e * TARGET_SAMPLE_RATE as f64) as usize * TARGET_CHANNELS as usize)
-            .unwrap_or(mix_buffer.len());
+            .unwrap_or(scenario_samples)
+            .min(scenario_samples);
 
         let fade_in_samples = track.fade_in.unwrap_or(0.0) * TARGET_SAMPLE_RATE as f64;
         let fade_out_samples = track.fade_out.unwrap_or(0.0) * TARGET_SAMPLE_RATE as f64;
 
-        // Mix into buffer
+        // How much of the track is ever audible in the scenario, regardless
+        // of which segment we are materializing right now. Fades are
+        // computed against this, not against the segment's own bounds.
         let src_len = resampled.len();
-        let available = end_sample.min(mix_buffer.len()) - start_sample.min(mix_buffer.len());
+        let available = track_end_abs.saturating_sub(track_start_abs);
         let copy_len = src_len.min(available);
+        let total_frames = copy_len / TARGET_CHANNELS as usize;
 
         for (i, &src_sample) in resampled.iter().enumerate().take(copy_len) {
-            let dst_idx = start_sample + i;
+            // Absolute position of this sample on the scenario timeline,
+            // translated into this segment's own buffer coordinates.
+            let abs_idx = track_start_abs as i64 + i as i64;
+            let dst_idx = abs_idx - segment_offset_samples;
+            if dst_idx < 0 {
+                // Before this segment's window — earlier segments (or a
+                // future re-render of an earlier range) own this sample.
+                continue;
+            }
+            let dst_idx = dst_idx as usize;
             if dst_idx >= mix_buffer.len() {
+                // Past this segment's window. `abs_idx` only increases as
+                // `i` does, so nothing later in this track falls inside
+                // this segment either.
                 break;
             }
 
@@ -173,8 +234,8 @@ pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Op
                 sample *= frame as f32 / fade_in_samples as f32;
             }
 
-            // Apply fade out
-            let total_frames = copy_len / TARGET_CHANNELS as usize;
+            // Apply fade out — against the track's own total audible
+            // frames in the scenario, not this segment's length.
             let frames_from_end = total_frames - frame;
             if fade_out_samples > 0.0 && (frames_from_end as f64) < fade_out_samples {
                 sample *= frames_from_end as f32 / fade_out_samples as f32;
@@ -457,6 +518,241 @@ mod tests {
             "PCM buffer length must be computed from TARGET_SAMPLE_RATE={TARGET_SAMPLE_RATE}; \
              a caller that assumes 44100Hz (both muxers do) will read this buffer at the \
              wrong duration/pitch if the constant disagrees"
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+    }
+
+    /// Write a mono PCM WAV with deterministic, non-silent content:
+    /// `sample[i] = ((i % 2000) - 1000) * 30`. Unlike `write_minimal_wav`'s
+    /// silence, an offset applied to this content is detectable — silence
+    /// shifted by any amount is still silence, which would make a
+    /// byte-equality check pass trivially even with a broken offset.
+    fn write_tone_wav(path: &std::path::Path, sample_rate: u32, num_samples: u32) {
+        let bits_per_sample: u16 = 16;
+        let num_channels: u16 = 1;
+        let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+        let block_align = num_channels * bits_per_sample / 8;
+        let data_size = num_samples * block_align as u32;
+
+        let mut buf = Vec::with_capacity(44 + data_size as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_size).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&num_channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            let v: i16 = (((i % 2000) as i32 - 1000) * 30) as i16;
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+
+        std::fs::write(path, &buf).expect("write fixture wav");
+    }
+
+    /// The core proof of the frame-range audio fix (brief's constat #2): a
+    /// segment starting partway through the scenario must carry the audio
+    /// that actually plays at that point, not audio restarted from t=0.
+    ///
+    /// Mixing one 2.0s track for the whole scenario in a single call must
+    /// produce byte-identical PCM to mixing the *same* track in three
+    /// independent segment calls (0.7s + 0.7s + 0.6s) and concatenating the
+    /// results — each boundary lands on a whole sample count at 44100Hz
+    /// (30870 / 30870 / 26460, summing exactly to 88200), so nothing here
+    /// can hide behind rounding. `fade_in`/`fade_out` are set on the track
+    /// specifically to also prove fades key off the *scenario*'s bound, not
+    /// each segment's own edges (a segment boundary must never look like
+    /// the track's natural end and trigger an early fade-out).
+    #[test]
+    fn segment_mixing_concatenates_to_exactly_the_whole_scenario_mix() {
+        let sample_rate = TARGET_SAMPLE_RATE;
+        let scenario_duration = 2.0_f64;
+        let num_samples = (scenario_duration * sample_rate as f64) as u32;
+
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_audio_segment_concat_test_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_tone_wav(&wav_path, sample_rate, num_samples);
+
+        let track = AudioTrack {
+            src: wav_path.to_str().unwrap().to_string(),
+            start: 0.3,
+            end: None,
+            volume: 0.8,
+            fade_in: Some(0.1),
+            fade_out: Some(0.1),
+            volume_keyframes: Vec::new(),
+        };
+        let tracks = [track];
+
+        let whole = mix_audio_tracks_segment(&tracks, scenario_duration, 0.0, scenario_duration)
+            .expect("whole mix must succeed")
+            .expect("must return Some(pcm)");
+
+        let bounds = [(0.0, 0.7), (0.7, 0.7), (1.4, 0.6)];
+        let mut concatenated = Vec::new();
+        for (start, duration) in bounds {
+            let seg = mix_audio_tracks_segment(&tracks, scenario_duration, start, duration)
+                .expect("segment mix must succeed")
+                .expect("must return Some(pcm)");
+            concatenated.extend_from_slice(&seg);
+        }
+
+        assert_eq!(
+            concatenated.len(),
+            whole.len(),
+            "segment PCM lengths must sum to the whole mix's length"
+        );
+        assert_eq!(
+            concatenated, whole,
+            "concatenating three independently-mixed segments must reproduce the whole-scenario \
+             mix byte-for-byte — a mismatch means a segment is carrying audio from the wrong \
+             offset (the frame-range bug this function exists to close)"
+        );
+
+        // The equality above is only meaningful if the fixture is not
+        // silent — otherwise it would hold trivially regardless of offsets.
+        assert!(
+            whole.iter().any(|&b| b != 0),
+            "fixture must contain non-silent audio or the byte-equality check above proves nothing"
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+    }
+
+    /// A track's explicit `end` is scenario-relative. A segment sitting
+    /// entirely after that `end` must be silent — proving `track_end_abs`
+    /// clamps to the *scenario* bound (needed so a track with no `end` at
+    /// all keeps playing across segment boundaries) without also letting a
+    /// track that DOES have an end ignore it past its own segment.
+    #[test]
+    fn segment_mix_silences_a_track_after_its_own_explicit_end() {
+        let sample_rate = TARGET_SAMPLE_RATE;
+        let scenario_duration = 2.0_f64;
+        let num_samples = (scenario_duration * sample_rate as f64) as u32;
+
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_audio_segment_end_test_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_tone_wav(&wav_path, sample_rate, num_samples);
+
+        let track = AudioTrack {
+            src: wav_path.to_str().unwrap().to_string(),
+            start: 0.0,
+            end: Some(1.0),
+            volume: 1.0,
+            fade_in: None,
+            fade_out: None,
+            volume_keyframes: Vec::new(),
+        };
+        let tracks = [track];
+
+        // Segment [1.0, 2.0) sits entirely after the track's own end.
+        let seg = mix_audio_tracks_segment(&tracks, scenario_duration, 1.0, 1.0)
+            .expect("mix must succeed")
+            .expect("must return Some(pcm)");
+        assert!(
+            seg.iter().all(|&b| b == 0),
+            "a segment entirely after the track's own `end` must be silent"
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+    }
+
+    /// Reproduces the brief's exact bug shape, quantified. Before
+    /// `mix_audio_tracks_segment` existed, `mux_h264_to_mp4` /
+    /// `encode_with_ffmpeg_hw` had no offset to give the mixer at all —
+    /// every segment's mux step could only call `mix_audio_tracks(tracks,
+    /// segment_duration)`, which is exactly `mix_audio_tracks_segment`
+    /// with an implicit `segment_start = 0.0`. For a second segment that
+    /// actually starts at t=0.7s in the scenario, that call mixes the
+    /// track as if the *segment itself* were the whole timeline starting
+    /// at 0 — i.e. "a segment starting at frame 300 would receive the
+    /// audio from the start of the scenario" (the brief's own framing).
+    /// This test calls the old, still-present, offset-less
+    /// `mix_audio_tracks` the way that old mux code path would have, and
+    /// shows — with an actual byte-difference count, not just "it's
+    /// different" — how far that is from the correct windowed segment.
+    #[test]
+    fn without_the_offset_a_second_segment_would_wrongly_replay_the_track_from_the_start() {
+        let sample_rate = TARGET_SAMPLE_RATE;
+        let scenario_duration = 2.0_f64;
+        let num_samples = (scenario_duration * sample_rate as f64) as u32;
+
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_audio_naive_bug_repro_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_tone_wav(&wav_path, sample_rate, num_samples);
+
+        let track = AudioTrack {
+            src: wav_path.to_str().unwrap().to_string(),
+            start: 0.3,
+            end: None,
+            volume: 0.8,
+            fade_in: None,
+            fade_out: None,
+            volume_keyframes: Vec::new(),
+        };
+        let tracks = [track];
+
+        // Segment 2, correctly windowed: [0.7s, 2.0s) of the scenario.
+        let segment_start = 0.7_f64;
+        let segment_duration = 1.3_f64;
+        let correct =
+            mix_audio_tracks_segment(&tracks, scenario_duration, segment_start, segment_duration)
+                .expect("mix must succeed")
+                .expect("must return Some(pcm)");
+
+        // The bug: mixing the same segment's own duration with no offset —
+        // exactly the call shape available before this fix existed.
+        let buggy = mix_audio_tracks(&tracks, segment_duration)
+            .expect("mix must succeed")
+            .expect("must return Some(pcm)");
+
+        assert_eq!(
+            correct.len(),
+            buggy.len(),
+            "same segment duration, so same buffer size — the bug is about content, not length"
+        );
+
+        let differing_bytes = correct
+            .iter()
+            .zip(buggy.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        let total_bytes = correct.len();
+        eprintln!(
+            "without the offset, {differing_bytes}/{total_bytes} bytes \
+             ({:.1}%) of segment 2 would have been wrong",
+            100.0 * differing_bytes as f64 / total_bytes as f64
+        );
+        assert!(
+            differing_bytes * 4 > total_bytes,
+            "expected the offset-less (buggy) mix to differ substantially from the correctly \
+             windowed segment — only {differing_bytes}/{total_bytes} bytes differed, which would \
+             mean the offset barely matters (it should matter for nearly the whole buffer here)"
         );
 
         let _ = std::fs::remove_file(&wav_path);

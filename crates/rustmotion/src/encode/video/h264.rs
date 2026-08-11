@@ -10,7 +10,7 @@ use crate::error::{Result, RustmotionError};
 use crate::schema::ResolvedScenario as Scenario;
 
 use super::mux::mux_h264_to_mp4;
-use super::tasks::{build_frame_tasks, render_frame_task, SceneSegment};
+use super::tasks::{build_frame_tasks, build_frame_tasks_range, render_frame_task, SceneSegment};
 use super::EncodeProgress;
 
 /// Create an OpenH264 encoder with standard settings for the given video dimensions.
@@ -27,7 +27,35 @@ fn create_encoder(width: u32, height: u32, fps: u32) -> Result<Encoder> {
 pub fn encode_video(
     scenario: &Scenario,
     output_path: &str,
+    quiet: bool,
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    encode_video_impl(scenario, output_path, quiet, None, on_progress)
+}
+
+/// Same as [`encode_video`], restricted to the inclusive frame index range
+/// `[frame_range.0, frame_range.1]` — the same index space `--frame N`
+/// already addresses via `build_frame_tasks(...).get(N)`. Produces a
+/// standalone MP4 covering only that range, independently muxed; its
+/// embedded audio is windowed to match via `mix_audio_tracks_segment` (see
+/// that function's doc), so a segment starting at frame 300 carries the
+/// audio that plays at that point in the *full* scenario rather than audio
+/// restarted from t=0.
+pub fn encode_video_range(
+    scenario: &Scenario,
+    output_path: &str,
+    quiet: bool,
+    frame_range: (u32, u32),
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    encode_video_impl(scenario, output_path, quiet, Some(frame_range), on_progress)
+}
+
+fn encode_video_impl(
+    scenario: &Scenario,
+    output_path: &str,
     _quiet: bool,
+    frame_range: Option<(u32, u32)>,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
     let config = &scenario.video;
@@ -41,12 +69,21 @@ pub fn encode_video(
     }
     analyze_scenario_audio(scenario);
 
-    let tasks = build_frame_tasks(scenario);
+    let (tasks, full_total_frames, segment_start_frame) = match frame_range {
+        Some((start, end)) => {
+            let (tasks, total) = build_frame_tasks_range(scenario, start, end)?;
+            (tasks, total, start)
+        }
+        None => {
+            let tasks = build_frame_tasks(scenario);
+            let total = tasks.len() as u32;
+            if total == 0 {
+                return Err(RustmotionError::NoFrames);
+            }
+            (tasks, total, 0)
+        }
+    };
     let total_frames = tasks.len() as u32;
-
-    if total_frames == 0 {
-        return Err(RustmotionError::NoFrames);
-    }
 
     let batch_size = (rayon::current_num_threads() * 2).max(4);
     let counter = AtomicU32::new(0);
@@ -85,7 +122,9 @@ pub fn encode_video(
         cb(EncodeProgress::Muxing);
     }
 
-    let total_duration = total_frames as f64 / fps as f64;
+    let scenario_total_duration = full_total_frames as f64 / fps as f64;
+    let segment_duration = total_frames as f64 / fps as f64;
+    let segment_start = segment_start_frame as f64 / fps as f64;
     mux_h264_to_mp4(
         &h264_data,
         output_path,
@@ -93,7 +132,9 @@ pub fn encode_video(
         height,
         fps,
         scenario,
-        total_duration,
+        segment_duration,
+        scenario_total_duration,
+        segment_start,
     )?;
 
     Ok(())
@@ -272,6 +313,9 @@ pub fn encode_video_incremental(
         cb(EncodeProgress::Muxing);
     }
 
+    // Incremental encoding always covers the full scenario — there is no
+    // sub-range concept here, so the segment IS the whole scenario, same as
+    // every pre-frame-range caller of `mux_h264_to_mp4`.
     let total_duration = total_frames as f64 / fps as f64;
     mux_h264_to_mp4(
         &h264_data,
@@ -281,6 +325,8 @@ pub fn encode_video_incremental(
         fps,
         scenario,
         total_duration,
+        total_duration,
+        0.0,
     )?;
 
     if !quiet && on_progress.is_none() {
