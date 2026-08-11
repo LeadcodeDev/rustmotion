@@ -36,12 +36,79 @@ fn viewport_conversion_context(viewport_w: f32, viewport_h: f32) -> ConversionCo
     }
 }
 
+/// The single choke-point that turns "a frame of this scene" into the time
+/// value every render path in this file feeds into the background draw, the
+/// camera transform, and the component tree (`RenderContext.time`, and from
+/// there `BuildAnimationCtx.time` / `PaintFrame.time` / `PaintCtx.time`).
+///
+/// `SceneTime`'s inner field is private to this module; its only
+/// constructors, [`SceneTime::for_frame`] and [`SceneTime::for_local_time`],
+/// apply `scene.freeze_at`. There is therefore no way — inside this file or
+/// outside it — to obtain a `SceneTime` that skipped the freeze clamp:
+/// nothing downstream accepts a bare `f64` render time from a render path,
+/// because [`RenderContext::time`](RenderContext) is typed `SceneTime`, not
+/// `f64`.
+///
+/// This exists because five render paths in this file each independently
+/// computed `frame_index as f64 / fps as f64` and then reimplemented the
+/// freeze clamp by hand — issue #164. PR #152 fixed a missing copy (the
+/// world-view path) by adding a *sixth* occurrence of the same `if`,
+/// reshaped as `.min()` — "parity with the other four render paths," per
+/// its own commit message. Writing this module's parametrized freeze test
+/// (`freeze_at_produces_the_same_frame_on_every_render_path`) found the
+/// copies had *already* drifted in a way the shape difference didn't even
+/// hint at: the world-view path's own animated-background draw was never
+/// clamped at all (see the `SceneTime::for_local_time` call site in
+/// `render_world_frame_scaled`). A shared *function* would still let a
+/// future render path forget to call it — the whole history above is
+/// forgetting to call it, three times over the same bug. A shared *type* is
+/// what closes that: `render_with_new_pipeline`, the only function in this
+/// crate that paints a scene's component tree, requires a `RenderContext`,
+/// and building a `RenderContext` requires handing it a `SceneTime` — which
+/// requires going through one of these two constructors first.
+mod scene_time {
+    use crate::schema::Scene;
+
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct SceneTime(f64);
+
+    impl SceneTime {
+        /// `frame_index` is "frames elapsed since this scene started" — the
+        /// normal case (four of the five render paths).
+        pub(super) fn for_frame(scene: &Scene, frame_index: u32, fps: u32) -> Self {
+            Self::clamp(scene, frame_index as f64 / fps as f64)
+        }
+
+        /// World-view scenes: the world timeline computes each visible
+        /// scene's local elapsed time itself (already floored at 0 by the
+        /// caller during an incoming camera pan); still funnels through the
+        /// same freeze clamp as `for_frame`.
+        pub(super) fn for_local_time(scene: &Scene, local_time: f64) -> Self {
+            Self::clamp(scene, local_time)
+        }
+
+        fn clamp(scene: &Scene, raw: f64) -> Self {
+            match scene.freeze_at {
+                Some(freeze_at) if raw > freeze_at => SceneTime(freeze_at),
+                _ => SceneTime(raw),
+            }
+        }
+
+        pub(super) fn seconds(self) -> f64 {
+            self.0
+        }
+    }
+}
+use scene_time::SceneTime;
+
 /// Internal render-time context — bundles per-scene timing/dimension info that
 /// the scene renderer threads down into its helpers. This is intentionally
 /// private to the scene renderer; component painters receive `PaintCtx`.
+///
+/// `time` is a [`SceneTime`], not a bare `f64` — see that type's doc for why.
 #[derive(Debug, Clone)]
 struct RenderContext {
-    time: f64,
+    time: SceneTime,
     scene_duration: f64,
     frame_index: u32,
     fps: u32,
@@ -132,14 +199,8 @@ pub fn render_frame_v2_scaled(
 ) -> Result<Vec<u8>> {
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
-    let mut time = frame_index as f64 / config.fps as f64;
-
-    // Apply freeze_at
-    if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at {
-            time = freeze_at;
-        }
-    }
+    let scene_time = SceneTime::for_frame(scene, frame_index, config.fps);
+    let time = scene_time.seconds();
 
     let info = ImageInfo::new(
         (scaled_w, scaled_h),
@@ -277,7 +338,7 @@ pub fn render_frame_v2_scaled(
 
     // Build render context
     let ctx = RenderContext {
-        time,
+        time: scene_time,
         scene_duration: scene.duration,
         frame_index,
         fps: config.fps,
@@ -478,7 +539,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let root_css = root_style(scene_layout, ViewType::Slide);
 
     let anim = Some(BuildAnimationCtx {
-        time: ctx.time,
+        time: ctx.time.seconds(),
         scene_duration: ctx.scene_duration,
         fps: ctx.fps,
     });
@@ -490,7 +551,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
-        time: ctx.time,
+        time: ctx.time.seconds(),
         frame_index: ctx.frame_index,
         fps: ctx.fps,
         video_width: ctx.video_width,
@@ -515,15 +576,16 @@ fn paint_decorative_fullscreen(
     use rustmotion_core::engine::layout_pass::BoxLayout;
     use rustmotion_core::traits::PaintCtx;
 
+    let time = ctx.time.seconds();
     if let Some(timed) = child.component.as_timed() {
         let (start_at, end_at) = timed.timing();
         if let Some(s) = start_at {
-            if ctx.time < s {
+            if time < s {
                 return;
             }
         }
         if let Some(e) = end_at {
-            if ctx.time > e {
+            if time > e {
                 return;
             }
         }
@@ -535,7 +597,7 @@ fn paint_decorative_fullscreen(
             if effects.is_empty() {
                 AnimatedProperties::default()
             } else {
-                resolve_props_for_effects(effects, ctx.time, ctx.scene_duration)
+                resolve_props_for_effects(effects, time, ctx.scene_duration)
             }
         }
         None => AnimatedProperties::default(),
@@ -556,7 +618,7 @@ fn paint_decorative_fullscreen(
         ..Default::default()
     };
     let paint_ctx = PaintCtx {
-        time: ctx.time,
+        time,
         scene_duration: ctx.scene_duration,
         frame_index: ctx.frame_index,
         fps: ctx.fps,
@@ -666,12 +728,7 @@ pub fn render_scene_hits(
 
     let children = prepare_scene(scene, config);
 
-    let mut time = frame_in_scene as f64 / config.fps as f64;
-    if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at {
-            time = freeze_at;
-        }
-    }
+    let time = SceneTime::for_frame(scene, frame_in_scene, config.fps).seconds();
     let vw = config.width as f32;
     let vh = config.height as f32;
 
@@ -811,7 +868,14 @@ pub fn render_world_frame_scaled(
         let non_persisted: Vec<_> = visible.iter().filter(|v| !v.is_persisted).collect();
 
         if non_persisted.len() >= 2 {
-            // Crossfade between outgoing and incoming scene backgrounds
+            // Crossfade between outgoing and incoming scene backgrounds.
+            // Not gated by either side's `freeze_at` — deliberately out of
+            // this fix's scope (see the single-active-scene branch below
+            // for the case that is fixed): a crossfade only runs during the
+            // camera pan *away* from a scene, so "freezing" its background
+            // mid-transition is a narrower, more debatable ask than the
+            // steady-state case, and neither this test suite nor the
+            // parametrized freeze test exercises it.
             let scene_a_idx = non_persisted[0].scene_idx;
             let scene_b_idx = non_persisted[1].scene_idx;
             let scene_a = &view.scenes[scene_a_idx];
@@ -915,9 +979,34 @@ pub fn render_world_frame_scaled(
                 }
             }
         } else {
-            // Single active scene — just draw its backgrounds
+            // Single active scene — just draw its backgrounds. When these
+            // are the scene's *own* background (not the shared
+            // `view.background` it falls back to when it declares none),
+            // they must respect that scene's `freeze_at` exactly like
+            // `render_scene_bg_scaled` does for a slide view — otherwise a
+            // frozen scene's background keeps animating in a world view
+            // while its camera and children correctly hold still. (Found
+            // writing `freeze_at_produces_the_same_frame_on_every_render_path`:
+            // PR #152's world-view freeze fix clamped the tree and the
+            // per-scene camera below but never touched this call — the
+            // world path's freeze was incomplete even after that fix, not
+            // just differently-shaped.) A *shared* view-level background is
+            // not "this scene's" content — the world's camera keeps moving
+            // through it regardless of any one scene's freeze — so it keeps
+            // using the raw world clock.
+            let uses_own_background = !active_scene.resolved_background.animated.is_empty();
+            let bg_time = if uses_own_background {
+                let local_time = visible
+                    .iter()
+                    .find(|v| v.scene_idx == active_idx && !v.is_persisted)
+                    .map(|v| v.local_time.max(0.0))
+                    .unwrap_or(time);
+                SceneTime::for_local_time(active_scene, local_time).seconds() as f32
+            } else {
+                time as f32
+            };
             for bg in active_bgs {
-                draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
+                draw_world_bg_with_parallax(canvas, bg, bg_time, vw, vh, cam_x, cam_y);
             }
         }
     } else {
@@ -953,23 +1042,20 @@ pub fn render_world_frame_scaled(
         // Translate to scene's world position, offset so scene center = world position
         canvas.translate((wx - viewport_cx, wy - viewport_cy));
 
-        // Use local_time for animations (clamped to 0 if pan hasn't finished)
-        let mut anim_time = vis.local_time.max(0.0);
-        // Apply freeze_at (parity with the other four render paths —
-        // render_frame_v2_scaled, render_scene_hits, render_scene_bg_scaled,
-        // render_scene_fg_scaled — all of which clamp `time` the same way).
-        // Only the animation clock is clamped, not `frame_index`
+        // Use local_time for animations (clamped to 0 if pan hasn't
+        // finished), then through the same `SceneTime::for_local_time`
+        // freeze clamp every other render path in this file uses — only
+        // the animation clock is clamped, not `frame_index`
         // (`vis.local_frame` below): the other paths keep advancing
         // `frame_index` past the freeze point too, and diverging here would
         // desync any effect keyed on frame index (e.g. grain) from a scene
         // that also appears in a slide view.
-        if let Some(freeze_at) = scene.freeze_at {
-            anim_time = anim_time.min(freeze_at);
-        }
+        let scene_time = SceneTime::for_local_time(scene, vis.local_time.max(0.0));
+        let anim_time = scene_time.seconds();
         // World views keep the global per-scene camera (depth planes are a
         // slide-view feature; the world pan is a separate transform).
         let ctx = RenderContext {
-            time: anim_time,
+            time: scene_time,
             scene_duration: scene.duration,
             frame_index: vis.local_frame,
             fps,
@@ -1115,12 +1201,7 @@ pub fn render_scene_bg_scaled(
 ) -> Result<Vec<u8>> {
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
-    let mut time = frame_in_scene as f64 / config.fps as f64;
-    if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at {
-            time = freeze_at;
-        }
-    }
+    let time = SceneTime::for_frame(scene, frame_in_scene, config.fps).seconds();
     let info = ImageInfo::new(
         (scaled_w, scaled_h),
         ColorType::RGBA8888,
@@ -1176,12 +1257,8 @@ pub fn render_scene_fg_scaled(
     let children = prepare_scene(scene, config);
     let scaled_w = (config.width as f32 * scale_factor) as i32;
     let scaled_h = (config.height as f32 * scale_factor) as i32;
-    let mut time = frame_in_scene as f64 / config.fps as f64;
-    if let Some(freeze_at) = scene.freeze_at {
-        if time > freeze_at {
-            time = freeze_at;
-        }
-    }
+    let scene_time = SceneTime::for_frame(scene, frame_in_scene, config.fps);
+    let time = scene_time.seconds();
     let info = ImageInfo::new(
         (scaled_w, scaled_h),
         ColorType::RGBA8888,
@@ -1206,7 +1283,7 @@ pub fn render_scene_fg_scaled(
         config.height as f32,
     );
     let ctx = RenderContext {
-        time,
+        time: scene_time,
         scene_duration: scene.duration,
         frame_index: frame_in_scene,
         fps: config.fps,

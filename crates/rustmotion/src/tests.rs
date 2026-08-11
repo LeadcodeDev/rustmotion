@@ -1423,6 +1423,91 @@ mod component_smoke {
             red_remapped
         );
     }
+
+    // ─── time-container chantier: composition + freeze (issue #164) ──────────
+
+    #[test]
+    fn nested_time_scale_and_offset_compose_and_a_frozen_global_time_freezes_the_whole_subtree() {
+        // Direct answer to "a card with time_scale: 2 containing a flex with
+        // time_offset: -1: what does the grandchild see?" — per the
+        // documented composition rule (`t_local = (t_parent - offset) *
+        // scale`, applied per level,
+        // .claude/skills/rustmotion/rules/time-remapping.md):
+        //   card:  t_card = (T - 0) * 2        = 2T
+        //   flex:  t_flex = (t_card - (-1)) * 1 = 2T + 1
+        // A shape with a 4s fade_in nested two levels deep should be 25%
+        // faded at T=0 (t_local=1) and 50% faded at T=0.5 (t_local=2).
+        let json = serde_json::json!({
+            "type": "card",
+            "time_scale": 2.0,
+            "style": { "width": "400px", "height": "300px" },
+            "children": [{
+                "type": "flex",
+                "time_offset": -1.0,
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "fill": "#ff0000",
+                    "style": {
+                        "width": "200px",
+                        "height": "200px",
+                        "animation": [{ "name": "fade_in", "duration": 4.0 }]
+                    }
+                }]
+            }]
+        });
+        let make_scene = || {
+            let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
+            vec![crate::components::ChildComponent {
+                component,
+                position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+                x: None,
+                y: None,
+                z_index: None,
+                bleed: false,
+            }]
+        };
+
+        let at_t0 = render_new_at(&make_scene(), 400, 300, 0.0, 6.0);
+        let at_t_half = render_new_at(&make_scene(), 400, 300, 0.5, 6.0);
+        let red_t0 = red_sum(&at_t0);
+        let red_t_half = red_sum(&at_t_half);
+        assert!(
+            red_t_half > red_t0 + 500,
+            "card time_scale=2 > flex time_offset=-1: grandchild local time is 2*T+1; T=0.5 \
+             (local=2, 50% faded, red={}) must be more opaque than T=0 (local=1, 25% faded, red={})",
+            red_t_half,
+            red_t0
+        );
+
+        // Simulate what a Scene-level `freeze_at: 0.5` does *upstream* of
+        // this box tree: `scene.rs` clamps the GLOBAL time to `freeze_at`
+        // once, before it ever reaches `build_scene_with_anim` — a nested
+        // time_scale/time_offset subtree never sees a global time past the
+        // freeze point in the first place. Clamping *before* the affine
+        // composition is equivalent to clamping *after* it whenever every
+        // ancestor's `time_scale` is positive (which the validator already
+        // enforces — see `validate_schema.rs`'s `time_scale must be > 0`).
+        // So: two different raw global times that both get clamped to the
+        // same freeze point must render identically, however deep the
+        // nesting — this is *why* freeze_at needs no changes to
+        // `box_builder.rs`'s time_remap composition at all, only a single,
+        // upstream clamp of the scene's own global time (see `scene.rs`'s
+        // `SceneTime`).
+        let freeze_at = 0.5;
+        let frozen_a = render_new_at(&make_scene(), 400, 300, 1.5_f64.min(freeze_at), 6.0);
+        let frozen_b = render_new_at(&make_scene(), 400, 300, 2.5_f64.min(freeze_at), 6.0);
+        assert_eq!(
+            frozen_a, frozen_b,
+            "two different global times both clamped to the same freeze_at before reaching a \
+             nested time_scale/time_offset subtree must render pixel-identical"
+        );
+        assert_eq!(
+            frozen_a, at_t_half,
+            "clamping T to freeze_at=0.5 must render exactly like rendering at T=0.5 directly \
+             (frozen == the frame at the freeze point, not some other value)"
+        );
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2884,6 +2969,10 @@ mod parallax_hitmap_tests {
 #[cfg(test)]
 mod world_view_regressions {
     use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::engine::render::{
+        render_scene_bg_scaled, render_scene_fg_scaled, render_scene_frame_scaled,
+        render_scene_hits,
+    };
     use crate::loader::load_scenario_from_source;
     use crate::schema::ResolvedScenario;
 
@@ -3011,6 +3100,137 @@ mod world_view_regressions {
             after_freeze_a, after_freeze_b,
             "frames 45 and 55 are both past freeze_at=0.5s and must be pixel-identical \
              (the counter must have stopped, not kept incrementing)"
+        );
+    }
+
+    // Issue #164: `freeze_at` was applied by hand in five different render
+    // paths inside `crates/rustmotion/src/engine/render/scene.rs`, and
+    // nothing ever asserted the five agree — PR #152 only tested the world
+    // path it was repairing (the test above). This is that missing test,
+    // written before the `SceneTime` consolidation refactor: a scene whose
+    // animated content spans everything a "frozen" frame must actually hold
+    // still — the component tree (a counter), the per-scene camera (an x
+    // keyframe), and the animated background (`gradient_shift`) — so a path
+    // that forgot the clamp anywhere would show it.
+    #[test]
+    fn freeze_at_produces_the_same_frame_on_every_render_path() {
+        let slide_json = r##"{
+            "video": { "width": 200, "height": 200, "fps": 30, "background": "#000000" },
+            "scenes": [
+                { "duration": 2.0, "freeze_at": 0.5,
+                  "background": { "preset": "gradient_shift",
+                                   "colors": ["#101020", "#4422aa"], "speed": 60 },
+                  "camera": { "keyframes": [
+                      { "property": "x", "values": [
+                          { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 80.0 }
+                      ] }
+                  ] },
+                  "children": [
+                      { "type": "counter", "from": 0, "to": 200,
+                        "style": { "font-size": 48, "color": "#ffffff" } }
+                  ] }
+            ]
+        }"##;
+        let slide = scenario(slide_json);
+        let config = &slide.video;
+        let scenes = slide.all_scenes_vec();
+        let scene = scenes[0];
+
+        // Frame 5 (t~0.167s) is before freeze_at=0.5s: content still moving.
+        // Frames 45 (t=1.5s) and 55 (t~1.833s) are both well past it.
+        let (pre, post_a, post_b) = (5u32, 45u32, 55u32);
+
+        let render_full = |f: u32| render_scene_frame_scaled(config, scene, f, 60, 1.0).unwrap();
+        let render_bg = |f: u32| render_scene_bg_scaled(config, scene, f, 1.0).unwrap();
+        let render_fg = |f: u32| render_scene_fg_scaled(config, scene, f, 60, 1.0).unwrap();
+
+        let pixel_paths: [(&str, &dyn Fn(u32) -> Vec<u8>); 3] = [
+            ("render_scene_frame_scaled", &render_full),
+            ("render_scene_bg_scaled", &render_bg),
+            ("render_scene_fg_scaled", &render_fg),
+        ];
+        for (name, render) in pixel_paths {
+            let before = render(pre);
+            let after_a = render(post_a);
+            let after_b = render(post_b);
+            assert_ne!(
+                before, after_a,
+                "{name}: frame {pre} (pre-freeze) must differ from frame {post_a} (post-freeze)"
+            );
+            assert_eq!(
+                after_a, after_b,
+                "{name}: frames {post_a} and {post_b} are both past freeze_at=0.5s and must be \
+                 pixel-identical"
+            );
+        }
+
+        // render_scene_hits: a different output shape (bounding boxes, not
+        // pixels) but the same claim — the camera pan (and therefore every
+        // hit rect) must stop moving past the freeze point.
+        let hit_rects = |f: u32| -> Vec<_> {
+            render_scene_hits(config, scene, f)
+                .into_iter()
+                .map(|h| h.rect)
+                .collect::<Vec<_>>()
+        };
+        let hits_pre = hit_rects(pre);
+        let hits_post_a = hit_rects(post_a);
+        let hits_post_b = hit_rects(post_b);
+        assert_ne!(
+            hits_pre, hits_post_a,
+            "render_scene_hits: hit rects at frame {pre} (pre-freeze, camera still panning) \
+             must differ from frame {post_a}"
+        );
+        assert_eq!(
+            hits_post_a, hits_post_b,
+            "render_scene_hits: hit rects at frames {post_a} and {post_b} (both past \
+             freeze_at) must be identical — the camera pan must have stopped"
+        );
+
+        // render_world_frame_scaled: same scene, wrapped in a world view so
+        // the world-specific freeze copy (the one PR #152 added — `.min()`
+        // instead of the other four's `if`) is exercised too.
+        let world_json = r##"{
+            "video": { "width": 200, "height": 200, "fps": 30, "background": "#000000" },
+            "composition": [
+                { "type": "world", "scenes": [
+                    { "duration": 2.0, "freeze_at": 0.5,
+                      "background": { "preset": "gradient_shift",
+                                       "colors": ["#101020", "#4422aa"], "speed": 60 },
+                      "camera": { "keyframes": [
+                          { "property": "x", "values": [
+                              { "time": 0.0, "value": 0.0 }, { "time": 2.0, "value": 80.0 }
+                          ] }
+                      ] },
+                      "children": [
+                          { "type": "counter", "from": 0, "to": 200,
+                            "style": { "font-size": 48, "color": "#ffffff" } }
+                      ] }
+                ] }
+            ]
+        }"##;
+        let world = scenario(world_json);
+        let tasks = build_frame_tasks(&world);
+        let world_render = |frame_in_view: u32| -> Vec<u8> {
+            let task = tasks
+                .iter()
+                .find(
+                    |t| matches!(t, FrameTask::WorldFrame { frame_in_view: f, .. } if *f == frame_in_view),
+                )
+                .unwrap_or_else(|| panic!("no WorldFrame task for frame {frame_in_view}"));
+            render_frame_task(&world.video, &world, task).unwrap()
+        };
+        let w_before = world_render(pre);
+        let w_after_a = world_render(post_a);
+        let w_after_b = world_render(post_b);
+        assert_ne!(
+            w_before, w_after_a,
+            "render_world_frame_scaled: frame {pre} (pre-freeze) must differ from frame {post_a}"
+        );
+        assert_eq!(
+            w_after_a, w_after_b,
+            "render_world_frame_scaled: frames {post_a} and {post_b} (both past freeze_at) \
+             must be pixel-identical"
         );
     }
 
