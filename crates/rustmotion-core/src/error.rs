@@ -207,6 +207,16 @@ pub enum RustmotionError {
     #[error("No frames to render (total duration is 0)")]
     NoFrames,
 
+    // ffmpeg is otherwise the one that finds out, and only after every frame
+    // has been rendered: it exits with "Nothing was written into output file"
+    // and a raw -22 dump. Naming the working combination costs one line.
+    #[error("codec '{codec}' cannot be written into a .{container} file — {fix}")]
+    CodecContainerMismatch {
+        codec: String,
+        container: String,
+        fix: String,
+    },
+
     #[error("Failed to run ffmpeg: {reason}. Is ffmpeg installed?")]
     FfmpegSpawn { reason: String },
 
