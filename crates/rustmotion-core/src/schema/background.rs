@@ -69,6 +69,95 @@ pub struct HaloConfig {
     pub zones: Vec<HaloZone>,
 }
 
+/// Config for the `pixel_grid` preset: a lattice of square cells.
+///
+/// Covers two looks with one shape. `density: 1.0` with two colours gives a
+/// true checkerboard (cells alternate by `(row + col)` parity); a density
+/// below 1 with one colour gives the sparse tile field the reference piece
+/// uses — squares on a ground, some cells simply absent.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PixelGridConfig {
+    /// Cell colours. One colour fills every drawn cell; several alternate by
+    /// `(row + col)`, which is what makes a checkerboard rather than a field.
+    #[serde(default = "default_pixel_colors")]
+    pub colors: Vec<String>,
+    /// Edge of a cell in px.
+    #[serde(default = "default_pixel_size")]
+    pub size: f32,
+    /// Lattice pitch in px — the distance between two cell origins. Clamped to
+    /// at least `size`, so cells never overlap; `spacing - size` is the gap.
+    #[serde(default = "default_pixel_spacing")]
+    pub spacing: f32,
+    /// Fraction of cells drawn, 0..1. Which cells is decided by a hash of the
+    /// cell's coordinates, so the pattern is stable from frame to frame — a
+    /// per-frame random would boil.
+    #[serde(default = "default_pixel_density")]
+    pub density: f32,
+    /// Where the field is densest. The reference piece ramps its density
+    /// across the frame rather than scattering uniformly, which is what stops
+    /// the texture reading as noise.
+    #[serde(default)]
+    pub density_ramp: PixelDensityRamp,
+    /// Corner radius of a cell in px. `0` for hard pixels.
+    #[serde(default)]
+    pub radius: f32,
+    /// Stable pattern selector: two backgrounds with the same seed and
+    /// geometry are identical, different seeds are different scatters.
+    #[serde(default = "default_pixel_seed")]
+    pub seed: u32,
+    /// How the field moves. `speed` on the background scales it.
+    #[serde(default)]
+    pub motion: PixelGridMotion,
+}
+
+/// Which way the fill density ramps across the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelDensityRamp {
+    /// Uniform: every cell has the same chance of being drawn.
+    #[default]
+    None,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// Dense at the centre, thinning outwards.
+    Radial,
+}
+
+/// How a `pixel_grid` animates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelGridMotion {
+    /// Still. The lattice is a texture, not an effect.
+    #[default]
+    None,
+    /// Cells fade in and out on their own phase.
+    Twinkle,
+    /// A band of extra density travels across the field.
+    Sweep,
+}
+
+fn default_pixel_colors() -> Vec<String> {
+    vec!["#FFFFFF22".to_string()]
+}
+
+fn default_pixel_size() -> f32 {
+    10.0
+}
+
+fn default_pixel_spacing() -> f32 {
+    24.0
+}
+
+fn default_pixel_density() -> f32 {
+    0.6
+}
+
+fn default_pixel_seed() -> u32 {
+    7
+}
+
 /// Config for the `heropattern` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HeropatternConfig {
@@ -101,6 +190,7 @@ pub enum BackgroundPreset {
     GridDots(GridDotsConfig),
     ConcentricCircles(ConcentricCirclesConfig),
     Halo(HaloConfig),
+    PixelGrid(PixelGridConfig),
     Heropattern(HeropatternConfig),
 }
 
@@ -111,6 +201,7 @@ impl BackgroundPreset {
             BackgroundPreset::GridDots(_) => "grid_dots",
             BackgroundPreset::ConcentricCircles(_) => "concentric_circles",
             BackgroundPreset::Halo(_) => "halo",
+            BackgroundPreset::PixelGrid(_) => "pixel_grid",
             BackgroundPreset::Heropattern(_) => "heropattern",
         }
     }
@@ -143,6 +234,7 @@ impl Serialize for AnimatedBackground {
                 map.serialize_entry("concentric_circles", cfg)?
             }
             BackgroundPreset::Halo(cfg) => map.serialize_entry("halo", cfg)?,
+            BackgroundPreset::PixelGrid(cfg) => map.serialize_entry("pixel_grid", cfg)?,
             BackgroundPreset::Heropattern(cfg) => map.serialize_entry("heropattern", cfg)?,
         }
         map.serialize_entry("speed", &self.speed)?;
@@ -168,6 +260,7 @@ const KNOWN_BACKGROUND_PRESETS: &[&str] = &[
     "grid_dots",
     "concentric_circles",
     "halo",
+    "pixel_grid",
     "heropattern",
 ];
 
@@ -365,6 +458,9 @@ fn deserialize_preset_config<E: serde::de::Error>(
             serde_json::from_value(sub).map_err(E::custom)?,
         )),
         "halo" => Ok(BackgroundPreset::Halo(
+            serde_json::from_value(sub).map_err(E::custom)?,
+        )),
+        "pixel_grid" => Ok(BackgroundPreset::PixelGrid(
             serde_json::from_value(sub).map_err(E::custom)?,
         )),
         "heropattern" => Ok(BackgroundPreset::Heropattern(

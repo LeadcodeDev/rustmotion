@@ -2337,13 +2337,46 @@ With `transition`, background properties (colors, speed, spacing, element_size, 
 | `colors`       | array  | `[]`              | Gradient colors (hex)                         |
 | `speed`        | f32    | `30.0`            | Animation speed (degrees/sec or pixels/sec)   |
 | `gradient_type`| enum   | `"linear"`        | `"linear"` or `"radial"`                      |
-| `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"` |
+| `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"`, `"heropattern"`, `"pixel_grid"` |
 | `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots; stroke width for concentric_circles |
 | `spacing`      | f32    | `60.0`            | Element spacing for grid_dots/concentric_circles |
 | `count`        | u32    | `null`            | Number of circles for concentric_circles (overrides spacing) |
 | `zones`        | array  | `[]`              | `halo` only — `[{ "color": "#hex", "x": 0.0-1.0, "y": 0.0-1.0, "radius": 0.0-1.0 }]`. `x`/`y` are fractions of width/height, `radius` a fraction of `max(width, height)`. |
 | `$ref`         | string | `null`            | Reference to a named template in `backgrounds` |
 | `transition`   | object | `null`            | `{ "duration": f64, "easing": "ease_in_out" }` — interpolates from prev scene |
+
+### `pixel_grid` — a lattice of square cells
+
+Two looks from one preset. **Sparse tile field**: one colour under `density: 1`,
+cells scattered by a hash of their coordinates. **Checkerboard**: two colours at
+`density: 1.0`, which alternate by `(col + row)`.
+
+```json
+{ "preset": "pixel_grid", "speed": 1.0, "pixel_grid": {
+    "colors": ["#FFFFFF26"],   // one → field; two+ → alternating checkerboard
+    "size": 9,                 // cell edge, px
+    "spacing": 22,             // lattice pitch, px — clamped to at least `size`
+    "density": 0.75,           // 0..1 fraction of cells drawn
+    "density_ramp": "right",   // none | left | right | top | bottom | radial
+    "radius": 1,               // cell corner radius; 0 for hard pixels
+    "seed": 7,                 // stable scatter; same seed → same pattern
+    "motion": "none"           // none | twinkle | sweep
+} }
+```
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `colors` | `["#FFFFFF22"]` | Alternate by `(col + row)`. Alpha in the hex is how a texture stays a texture. |
+| `size` | `10.0` | Cell edge in px. |
+| `spacing` | `24.0` | Pitch, **clamped to `size`**: a smaller value would draw a solid sheet and lose the lattice. |
+| `density` | `0.6` | Fraction of cells drawn. `1.0` fills every cell — required for a real checkerboard. |
+| `density_ramp` | `"none"` | Where the field is densest. A ramp is what stops a scatter reading as noise. |
+| `radius` | `0.0` | `0` keeps the pixels hard-edged; anti-aliasing turns on above `0`. |
+| `seed` | `7` | Occupancy is a hash of `(col, row, seed)`, so the pattern holds still across frames and is identical between two renders. |
+| `motion` | `"none"` | `twinkle` fades cells on their own phase; `sweep` runs a band of extra density across the field. Scaled by the background's `speed`. |
+
+> The lattice repeats on `spacing`, so it tiles seamlessly under a `world`
+> view's camera pan.
 
 The same `background` field also exists at the **view** level (`composition[].background`) — that's the recommended place for an ambient `halo` glow in a `world` view, since a per-scene shape glow either fails viewport validation or, once clipped to pass, becomes a visible hard-edged rectangle during a camera pan. See [rules/world-view.md](rules/world-view.md).
 
