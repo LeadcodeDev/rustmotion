@@ -1,6 +1,6 @@
 # Rule: Keep Content Inside the Viewport
 
-No textual content may bleed out of the device viewport. The renderer enforces this through three opt-in mechanisms, all checked by `rustmotion validate`.
+No textual content may bleed out of the device viewport. The renderer enforces this through four opt-in mechanisms, all checked by `rustmotion validate`.
 
 ## 1. Text wrapping (`style.white-space`)
 
@@ -29,7 +29,26 @@ When you give a `codeblock` or `terminal` a fixed `size` smaller than its natura
 }
 ```
 
-## 3. Container `style.overflow`
+## 3. Text shrink-to-fit (`style.text-autofit`)
+
+`text` and `gradient_text` accept `text-autofit: true`, which reduces their font size until the content fits the resolved box — width, and height when taffy resolves one.
+
+```json
+{ "type": "text", "content": "A headline too long for its box",
+  "style": { "width": "320px", "height": "90px", "font-size": 120, "text-autofit": true } }
+```
+
+Use it when the copy is data-driven and you cannot know in advance whether it fits — a label coming from a `for-each`, a headline injected through a variable. Do **not** reach for it to paper over a layout you can simply size correctly: shrinking is a fallback, not a design.
+
+Three things to know:
+
+- **It has a floor.** Shrinking stops at a calibrated legibility threshold and never goes below it. If the text still does not fit at the floor, the geometry violation is **still reported** — `text-autofit` narrows that failure class, it does not silence it.
+- **`white-space` still decides whether the text wraps**; `text-autofit` only decides at what size. They compose.
+- **Only these two components implement it.** Declaring it on a `caption`, a `codeblock` or a `table` is inert — those painters never read it.
+
+On a canvas taller than 1080, `validate` warns that autofit may shrink below the legibility floor for that frame height. That warning is about the *rendered* size, not the declared one.
+
+## 4. Container `style.overflow`
 
 CSS-like semantics: `visible` (default) lets children bleed; `hidden` clips at the parent box. The validator only fails when content escapes the **viewport**, not a `visible` parent — a badge sticking out of a card is legal.
 

@@ -106,3 +106,28 @@ For items entering one by one without exits, use increasing `delay` on sibling e
 { "type": "text", "content": "Second", "style": { "animation": [{ "name": "fade_in_up", "delay": 0.2, "duration": 0.6 }] } },
 { "type": "text", "content": "Third",  "style": { "animation": [{ "name": "fade_in_up", "delay": 0.4, "duration": 0.6 }] } }
 ```
+
+## Ce que `style.transition` lisse réellement
+
+`style.transition` fait interpoler les changements posés par un `timeline` — mais **seulement pour certaines propriétés**. Toutes les autres sautent à l'instant du pas.
+
+Interpolées aujourd'hui :
+
+| Propriété | Restriction |
+|---|---|
+| `opacity` | — |
+| `color` | sur `text` / `counter` |
+| `background` | couleur solide uniquement |
+| `border-radius` | rayon uniforme, en px absolus |
+
+Tout le reste saute. Ce n'est pas silencieux : dès que `style.transition` est posé, `rustmotion validate` inspecte les diffs entre états de `timeline` et **nomme chaque propriété qui ne sera pas lissée**, avec la raison.
+
+Trois raisons distinctes, et le message le dit :
+
+- **Propriété de layout** (`width`, `height`, `margin`, `padding`, `gap`, `font-size`, `top`/`left`…) — interpoler demanderait de relancer le layout à chaque frame échantillonnée. Le message suggère l'alternative : `transform: translate` ou `scale`, qui sont côté peinture et s'interpolent, elles.
+- **Propriété discrète** (`display`, `position`, `overflow`, `font-weight`, `text-align`…) — il n'existe aucune valeur intermédiaire. Le saut est le comportement CSS attendu, pas une limite de rustmotion, et le message le précise pour t'éviter de chercher un bug.
+- **Peinture non supportée** (`transform`, `box-shadow`, `filter`, `clip-path`…) — continue en principe, pas encore implémenté.
+
+Les unités relatives (`%`, `em`, `rem`, `vw`, `vh`) et les rayons par coin sont refusés à l'interpolation et signalés : avant le layout, ces unités n'ont pas de base fiable.
+
+**En pratique :** pour animer une taille ou une position, préfère `transform` à `width`/`top`. C'est ce que le validateur te dira, et c'est aussi ce qui coûte le moins cher à rendre.
