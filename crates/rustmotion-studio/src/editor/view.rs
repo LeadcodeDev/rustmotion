@@ -157,7 +157,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
         diff_side,
     );
 
-    let (total, err, write_err, title, annotations) = {
+    let (total, err, write_err, audio_err, title, annotations) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         let title = m
             .path
@@ -170,6 +170,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             m.total_frames,
             m.error.clone(),
             m.write_error.clone(),
+            m.audio_error.clone(),
             title,
             list_annotations(&m.raw),
         )
@@ -320,6 +321,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
                 show_hits,
                 comment_count,
                 write_error: write_err,
+                audio_error: audio_err,
                 diff_active,
                 diff_side,
             }

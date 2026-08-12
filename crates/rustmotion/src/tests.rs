@@ -1949,6 +1949,91 @@ mod audio_tests {
         count
     }
 
+    /// A track that cannot be decoded must be *reported*, not swallowed:
+    /// silence here leaves `waveform`/`audio_spectrum` on their flat fallback
+    /// with nothing anywhere saying why.
+    #[test]
+    fn analyze_scenario_audio_reports_an_undecodable_track() {
+        let missing = std::env::temp_dir()
+            .join(format!("rustmotion_test_absent_{}.wav", nanos()))
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let json = serde_json::json!({
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "audio": [{"src": missing}],
+            "scenes": [{"duration": 1.0, "children": []}]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+
+        let failures = crate::encode::audio_analysis::analyze_scenario_audio(&scenario);
+        assert_eq!(failures.len(), 1, "the missing track must be reported");
+        assert_eq!(failures[0].src, missing);
+        assert!(
+            !failures[0].reason.is_empty(),
+            "a failure must carry a reason, got {failures:?}"
+        );
+        assert!(
+            audio_analysis_cache().get(&missing).is_none(),
+            "a failed decode must not leave an entry behind"
+        );
+    }
+
+    /// The cache is keyed by path, so a track re-exported under the same name
+    /// used to keep serving the first envelope for the life of the process —
+    /// exactly what a studio session does when the mix is updated.
+    #[test]
+    fn analyze_scenario_audio_reruns_when_the_file_changes() {
+        let sample_rate = 44100u32;
+        let wav_path =
+            std::env::temp_dir().join(format!("rustmotion_test_refresh_{}.wav", nanos()));
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        // First: a full second of sine — amplitude high throughout.
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate, sample_rate, 440.0, sample_rate),
+        )
+        .expect("write first fixture");
+
+        let json = serde_json::json!({
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "audio": [{"src": wav_str}],
+            "scenes": [{"duration": 1.0, "children": []}]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+        assert!(crate::encode::audio_analysis::analyze_scenario_audio(&scenario).is_empty());
+        let late_before = audio_analysis_cache().get(&wav_str).unwrap().amplitude[25];
+
+        // Rewrite the same path with sine only in the first half. mtime has
+        // 1 ns resolution on the platforms we target, but the length differs
+        // too, so the fingerprint changes either way.
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate * 2, sample_rate / 2, 440.0, sample_rate),
+        )
+        .expect("write second fixture");
+
+        assert!(crate::encode::audio_analysis::analyze_scenario_audio(&scenario).is_empty());
+        let late_after = audio_analysis_cache().get(&wav_str).unwrap().amplitude[25];
+        std::fs::remove_file(&wav_path).ok();
+
+        assert!(
+            late_before > 0.5,
+            "frame 25 of the first take is inside the sine, got {late_before}"
+        );
+        assert!(
+            late_after < 0.1,
+            "frame 25 of the second take is silence — a stale analysis would \
+             still report {late_before}, got {late_after}"
+        );
+    }
+
     #[test]
     fn analyze_scenario_audio_computes_amplitude_and_440hz_band() {
         let sample_rate = 44100u32;

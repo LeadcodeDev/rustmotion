@@ -67,7 +67,9 @@ fn encode_video_impl(
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
-    analyze_scenario_audio(scenario);
+    for failure in analyze_scenario_audio(scenario) {
+        eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");
+    }
 
     let (tasks, full_total_frames, segment_start_frame) = match frame_range {
         Some((start, end)) => {
@@ -171,7 +173,9 @@ pub fn encode_video_incremental(
         preextract_video_frames(&view.scenes, fps);
         prefetch_icons(&view.scenes);
     }
-    analyze_scenario_audio(scenario);
+    for failure in analyze_scenario_audio(scenario) {
+        eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");
+    }
 
     let num_slots = slots.len();
     let scene_hashes: Vec<u64> = slots

@@ -401,7 +401,9 @@ fn encode_with_ffmpeg_hw_impl(
     for view in &scenario.views {
         prefetch_icons(&view.scenes);
     }
-    analyze_scenario_audio(scenario);
+    for failure in analyze_scenario_audio(scenario) {
+        eprintln!("rustmotion: audio-reactive: {failure} — waveform/audio_spectrum will render flat for this track.");
+    }
 
     let (tasks, full_total_frames, segment_start_frame) = match frame_range {
         Some((start, end)) => {
