@@ -31,10 +31,12 @@ impl std::fmt::Display for AudioAnalysisFailure {
 /// up that way), so without this a track whose *content* changed under a stable
 /// path — the normal case when someone re-exports a mix while the studio is
 /// open — would keep serving the old envelope forever.
-/// Also carries the track's placement: the analysis content depends only
-/// on the file, but the *lookup* now applies `start`/`end`, so an entry
-/// computed for one placement must not be reused for another.
-type SourceFingerprint = (u64, u128, u32, u64, u64);
+/// File identity (length, mtime), the fps it was bucketed at, and a hash of
+/// everything about the *track* that changes the result: `start`/`end` move the
+/// lookup, and `volume`/`volume_keyframes`/the fades are baked into the
+/// amplitudes. An entry computed for one of those must never be served for
+/// another — two scenarios can name the same file with different mixes.
+type SourceFingerprint = (u64, u128, u32, u64);
 
 static FINGERPRINTS: OnceLock<Mutex<HashMap<String, SourceFingerprint>>> = OnceLock::new();
 
@@ -48,8 +50,7 @@ fn fingerprints() -> &'static Mutex<HashMap<String, SourceFingerprint>> {
 fn source_fingerprint(
     src: &str,
     fps: u32,
-    start: f64,
-    end: Option<f64>,
+    track: &rustmotion_core::schema::AudioTrack,
 ) -> Option<SourceFingerprint> {
     let meta = std::fs::metadata(src).ok()?;
     let mtime = meta
@@ -58,13 +59,19 @@ fn source_fingerprint(
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    Some((
-        meta.len(),
-        mtime,
-        fps,
-        start.to_bits(),
-        end.unwrap_or(f64::INFINITY).to_bits(),
-    ))
+    Some((meta.len(), mtime, fps, track_hash(track)))
+}
+
+/// Hash the track's placement and volume envelope. Serialised rather than
+/// hashed field by field so adding a field to `AudioTrack` cannot silently
+/// leave it out of the key.
+fn track_hash(track: &rustmotion_core::schema::AudioTrack) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(track)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Build the 16 log-spaced band frequency boundaries (Hz) from 20..16000.
@@ -107,7 +114,7 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
 
     for track in tracks {
         let src = &track.src;
-        let fingerprint = source_fingerprint(src, fps, track.start, track.end);
+        let fingerprint = source_fingerprint(src, fps, track);
         let cached_and_current = cache.contains_key(src)
             && fingerprint.is_some()
             && fps_of
@@ -140,6 +147,28 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
                 .map(|c| c.iter().sum::<f32>() / channels as f32)
                 .collect(),
         };
+
+        // Follow the *mix*, not the source. `volume`, `volume_keyframes` and the
+        // fades are what comes out of the speakers, and since #182 the studio
+        // plays exactly that — a waveform drawing the raw file's envelope while
+        // a fade takes the sound down contradicts what the viewer hears. The
+        // gain comes from the encoder's own `track_gain_at`, so the picture
+        // cannot drift from the audio.
+        let audible = {
+            let file_seconds = mono.len() as f64 / sample_rate as f64;
+            match track.end {
+                Some(end) => file_seconds.min((end - track.start).max(0.0)),
+                None => file_seconds,
+            }
+        };
+        let mono: Vec<f32> = mono
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let t = i as f64 / sample_rate as f64;
+                s * crate::encode::audio::track_gain_at(track, t, audible)
+            })
+            .collect();
 
         let samples_per_frame = (sample_rate as f64 / fps as f64).ceil() as usize;
         let num_frames = (mono.len() as f64 / samples_per_frame as f64).ceil() as usize;

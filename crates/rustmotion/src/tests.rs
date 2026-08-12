@@ -1992,6 +1992,98 @@ mod audio_tests {
         count
     }
 
+    /// The analysis must describe the **mix**, not the source.
+    ///
+    /// `volume`, `volume_keyframes` and the fades are what comes out of the
+    /// speakers, and since #182 the studio plays exactly that. A waveform
+    /// drawing the raw file's envelope while a keyframe takes the sound to
+    /// zero contradicts what the viewer hears.
+    #[test]
+    fn the_analysis_follows_the_mixed_envelope_not_the_raw_file() {
+        let sample_rate = 44100u32;
+        // 2 s of unbroken sine: any variation in the analysis comes from the
+        // envelope, never from the source.
+        let wav_path = std::env::temp_dir().join(format!("rustmotion_test_mix_{}.wav", nanos()));
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate * 2, sample_rate * 2, 440.0, sample_rate),
+        )
+        .expect("write fixture");
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        // Full for the first second, silent for the second.
+        let json = serde_json::json!({
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "audio": [{
+                "src": wav_str,
+                "volume_keyframes": [
+                    {"time": 0.0, "volume": 1.0},
+                    {"time": 1.0, "volume": 1.0},
+                    {"time": 1.05, "volume": 0.0},
+                    {"time": 2.0, "volume": 0.0}
+                ]
+            }],
+            "scenes": [{"duration": 2.0, "children": []}]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+        assert!(crate::encode::audio_analysis::analyze_scenario_audio(&scenario).is_empty());
+
+        let analysis = audio_analysis_cache().get(&wav_str).unwrap().clone();
+        std::fs::remove_file(&wav_path).ok();
+
+        assert!(
+            analysis.amplitude_at(0.5) > 0.5,
+            "inside the audible half the envelope is open"
+        );
+        assert!(
+            analysis.amplitude_at(1.5) < 0.05,
+            "the keyframes take the track to silence — the visualisation must \
+             follow it, not keep drawing the sine underneath"
+        );
+    }
+
+    /// The envelope is part of the cache key: two scenarios naming the same
+    /// file with different mixes must not share an analysis.
+    #[test]
+    fn changing_the_envelope_re_analyses_the_same_file() {
+        let sample_rate = 44100u32;
+        let wav_path = std::env::temp_dir().join(format!("rustmotion_test_env_{}.wav", nanos()));
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate, sample_rate, 440.0, sample_rate),
+        )
+        .expect("write fixture");
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        let with_volume = |v: f32| {
+            let json = serde_json::json!({
+                "video": {"width": 32, "height": 32, "fps": 30},
+                "audio": [{"src": wav_str, "volume": v}],
+                "scenes": [{"duration": 1.0, "children": []}]
+            })
+            .to_string();
+            let scenario =
+                crate::loader::load_scenario_from_source(None, Some(&json)).expect("load");
+            crate::encode::audio_analysis::analyze_scenario_audio(&scenario);
+            audio_analysis_cache().get(&wav_str).unwrap().amplitude[10]
+        };
+
+        // Amplitudes are normalised per analysis, so a flat gain change cannot
+        // be read off the values — assert the *entry* was replaced instead.
+        let loud = with_volume(1.0);
+        let quiet = with_volume(0.0);
+        std::fs::remove_file(&wav_path).ok();
+
+        assert!(loud > 0.5, "the full-volume take is audible, got {loud}");
+        assert_eq!(
+            quiet, 0.0,
+            "at volume 0 the analysis must be silent — a stale entry would \
+             still report {loud}"
+        );
+    }
+
     /// The failure the whole rewrite exists for: a scenario naming an asset
     /// beside itself must load identically whatever directory the process
     /// runs from. Authoring from the scenario's folder worked; the studio,
