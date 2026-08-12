@@ -31,7 +31,10 @@ impl std::fmt::Display for AudioAnalysisFailure {
 /// up that way), so without this a track whose *content* changed under a stable
 /// path — the normal case when someone re-exports a mix while the studio is
 /// open — would keep serving the old envelope forever.
-type SourceFingerprint = (u64, u128, u32);
+/// Also carries the track's placement: the analysis content depends only
+/// on the file, but the *lookup* now applies `start`/`end`, so an entry
+/// computed for one placement must not be reused for another.
+type SourceFingerprint = (u64, u128, u32, u64, u64);
 
 static FINGERPRINTS: OnceLock<Mutex<HashMap<String, SourceFingerprint>>> = OnceLock::new();
 
@@ -42,7 +45,12 @@ fn fingerprints() -> &'static Mutex<HashMap<String, SourceFingerprint>> {
 /// `None` when the file cannot be stat'ed — treated as "changed", so the next
 /// analysis attempt runs and reports a real decode error instead of silently
 /// reusing a stale entry.
-fn source_fingerprint(src: &str, fps: u32) -> Option<SourceFingerprint> {
+fn source_fingerprint(
+    src: &str,
+    fps: u32,
+    start: f64,
+    end: Option<f64>,
+) -> Option<SourceFingerprint> {
     let meta = std::fs::metadata(src).ok()?;
     let mtime = meta
         .modified()
@@ -50,7 +58,13 @@ fn source_fingerprint(src: &str, fps: u32) -> Option<SourceFingerprint> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    Some((meta.len(), mtime, fps))
+    Some((
+        meta.len(),
+        mtime,
+        fps,
+        start.to_bits(),
+        end.unwrap_or(f64::INFINITY).to_bits(),
+    ))
 }
 
 /// Build the 16 log-spaced band frequency boundaries (Hz) from 20..16000.
@@ -93,7 +107,7 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
 
     for track in tracks {
         let src = &track.src;
-        let fingerprint = source_fingerprint(src, fps);
+        let fingerprint = source_fingerprint(src, fps, track.start, track.end);
         let cached_and_current = cache.contains_key(src)
             && fingerprint.is_some()
             && fps_of
@@ -208,6 +222,8 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             frame_rate: fps,
             amplitude,
             bands: bands_all,
+            start: track.start,
+            end: track.end,
         });
         cache.insert(src.clone(), analysis);
         let mut fps_of = fps_of.lock().unwrap_or_else(|e| e.into_inner());
