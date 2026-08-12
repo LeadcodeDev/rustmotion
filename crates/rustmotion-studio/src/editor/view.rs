@@ -50,6 +50,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
 
     let current = use_signal(|| 0u32);
     let playing = use_signal(|| false);
+    let muted = use_signal(|| false);
     let rev = use_signal(|| 0u64);
     // Selection stores (node_id, pointer, kind) so the inspector stays open via
     // the stored pointer even if the element collapses out of the hit-map.
@@ -157,7 +158,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
         diff_side,
     );
 
-    let (total, err, write_err, audio_err, title, annotations) = {
+    let (total, fps, err, write_err, audio_err, title, annotations) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         let title = m
             .path
@@ -168,6 +169,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             .to_string();
         (
             m.total_frames,
+            m.scenario.video.fps.max(1),
             m.error.clone(),
             m.write_error.clone(),
             m.audio_error.clone(),
@@ -328,7 +330,7 @@ pub fn StudioApp(view: Signal<View>) -> Element {
             div { style: "flex:1; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:stretch; min-height:0; overflow:hidden;",
                 div { style: "flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;",
                     Canvas { current, rev, show_hits, playing, selected, diff_active, diff_side, diff_marks, preview_scale }
-                    PlaybackBar { current, playing, total, diff_active, diff_side, preview_scale }
+                    PlaybackBar { current, playing, total, fps, muted, diff_active, diff_side, preview_scale }
                 }
                 div {
                     style: "flex:none; display:flex; overflow:hidden; transition:width 220ms ease; width:{panel_w};",
