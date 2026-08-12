@@ -62,13 +62,20 @@ pub(super) fn draw_world_bg_with_parallax(
     height: f32,
     cam_x: f32,
     cam_y: f32,
+    world: (f32, f32, f32, f32),
 ) {
     match &bg.preset {
         BackgroundPreset::Halo(cfg) => {
-            let world_w = width * 5.0;
-            let world_h = height * 5.0;
+            // `HaloZone`'s x/y/radius are fractions of the surface it is painted
+            // on. In a slide view that is the viewport; here it is the world the
+            // camera travels, so it has to be the *actual* extent
+            // (`WorldTimeline::world_extent`). It used to be `viewport * 5.0`,
+            // a constant unrelated to the scenes' own positions: the same
+            // `radius: 0.55` that reads as a half-screen glow in a slide became
+            // a five-screen wash, and calibrating one was trial and error.
+            let (world_x, world_y, world_w, world_h) = world;
             canvas.save();
-            canvas.translate((-cam_x, -cam_y));
+            canvas.translate((world_x - cam_x, world_y - cam_y));
             draw_bg_halo(canvas, cfg, bg.speed, time, world_w, world_h);
             canvas.restore();
         }
