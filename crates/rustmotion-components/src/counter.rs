@@ -373,6 +373,7 @@ mod tests {
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         let ctx = PaintCtx {
             time: 1.0,
+            scenario_time: 1.0,
             scene_duration: 2.0,
             frame_index: 30,
             fps: 30,

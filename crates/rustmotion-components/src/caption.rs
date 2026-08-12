@@ -416,6 +416,7 @@ mod tests {
     fn test_ctx(time: f64) -> PaintCtx {
         PaintCtx {
             time,
+            scenario_time: time,
             scene_duration: 2.0,
             frame_index: (time * 30.0) as u32,
             fps: 30,

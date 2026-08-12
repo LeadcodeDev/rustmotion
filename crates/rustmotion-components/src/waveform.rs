@@ -36,7 +36,7 @@ pub struct Waveform {
     /// Visual style: line or filled.
     #[serde(default)]
     pub draw_style: DrawStyle,
-    /// Time window in seconds, centered on ctx.time.
+    /// Time window in seconds, centered on ctx.scenario_time.
     #[serde(default = "default_window")]
     pub window: f32,
     #[serde(flatten)]
@@ -91,8 +91,8 @@ impl Painter for Waveform {
         };
 
         let half_window = self.window as f64 / 2.0;
-        let t_start = (ctx.time - half_window).max(0.0);
-        let t_end = ctx.time + half_window;
+        let t_start = (ctx.scenario_time - half_window).max(0.0);
+        let t_end = ctx.scenario_time + half_window;
 
         // Sample N points along the window
         let n_points = w as usize;

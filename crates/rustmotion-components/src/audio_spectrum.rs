@@ -111,7 +111,7 @@ impl Painter for AudioSpectrum {
         let w = layout.width;
         let h = layout.height;
         let n = self.bars.max(1) as usize;
-        let values = self.get_band_values(ctx.time);
+        let values = self.get_band_values(ctx.scenario_time);
         let (r, g, b, a) = parse_hex_color(&self.color);
         let color = Color::from_argb(a, r, g, b);
 

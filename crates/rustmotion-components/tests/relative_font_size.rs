@@ -41,6 +41,7 @@ fn render(json: serde_json::Value) -> Vec<u8> {
         (W as f32, H as f32),
         BuildAnimationCtx {
             time: 0.5,
+            scenario_time: 0.5,
             scene_duration: 2.0,
             fps: 30,
         },
@@ -53,6 +54,7 @@ fn render(json: serde_json::Value) -> Vec<u8> {
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time: 0.5,
+        scenario_time: 0.5,
         frame_index: 15,
         fps: 30,
         video_width: W,

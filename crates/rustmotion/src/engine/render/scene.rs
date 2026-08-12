@@ -109,6 +109,8 @@ use scene_time::SceneTime;
 #[derive(Debug, Clone)]
 struct RenderContext {
     time: SceneTime,
+    /// Seconds since the scenario started — see `PaintFrame::scenario_time`.
+    scenario_time: f64,
     scene_duration: f64,
     frame_index: u32,
     fps: u32,
@@ -168,6 +170,7 @@ pub fn render_frame_v2(
     config: &VideoConfig,
     scene: &Scene,
     frame_index: u32,
+    scenario_time: f64,
     _total_frames: u32,
     root_children: &[ChildComponent],
 ) -> Result<Vec<u8>> {
@@ -175,6 +178,7 @@ pub fn render_frame_v2(
         config,
         scene,
         frame_index,
+        scenario_time,
         _total_frames,
         root_children,
         1.0,
@@ -192,6 +196,7 @@ pub fn render_frame_v2_scaled(
     config: &VideoConfig,
     scene: &Scene,
     frame_index: u32,
+    scenario_time: f64,
     _total_frames: u32,
     root_children: &[ChildComponent],
     scale_factor: f32,
@@ -339,6 +344,7 @@ pub fn render_frame_v2_scaled(
     // Build render context
     let ctx = RenderContext {
         time: scene_time,
+        scenario_time,
         scene_duration: scene.duration,
         frame_index,
         fps: config.fps,
@@ -540,6 +546,7 @@ fn render_with_new_pipeline_iter<'a, I>(
 
     let anim = Some(BuildAnimationCtx {
         time: ctx.time.seconds(),
+        scenario_time: ctx.scenario_time,
         scene_duration: ctx.scene_duration,
         fps: ctx.fps,
     });
@@ -552,6 +559,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time: ctx.time.seconds(),
+        scenario_time: ctx.scenario_time,
         frame_index: ctx.frame_index,
         fps: ctx.fps,
         video_width: ctx.video_width,
@@ -619,6 +627,7 @@ fn paint_decorative_fullscreen(
     };
     let paint_ctx = PaintCtx {
         time,
+        scenario_time: ctx.scenario_time,
         scene_duration: ctx.scene_duration,
         frame_index: ctx.frame_index,
         fps: ctx.fps,
@@ -662,16 +671,25 @@ pub fn render_scene_frame(
     config: &VideoConfig,
     scene: &Scene,
     frame_in_scene: u32,
+    scenario_time: f64,
     scene_total_frames: u32,
 ) -> Result<Vec<u8>> {
     let children = prepare_scene(scene, config);
-    render_frame_v2(config, scene, frame_in_scene, scene_total_frames, &children)
+    render_frame_v2(
+        config,
+        scene,
+        frame_in_scene,
+        scenario_time,
+        scene_total_frames,
+        &children,
+    )
 }
 
 pub fn render_scene_frame_scaled(
     config: &VideoConfig,
     scene: &Scene,
     frame_in_scene: u32,
+    scenario_time: f64,
     scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
@@ -680,6 +698,7 @@ pub fn render_scene_frame_scaled(
         config,
         scene,
         frame_in_scene,
+        scenario_time,
         scene_total_frames,
         &children,
         scale_factor,
@@ -693,6 +712,7 @@ pub fn render_scene_frame_scaled_with_prev_bg(
     config: &VideoConfig,
     scene: &Scene,
     frame_in_scene: u32,
+    scenario_time: f64,
     scene_total_frames: u32,
     scale_factor: f32,
     prev_bg: Option<(&crate::schema::ResolvedBackground, f64)>,
@@ -702,6 +722,7 @@ pub fn render_scene_frame_scaled_with_prev_bg(
         config,
         scene,
         frame_in_scene,
+        scenario_time,
         scene_total_frames,
         &children,
         scale_factor,
@@ -763,6 +784,7 @@ pub fn render_scene_hits(
     let root_css = root_style(scene.layout.as_ref(), ViewType::Slide);
     let anim = Some(BuildAnimationCtx {
         time,
+        scenario_time: time,
         scene_duration: scene.duration,
         fps: config.fps,
     });
@@ -771,6 +793,9 @@ pub fn render_scene_hits(
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,
+        // Geometry probe for the studio overlay, never an encoded frame:
+        // no painter reads the audio clock here.
+        scenario_time: time,
         frame_index: frame_in_scene,
         fps: config.fps,
         video_width: config.width,
@@ -807,6 +832,7 @@ pub fn render_world_frame_scaled(
     view: &crate::schema::ResolvedView,
     timeline: &crate::engine::world::WorldTimeline,
     frame_in_view: u32,
+    scenario_time: f64,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     let scaled_w = (config.width as f32 * scale_factor) as i32;
@@ -1070,6 +1096,7 @@ pub fn render_world_frame_scaled(
         // slide-view feature; the world pan is a separate transform).
         let ctx = RenderContext {
             time: scene_time,
+            scenario_time,
             scene_duration: scene.duration,
             frame_index: vis.local_frame,
             fps,
@@ -1266,6 +1293,7 @@ pub fn render_scene_fg_scaled(
     config: &VideoConfig,
     scene: &Scene,
     frame_in_scene: u32,
+    scenario_time: f64,
     _scene_total_frames: u32,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
@@ -1299,6 +1327,9 @@ pub fn render_scene_fg_scaled(
     );
     let ctx = RenderContext {
         time: scene_time,
+        // The hit-map is a geometry probe for the studio overlay, never an
+        // encoded frame: no painter reads the audio clock on this path.
+        scenario_time,
         scene_duration: scene.duration,
         frame_index: frame_in_scene,
         fps: config.fps,

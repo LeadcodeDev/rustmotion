@@ -194,9 +194,17 @@ pub fn encode_video_incremental(
     }
 
     // Build per-slot tasks
+    // Slots are built independently but their tasks form one stream, so each
+    // starts where the previous ended — a task's `global_frame` must mean the
+    // same thing here as in a full encode.
+    let mut next_frame = 0u32;
     let scene_tasks: Vec<Vec<super::tasks::FrameTask>> = slots
         .iter()
-        .map(|s| super::tasks::build_slot_frame_tasks(scenario, s))
+        .map(|s| {
+            let tasks = super::tasks::build_slot_frame_tasks(scenario, s, next_frame);
+            next_frame += tasks.len() as u32;
+            tasks
+        })
         .collect();
     let num_scenes = num_slots;
 

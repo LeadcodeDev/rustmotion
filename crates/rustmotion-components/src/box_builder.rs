@@ -37,6 +37,13 @@ use crate::{ChildComponent, Component};
 #[derive(Debug, Clone, Copy)]
 pub struct BuildAnimationCtx {
     pub time: f64,
+    /// Seconds since the scenario started, as opposed to `time`, which
+    /// restarts at every scene. Only the `audio-reactive` binding reads it:
+    /// the audio analysis is indexed on the scenario's timeline, so using
+    /// `time` gave a scene starting at t=73 s the analysis at 73 s *into that
+    /// scene*. Every animation stays on `time`, which is what a delay, a
+    /// stagger or a preset is written against.
+    pub scenario_time: f64,
     pub scene_duration: f64,
     /// Frames per second of the output video. Required to convert the
     /// `shutter` fraction (in `MotionBlurConfig`) into an absolute temporal
@@ -305,6 +312,7 @@ fn build_ghosts<'a>(
         // Resolve animation props at the *ghost* time.
         let ghost_actx = BuildAnimationCtx {
             time: ghost_time,
+            scenario_time: actx.scenario_time,
             scene_duration: actx.scene_duration,
             fps: actx.fps,
         };
@@ -428,6 +436,11 @@ fn build_child<'a>(
         let (scale, shift) = time_remap;
         BuildAnimationCtx {
             time: a.time * scale + shift,
+            // A container's `time_scale`/`time_offset` remaps the *animation*
+            // clock of its subtree. The audio is not part of that subtree —
+            // it plays at wall-clock speed regardless — so the scenario clock
+            // passes through unremapped.
+            scenario_time: a.scenario_time,
             scene_duration: a.scene_duration,
             fps: a.fps,
         }
@@ -545,10 +558,10 @@ fn build_child<'a>(
             let raw = if let Some(analysis) = analysis_opt {
                 match &ar.source {
                     AudioSource::Amplitude(AudioSourceTag::Amplitude) => {
-                        analysis.amplitude_smoothed(actx.time, ar.smoothing_frames)
+                        analysis.amplitude_smoothed(actx.scenario_time, ar.smoothing_frames)
                     }
                     AudioSource::Band { band } => {
-                        analysis.band_smoothed(actx.time, *band, ar.smoothing_frames)
+                        analysis.band_smoothed(actx.scenario_time, *band, ar.smoothing_frames)
                     }
                 }
             } else {
@@ -2657,6 +2670,7 @@ mod tests {
         }
         let anim = BuildAnimationCtx {
             time: 0.0,
+            scenario_time: 0.0,
             scene_duration: 1.0,
             fps: 30,
         };
@@ -2709,6 +2723,7 @@ mod tests {
         }
         let anim = BuildAnimationCtx {
             time: 0.0,
+            scenario_time: 0.0,
             scene_duration: 1.0,
             fps: 30,
         };
@@ -2737,6 +2752,7 @@ mod tests {
         let shape = make_shape(100.0, 100.0);
         let anim = BuildAnimationCtx {
             time: 0.0,
+            scenario_time: 0.0,
             scene_duration: 1.0,
             fps: 30,
         };

@@ -160,7 +160,8 @@ fn bench_duplicate_paint_via_render_scene_hits() {
 
     let t0 = Instant::now();
     for f in 0..FRAMES {
-        let _ = render_scene_frame_scaled(config, scene, f, FRAMES, 1.0).expect("render");
+        let _ = render_scene_frame_scaled(config, scene, f, f as f64 / 30.0, FRAMES, 1.0)
+            .expect("render");
     }
     let normal_elapsed = t0.elapsed();
 
