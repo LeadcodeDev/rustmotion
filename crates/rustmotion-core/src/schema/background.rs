@@ -436,13 +436,16 @@ pub struct HaloZone {
     /// Zone color (hex string). May itself carry an alpha channel
     /// (`#rrggbbaa`); see [`HaloZone::opacity`] for how the two combine.
     pub color: String,
-    /// X position as fraction of width (0.0 = left, 1.0 = right).
+    /// X position as a fraction of the surface the halo is painted on:
+    /// the viewport in a `slide` view, the world the camera travels in a
+    /// `world` view (`WorldTimeline::world_extent`). 0.0 = left, 1.0 = right.
     #[serde(default = "default_half")]
     pub x: f32,
-    /// Y position as fraction of height (0.0 = top, 1.0 = bottom).
+    /// Y position as a fraction of that same surface. 0.0 = top, 1.0 = bottom.
     #[serde(default = "default_half")]
     pub y: f32,
-    /// Radius as fraction of max(width, height).
+    /// Radius as a fraction of that surface's `max(width, height)` — so the
+    /// same value covers proportionally the same area whichever view it is in.
     #[serde(default = "default_halo_radius")]
     pub radius: f32,
     /// Zone opacity, multiplied with any alpha already encoded in `color`.

@@ -126,6 +126,37 @@ impl WorldTimeline {
     }
 
     /// Total number of frames for this world view.
+    /// The rectangle of world space the camera ever shows, in world
+    /// coordinates: `(x, y, width, height)`.
+    ///
+    /// Each waypoint puts that world point at the viewport's top-left, so the
+    /// span is the union of one viewport-sized rect per waypoint. Backgrounds
+    /// painted across the world need this rather than a fixed multiple of the
+    /// viewport: a world spanning two screens and one spanning ten are not the
+    /// same canvas, and a `halo` zone expressed as a fraction of the wrong one
+    /// lands nowhere near where its author aimed it.
+    ///
+    /// Falls back to the viewport itself when there are no waypoints.
+    pub fn world_extent(&self, viewport_w: f32, viewport_h: f32) -> (f32, f32, f32, f32) {
+        let Some(first) = self.camera_waypoints.first() else {
+            return (0.0, 0.0, viewport_w, viewport_h);
+        };
+        let (mut min_x, mut min_y) = (first.x, first.y);
+        let (mut max_x, mut max_y) = (first.x, first.y);
+        for wp in &self.camera_waypoints {
+            min_x = min_x.min(wp.x);
+            min_y = min_y.min(wp.y);
+            max_x = max_x.max(wp.x);
+            max_y = max_y.max(wp.y);
+        }
+        (
+            min_x,
+            min_y,
+            (max_x - min_x) + viewport_w,
+            (max_y - min_y) + viewport_h,
+        )
+    }
+
     pub fn total_frames(&self, fps: u32) -> u32 {
         (self.total_duration * fps as f64).round() as u32
     }
@@ -604,5 +635,56 @@ mod world_timeline_tests {
                  (bug produced ~0.40-0.48 in one frame)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod world_extent_tests {
+    use super::*;
+
+    fn timeline_with(waypoints: &[(f32, f32)]) -> WorldTimeline {
+        WorldTimeline {
+            scene_windows: Vec::new(),
+            camera_waypoints: waypoints
+                .iter()
+                .map(|&(x, y)| CameraWaypoint { time: 0.0, x, y })
+                .collect(),
+            total_duration: 0.0,
+            camera_pan_duration: 0.0,
+            boundary_pan_duration: Vec::new(),
+        }
+    }
+
+    /// The extent is the union of one viewport per waypoint — the span the
+    /// camera actually shows — not a fixed multiple of the viewport.
+    #[test]
+    fn extent_spans_the_waypoints_plus_one_viewport() {
+        let t = timeline_with(&[(0.0, 0.0), (2016.0, 0.0), (2016.0, 1080.0)]);
+        assert_eq!(t.world_extent(1920.0, 1080.0), (0.0, 0.0, 3936.0, 2160.0));
+    }
+
+    /// A single-waypoint world is exactly one screen, where `viewport * 5.0`
+    /// used to claim five — and divided every halo radius by five with it.
+    #[test]
+    fn a_single_waypoint_world_is_one_viewport() {
+        let t = timeline_with(&[(0.0, 0.0)]);
+        assert_eq!(t.world_extent(1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0));
+    }
+
+    /// Negative waypoints are inside the world, not outside it: the origin
+    /// moves rather than the span being measured from zero.
+    #[test]
+    fn negative_waypoints_move_the_origin() {
+        let t = timeline_with(&[(-1920.0, -540.0), (0.0, 0.0)]);
+        assert_eq!(
+            t.world_extent(1920.0, 1080.0),
+            (-1920.0, -540.0, 3840.0, 1620.0)
+        );
+    }
+
+    #[test]
+    fn no_waypoints_falls_back_to_the_viewport() {
+        let t = timeline_with(&[]);
+        assert_eq!(t.world_extent(1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0));
     }
 }

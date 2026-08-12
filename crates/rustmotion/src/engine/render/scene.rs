@@ -841,6 +841,9 @@ pub fn render_world_frame_scaled(
 
     // Pre-compute camera position for background parallax
     let (cam_x, cam_y) = timeline.camera_at(time, &view.camera_easing);
+    // The surface world-spanning backgrounds are painted on. Derived from the
+    // camera's own waypoints, not a fixed multiple of the viewport.
+    let world = timeline.world_extent(vw, vh);
     let viewport_cx = vw / 2.0;
     let viewport_cy = vh / 2.0;
 
@@ -917,7 +920,16 @@ pub fn render_world_frame_scaled(
                 // crossfade of a layer with itself is that layer, so just
                 // paint it once instead of doing the work twice.
                 for bg in bgs_a {
-                    draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
+                    draw_world_bg_with_parallax(
+                        canvas,
+                        bg,
+                        time as f32,
+                        vw,
+                        vh,
+                        cam_x,
+                        cam_y,
+                        world,
+                    );
                 }
             } else {
                 // Distinct per-scene backgrounds: render each side into its
@@ -942,6 +954,7 @@ pub fn render_world_frame_scaled(
                     vh,
                     cam_x,
                     cam_y,
+                    world,
                     scaled_w,
                     scaled_h,
                     scale_factor,
@@ -953,6 +966,7 @@ pub fn render_world_frame_scaled(
                     vh,
                     cam_x,
                     cam_y,
+                    world,
                     scaled_w,
                     scaled_h,
                     scale_factor,
@@ -1006,13 +1020,13 @@ pub fn render_world_frame_scaled(
                 time as f32
             };
             for bg in active_bgs {
-                draw_world_bg_with_parallax(canvas, bg, bg_time, vw, vh, cam_x, cam_y);
+                draw_world_bg_with_parallax(canvas, bg, bg_time, vw, vh, cam_x, cam_y, world);
             }
         }
     } else {
         // No active scene — draw view-level backgrounds
         for bg in &view.background.animated {
-            draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y);
+            draw_world_bg_with_parallax(canvas, bg, time as f32, vw, vh, cam_x, cam_y, world);
         }
     }
 
@@ -1143,6 +1157,7 @@ fn render_world_bg_layer_pixels(
     vh: f32,
     cam_x: f32,
     cam_y: f32,
+    world: (f32, f32, f32, f32),
     scaled_w: i32,
     scaled_h: i32,
     scale_factor: f32,
@@ -1160,7 +1175,7 @@ fn render_world_bg_layer_pixels(
     }
     canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
     for bg in bgs {
-        draw_world_bg_with_parallax(canvas, bg, time, vw, vh, cam_x, cam_y);
+        draw_world_bg_with_parallax(canvas, bg, time, vw, vh, cam_x, cam_y, world);
     }
     let row_bytes = scaled_w as usize * 4;
     let mut pixels = vec![0u8; row_bytes * scaled_h as usize];
