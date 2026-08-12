@@ -1984,6 +1984,65 @@ mod audio_tests {
         count
     }
 
+    /// A track placed at `start` must be *read* from `start` too.
+    ///
+    /// The mux places the file at `track.start` on the scenario timeline and
+    /// copies it from its own sample 0; the analysis indexes the file from its
+    /// own frame 0 while every painter asks in scenario time. The two only
+    /// lined up when `start == 0` — a soundtrack gated to one scene played its
+    /// opening while the waveform drew the file's content at that timestamp.
+    #[test]
+    fn a_track_start_offsets_the_analysis_lookup() {
+        let sample_rate = 44100u32;
+        // 1 s of sine then 1 s of silence, placed at t = 5 and cut at t = 6.5.
+        let wav_path = std::env::temp_dir().join(format!("rustmotion_test_offset_{}.wav", nanos()));
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate * 2, sample_rate, 440.0, sample_rate),
+        )
+        .expect("write fixture");
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        let json = serde_json::json!({
+            "video": {"width": 32, "height": 32, "fps": 30},
+            "audio": [{"src": wav_str, "start": 5.0, "end": 6.5}],
+            "scenes": [{"duration": 8.0, "children": []}]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+        assert!(crate::encode::audio_analysis::analyze_scenario_audio(&scenario).is_empty());
+
+        let analysis = audio_analysis_cache().get(&wav_str).unwrap().clone();
+        std::fs::remove_file(&wav_path).ok();
+
+        assert_eq!(
+            analysis.amplitude_at(4.9),
+            0.0,
+            "before `start` the track is not playing"
+        );
+        assert!(
+            analysis.amplitude_at(5.2) > 0.5,
+            "0.2 s after `start` is 0.2 s into the file — inside the sine"
+        );
+        assert!(
+            analysis.amplitude_at(6.2) < 0.1,
+            "1.2 s after `start` is 1.2 s into the file — inside the silence"
+        );
+        assert_eq!(
+            analysis.amplitude_at(6.6),
+            0.0,
+            "past `end` the track is cut, so the visualisation must go flat \
+             rather than keep drawing an envelope nobody hears"
+        );
+
+        // The smoothed accessors take the same path, or a bound component
+        // would disagree with the waveform next to it.
+        assert_eq!(analysis.amplitude_smoothed(4.9, 3), 0.0);
+        assert_eq!(analysis.band_at(4.9, 4), 0.0);
+        assert_eq!(analysis.band_smoothed(4.9, 4, 3), 0.0);
+    }
+
     /// A track that cannot be decoded must be *reported*, not swallowed:
     /// silence here leaves `waveform`/`audio_spectrum` on their flat fallback
     /// with nothing anywhere saying why.
@@ -2164,6 +2223,8 @@ mod audio_tests {
                 frame_rate: 30,
                 amplitude: vec![1.0; 30],
                 bands,
+                start: 0.0,
+                end: None,
             }),
         );
 
@@ -2220,6 +2281,8 @@ mod audio_tests {
                 frame_rate: 30,
                 amplitude,
                 bands: vec![[0.0f32; 16]; 60],
+                start: 0.0,
+                end: None,
             }),
         );
 
@@ -2256,6 +2319,8 @@ mod audio_tests {
                 frame_rate: 30,
                 amplitude,
                 bands: vec![[0.0f32; 16]; 90],
+                start: 0.0,
+                end: None,
             }),
         );
 
