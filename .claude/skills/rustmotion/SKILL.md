@@ -919,7 +919,14 @@ Animates each character or word independently with staggered timing. Use `char_*
 | --------------- | ------------------ | ----------- |
 | `border-radius` | f32                | `null`      |
 
-**Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
+**Shape types.** `ShapeType` is externally tagged: the plain variants are strings, the parameterised ones are single-key objects. Writing `"shape": "star"` fails with `invalid type: unit variant, expected struct variant`.
+
+```json
+"shape": "rect"                              // also: circle, rounded_rect, ellipse, triangle
+"shape": { "star": { "points": 6 } }         // default 5
+"shape": { "polygon": { "sides": 6 } }       // default 6
+"shape": { "path": { "data": "M0 0 L10 10" } }
+```
 
 **Gradient fill (root field):**
 ```json
@@ -2350,7 +2357,9 @@ New style fields available on all components:
 | ----------------- | ------ | ------- | -------------------------------------------------------- |
 | `gradient-border` | object | `null`  | `{ "colors": ["#f00", "#00f"], "width": 2, "angle": 0 }` — gradient-colored border ring, border-radius aware, painted instead of `border` when both are set |
 
-`stagger` and `timeline` are **root fields** (siblings of `style`), not style fields — see [rules/component-field-placement.md](rules/component-field-placement.md). `motion-path` does not exist in the current schema (leftover from the pre-CSS `LayerStyle` model) — there is no motion-path-following mechanism today.
+`stagger` and `timeline` are **root fields** (siblings of `style`), not style fields — see [rules/component-field-placement.md](rules/component-field-placement.md).
+
+There is no `motion-path` *style* property — that name is a leftover from the pre-CSS `LayerStyle` model and was removed. To move a component along a path, use the **`motion_path` animation effect** (snake_case), which takes SVG path data and can orient the component along the tangent — see [rules/motion-path.md](rules/motion-path.md). The two spellings are one character apart and mean different things: `motion-path` in `style` is dropped, `motion_path` in `animation` works.
 
 **Deprecated (accepted but never rendered — the validator warns):**
 
