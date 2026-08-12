@@ -20,6 +20,10 @@ pub struct StudioModel {
     /// Disk-write error surfaced as a topbar indicator. Cleared on the next
     /// successful write or on model reload.
     pub write_error: Option<String>,
+    /// Audio tracks the analyser could not read, surfaced as a topbar
+    /// indicator. Without it an undecodable track just makes `waveform` and
+    /// `audio_spectrum` draw their flat fallback, with nothing to explain it.
+    pub audio_error: Option<String>,
     /// Bumped on every hot-reload so the UI can detect a change.
     pub generation: u64,
     /// Path to the scenario file (for inspector write-back).
@@ -66,12 +70,25 @@ impl StudioModel {
             .unwrap_or(serde_json::Value::Null);
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         let total_frames = tasks.len() as u32;
+        // Analyse here rather than once at launch: every reload path — the
+        // watcher, opening a file from the library, undo — funnels through this
+        // constructor, and a scenario that gained a track or had its path fixed
+        // must not keep the previous scenario's (or no) analysis.
+        let failures = rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
+        let audio_error = (!failures.is_empty()).then(|| {
+            failures
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(" · ")
+        });
         Self {
             scenario: Arc::new(scenario),
             tasks: Arc::new(tasks),
             total_frames,
             error,
             write_error: None,
+            audio_error,
             generation: 0,
             path,
             raw,

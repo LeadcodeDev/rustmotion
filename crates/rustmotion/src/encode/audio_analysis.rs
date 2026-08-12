@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rustfft::{num_complex::Complex, FftPlanner};
 use rustmotion_core::engine::renderer::audio_analysis::{audio_analysis_cache, AudioAnalysis};
@@ -6,6 +7,51 @@ use rustmotion_core::schema::ResolvedScenario;
 
 const FFT_SIZE: usize = 2048;
 const NUM_BANDS: usize = 16;
+
+/// A track that could not be analysed, and why.
+///
+/// Returned rather than logged so each caller decides how loud to be: an
+/// encode prints a warning and carries on, the studio shows it in the topbar.
+/// Swallowing it leaves `waveform`/`audio_spectrum` drawing their flat
+/// fallback with nothing anywhere saying why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioAnalysisFailure {
+    pub src: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for AudioAnalysisFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.src, self.reason)
+    }
+}
+
+/// What a cached analysis was computed from: file size, mtime, and the fps it
+/// was bucketed at. The cache is keyed by path alone (the painters look tracks
+/// up that way), so without this a track whose *content* changed under a stable
+/// path — the normal case when someone re-exports a mix while the studio is
+/// open — would keep serving the old envelope forever.
+type SourceFingerprint = (u64, u128, u32);
+
+static FINGERPRINTS: OnceLock<Mutex<HashMap<String, SourceFingerprint>>> = OnceLock::new();
+
+fn fingerprints() -> &'static Mutex<HashMap<String, SourceFingerprint>> {
+    FINGERPRINTS.get_or_init(Default::default)
+}
+
+/// `None` when the file cannot be stat'ed — treated as "changed", so the next
+/// analysis attempt runs and reports a real decode error instead of silently
+/// reusing a stale entry.
+fn source_fingerprint(src: &str, fps: u32) -> Option<SourceFingerprint> {
+    let meta = std::fs::metadata(src).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), mtime, fps))
+}
 
 /// Build the 16 log-spaced band frequency boundaries (Hz) from 20..16000.
 fn band_boundaries() -> [(f32, f32); NUM_BANDS] {
@@ -28,14 +74,18 @@ fn hann_window(n: usize) -> Vec<f32> {
 }
 
 /// Analyze all audio tracks in the scenario and populate the global cache.
-/// Already-cached tracks are skipped (idempotent).
-pub fn analyze_scenario_audio(scenario: &ResolvedScenario) {
+/// Idempotent: a track is re-analysed only when its file changed on disk or
+/// the fps did. Returns the tracks that could not be analysed — an empty vec
+/// means every track in the scenario now has an entry in the cache.
+pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisFailure> {
+    let mut failures = Vec::new();
     let tracks = &scenario.audio;
     if tracks.is_empty() {
-        return;
+        return failures;
     }
     let fps = scenario.video.fps;
     let cache = audio_analysis_cache();
+    let fps_of = fingerprints();
     let band_bounds = band_boundaries();
     let hann = hann_window(FFT_SIZE);
     let mut planner = FftPlanner::<f32>::new();
@@ -43,14 +93,29 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) {
 
     for track in tracks {
         let src = &track.src;
-        if cache.contains_key(src) {
+        let fingerprint = source_fingerprint(src, fps);
+        let cached_and_current = cache.contains_key(src)
+            && fingerprint.is_some()
+            && fps_of
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(src)
+                .copied()
+                == fingerprint;
+        if cached_and_current {
             continue;
         }
 
         // Decode to PCM f32
         let (samples, sample_rate, channels) = match crate::encode::audio::decode_audio_file(src) {
             Ok(v) => v,
-            Err(_) => continue, // graceful degradation: skip undecodable track
+            Err(e) => {
+                failures.push(AudioAnalysisFailure {
+                    src: src.clone(),
+                    reason: e.to_string(),
+                });
+                continue;
+            }
         };
 
         // Downmix to mono
@@ -145,5 +210,18 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) {
             bands: bands_all,
         });
         cache.insert(src.clone(), analysis);
+        let mut fps_of = fps_of.lock().unwrap_or_else(|e| e.into_inner());
+        match fingerprint {
+            Some(fp) => {
+                fps_of.insert(src.clone(), fp);
+            }
+            // Un-stat'able but decodable: don't record a fingerprint, so the
+            // next call re-analyses rather than trusting an entry it cannot
+            // check.
+            None => {
+                fps_of.remove(src);
+            }
+        }
     }
+    failures
 }

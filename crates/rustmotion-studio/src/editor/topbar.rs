@@ -95,6 +95,7 @@ pub fn TopBar(
     show_hits: Signal<bool>,
     comment_count: usize,
     write_error: Option<String>,
+    audio_error: Option<String>,
     diff_active: Signal<bool>,
     diff_side: Signal<DiffSide>,
 ) -> Element {
@@ -157,6 +158,13 @@ pub fn TopBar(
                         title: "{msg}",
                         style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis;",
                         "Changes not saved: {msg}"
+                    }
+                }
+                if let Some(ref msg) = audio_error {
+                    span {
+                        title: "{msg}",
+                        style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis;",
+                        "Audio not analysed: {msg}"
                     }
                 }
                 Button {

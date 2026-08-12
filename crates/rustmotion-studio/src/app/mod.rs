@@ -69,7 +69,9 @@ pub fn run_preview_root(
         engine::prefetch_icons(&view.scenes);
         engine::preextract_video_frames(&view.scenes, scenario.video.fps);
     }
-    rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
+    // Audio analysis is NOT done here: it belongs to `StudioModel::new`, which
+    // every load path goes through. Doing it once at launch left a scenario
+    // opened or reloaded later with the wrong (or no) analysis for the session.
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
