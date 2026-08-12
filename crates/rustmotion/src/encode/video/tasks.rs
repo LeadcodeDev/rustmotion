@@ -1,8 +1,8 @@
 use crate::engine::transition::{apply_transition, camera_pan_transition};
 use crate::error::{Result, RustmotionError};
 use crate::schema::{
-    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionCorner,
-    TransitionType, VideoConfig, ViewType,
+    EasingType, PixelDissolveOrder, ResolvedScenario as Scenario, ResolvedView, Scene,
+    TransitionCorner, TransitionType, VideoConfig, ViewType,
 };
 
 /// Description of what to render for a specific frame
@@ -42,6 +42,10 @@ pub enum FrameTask {
         transition_type: TransitionType,
         /// Which corner a `corner_reveal` grows from; inert for every other type.
         corner: TransitionCorner,
+        /// `pixel_dissolve` only: cell edge and scatter seed.
+        cell: f32,
+        seed: u32,
+        order: PixelDissolveOrder,
         transition_duration: f64,
         easing: EasingType,
     },
@@ -73,6 +77,10 @@ pub enum FrameTask {
         transition_type: TransitionType,
         /// Which corner a `corner_reveal` grows from; inert for every other type.
         corner: TransitionCorner,
+        /// `pixel_dissolve` only: cell edge and scatter seed.
+        cell: f32,
+        seed: u32,
+        order: PixelDissolveOrder,
         transition_duration: f64,
         easing: EasingType,
     },
@@ -166,6 +174,9 @@ pub fn render_frame_task_scaled(
             scene_b_total_frames,
             transition_type,
             corner,
+            cell,
+            seed,
+            order,
             transition_duration,
             easing,
         } => {
@@ -300,6 +311,9 @@ pub fn render_frame_task_scaled(
                 progress,
                 transition_type,
                 *corner,
+                *cell,
+                *seed,
+                *order,
             );
             apply_post_effects(
                 &mut composited,
@@ -355,6 +369,9 @@ pub fn render_frame_task_scaled(
             frame_in_transition,
             transition_type,
             corner,
+            cell,
+            seed,
+            order,
             transition_duration,
             easing: _,
         } => {
@@ -385,6 +402,9 @@ pub fn render_frame_task_scaled(
                 progress,
                 transition_type,
                 *corner,
+                *cell,
+                *seed,
+                *order,
             );
             // By symmetry with `SlideTransition` (which applies scene_b's
             // effects to the blended result, "the transition is the entry
@@ -557,6 +577,9 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
                         corner: transition.corner,
+                        cell: transition.cell,
+                        seed: transition.seed,
+                        order: transition.order,
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -686,6 +709,9 @@ fn build_slide_view_tasks(
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
                     corner: transition.corner,
+                    cell: transition.cell,
+                    seed: transition.seed,
+                    order: transition.order,
                     transition_duration: outgoing_effective_duration,
                     easing: easing.clone(),
                 });
@@ -878,6 +904,9 @@ pub(super) fn build_slot_frame_tasks(
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
                         corner: transition.corner,
+                        cell: transition.cell,
+                        seed: transition.seed,
+                        order: transition.order,
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -948,6 +977,9 @@ pub(super) fn build_scene_frame_tasks_in_view(
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
                 corner: transition.corner,
+                cell: transition.cell,
+                seed: transition.seed,
+                order: transition.order,
                 transition_duration: outgoing_effective_duration,
                 easing: easing.clone(),
             });

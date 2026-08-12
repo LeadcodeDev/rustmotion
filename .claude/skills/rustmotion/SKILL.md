@@ -224,6 +224,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
 - [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
+- [rules/terminal-product-register.md](rules/terminal-product-register.md) - Complete visual register for demonstrating a CLI product: palette, the two type scales, the composed terminal pane, beat proportions, and which transition to spend where. Every value measured, with the derivations kept.
 - [rules/world-view.md](rules/world-view.md) - **CRITICAL:** `world` view = the only mechanism for real continuity across beats (no scene-boundary cuts); `world-position` coordinate model + ambient-halo recipe
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
 - [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
@@ -732,7 +733,7 @@ Config types: `string`, `number`, `boolean`, `object`, `array`. Omitted override
 { "type": "fade", "duration": 0.5 }
 ```
 
-**14 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `corner_reveal`, `none`
+**15 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `corner_reveal`, `pixel_dissolve`, `none`
 
 `corner_reveal` uncovers the incoming scene through a rectangle anchored at one
 corner: two edges stay pinned to the frame, the other two travel until it fills.
@@ -747,6 +748,21 @@ not pushed, which is what separates it from `slide` and from the full-width
 
 `corner` takes `top_right` (default), `top_left`, `bottom_right`, `bottom_left`
 and is ignored by every other type.
+
+`pixel_dissolve` turns the frame over cell by cell on a square lattice, each
+cell **fading** on its own schedule. Mid-transition the frame is a mosaic of
+both scenes with a band of half-faded cells between them — which is what
+separates it from `dissolve` (one global opacity, no structure) and from the
+wipes (a single hard boundary).
+
+```json
+{ "type": "pixel_dissolve", "duration": 0.7, "cell": 48, "seed": 11 }
+```
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `cell` | `48.0` | Cell edge in px. Smaller reads as grain, larger as blocks. |
+| `seed` | `11` | Which cells turn first. Same seed → same dissolve, every render. |
 
 Default duration: `0.5` seconds.
 

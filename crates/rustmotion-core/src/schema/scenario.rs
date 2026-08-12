@@ -593,6 +593,21 @@ pub struct SceneLayout {
     pub padding: Option<f32>,
 }
 
+/// The order `pixel_dissolve` turns its cells in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelDissolveOrder {
+    /// From the frame's border inward, so the centre — where the subject
+    /// usually is — is the last thing to go. This is what the reference piece
+    /// does, and it is the default for that reason.
+    #[default]
+    EdgesIn,
+    /// The mirror: the centre opens first and the border closes last.
+    CenterOut,
+    /// No spatial order at all — every cell on its own draw.
+    Random,
+}
+
 /// The corner a `corner_reveal` is anchored to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -614,6 +629,16 @@ pub struct Transition {
     /// Which corner a `corner_reveal` grows from. Ignored by every other type.
     #[serde(default)]
     pub corner: TransitionCorner,
+    /// Cell edge in px for `pixel_dissolve`. Ignored by every other type.
+    #[serde(default = "default_transition_cell")]
+    pub cell: f32,
+    /// `pixel_dissolve` only: stable scatter selector. Two transitions with the
+    /// same seed dissolve in the same order.
+    #[serde(default = "default_transition_seed")]
+    pub seed: u32,
+    /// `pixel_dissolve` only: which cells turn first.
+    #[serde(default)]
+    pub order: PixelDissolveOrder,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -658,8 +683,17 @@ pub enum TransitionType {
     Slide,
     Dissolve,
     CornerReveal,
+    PixelDissolve,
     CameraPan,
     None,
+}
+
+fn default_transition_cell() -> f32 {
+    48.0
+}
+
+fn default_transition_seed() -> u32 {
+    11
 }
 
 fn default_transition_duration() -> f64 {
