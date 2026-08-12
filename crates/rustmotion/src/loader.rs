@@ -24,6 +24,13 @@ pub fn load_scenario_with_vars(
     let label = input.display().to_string();
     variables::apply_variables(&mut json_value, overrides, &label)?;
     expand::expand_directives(&mut json_value, &label)?;
+    // Asset paths are relative to the file that names them, like `include` —
+    // not to wherever the process happens to run.
+    if let Some(dir) = input.parent() {
+        {
+            crate::assets::rebase_relative_paths(&mut json_value, dir);
+        }
+    }
 
     let scenario: Scenario = serde_json::from_value(json_value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
@@ -100,6 +107,10 @@ pub fn load_scenario_from_html_with_vars(
     let label = input.display().to_string();
     variables::apply_variables(&mut value, overrides, &label)?;
     expand::expand_directives(&mut value, &label)?;
+    // Same rule as the JSON loader: assets are relative to the file naming them.
+    if let Some(dir) = input.parent() {
+        crate::assets::rebase_relative_paths(&mut value, dir);
+    }
     let scenario: Scenario = serde_json::from_value(value).map_err(RustmotionError::from)?;
     include::resolve_includes(scenario, &include::IncludeSource::File(input.clone()))
 }

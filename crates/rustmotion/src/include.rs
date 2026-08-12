@@ -148,6 +148,15 @@ fn fetch_and_resolve(
         directive.config.as_ref(),
         &directive.include,
     )?;
+
+    // An included file's assets are relative to *that* file, not to the parent
+    // that pulled it in — otherwise moving an include would silently break
+    // every path inside it.
+    if let IncludeSource::File(ref p) = child_source {
+        if let Some(dir) = p.parent() {
+            crate::assets::rebase_relative_paths(&mut json_value, dir);
+        }
+    }
     // `components` (and any `for-each`/`use` inside this file's own scenes)
     // is scoped to this document: expanded here, per included file, using
     // ONLY this file's own `components` block — never the parent's, and
