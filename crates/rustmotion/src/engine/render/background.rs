@@ -431,6 +431,11 @@ fn ramp_at(ramp: PixelDensityRamp, x: f32, y: f32, width: f32, height: f32) -> f
             let (dx, dy) = (fx - 0.5, fy - 0.5);
             (1.0 - (dx * dx + dy * dy).sqrt() * 2.0).clamp(0.0, 1.0)
         }
+        // The inverse: a vignette that leaves the middle clear.
+        PixelDensityRamp::Edges => {
+            let (dx, dy) = (fx - 0.5, fy - 0.5);
+            ((dx * dx + dy * dy).sqrt() * 2.0).clamp(0.0, 1.0)
+        }
     }
 }
 
@@ -1173,6 +1178,17 @@ mod pixel_grid_tests {
         // Radial is full at the centre and gone at the corners.
         assert!(ramp_at(PixelDensityRamp::Radial, 50.0, 50.0, w, h) > 0.99);
         assert_eq!(ramp_at(PixelDensityRamp::Radial, 0.0, 0.0, w, h), 0.0);
+        // `Edges` is the vignette: clear in the middle, heavy at the border.
+        assert_eq!(ramp_at(PixelDensityRamp::Edges, 50.0, 50.0, w, h), 0.0);
+        assert!(ramp_at(PixelDensityRamp::Edges, 0.0, 50.0, w, h) > 0.99);
+        assert!(ramp_at(PixelDensityRamp::Edges, 100.0, 50.0, w, h) > 0.99);
+        // …and the exact inverse of `Radial`, which is the point of having both.
+        for (x, y) in [(0.0, 0.0), (25.0, 60.0), (100.0, 50.0)] {
+            let r = ramp_at(PixelDensityRamp::Radial, x, y, w, h);
+            let e = ramp_at(PixelDensityRamp::Edges, x, y, w, h);
+            assert!((r + e - 1.0).abs() < 1e-6, "at ({x},{y}): {r} + {e} != 1");
+        }
+
         // `None` is uniform: the same everywhere, including the edges.
         for x in [0.0, 50.0, 100.0] {
             assert_eq!(ramp_at(PixelDensityRamp::None, x, 0.0, w, h), 1.0);
