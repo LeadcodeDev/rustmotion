@@ -498,9 +498,12 @@ fn draw_bg_pixel_grid(
             let paint = &mut paints[idx];
 
             if cfg.motion == PixelGridMotion::Twinkle {
-                // Each cell on its own phase, or they blink in unison.
+                // Full 0 → 1 → 0, not a partial dip: a cell that only fades to
+                // 10 % still reads as a permanent dot, so the lattice looks
+                // fixed and merely dimmer. Each cell gets its own phase from
+                // its own hash, or the whole field blinks in unison.
                 let phase = cell_hash(col, row, cfg.seed, 1) * std::f32::consts::TAU;
-                let a = 0.55 + 0.45 * (t * 1.6 + phase).sin();
+                let a = 0.5 + 0.5 * (t * 1.6 + phase).sin();
                 paint.set_alpha_f(paint.alpha_f() * a);
             }
 
@@ -1203,6 +1206,19 @@ mod pixel_grid_tests {
         c.size = 40.0;
         c.spacing = 8.0;
         assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), 40.0);
+    }
+
+    /// `twinkle` has to reach both ends. A cell that only dips to 10 % still
+    /// reads as a permanent dot: the field looks fixed, just dimmer.
+    #[test]
+    fn twinkle_spans_the_whole_opacity_range() {
+        let phase = 0.0f32;
+        let alpha = |t: f32| 0.5 + 0.5 * (t * 1.6 + phase).sin();
+        let samples: Vec<f32> = (0..400).map(|i| alpha(i as f32 * 0.01)).collect();
+        let lo = samples.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = samples.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(lo < 0.01, "must fade all the way out, floor was {lo}");
+        assert!(hi > 0.99, "must come all the way back, ceiling was {hi}");
     }
 
     /// Degenerate configs must be inert, not panic: an empty palette has
