@@ -123,6 +123,14 @@ pub enum PixelDensityRamp {
     Bottom,
     /// Dense at the centre, thinning outwards.
     Radial,
+    /// Dense at the frame's edges, thinning toward the centre — a vignette.
+    ///
+    /// Measured on the reference piece, in a band clear of its window, the
+    /// density runs 10.9 · 6.5 · 0.8 · 0.2 · 0.2 · 0.2 · 0.2 · 0.9 · 7.8 · 8.8 %
+    /// across the tenths of the frame: heavy at both edges, effectively empty
+    /// through the middle 60 %. That is what keeps the texture off whatever
+    /// sits in the centre, and `Radial` is its exact inverse.
+    Edges,
 }
 
 /// How a `pixel_grid` animates.

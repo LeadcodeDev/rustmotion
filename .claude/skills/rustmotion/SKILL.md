@@ -2357,7 +2357,7 @@ cells scattered by a hash of their coordinates. **Checkerboard**: two colours at
     "size": 9,                 // cell edge, px
     "spacing": 22,             // lattice pitch, px — clamped to at least `size`
     "density": 0.75,           // 0..1 fraction of cells drawn
-    "density_ramp": "right",   // none | left | right | top | bottom | radial
+    "density_ramp": "edges",   // none | left | right | top | bottom | radial | edges
     "radius": 1,               // cell corner radius; 0 for hard pixels
     "seed": 7,                 // stable scatter; same seed → same pattern
     "motion": "none"           // none | twinkle | sweep
@@ -2370,7 +2370,7 @@ cells scattered by a hash of their coordinates. **Checkerboard**: two colours at
 | `size` | `10.0` | Cell edge in px. |
 | `spacing` | `24.0` | Pitch, **clamped to `size`**: a smaller value would draw a solid sheet and lose the lattice. |
 | `density` | `0.6` | Fraction of cells drawn. `1.0` fills every cell — required for a real checkerboard. |
-| `density_ramp` | `"none"` | Where the field is densest. A ramp is what stops a scatter reading as noise. |
+| `density_ramp` | `"none"` | Where the field is densest. A ramp is what stops a scatter reading as noise. `edges` is a vignette — heavy at the border, clear through the middle, so the texture stays off whatever sits in the centre; `radial` is its exact inverse. |
 | `radius` | `0.0` | `0` keeps the pixels hard-edged; anti-aliasing turns on above `0`. |
 | `seed` | `7` | Occupancy is a hash of `(col, row, seed)`, so the pattern holds still across frames and is identical between two renders. |
 | `motion` | `"none"` | `twinkle` fades cells on their own phase; `sweep` runs a band of extra density across the field. Scaled by the background's `speed`. |
