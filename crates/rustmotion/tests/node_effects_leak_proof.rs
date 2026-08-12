@@ -52,7 +52,7 @@ fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
     let (config, scene) = background_and_overlapping_foreground();
 
     // The real, already-rendered frame: red background, blue square on top.
-    let rendered = render_scene_frame_scaled(&config, &scene, 0, 30, 1.0).expect("render");
+    let rendered = render_scene_frame_scaled(&config, &scene, 0, 0.0, 30, 1.0).expect("render");
 
     // Sanity: the foreground square really is visible (opaque blue), not
     // occluded or blended away — otherwise the "leak" below would be trivial.

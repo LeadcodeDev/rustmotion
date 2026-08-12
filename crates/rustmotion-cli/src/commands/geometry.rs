@@ -1329,6 +1329,7 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                 let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
                 let anim = Some(BuildAnimationCtx {
                     time,
+                    scenario_time: time,
                     scene_duration,
                     fps,
                 });

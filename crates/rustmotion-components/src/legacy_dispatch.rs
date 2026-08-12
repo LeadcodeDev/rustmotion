@@ -157,6 +157,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
 
         let paint_ctx = PaintCtx {
             time: local_time,
+            scenario_time: frame.scenario_time,
             scene_duration: frame.scene_duration,
             frame_index: frame.frame_index,
             fps: frame.fps,
@@ -246,6 +247,7 @@ mod tests {
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: 200,
@@ -314,6 +316,7 @@ mod tests {
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: 200,
@@ -415,6 +418,7 @@ mod tests {
         let dispatcher = LegacyPaintDispatcher::new(&built.components);
         let frame = PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: 200,
@@ -511,6 +515,7 @@ mod tests {
                 (200.0, 200.0),
                 crate::box_builder::BuildAnimationCtx {
                     time,
+                    scenario_time: time,
                     scene_duration: 1.0,
                     fps: 30,
                 },
@@ -523,6 +528,7 @@ mod tests {
             let dispatcher = LegacyPaintDispatcher::new(&built.components);
             let frame = PaintFrame {
                 time,
+                scenario_time: time,
                 frame_index: 0,
                 fps: 30,
                 video_width: 200,
@@ -591,6 +597,7 @@ mod tests {
         };
         let frame = PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: 10,

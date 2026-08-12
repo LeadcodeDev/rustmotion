@@ -34,6 +34,15 @@ use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 #[derive(Debug, Clone, Copy)]
 pub struct PaintFrame {
     pub time: f64,
+    /// Seconds since the start of the *scenario* (of the view, for a `world`
+    /// view), as opposed to `time`, which restarts at every scene.
+    ///
+    /// Only the audio-reactive painters want this: an audio analysis is
+    /// indexed on the scenario's own timeline, so reading it with `time` gave
+    /// a scene starting at t=73 s the analysis at 73 s *into that scene*.
+    /// Everything else — animation progress, reveals, transitions — is
+    /// correctly scene-local and must stay on `time`.
+    pub scenario_time: f64,
     pub frame_index: u32,
     pub fps: u32,
     pub video_width: u32,
@@ -1477,6 +1486,7 @@ mod hit_tests {
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: w,
@@ -1828,6 +1838,7 @@ mod transform_origin_tests {
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: w,
@@ -2268,6 +2279,7 @@ mod glassmorphism_tests {
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: w,
@@ -2694,6 +2706,7 @@ mod paint_order_tests {
     fn test_frame(w: u32, h: u32) -> PaintFrame {
         PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: w,

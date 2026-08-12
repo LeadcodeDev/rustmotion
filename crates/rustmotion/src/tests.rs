@@ -333,6 +333,7 @@ mod component_smoke {
         let canvas = surface.canvas();
         let frame = PaintFrame {
             time: 0.5,
+            scenario_time: 0.5,
             frame_index: 15,
             fps: 30,
             video_width: 400,
@@ -397,6 +398,7 @@ mod component_smoke {
         let canvas = surface.canvas();
         let frame = PaintFrame {
             time: 0.0,
+            scenario_time: 0.0,
             frame_index: 0,
             fps: 30,
             video_width: 400,
@@ -494,6 +496,7 @@ mod component_smoke {
             (w as f32, h as f32),
             BuildAnimationCtx {
                 time,
+                scenario_time: time,
                 scene_duration,
                 fps: 30,
             },
@@ -506,6 +509,7 @@ mod component_smoke {
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
             time,
+            scenario_time: time,
             frame_index: (time * 30.0) as u32,
             fps: 30,
             video_width: w,
@@ -1618,6 +1622,7 @@ mod svg_draw_on_tests {
             (w as f32, h as f32),
             BuildAnimationCtx {
                 time: progress,
+                scenario_time: progress,
                 scene_duration,
                 fps: 30,
             },
@@ -1630,6 +1635,7 @@ mod svg_draw_on_tests {
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
             time: progress,
+            scenario_time: progress,
             frame_index: (progress * 30.0) as u32,
             fps: 30,
             video_width: w,
@@ -1933,6 +1939,7 @@ mod audio_tests {
             (w as f32, h as f32),
             BuildAnimationCtx {
                 time,
+                scenario_time: time,
                 scene_duration: 10.0,
                 fps,
             },
@@ -1949,6 +1956,7 @@ mod audio_tests {
             &layout,
             &PaintFrame {
                 time,
+                scenario_time: time,
                 frame_index: (time * fps as f64) as u32,
                 fps,
                 video_width: w as u32,
@@ -2082,6 +2090,73 @@ mod audio_tests {
         assert_eq!(analysis.amplitude_smoothed(4.9, 3), 0.0);
         assert_eq!(analysis.band_at(4.9, 4), 0.0);
         assert_eq!(analysis.band_smoothed(4.9, 4, 3), 0.0);
+    }
+
+    /// A `waveform` must read the scenario's clock, not its own scene's.
+    ///
+    /// The analysis is indexed on the scenario timeline. A scene starting at
+    /// t=2 s used to be handed the analysis at that many seconds *into itself*,
+    /// so it drew a moment of the track that had already played.
+    ///
+    /// The fixture separates the two clocks: 3 s of sine then 1 s of silence,
+    /// behind a 2 s filler scene. At frame 105 the scenario is at 3.5 s — in
+    /// the silence — while the scene is only 1.5 s old — still in the sine.
+    /// Reading the wrong clock draws a waveform where there is no sound.
+    #[test]
+    fn a_waveform_reads_the_scenario_clock_not_the_scene_clock() {
+        let sample_rate = 44100u32;
+        let wav_path = std::env::temp_dir().join(format!("rustmotion_test_clock_{}.wav", nanos()));
+        std::fs::write(
+            &wav_path,
+            make_sine_wav(sample_rate * 4, sample_rate * 3, 440.0, sample_rate),
+        )
+        .expect("write fixture");
+        let wav_str = wav_path.to_str().unwrap().to_string();
+
+        let json = serde_json::json!({
+            "video": {"width": 200, "height": 80, "fps": 30, "background": "#000000"},
+            "audio": [{"src": wav_str}],
+            "scenes": [
+                {"duration": 2.0, "children": []},
+                {"duration": 2.0, "children": [
+                    {"type": "waveform", "track": wav_str, "color": "#ffffff",
+                     "draw_style": "filled", "window": 0.5,
+                     "style": {"width": 200, "height": 80}}
+                ]}
+            ]
+        })
+        .to_string();
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(&json)).expect("load scenario");
+        crate::encode::audio_analysis::analyze_scenario_audio(&scenario);
+
+        let tasks = crate::encode::build_frame_tasks(&scenario);
+        let lit_at = |frame: usize| {
+            crate::encode::video::render_frame_task(&scenario.video, &scenario, &tasks[frame])
+                .expect("render")
+                .chunks_exact(4)
+                .filter(|p| p[0] > 40)
+                .count()
+        };
+
+        // t = 2.5 s: both clocks land in the sine, so this only proves the
+        // analysis is loaded and the component draws at all.
+        let audible = lit_at(75);
+        // t = 3.5 s: the scenario is in the silence, the scene is not. This is
+        // the frame that separates the two.
+        let silent = lit_at(105);
+        std::fs::remove_file(&wav_path).ok();
+
+        assert!(
+            audible > 300,
+            "sanity: with sound at that moment the waveform must be drawn, got {audible} lit pixels"
+        );
+        assert!(
+            silent * 3 < audible,
+            "the track is silent at 3.5 s of the scenario — a scene-local clock \
+             would read 1.5 s, still inside the sine, and draw a waveform for \
+             sound nobody hears. audible={audible} silent={silent}"
+        );
     }
 
     /// A track that cannot be decoded must be *reported*, not swallowed:
@@ -2435,6 +2510,7 @@ mod motion_blur_trail {
             (w as f32, h as f32),
             BuildAnimationCtx {
                 time,
+                scenario_time: time,
                 scene_duration,
                 fps: FPS,
             },
@@ -2447,6 +2523,7 @@ mod motion_blur_trail {
         let dispatcher = LegacyPaintDispatcher::for_scene(&built);
         let frame = PaintFrame {
             time,
+            scenario_time: time,
             frame_index: (time * FPS as f64) as u32,
             fps: FPS,
             video_width: w,
@@ -2855,7 +2932,8 @@ mod camera_focal_tests {
     ) -> Vec<u8> {
         let scene: Scene = serde_json::from_value(scene_json).expect("scene json");
         let children = crate::engine::render::deserialize_children(&scene);
-        render_frame_v2(&config(w, h), &scene, frame, 120, &children).expect("render")
+        let t = frame as f64 / 30.0;
+        render_frame_v2(&config(w, h), &scene, frame, t, 120, &children).expect("render")
     }
 
     /// Centroid (x, y) of pixels dominated by the given channel (0=r, 2=b).
@@ -3366,9 +3444,11 @@ mod world_view_regressions {
         // Frames 45 (t=1.5s) and 55 (t~1.833s) are both well past it.
         let (pre, post_a, post_b) = (5u32, 45u32, 55u32);
 
-        let render_full = |f: u32| render_scene_frame_scaled(config, scene, f, 60, 1.0).unwrap();
+        let render_full =
+            |f: u32| render_scene_frame_scaled(config, scene, f, f as f64 / 30.0, 60, 1.0).unwrap();
         let render_bg = |f: u32| render_scene_bg_scaled(config, scene, f, 1.0).unwrap();
-        let render_fg = |f: u32| render_scene_fg_scaled(config, scene, f, 60, 1.0).unwrap();
+        let render_fg =
+            |f: u32| render_scene_fg_scaled(config, scene, f, f as f64 / 30.0, 60, 1.0).unwrap();
 
         let pixel_paths: [(&str, &dyn Fn(u32) -> Vec<u8>); 3] = [
             ("render_scene_frame_scaled", &render_full),

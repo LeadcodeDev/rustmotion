@@ -46,6 +46,7 @@ fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
         (W as f32, H as f32),
         BuildAnimationCtx {
             time,
+            scenario_time: time,
             scene_duration: 2.0,
             fps: 30,
         },
@@ -58,6 +59,7 @@ fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,
+        scenario_time: time,
         frame_index: (time * 30.0) as u32,
         fps: 30,
         video_width: W,

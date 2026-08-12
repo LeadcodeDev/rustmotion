@@ -59,6 +59,7 @@ fn css_at(json: serde_json::Value, time: f64) -> CssStyle {
         CssStyle::default(),
         BuildAnimationCtx {
             time,
+            scenario_time: time,
             scene_duration: SCENE_DURATION,
             fps: 30,
         },

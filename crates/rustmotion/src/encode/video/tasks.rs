@@ -10,12 +10,28 @@ use crate::schema::{
 #[allow(dead_code)]
 pub enum FrameTask {
     Normal {
+        /// This frame's index in the *whole* schedule.
+        ///
+        /// The audio track is muxed on the scenario's timeline, so anything
+        /// reading the audio analysis needs this rather than the scene-local
+        /// counter beside it. Carried on the task rather than re-derived from
+        /// the scenario, which would be a second copy of the scheduler's
+        /// arithmetic that can drift from it.
+        global_frame: u32,
         view_idx: usize,
         scene_idx: usize,
         frame_in_scene: u32,
         scene_total_frames: u32,
     },
     SlideTransition {
+        /// This frame's index in the *whole* schedule.
+        ///
+        /// The audio track is muxed on the scenario's timeline, so anything
+        /// reading the audio analysis needs this rather than the scene-local
+        /// counter beside it. Carried on the task rather than re-derived from
+        /// the scenario, which would be a second copy of the scheduler's
+        /// arithmetic that can drift from it.
+        global_frame: u32,
         view_idx: usize,
         scene_a_idx: usize,
         scene_b_idx: usize,
@@ -28,11 +44,27 @@ pub enum FrameTask {
         easing: EasingType,
     },
     WorldFrame {
+        /// This frame's index in the *whole* schedule.
+        ///
+        /// The audio track is muxed on the scenario's timeline, so anything
+        /// reading the audio analysis needs this rather than the scene-local
+        /// counter beside it. Carried on the task rather than re-derived from
+        /// the scenario, which would be a second copy of the scheduler's
+        /// arithmetic that can drift from it.
+        global_frame: u32,
         view_idx: usize,
         frame_in_view: u32,
         view_total_frames: u32,
     },
     ViewTransition {
+        /// This frame's index in the *whole* schedule.
+        ///
+        /// The audio track is muxed on the scenario's timeline, so anything
+        /// reading the audio analysis needs this rather than the scene-local
+        /// counter beside it. Carried on the task rather than re-derived from
+        /// the scenario, which would be a second copy of the scheduler's
+        /// arithmetic that can drift from it.
+        global_frame: u32,
         view_a_idx: usize,
         view_b_idx: usize,
         frame_in_transition: u32,
@@ -84,11 +116,13 @@ pub fn render_frame_task_scaled(
 
     match task {
         FrameTask::Normal {
+            global_frame,
             view_idx,
             scene_idx,
             frame_in_scene,
             scene_total_frames,
         } => {
+            let scenario_time = *global_frame as f64 / config.fps as f64;
             let view = &scenario.views[*view_idx];
             let scene = &view.scenes[*scene_idx];
             let prev_bg = if *scene_idx > 0 {
@@ -101,6 +135,7 @@ pub fn render_frame_task_scaled(
                 config,
                 scene,
                 *frame_in_scene,
+                scenario_time,
                 *scene_total_frames,
                 scale_factor,
                 prev_bg,
@@ -117,6 +152,7 @@ pub fn render_frame_task_scaled(
             Ok(pixels)
         }
         FrameTask::SlideTransition {
+            global_frame,
             view_idx,
             scene_a_idx,
             scene_b_idx,
@@ -128,6 +164,7 @@ pub fn render_frame_task_scaled(
             transition_duration,
             easing,
         } => {
+            let scenario_time = *global_frame as f64 / config.fps as f64;
             let scenes = &scenario.views[*view_idx].scenes;
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
@@ -174,6 +211,7 @@ pub fn render_frame_task_scaled(
                     config,
                     &scenes[*scene_a_idx],
                     frame_a_idx,
+                    scenario_time,
                     *scene_a_total_frames,
                     scale_factor,
                 )?;
@@ -181,6 +219,7 @@ pub fn render_frame_task_scaled(
                     config,
                     &scenes[*scene_b_idx],
                     *frame_in_transition,
+                    scenario_time,
                     *scene_b_total_frames,
                     scale_factor,
                 )?;
@@ -213,12 +252,14 @@ pub fn render_frame_task_scaled(
                     config,
                     &scenes[*scene_a_idx],
                     frame_a_idx,
+                    scenario_time,
                     *scene_a_total_frames,
                 )?;
                 let b = render_scene_frame(
                     config,
                     &scenes[*scene_b_idx],
                     *frame_in_transition,
+                    scenario_time,
                     *scene_b_total_frames,
                 )?;
                 (a, b)
@@ -227,6 +268,7 @@ pub fn render_frame_task_scaled(
                     config,
                     &scenes[*scene_a_idx],
                     frame_a_idx,
+                    scenario_time,
                     *scene_a_total_frames,
                     scale_factor,
                 )?;
@@ -234,6 +276,7 @@ pub fn render_frame_task_scaled(
                     config,
                     &scenes[*scene_b_idx],
                     *frame_in_transition,
+                    scenario_time,
                     *scene_b_total_frames,
                     scale_factor,
                 )?;
@@ -262,10 +305,12 @@ pub fn render_frame_task_scaled(
             Ok(composited)
         }
         FrameTask::WorldFrame {
+            global_frame,
             view_idx,
             frame_in_view,
             view_total_frames: _,
         } => {
+            let scenario_time = *global_frame as f64 / config.fps as f64;
             use crate::engine::world::WorldTimeline;
             let view = &scenario.views[*view_idx];
             let timeline = WorldTimeline::build(view, config.fps, config.width, config.height);
@@ -274,6 +319,7 @@ pub fn render_frame_task_scaled(
                 view,
                 &timeline,
                 *frame_in_view,
+                scenario_time,
                 scale_factor,
             )?;
             // `apply_post_effects` runs for every other frame kind (Normal,
@@ -297,6 +343,7 @@ pub fn render_frame_task_scaled(
             Ok(pixels)
         }
         FrameTask::ViewTransition {
+            global_frame,
             view_a_idx,
             view_b_idx,
             frame_in_transition,
@@ -304,6 +351,7 @@ pub fn render_frame_task_scaled(
             transition_duration,
             easing: _,
         } => {
+            let scenario_time = *global_frame as f64 / config.fps as f64;
             let scaled_w = (config.width as f32 * scale_factor) as u32;
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
@@ -317,8 +365,10 @@ pub fn render_frame_task_scaled(
             let view_a = &scenario.views[*view_a_idx];
             let view_b = &scenario.views[*view_b_idx];
 
-            let frame_a = render_last_frame_of_view(config, view_a, fps, scale_factor)?;
-            let frame_b = render_first_frame_of_view(config, view_b, fps, scale_factor)?;
+            let frame_a =
+                render_last_frame_of_view(config, view_a, fps, scenario_time, scale_factor)?;
+            let frame_b =
+                render_first_frame_of_view(config, view_b, fps, scenario_time, scale_factor)?;
 
             let mut composited = apply_transition(
                 &frame_a,
@@ -395,6 +445,9 @@ fn render_last_frame_of_view(
     config: &VideoConfig,
     view: &ResolvedView,
     fps: u32,
+    // Where that last frame sits on the scenario's own timeline — the view
+    // transition that needs it is itself somewhere in the middle of a render.
+    scenario_time: f64,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     use crate::engine::render::render_scene_frame_scaled;
@@ -406,6 +459,7 @@ fn render_last_frame_of_view(
                     config,
                     last_scene,
                     scene_frames.saturating_sub(1),
+                    scenario_time,
                     scene_frames,
                     scale_factor,
                 )
@@ -427,6 +481,7 @@ fn render_last_frame_of_view(
                 view,
                 &timeline,
                 total_frames.saturating_sub(1),
+                scenario_time,
                 scale_factor,
             )
         }
@@ -437,6 +492,8 @@ fn render_first_frame_of_view(
     config: &VideoConfig,
     view: &ResolvedView,
     fps: u32,
+    // See `render_last_frame_of_view`.
+    scenario_time: f64,
     scale_factor: f32,
 ) -> Result<Vec<u8>> {
     use crate::engine::render::render_scene_frame_scaled;
@@ -444,7 +501,14 @@ fn render_first_frame_of_view(
         ViewType::Slide => {
             if let Some(first_scene) = view.scenes.first() {
                 let scene_frames = (first_scene.duration * fps as f64).round() as u32;
-                render_scene_frame_scaled(config, first_scene, 0, scene_frames, scale_factor)
+                render_scene_frame_scaled(
+                    config,
+                    first_scene,
+                    0,
+                    scenario_time,
+                    scene_frames,
+                    scale_factor,
+                )
             } else {
                 Ok(vec![
                     0u8;
@@ -462,6 +526,7 @@ fn render_first_frame_of_view(
                 view,
                 &timeline,
                 0,
+                scenario_time,
                 scale_factor,
             )
         }
@@ -478,6 +543,7 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
                 let transition_frames = (transition.duration * fps as f64).round() as u32;
                 for f in 0..transition_frames {
                     tasks.push(FrameTask::ViewTransition {
+                        global_frame: tasks.len() as u32,
                         view_a_idx: view_idx - 1,
                         view_b_idx: view_idx,
                         frame_in_transition: f,
@@ -588,6 +654,7 @@ fn build_slide_view_tasks(
 
         for f in normal_start..normal_end {
             tasks.push(FrameTask::Normal {
+                global_frame: tasks.len() as u32,
                 view_idx,
                 scene_idx: i,
                 frame_in_scene: f,
@@ -600,6 +667,7 @@ fn build_slide_view_tasks(
             let easing = transition.easing.clone();
             for f in 0..outgoing_transition_frames {
                 tasks.push(FrameTask::SlideTransition {
+                    global_frame: tasks.len() as u32,
                     view_idx,
                     scene_a_idx: i,
                     scene_b_idx: i + 1,
@@ -628,6 +696,7 @@ fn build_world_view_tasks(
     let total_frames = timeline.total_frames(fps);
     for f in 0..total_frames {
         tasks.push(FrameTask::WorldFrame {
+            global_frame: tasks.len() as u32,
             view_idx,
             frame_in_view: f,
             view_total_frames: total_frames,
@@ -751,8 +820,36 @@ pub fn plan_dirty(
 }
 
 /// Frame tasks for one slot, mirroring the full builder's output.
-pub(super) fn build_slot_frame_tasks(scenario: &Scenario, slot: &SegmentSlot) -> Vec<FrameTask> {
-    match slot {
+/// `start_frame` is where this slot begins in the full schedule.
+///
+/// The incremental encoder builds slots independently, so the position cannot
+/// come from the local `Vec`'s length the way it does in `build_frame_tasks` —
+/// each slot would restart at 0 and every task past the first scene would carry
+/// the wrong `global_frame`. Threaded in rather than re-derived here: summing
+/// the preceding slots would be a second copy of the scheduler's arithmetic,
+/// free to drift from it (`slot_tasks_reproduce_the_full_builder_exactly`
+/// exists precisely because that has happened before).
+impl FrameTask {
+    /// Overwrite this task's position in the full schedule.
+    ///
+    /// Used by the incremental path, which builds each slot in isolation and
+    /// only then knows where it starts.
+    fn set_global_frame(&mut self, frame: u32) {
+        match self {
+            FrameTask::Normal { global_frame, .. }
+            | FrameTask::SlideTransition { global_frame, .. }
+            | FrameTask::WorldFrame { global_frame, .. }
+            | FrameTask::ViewTransition { global_frame, .. } => *global_frame = frame,
+        }
+    }
+}
+
+pub(super) fn build_slot_frame_tasks(
+    scenario: &Scenario,
+    slot: &SegmentSlot,
+    start_frame: u32,
+) -> Vec<FrameTask> {
+    let mut tasks = match slot {
         SegmentSlot::Scene {
             view_idx,
             scene_idx,
@@ -765,6 +862,7 @@ pub(super) fn build_slot_frame_tasks(scenario: &Scenario, slot: &SegmentSlot) ->
                 let transition_frames = (transition.duration * fps as f64).round() as u32;
                 for f in 0..transition_frames {
                     tasks.push(FrameTask::ViewTransition {
+                        global_frame: tasks.len() as u32,
                         view_a_idx: view_idx - 1,
                         view_b_idx: *view_idx,
                         frame_in_transition: f,
@@ -776,7 +874,12 @@ pub(super) fn build_slot_frame_tasks(scenario: &Scenario, slot: &SegmentSlot) ->
             }
             tasks
         }
+    };
+    // The slot was numbered from its own zero; place it in the full schedule.
+    for (i, task) in tasks.iter_mut().enumerate() {
+        task.set_global_frame(start_frame + i as u32);
     }
+    tasks
 }
 
 /// Build frame tasks for a single scene (by index) within a slide view.
@@ -811,6 +914,7 @@ pub(super) fn build_scene_frame_tasks_in_view(
 
     for f in normal_start..normal_end {
         tasks.push(FrameTask::Normal {
+            global_frame: tasks.len() as u32,
             view_idx,
             scene_idx,
             frame_in_scene: f,
@@ -823,6 +927,7 @@ pub(super) fn build_scene_frame_tasks_in_view(
         let easing = transition.easing.clone();
         for f in 0..outgoing_transition_frames {
             tasks.push(FrameTask::SlideTransition {
+                global_frame: tasks.len() as u32,
                 view_idx,
                 scene_a_idx: scene_idx,
                 scene_b_idx: scene_idx + 1,
@@ -1274,9 +1379,14 @@ mod segment_tests {
         for with_vt in [false, true] {
             let s = scenario(&two_view_json("two", with_vt));
             let slots = segment_slots(&s).unwrap();
+            let mut next_frame = 0u32;
             let concatenated: Vec<String> = slots
                 .iter()
-                .flat_map(|slot| build_slot_frame_tasks(&s, slot))
+                .flat_map(|slot| {
+                    let tasks = build_slot_frame_tasks(&s, slot, next_frame);
+                    next_frame += tasks.len() as u32;
+                    tasks
+                })
                 .map(|t| format!("{t:?}"))
                 .collect();
             let full: Vec<String> = build_frame_tasks(&s)

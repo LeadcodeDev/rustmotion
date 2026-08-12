@@ -386,6 +386,7 @@ mod tests {
     fn test_ctx() -> PaintCtx {
         PaintCtx {
             time: 1.0,
+            scenario_time: 1.0,
             scene_duration: 2.0,
             frame_index: 30,
             fps: 30,

@@ -14,7 +14,13 @@ use crate::engine::layout_pass::BoxLayout;
 /// Frame-level info passed into every paint call.
 #[derive(Debug, Clone, Copy)]
 pub struct PaintCtx {
+    /// Seconds since this *scene* started. What animation progress, reveals
+    /// and every timed effect are expressed in.
     pub time: f64,
+    /// Seconds since the start of the scenario (of the view, in a `world`
+    /// view). Only the audio-reactive painters need it — the audio analysis is
+    /// indexed on that timeline, not on each scene's own.
+    pub scenario_time: f64,
     pub scene_duration: f64,
     pub frame_index: u32,
     pub fps: u32,
