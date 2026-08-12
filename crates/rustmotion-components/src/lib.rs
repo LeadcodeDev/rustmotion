@@ -186,7 +186,7 @@ impl<'de> Deserialize<'de> for PositionMode {
 /// frame: over a thousand times on a 1200-frame render, drowning out anything
 /// else on stderr. Keyed by the value rather than a plain `Once` so a scenario
 /// with several distinct bad values still hears about each of them.
-fn warn_once_for(value: &str) -> bool {
+pub(crate) fn warn_once_for(value: &str) -> bool {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
     static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
