@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use skia_safe::Path as SkiaPath;
 
 use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig, SpringConfig};
 use super::style::{FontWeight, TextAlign, VerticalAlign};
@@ -98,6 +99,12 @@ pub enum AnimationEffect {
     /// Temporal trail effect: paints copies of the component at prior times
     /// with decaying opacity, creating a persistence-of-vision ghost trail.
     Trail(TrailConfig),
+    /// Move the component along an SVG path, and — when `orient` is set —
+    /// rotate it to face the path's tangent direction. See
+    /// [`MotionPathConfig`]'s doc comment for the path syntax, the
+    /// coordinate space path points are interpreted in, and how degenerate
+    /// paths (empty, single-point, zero-length) are handled.
+    MotionPath(MotionPathConfig),
 }
 
 impl AnimationEffect {
@@ -120,6 +127,7 @@ impl AnimationEffect {
             CharScaleIn(c) | CharFadeIn(c) | CharWave(c) | CharBounce(c) | CharRotateIn(c)
             | CharSlideUp(c) | CharBlurIn(c) => c.delay += by,
             Keyframes(c) => c.delay += by,
+            MotionPath(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }
@@ -629,6 +637,123 @@ pub struct WiggleConfig {
     pub mode: Option<String>,
 }
 
+// --- Motion Path Config ---
+
+/// Configuration for the `motion_path` animation effect: moves — and,
+/// optionally, orients — a component along an SVG path.
+///
+/// # Path syntax
+/// `path` is the SVG path `d`-attribute mini-language (`M`/`L`/`H`/`V`/`C`/
+/// `S`/`Q`/`T`/`A`/`Z`, absolute or relative) — the exact syntax `shape`'s
+/// `ShapeType::Path { data }` already accepts and parses with
+/// `skia_safe::Path::from_svg` (`engine/renderer/shapes.rs`). This effect
+/// reuses that same call rather than inventing a second path grammar, and
+/// measures the parsed path with `skia_safe::PathMeasure` — the exact
+/// primitive `svg.rs` (dash-reveal of an SVG document's paths) and
+/// `arrow.rs` (dash-reveal of a bezier curve, plus its own tangent-based
+/// arrowhead orientation) already use for `draw_progress`. `orient`'s
+/// tangent-to-degrees math is the same `atan2(tangent.y, tangent.x)` idiom
+/// `arrow.rs::draw_arrowhead` already computes for its arrowhead.
+///
+/// # Coordinate space
+/// Path coordinates are pixel **deltas relative to wherever CSS layout
+/// placed the component absent this effect** — the same convention `orbit`
+/// already uses for its circular motion (see `OrbitConfig`/`apply_orbits`),
+/// and the only one implementable here: the resolver this effect plugs into
+/// (`engine::animator::resolve_props_for_effects`) receives only
+/// `(effects, time, scene_duration)` — never the component's resolved
+/// layout box or the viewport, which are computed downstream in
+/// `paint_pass.rs`/`box_builder.rs`. So `"M0,0 L200,0"` slides the
+/// component 200px right of its laid-out position (and back, if the effect
+/// loops); `"M100,0 L300,0"` starts the component already displaced 100px
+/// right of its laid-out position — a direct, intentional consequence of
+/// treating the whole path as a translate delta, not a bug to normalize
+/// away.
+///
+/// # Degenerate paths
+/// - **Empty or syntactically invalid** `path` (e.g. `""`, garbage text) is
+///   rejected at JSON-parse time by [`deserialize_motion_path_data`] — a
+///   named error, never a silent no-op, mirroring
+///   [`deserialize_motion_property`]'s treatment of an unrecognised
+///   `wiggle`/`keyframes` property name.
+/// - **Zero measured length** (a single point, e.g. `"M50,50"`, or every
+///   segment collapsing onto one point) is syntactically valid SVG and is
+///   *not* rejected at parse time — it has a well-defined render-time
+///   meaning: the component holds at that single point for the whole
+///   timeline, and `orient` (if set) contributes no rotation (a tangent is
+///   undefined at zero length) instead of propagating a NaN. See
+///   `engine::animator::motion_path_sample`. `validate_schema.rs` flags it
+///   as a (non-blocking) warning, since it is very likely — but not
+///   certainly — an authoring mistake (e.g. duplicated coordinates).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MotionPathConfig {
+    /// SVG path data (the `d`-attribute mini-language). Must contain at
+    /// least one drawable point — an empty or unparsable path is rejected
+    /// at deserialize time (see [`deserialize_motion_path_data`]).
+    #[serde(deserialize_with = "deserialize_motion_path_data")]
+    pub path: String,
+    /// Delay before travel starts (seconds). Before this, the component
+    /// sits at the path's start point (progress 0) — the same "hold at the
+    /// entrance state" behaviour every other preset/effect with a `delay`
+    /// already has.
+    #[serde(default)]
+    pub delay: f64,
+    /// Time to travel the whole path once (seconds).
+    #[serde(default = "default_animation_duration")]
+    pub duration: f64,
+    /// Loop the traversal continuously instead of holding at the path's end
+    /// once `delay + duration` has elapsed.
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+    /// Rotate the component to face the path's tangent direction (default
+    /// false — position without orientation, e.g. for content that should
+    /// stay upright while it moves).
+    #[serde(default)]
+    pub orient: bool,
+    /// Degrees added on top of the tangent-derived rotation, for assets
+    /// whose drawn "forward" direction is not +X (default 0.0). E.g. an
+    /// icon drawn pointing up needs `orient_offset: 90`.
+    #[serde(default)]
+    pub orient_offset: f64,
+    /// Easing applied to progress along the path (default linear — constant
+    /// speed along the curve, the expected default for a hand-authored
+    /// trajectory; `ease_in`/`ease_out` bunches travel toward one end).
+    #[serde(default)]
+    pub easing: EasingType,
+}
+
+/// Reject `motion_path.path` values that cannot produce at least one
+/// drawable point — the JSON-authoring analogue of "empty path" from the
+/// workstream brief. Unlike [`deserialize_motion_property`], there is no
+/// finite alphabet to suggest a correction from: any syntactically valid
+/// (even visually nonsensical) SVG path `d` string is accepted, exactly as
+/// `shape`'s `ShapeType::Path { data }` already accepts it via the same
+/// `skia_safe::Path::from_svg` call — this does not invent a second path
+/// grammar.
+///
+/// A path that parses but has zero measured *length* (e.g. `"M50,50"`) is
+/// deliberately NOT rejected here — see `MotionPathConfig`'s "Degenerate
+/// paths" doc section for why, and where that case is instead surfaced (a
+/// `validate_schema.rs` warning, not a parse-time error).
+fn deserialize_motion_path_data<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    match SkiaPath::from_svg(&s) {
+        Some(path) if path.count_points() > 0 => Ok(s),
+        Some(_) => Err(serde::de::Error::custom(format!(
+            "motion_path.path '{s}' has no drawable point (an empty path has nothing to travel \
+             to) — provide at least one command, e.g. \"M0,0 L100,0\""
+        ))),
+        None => Err(serde::de::Error::custom(format!(
+            "motion_path.path '{s}' is not valid SVG path data (the same 'd'-attribute \
+             mini-language shape's type: \"path\" accepts), e.g. \"M0,0 C50,-100 150,-100 200,0\""
+        ))),
+    }
+}
+
 // --- Supporting types ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -977,5 +1102,116 @@ mod motion_property_tests {
         });
         let effect: AnimationEffect = serde_json::from_value(json).unwrap();
         assert!(matches!(effect, AnimationEffect::Keyframes(_)));
+    }
+}
+
+#[cfg(test)]
+mod motion_path_schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn motion_path_deserializes_with_known_fields() {
+        let json = json!({
+            "name": "motion_path",
+            "path": "M0,0 L100,0 L100,100",
+            "delay": 0.2,
+            "duration": 1.5,
+            "loop": true,
+            "orient": true,
+            "orient_offset": 90.0,
+            "easing": "ease_out"
+        });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::MotionPath(cfg) => {
+                assert_eq!(cfg.path, "M0,0 L100,0 L100,100");
+                assert_eq!(cfg.delay, 0.2);
+                assert_eq!(cfg.duration, 1.5);
+                assert!(cfg.repeat);
+                assert!(cfg.orient);
+                assert_eq!(cfg.orient_offset, 90.0);
+                assert_eq!(cfg.easing, EasingType::EaseOut);
+            }
+            other => panic!("expected MotionPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn motion_path_defaults_match_documented_values() {
+        let json = json!({ "name": "motion_path", "path": "M0,0 L10,0" });
+        let effect: AnimationEffect = serde_json::from_value(json).unwrap();
+        match effect {
+            AnimationEffect::MotionPath(cfg) => {
+                assert_eq!(cfg.delay, 0.0);
+                assert_eq!(cfg.duration, default_animation_duration());
+                assert!(!cfg.repeat);
+                assert!(!cfg.orient);
+                assert_eq!(cfg.orient_offset, 0.0);
+                assert_eq!(cfg.easing, EasingType::Linear);
+            }
+            other => panic!("expected MotionPath, got {other:?}"),
+        }
+    }
+
+    // ---- brief's "empty path" degenerate case: rejected at parse time,
+    // not left to silently produce a no-op or a NaN downstream. ----
+
+    #[test]
+    fn motion_path_rejects_an_empty_path_string() {
+        let json = json!({ "name": "motion_path", "path": "" });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("an empty motion_path.path must be rejected, not silently accepted");
+        assert!(err.to_string().contains("no drawable point"), "got: {err}");
+    }
+
+    #[test]
+    fn motion_path_rejects_unparsable_svg_path_data() {
+        let json = json!({ "name": "motion_path", "path": "this is not svg path data !!" });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("garbage path data must be rejected, not silently accepted");
+        assert!(
+            err.to_string().contains("not valid SVG path data"),
+            "got: {err}"
+        );
+    }
+
+    // A single-point ("zero measured length") path is syntactically valid
+    // and must NOT be rejected at parse time — see MotionPathConfig's
+    // "Degenerate paths" doc section; the render-time-defined behaviour is
+    // covered in `engine::animator`'s tests, and the advisory warning in
+    // `validate_schema.rs`'s.
+    #[test]
+    fn motion_path_accepts_a_single_point_path() {
+        let json = json!({ "name": "motion_path", "path": "M50,50" });
+        let effect: AnimationEffect = serde_json::from_value(json)
+            .expect("a syntactically valid single-point path must be accepted");
+        assert!(matches!(effect, AnimationEffect::MotionPath(_)));
+    }
+
+    #[test]
+    fn motion_path_rejects_unknown_fields() {
+        let json = json!({ "name": "motion_path", "path": "M0,0 L10,0", "detla": 0.2 });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("a typo'd field on motion_path must be rejected, not silently ignored");
+        assert!(err.to_string().contains("detla"), "got: {err}");
+    }
+
+    #[test]
+    fn motion_path_shift_delay_shifts_the_configs_own_delay() {
+        let mut effect = AnimationEffect::MotionPath(MotionPathConfig {
+            path: "M0,0 L10,0".to_string(),
+            delay: 0.5,
+            duration: 1.0,
+            repeat: false,
+            orient: false,
+            orient_offset: 0.0,
+            easing: EasingType::Linear,
+        });
+        effect.shift_delay(0.25);
+        match effect {
+            AnimationEffect::MotionPath(cfg) => assert!((cfg.delay - 0.75).abs() < 1e-9),
+            other => panic!("expected MotionPath, got {other:?}"),
+        }
     }
 }

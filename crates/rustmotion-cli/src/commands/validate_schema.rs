@@ -5,7 +5,10 @@ use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
     Background, BackgroundLayer, BorderRadius, Color, CssStyle, Display as CssDisplay,
 };
-use rustmotion::schema::{AnimationEffect, CharAnimationTiming, ResolvedScenario, SpringConfig};
+use rustmotion::engine::animator::{motion_path_length, MOTION_PATH_MIN_LENGTH};
+use rustmotion::schema::{
+    AnimationEffect, CharAnimationTiming, MotionPathConfig, ResolvedScenario, SpringConfig,
+};
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
@@ -180,6 +183,10 @@ fn validate_children(
                             check_spring_config(spring, &p, errors);
                         }
                     }
+                }
+
+                if let AnimationEffect::MotionPath(cfg) = effect {
+                    check_motion_path_config(cfg, &p, errors, warnings);
                 }
             }
         }
@@ -688,6 +695,59 @@ fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<Strin
     }
 }
 
+/// Same "reject before it reaches the solver" posture as `check_spring_config`
+/// (constat #6), applied to `motion_path`.
+///
+/// `duration <= 0` would make `engine::animator::motion_path_progress`
+/// divide by (near-)zero — the solver already floors that defensively via
+/// `safe_div` (belt and suspenders, the same pattern `spring_value` uses for
+/// `mass`/`stiffness`), so this is an actionable author-facing error, not
+/// the only thing standing between a bad config and a degenerate (if still
+/// finite) render.
+///
+/// The path's own syntax/emptiness is already a hard parse-time error
+/// (`schema/video.rs::deserialize_motion_path_data` — a scenario carrying
+/// one would have failed to deserialize before ever reaching here). What
+/// *can* still reach here is a syntactically valid but geometrically
+/// degenerate path — (near-)zero measured length, e.g. a single point or
+/// every segment collapsing onto one — which is well-defined at render time
+/// (the component holds still, see `motion_path_sample`'s doc comment) but
+/// is very likely a typo (duplicated/near-identical coordinates) rather
+/// than an intentional "don't move" effect — especially combined with
+/// `orient: true`, where the tangent is undefined and orientation silently
+/// does nothing. Advisory only (`warnings`, not `errors`): nothing here is
+/// unsound to render, unlike `duration <= 0`.
+fn check_motion_path_config(
+    cfg: &MotionPathConfig,
+    path: &str,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    if cfg.duration <= 0.0 {
+        errors.push(format!(
+            "{path}: motion_path.duration must be > 0 (got {}) — a zero or negative duration \
+             cannot be mapped to a point along the path",
+            cfg.duration
+        ));
+    }
+    if let Some(length) = motion_path_length(&cfg.path) {
+        if length <= MOTION_PATH_MIN_LENGTH {
+            let orient_note = if cfg.orient {
+                ", and `orient: true` will have no effect (a tangent is undefined at zero length)"
+            } else {
+                ""
+            };
+            warnings.push(format!(
+                "{path}: motion_path.path '{}' has (near-)zero measured length (a single \
+                 point, or every segment collapses onto one) — the component will hold still \
+                 instead of travelling{orient_note}. If this is intentional, ignore this \
+                 warning; otherwise check for duplicated/typo'd coordinates.",
+                cfg.path
+            ));
+        }
+    }
+}
+
 /// The `time_scale` declared on a container component, if any.
 fn container_time_scale(component: &Component) -> Option<f64> {
     match component {
@@ -771,6 +831,18 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
                 None
             } else {
                 Some((k.delay, k.duration))
+            }
+        }
+
+        // A non-looping `motion_path` settles onto the path's end at
+        // `delay + duration`, exactly like `Keyframes`/`TiltIn` above —
+        // budget it the same way. A looping one is continuous by nature
+        // (like `Orbit`), so it has no completion budget.
+        AnimationEffect::MotionPath(c) => {
+            if c.repeat {
+                None
+            } else {
+                Some((c.delay, c.duration))
             }
         }
 
@@ -1430,6 +1502,152 @@ mod transition_smoothing_tests {
         assert!(
             err.to_string().contains("background-color"),
             "expected the parse error to name the offending property: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod motion_path_validation_tests {
+    use super::*;
+
+    fn motion_path_child(json_animation: serde_json::Value) -> ChildComponent {
+        serde_json::from_value(serde_json::json!({
+            "type": "shape",
+            "shape": "rect",
+            "style": { "animation": [json_animation] }
+        }))
+        .expect("valid component JSON")
+    }
+
+    #[test]
+    fn zero_or_negative_duration_is_an_error() {
+        for duration in [0.0, -1.0] {
+            let child = motion_path_child(serde_json::json!({
+                "name": "motion_path",
+                "path": "M0,0 L100,0",
+                "duration": duration
+            }));
+            let mut errors = Vec::new();
+            let mut warnings = Vec::new();
+            validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains("motion_path.duration must be > 0")),
+                "duration={duration}: missing error, got errors={errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_normal_traveling_path_has_no_errors_or_warnings_about_itself() {
+        let child = motion_path_child(serde_json::json!({
+            "name": "motion_path",
+            "path": "M0,0 L100,0",
+            "duration": 0.6
+        }));
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().all(|w| !w.contains("motion_path")),
+            "unexpected motion_path warning on a normal path: {warnings:?}"
+        );
+    }
+
+    // ---- brief's "single point" / "zero length" degenerate cases: legal at
+    // parse time, but advisory-flagged here since they are very likely a
+    // typo (constat: this mirrors check_spring_config's posture, but as a
+    // warning rather than an error — nothing here is unsound to render). ----
+
+    #[test]
+    fn a_single_point_path_is_a_warning_not_an_error() {
+        let child = motion_path_child(serde_json::json!({
+            "name": "motion_path",
+            "path": "M50,50",
+            "duration": 0.6
+        }));
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            errors.iter().all(|e| !e.contains("motion_path")),
+            "a single-point path must not be a hard error: {errors:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("motion_path") && w.contains("measured length")),
+            "missing zero-length warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_zero_length_path_combined_with_orient_names_that_orient_does_nothing() {
+        let child = motion_path_child(serde_json::json!({
+            "name": "motion_path",
+            "path": "M10,10 L10,10",
+            "duration": 0.6,
+            "orient": true
+        }));
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("motion_path") && w.contains("orient")),
+            "expected the warning to call out orient:true doing nothing here: {warnings:?}"
+        );
+    }
+
+    // ---- entrance-budget completion check now covers motion_path too ----
+
+    #[test]
+    fn a_non_looping_motion_path_finishing_after_the_scene_is_an_error() {
+        let child = motion_path_child(serde_json::json!({
+            "name": "motion_path",
+            "path": "M0,0 L100,0",
+            "delay": 3.5,
+            "duration": 1.0
+        }));
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(
+            &[child],
+            "test",
+            /*scene_duration=*/ 2.0,
+            &mut errors,
+            &mut warnings,
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("animation finishes at")),
+            "expected the entrance-budget error for delay 3.5 + duration 1.0 > scene 2.0: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_looping_motion_path_has_no_completion_budget() {
+        let child = motion_path_child(serde_json::json!({
+            "name": "motion_path",
+            "path": "M0,0 L100,0",
+            "delay": 3.5,
+            "duration": 1.0,
+            "loop": true
+        }));
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(
+            &[child],
+            "test",
+            /*scene_duration=*/ 2.0,
+            &mut errors,
+            &mut warnings,
+        );
+        assert!(
+            errors.iter().all(|e| !e.contains("animation finishes at")),
+            "a looping motion_path must not be budget-checked, like orbit/wiggle: {errors:?}"
         );
     }
 }
