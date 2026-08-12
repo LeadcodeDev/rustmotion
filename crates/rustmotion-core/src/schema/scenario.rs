@@ -593,11 +593,27 @@ pub struct SceneLayout {
     pub padding: Option<f32>,
 }
 
+/// The corner a `corner_reveal` is anchored to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionCorner {
+    /// Measured default: the reference piece grows its reveal from here, with
+    /// the right and top edges pinned and the left and bottom edges travelling.
+    #[default]
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Transition {
     #[serde(rename = "type")]
     pub transition_type: TransitionType,
+    /// Which corner a `corner_reveal` grows from. Ignored by every other type.
+    #[serde(default)]
+    pub corner: TransitionCorner,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -641,6 +657,7 @@ pub enum TransitionType {
     Iris,
     Slide,
     Dissolve,
+    CornerReveal,
     CameraPan,
     None,
 }

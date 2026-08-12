@@ -1,8 +1,8 @@
 use crate::engine::transition::{apply_transition, camera_pan_transition};
 use crate::error::{Result, RustmotionError};
 use crate::schema::{
-    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType, VideoConfig,
-    ViewType,
+    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionCorner,
+    TransitionType, VideoConfig, ViewType,
 };
 
 /// Description of what to render for a specific frame
@@ -40,6 +40,8 @@ pub enum FrameTask {
         scene_a_total_frames: u32,
         scene_b_total_frames: u32,
         transition_type: TransitionType,
+        /// Which corner a `corner_reveal` grows from; inert for every other type.
+        corner: TransitionCorner,
         transition_duration: f64,
         easing: EasingType,
     },
@@ -69,6 +71,8 @@ pub enum FrameTask {
         view_b_idx: usize,
         frame_in_transition: u32,
         transition_type: TransitionType,
+        /// Which corner a `corner_reveal` grows from; inert for every other type.
+        corner: TransitionCorner,
         transition_duration: f64,
         easing: EasingType,
     },
@@ -161,6 +165,7 @@ pub fn render_frame_task_scaled(
             scene_a_total_frames,
             scene_b_total_frames,
             transition_type,
+            corner,
             transition_duration,
             easing,
         } => {
@@ -294,6 +299,7 @@ pub fn render_frame_task_scaled(
                 scaled_h,
                 progress,
                 transition_type,
+                *corner,
             );
             apply_post_effects(
                 &mut composited,
@@ -348,6 +354,7 @@ pub fn render_frame_task_scaled(
             view_b_idx,
             frame_in_transition,
             transition_type,
+            corner,
             transition_duration,
             easing: _,
         } => {
@@ -377,6 +384,7 @@ pub fn render_frame_task_scaled(
                 scaled_h,
                 progress,
                 transition_type,
+                *corner,
             );
             // By symmetry with `SlideTransition` (which applies scene_b's
             // effects to the blended result, "the transition is the entry
@@ -548,6 +556,7 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
                         view_b_idx: view_idx,
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
+                        corner: transition.corner,
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -676,6 +685,7 @@ fn build_slide_view_tasks(
                     scene_a_total_frames: scene_frames,
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
+                    corner: transition.corner,
                     transition_duration: outgoing_effective_duration,
                     easing: easing.clone(),
                 });
@@ -867,6 +877,7 @@ pub(super) fn build_slot_frame_tasks(
                         view_b_idx: *view_idx,
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
+                        corner: transition.corner,
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -936,6 +947,7 @@ pub(super) fn build_scene_frame_tasks_in_view(
                 scene_a_total_frames: scene_frames,
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
+                corner: transition.corner,
                 transition_duration: outgoing_effective_duration,
                 easing: easing.clone(),
             });

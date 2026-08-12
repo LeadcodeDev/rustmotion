@@ -1,5 +1,5 @@
 use crate::engine::animator::ease;
-use crate::schema::{EasingType, PanBackground, TransitionType};
+use crate::schema::{EasingType, PanBackground, TransitionCorner, TransitionType};
 use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
 
 /// Composite two RGBA frames during a transition.
@@ -11,6 +11,7 @@ pub fn apply_transition(
     height: u32,
     progress: f64,
     transition_type: &TransitionType,
+    corner: TransitionCorner,
 ) -> Vec<u8> {
     let progress = progress.clamp(0.0, 1.0) as f32;
 
@@ -35,6 +36,9 @@ pub fn apply_transition(
         TransitionType::Iris => iris_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Slide => slide_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Dissolve => dissolve_transition(frame_a, frame_b, width, height, progress),
+        TransitionType::CornerReveal => {
+            corner_reveal(frame_a, frame_b, width, height, progress, corner)
+        }
         TransitionType::CameraPan => blend_fade(frame_a, frame_b, progress),
         TransitionType::None => {
             if progress < 0.5 {
@@ -43,6 +47,61 @@ pub fn apply_transition(
                 frame_b.to_vec()
             }
         }
+    }
+}
+
+/// Reveal the incoming frame through a rectangle anchored at one corner.
+///
+/// Measured on a reference piece, over 15 frames (0.5 s): the right and top
+/// edges stay pinned to the frame while the left edge travels 2160 -> 0 and the
+/// bottom edge 1480 -> 2152. So it is not a wipe — `wipe_*` moves one
+/// full-width band — and not an `iris`, which is a circle. Both edges move at
+/// once, and the incoming scene sits still behind the growing window rather
+/// than sliding in: what arrives is *uncovered*, not pushed.
+fn corner_reveal(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    corner: TransitionCorner,
+) -> Vec<u8> {
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_a = match frame_to_image(frame_a, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_b = match frame_to_image(frame_b, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+
+    let (w, h) = (width as f32, height as f32);
+    let rect = corner_rect(corner, w, h, progress);
+
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_a, (0.0, 0.0), None);
+    canvas.save();
+    canvas.clip_rect(rect, skia_safe::ClipOp::Intersect, false);
+    canvas.draw_image(&img_b, (0.0, 0.0), None);
+    canvas.restore();
+
+    surface_to_pixels(surface, width, height)
+}
+
+/// The revealed rectangle at `progress`, anchored so that two edges stay on the
+/// frame and two travel.
+fn corner_rect(corner: TransitionCorner, w: f32, h: f32, progress: f32) -> skia_safe::Rect {
+    let p = progress.clamp(0.0, 1.0);
+    let (rw, rh) = (w * p, h * p);
+    match corner {
+        TransitionCorner::TopRight => skia_safe::Rect::from_xywh(w - rw, 0.0, rw, rh),
+        TransitionCorner::TopLeft => skia_safe::Rect::from_xywh(0.0, 0.0, rw, rh),
+        TransitionCorner::BottomRight => skia_safe::Rect::from_xywh(w - rw, h - rh, rw, rh),
+        TransitionCorner::BottomLeft => skia_safe::Rect::from_xywh(0.0, h - rh, rw, rh),
     }
 }
 
@@ -715,5 +774,75 @@ mod camera_pan_tests {
             out, bg_b,
             "progress=1.0 must land exactly on bg_b under Travel too"
         );
+    }
+}
+
+#[cfg(test)]
+mod corner_reveal_tests {
+    use super::*;
+
+    /// Two edges stay on the frame, two travel. Measured on the reference
+    /// piece: the right and top edges never move while the left runs
+    /// 2160 -> 0 and the bottom 1480 -> 2152, over 15 frames.
+    #[test]
+    fn the_anchored_edges_never_move() {
+        for p in [0.05, 0.3, 0.5, 0.8, 1.0] {
+            let r = corner_rect(TransitionCorner::TopRight, 1920.0, 1080.0, p);
+            assert!((r.right - 1920.0).abs() < 1e-3, "right edge moved at {p}");
+            assert!(r.top.abs() < 1e-3, "top edge moved at {p}");
+        }
+    }
+
+    /// …and the travelling edges do move, monotonically, in the direction the
+    /// corner names.
+    #[test]
+    fn the_travelling_edges_open_from_the_corner() {
+        let at = |p| corner_rect(TransitionCorner::TopRight, 1920.0, 1080.0, p);
+        let (a, b, c) = (at(0.2), at(0.5), at(0.9));
+        assert!(
+            a.left > b.left && b.left > c.left,
+            "left edge must travel left"
+        );
+        assert!(
+            a.bottom < b.bottom && b.bottom < c.bottom,
+            "bottom must travel down"
+        );
+    }
+
+    /// The ends are the whole point: nothing revealed at 0, everything at 1.
+    #[test]
+    fn it_starts_empty_and_ends_full() {
+        let empty = corner_rect(TransitionCorner::TopRight, 1920.0, 1080.0, 0.0);
+        assert_eq!((empty.width(), empty.height()), (0.0, 0.0));
+        let full = corner_rect(TransitionCorner::TopRight, 1920.0, 1080.0, 1.0);
+        assert_eq!(
+            (full.left, full.top, full.right, full.bottom),
+            (0.0, 0.0, 1920.0, 1080.0)
+        );
+    }
+
+    /// Each corner anchors its own two edges — otherwise `corner` is decoration.
+    #[test]
+    fn every_corner_anchors_its_own_edges() {
+        let (w, h, p) = (1920.0f32, 1080.0f32, 0.4);
+        let tl = corner_rect(TransitionCorner::TopLeft, w, h, p);
+        assert!(tl.left.abs() < 1e-3 && tl.top.abs() < 1e-3);
+        let br = corner_rect(TransitionCorner::BottomRight, w, h, p);
+        assert!((br.right - w).abs() < 1e-3 && (br.bottom - h).abs() < 1e-3);
+        let bl = corner_rect(TransitionCorner::BottomLeft, w, h, p);
+        assert!(bl.left.abs() < 1e-3 && (bl.bottom - h).abs() < 1e-3);
+    }
+
+    /// Progress outside 0..1 must clamp, not invert the rectangle: a negative
+    /// width would make the clip empty and the transition would look like a cut.
+    #[test]
+    fn out_of_range_progress_clamps() {
+        for p in [-0.5, 1.5] {
+            let r = corner_rect(TransitionCorner::TopRight, 1920.0, 1080.0, p);
+            assert!(
+                r.width() >= 0.0 && r.height() >= 0.0,
+                "inverted rect at {p}"
+            );
+        }
     }
 }
