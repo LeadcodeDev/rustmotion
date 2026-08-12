@@ -2,7 +2,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint};
 
 use crate::schema::{
     AnimatedBackground, BackgroundPreset, ConcentricCirclesConfig, GradientShiftConfig,
-    GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, ScrollDirection,
+    GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, PixelDensityRamp,
+    PixelGridConfig, PixelGridMotion, ScrollDirection,
 };
 use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex};
 
@@ -45,6 +46,9 @@ pub(super) fn draw_animated_background(
             draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height)
         }
         BackgroundPreset::Halo(cfg) => draw_bg_halo(canvas, cfg, bg.speed, time, width, height),
+        BackgroundPreset::PixelGrid(cfg) => {
+            draw_bg_pixel_grid(canvas, cfg, bg.speed, time, width, height)
+        }
         BackgroundPreset::Heropattern(cfg) => draw_bg_heropattern(canvas, cfg, time, width, height),
     }
 
@@ -386,6 +390,132 @@ fn draw_bg_grid_dots(
     }
 }
 
+/// Deterministic 0..1 value for a cell.
+///
+/// A hash of the coordinates, not a random number generator: the same cell
+/// must resolve the same way on every frame, or the field boils instead of
+/// holding still. Same reason `seed` is part of the input rather than process
+/// state — two renders of one scenario have to match.
+fn cell_hash(col: i32, row: i32, seed: u32, salt: u32) -> f32 {
+    let mut h = seed
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add((col as u32).wrapping_mul(0x85EB_CA6B))
+        .wrapping_add((row as u32).wrapping_mul(0xC2B2_AE35))
+        .wrapping_add(salt.wrapping_mul(0x27D4_EB2F));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2545_F491);
+    h ^= h >> 13;
+    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
+}
+
+/// How much of the field is filled at this point, before the cell's own draw.
+fn ramp_at(ramp: PixelDensityRamp, x: f32, y: f32, width: f32, height: f32) -> f32 {
+    let fx = if width > 0.0 {
+        (x / width).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let fy = if height > 0.0 {
+        (y / height).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    match ramp {
+        PixelDensityRamp::None => 1.0,
+        PixelDensityRamp::Right => fx,
+        PixelDensityRamp::Left => 1.0 - fx,
+        PixelDensityRamp::Bottom => fy,
+        PixelDensityRamp::Top => 1.0 - fy,
+        // Full at the centre, nothing at the corners.
+        PixelDensityRamp::Radial => {
+            let (dx, dy) = (fx - 0.5, fy - 0.5);
+            (1.0 - (dx * dx + dy * dy).sqrt() * 2.0).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// A lattice of square cells: the pixel-tile texture.
+///
+/// Occupancy is decided per cell by a hash against `density * ramp`, so the
+/// pattern is stable across frames and reproducible across renders. Colours
+/// alternate by `(col + row)`, which turns two colours at `density: 1.0` into
+/// a checkerboard and one colour below 1.0 into a scattered tile field.
+fn draw_bg_pixel_grid(
+    canvas: &Canvas,
+    cfg: &PixelGridConfig,
+    speed: f32,
+    time: f32,
+    width: f32,
+    height: f32,
+) {
+    if cfg.colors.is_empty() {
+        return;
+    }
+    let size = cfg.size.max(1.0);
+    // Cells must not overlap: a spacing under `size` would draw a solid sheet
+    // and silently lose the lattice the preset exists for.
+    let spacing = cfg.spacing.max(size);
+    let density = cfg.density.clamp(0.0, 1.0);
+    let t = time * speed.max(0.0);
+
+    let mut paints: Vec<_> = cfg
+        .colors
+        .iter()
+        .map(|c| {
+            let mut p = paint_from_hex(c);
+            p.set_anti_alias(cfg.radius > 0.0);
+            p
+        })
+        .collect();
+
+    let cols = (width / spacing).ceil() as i32 + 1;
+    let rows = (height / spacing).ceil() as i32 + 1;
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let x = col as f32 * spacing;
+            let y = row as f32 * spacing;
+
+            let mut threshold = density * ramp_at(cfg.density_ramp, x, y, width, height);
+            if cfg.motion == PixelGridMotion::Sweep {
+                // A band of extra density crossing the field, wrapped so it
+                // never runs off and leaves the texture flat.
+                let head = (t * 0.25).fract();
+                let d = ((x / width.max(1.0)) - head).abs().min(1.0);
+                threshold += (0.35 - d).max(0.0);
+            }
+
+            if cell_hash(col, row, cfg.seed, 0) >= threshold.clamp(0.0, 1.0) {
+                continue;
+            }
+
+            let idx = ((col + row).rem_euclid(paints.len() as i32)) as usize;
+            let paint = &mut paints[idx];
+
+            if cfg.motion == PixelGridMotion::Twinkle {
+                // Each cell on its own phase, or they blink in unison.
+                let phase = cell_hash(col, row, cfg.seed, 1) * std::f32::consts::TAU;
+                let a = 0.55 + 0.45 * (t * 1.6 + phase).sin();
+                paint.set_alpha_f(paint.alpha_f() * a);
+            }
+
+            let rect = skia_safe::Rect::from_xywh(x, y, size, size);
+            if cfg.radius > 0.0 {
+                let rr = skia_safe::RRect::new_rect_xy(rect, cfg.radius, cfg.radius);
+                canvas.draw_rrect(rr, paint);
+            } else {
+                canvas.draw_rect(rect, paint);
+            }
+
+            if cfg.motion == PixelGridMotion::Twinkle {
+                // `paint` is reused by the next cell that picks this colour.
+                *paint = paint_from_hex(&cfg.colors[idx]);
+                paint.set_anti_alias(cfg.radius > 0.0);
+            }
+        }
+    }
+}
+
 /// Tiled heropattern background.
 fn draw_bg_heropattern(
     canvas: &Canvas,
@@ -616,6 +746,9 @@ pub(super) fn interpolate_animated_bg(
 fn tile_spacing(preset: &BackgroundPreset) -> f32 {
     match preset {
         BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
+        // The lattice repeats on `spacing`, so the world-view camera can wrap
+        // on it and the tiling stays seamless as the camera pans.
+        BackgroundPreset::PixelGrid(cfg) => cfg.spacing.max(cfg.size.max(1.0)),
         BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
         BackgroundPreset::Heropattern(cfg) => {
             let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
@@ -972,5 +1105,108 @@ mod gradient_linear_space_tests {
             "alpha midpoint should be a plain 0.5 lerp, got {}",
             colors[1].a
         );
+    }
+}
+
+#[cfg(test)]
+mod pixel_grid_tests {
+    use super::*;
+
+    fn cfg() -> PixelGridConfig {
+        PixelGridConfig {
+            colors: vec!["#FFFFFF".to_string()],
+            size: 10.0,
+            spacing: 24.0,
+            density: 0.6,
+            density_ramp: PixelDensityRamp::None,
+            radius: 0.0,
+            seed: 7,
+            motion: PixelGridMotion::None,
+        }
+    }
+
+    /// The pattern must be a function of the cell, not of when it is drawn:
+    /// a per-frame random makes the whole field boil.
+    #[test]
+    fn a_cell_resolves_the_same_way_every_time() {
+        let a = cell_hash(3, 5, 7, 0);
+        let b = cell_hash(3, 5, 7, 0);
+        assert_eq!(a, b);
+        assert!(
+            (0.0..1.0).contains(&a),
+            "hash must be a 0..1 fraction, got {a}"
+        );
+    }
+
+    /// …and two seeds must actually scatter differently, or `seed` is a lie.
+    #[test]
+    fn the_seed_changes_which_cells_are_drawn() {
+        let same_seed: Vec<f32> = (0..40).map(|i| cell_hash(i, 0, 7, 0)).collect();
+        let other_seed: Vec<f32> = (0..40).map(|i| cell_hash(i, 0, 8, 0)).collect();
+        assert_ne!(same_seed, other_seed);
+    }
+
+    /// Neighbouring cells must not correlate — a hash that walks in step with
+    /// the coordinate draws diagonal stripes instead of a scatter.
+    #[test]
+    fn neighbouring_cells_are_uncorrelated() {
+        let drawn = |c: i32, r: i32| cell_hash(c, r, 7, 0) < 0.5;
+        let matches = (0..30)
+            .flat_map(|c| (0..30).map(move |r| (c, r)))
+            .filter(|&(c, r)| drawn(c, r) == drawn(c + 1, r + 1))
+            .count();
+        // 900 cells; a stripe pattern would agree ~100 % of the time.
+        assert!(
+            (300..600).contains(&matches),
+            "diagonal neighbours agree {matches}/900 times — that is a pattern, not a scatter"
+        );
+    }
+
+    #[test]
+    fn density_ramps_run_the_direction_they_name() {
+        let (w, h) = (100.0, 100.0);
+        assert!(ramp_at(PixelDensityRamp::Right, 90.0, 50.0, w, h) > 0.8);
+        assert!(ramp_at(PixelDensityRamp::Right, 10.0, 50.0, w, h) < 0.2);
+        assert!(ramp_at(PixelDensityRamp::Left, 10.0, 50.0, w, h) > 0.8);
+        assert!(ramp_at(PixelDensityRamp::Bottom, 90.0, 90.0, w, h) > 0.8);
+        assert!(ramp_at(PixelDensityRamp::Top, 50.0, 10.0, w, h) > 0.8);
+        // Radial is full at the centre and gone at the corners.
+        assert!(ramp_at(PixelDensityRamp::Radial, 50.0, 50.0, w, h) > 0.99);
+        assert_eq!(ramp_at(PixelDensityRamp::Radial, 0.0, 0.0, w, h), 0.0);
+        // `None` is uniform: the same everywhere, including the edges.
+        for x in [0.0, 50.0, 100.0] {
+            assert_eq!(ramp_at(PixelDensityRamp::None, x, 0.0, w, h), 1.0);
+        }
+    }
+
+    /// `spacing` below `size` would draw a solid sheet and lose the lattice
+    /// the preset exists for, so it is clamped rather than honoured.
+    #[test]
+    fn spacing_never_goes_below_the_cell_size() {
+        let mut c = cfg();
+        c.size = 40.0;
+        c.spacing = 8.0;
+        assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), 40.0);
+    }
+
+    /// Degenerate configs must be inert, not panic: an empty palette has
+    /// nothing to draw with, and a zero size no area to draw.
+    #[test]
+    fn degenerate_configs_draw_nothing_without_panicking() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32)).expect("surface");
+        let canvas = surface.canvas();
+
+        let mut empty = cfg();
+        empty.colors.clear();
+        draw_bg_pixel_grid(canvas, &empty, 1.0, 0.0, 32.0, 32.0);
+
+        let mut zero = cfg();
+        zero.size = 0.0;
+        zero.spacing = 0.0;
+        draw_bg_pixel_grid(canvas, &zero, 1.0, 0.0, 32.0, 32.0);
+
+        let mut over = cfg();
+        over.density = 5.0;
+        draw_bg_pixel_grid(canvas, &over, 1.0, 0.0, 32.0, 32.0);
     }
 }
