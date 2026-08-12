@@ -1984,6 +1984,47 @@ mod audio_tests {
         count
     }
 
+    /// The failure the whole rewrite exists for: a scenario naming an asset
+    /// beside itself must load identically whatever directory the process
+    /// runs from. Authoring from the scenario's folder worked; the studio,
+    /// which runs from the repository root, resolved nothing.
+    #[test]
+    fn a_relative_asset_resolves_against_the_scenario_not_the_cwd() {
+        let dir = std::env::temp_dir().join(format!("rustmotion_cwd_{}", nanos()));
+        std::fs::create_dir_all(dir.join("assets")).expect("scratch");
+        std::fs::write(
+            dir.join("assets/t.wav"),
+            make_sine_wav(4410, 4410, 440.0, 44100),
+        )
+        .expect("fixture");
+
+        let scenario_path = dir.join("scene.json");
+        std::fs::write(
+            &scenario_path,
+            serde_json::json!({
+                "video": {"width": 32, "height": 32, "fps": 30},
+                "audio": [{"src": "assets/t.wav"}],
+                "scenes": [{"duration": 0.1, "children": []}]
+            })
+            .to_string(),
+        )
+        .expect("write scenario");
+
+        let loaded = crate::loader::load_scenario_with_vars(&scenario_path, None)
+            .expect("scenario must load");
+        let src = &loaded.audio[0].src;
+
+        assert!(
+            std::path::Path::new(src).is_absolute(),
+            "the asset path must not stay relative to the process: {src}"
+        );
+        assert!(
+            std::path::Path::new(src).is_file(),
+            "and it must point at the file beside the scenario: {src}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A track placed at `start` must be *read* from `start` too.
     ///
     /// The mux places the file at `track.start` on the scenario timeline and

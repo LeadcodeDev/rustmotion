@@ -18,6 +18,7 @@ pub mod engine {
 }
 
 // Local modules
+pub mod assets;
 pub mod encode;
 pub mod include;
 pub mod loader;

@@ -188,6 +188,13 @@ pub fn load_with_vars(
     // renders.
     expand::expand_directives(&mut json_value, &label)?;
 
+    // Assets are relative to the scenario file, like `include` — and this must
+    // happen before `raw` is captured, so the existence check below and the
+    // renderer look at the same, already-resolved paths.
+    if let Some(dir) = source_path.as_ref().and_then(|p| p.parent()) {
+        rustmotion::assets::rebase_relative_paths(&mut json_value, dir);
+    }
+
     let scenario: Scenario = serde_json::from_value(json_value.clone())?;
     let resolved = include::resolve_includes(scenario, &include_source)?;
 
