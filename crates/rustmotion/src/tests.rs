@@ -163,6 +163,41 @@ mod component_smoke {
     const COMPONENT_ALIASES: &[(&str, &str)] =
         &[("container", "div"), ("progress_bar", "progress")];
 
+    /// The exact `shape` spellings SKILL.md documents must parse.
+    ///
+    /// `ShapeType` is externally tagged, and the skill used to describe the
+    /// parameterised variants as `star` "(with `points`)", which reads as a
+    /// sibling field and fails with `invalid type: unit variant, expected
+    /// struct variant`. The generator writes what the skill says, so a wrong
+    /// line there is not a documentation nit — it is a stream of invalid
+    /// scenarios. Pin the spellings.
+    #[test]
+    fn skill_documented_shape_spellings_parse() {
+        use rustmotion_core::schema::ShapeType;
+
+        for spelling in [
+            r#""rect""#,
+            r#""circle""#,
+            r#""rounded_rect""#,
+            r#""ellipse""#,
+            r#""triangle""#,
+            r#"{ "star": { "points": 6 } }"#,
+            r#"{ "polygon": { "sides": 6 } }"#,
+            r#"{ "path": { "data": "M0 0 L10 10" } }"#,
+        ] {
+            serde_json::from_str::<ShapeType>(spelling).unwrap_or_else(|e| {
+                panic!("SKILL.md documents `{spelling}`, which does not parse: {e}")
+            });
+        }
+
+        // …and the shape the skill used to imply must still be rejected, so a
+        // future edit cannot quietly reintroduce it.
+        assert!(
+            serde_json::from_str::<ShapeType>(r#""star""#).is_err(),
+            "a bare `star` must stay an error: it is what the old wording produced"
+        );
+    }
+
     #[test]
     fn all_components_serde_round_trip() {
         // deserialize → serialize → deserialize → serialize: the canonical
