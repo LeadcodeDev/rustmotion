@@ -53,6 +53,16 @@ pub fn cmd_render(
     transparent: bool,
     hardware_acceleration: bool,
 ) -> Result<()> {
+    // Refuse a codec the container cannot hold before rendering anything:
+    // ffmpeg otherwise discovers it after every frame is done, and reports it
+    // as a raw -22 with no output file.
+    {
+        let container = format
+            .as_deref()
+            .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
+        encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+    }
+
     let start = std::time::Instant::now();
 
     // Load custom fonts if defined
@@ -251,6 +261,16 @@ pub fn cmd_watch(
 ) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
+
+    // Refuse a codec the container cannot hold before rendering anything:
+    // ffmpeg otherwise discovers it after every frame is done, and reports it
+    // as a raw -22 with no output file.
+    {
+        let container = format
+            .as_deref()
+            .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
+        encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+    }
 
     // Determine if we can use incremental rendering (native h264 only).
     // Hardware acceleration is an ffmpeg-only feature (see

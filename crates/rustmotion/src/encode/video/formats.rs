@@ -538,3 +538,110 @@ mod tests {
         let _ = std::fs::remove_file(&out);
     }
 }
+
+/// Containers each codec can actually be muxed into.
+///
+/// `None` means "no opinion": an unknown codec is passed through to ffmpeg
+/// rather than second-guessed here.
+fn containers_for(codec: &str) -> Option<&'static [&'static str]> {
+    match codec {
+        "h264" => Some(&["mp4", "mov", "mkv"]),
+        "h265" | "hevc" => Some(&["mp4", "mov", "mkv"]),
+        "vp9" => Some(&["webm", "mkv"]),
+        "prores" => Some(&["mov", "mkv"]),
+        _ => None,
+    }
+}
+
+/// Reject a codec/container pair ffmpeg will refuse, before rendering a frame.
+///
+/// `rustmotion render --codec prores -o out.mp4` used to render the whole
+/// video, hand it to ffmpeg, and surface ffmpeg's internals:
+///
+/// ```text
+/// [vf#0:0] Task finished with error code: -22 (Invalid argument)
+/// [out#0/mp4] Nothing was written into output file, because at least one of
+///             its streams received no packets.
+/// ```
+///
+/// with no output file to show for it. `--codec prores` is the documented
+/// recommendation for dark gradients and `.mp4` is the extension everyone
+/// types, so the pair is a natural mistake worth catching early.
+///
+/// Containers with their own encode path (`gif`, `png-seq`, `raw`) never reach
+/// the ffmpeg muxer and are left alone.
+pub fn check_codec_container(codec: &str, container: &str) -> Result<()> {
+    if matches!(container, "gif" | "png-seq" | "raw") {
+        return Ok(());
+    }
+    let Some(allowed) = containers_for(codec) else {
+        return Ok(());
+    };
+    if allowed.contains(&container) {
+        return Ok(());
+    }
+    let fix = format!(
+        "use -o <file>.{}{}",
+        allowed[0],
+        if codec == "prores" {
+            ", or drop --codec for H.264"
+        } else {
+            ""
+        }
+    );
+    Err(RustmotionError::CodecContainerMismatch {
+        codec: codec.to_string(),
+        container: container.to_string(),
+        fix,
+    })
+}
+
+#[cfg(test)]
+mod codec_container_tests {
+    use super::*;
+
+    #[test]
+    fn prores_into_mp4_is_refused_with_the_fix_named() {
+        let err = check_codec_container("prores", "mp4").expect_err("prores/mp4 must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("prores"), "{msg}");
+        assert!(
+            msg.contains(".mov"),
+            "the message must name what works: {msg}"
+        );
+    }
+
+    #[test]
+    fn documented_pairs_are_accepted() {
+        for (codec, container) in [
+            ("h264", "mp4"),
+            ("h264", "mov"),
+            ("h265", "mp4"),
+            ("prores", "mov"),
+            ("vp9", "webm"),
+        ] {
+            check_codec_container(codec, container)
+                .unwrap_or_else(|e| panic!("{codec}/{container} must be accepted: {e}"));
+        }
+    }
+
+    #[test]
+    fn vp9_into_mp4_is_refused() {
+        assert!(check_codec_container("vp9", "mp4").is_err());
+    }
+
+    /// An unknown codec is ffmpeg's business, not ours — guessing would block
+    /// combinations that work.
+    #[test]
+    fn unknown_codecs_pass_through() {
+        check_codec_container("av1", "mp4").expect("unknown codec must not be second-guessed");
+    }
+
+    /// These containers never reach the ffmpeg muxer.
+    #[test]
+    fn own_path_containers_are_left_alone() {
+        for container in ["gif", "png-seq", "raw"] {
+            check_codec_container("prores", container).expect("own-path container");
+        }
+    }
+}
