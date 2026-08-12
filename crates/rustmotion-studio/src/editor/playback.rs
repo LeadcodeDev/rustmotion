@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Pause, Play};
+use dioxus_icons::lucide::{Pause, Play, Volume2, VolumeX};
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::select::{Select, SelectOption};
@@ -37,12 +37,20 @@ pub fn playback_action(key: &Key, mods: Modifiers) -> Option<PlaybackAction> {
     }
 }
 
-/// Advance the playhead at the scenario fps while `playing` is true. A custom
-/// hook so the editor view stays focused on layout.
+/// Advance the playhead while `playing` is true, and keep the sound with it.
+///
+/// When the scenario has audio the playhead follows the *audio* clock rather
+/// than its own timer: a timer ticking at 1/fps drifts against the sound card
+/// over a long scenario, and by the end the picture no longer matches what you
+/// hear. With no track (or no output device) it falls back to the timer.
 pub fn use_playback_clock(shared: Shared, mut current: Signal<u32>, playing: Signal<bool>) {
     use_future(move || {
         let shared = shared.clone();
         async move {
+            // Whether the sound for this playback run has been started. Reset on
+            // pause and on loop, so a mix that finishes preparing mid-playback
+            // still gets picked up.
+            let mut audio_armed = false;
             loop {
                 let fps = shared
                     .lock()
@@ -52,34 +60,61 @@ pub fn use_playback_clock(shared: Shared, mut current: Signal<u32>, playing: Sig
                     .fps
                     .max(1);
                 tokio::time::sleep(Duration::from_secs_f64(1.0 / fps as f64)).await;
-                if playing() {
-                    let total = shared
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .total_frames
-                        .max(1);
-                    let next = (current() + 1) % total;
-                    current.set(next);
+                if !playing() {
+                    if audio_armed {
+                        super::audio::stop();
+                        audio_armed = false;
+                    }
+                    continue;
                 }
+                let total = shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .total_frames
+                    .max(1);
+                if super::audio::has_audio() && !audio_armed {
+                    super::audio::play_from_frame(current(), fps);
+                    audio_armed = true;
+                }
+                let from = current();
+                let next = match super::audio::position_frame(fps) {
+                    Some(f) if f < total => f,
+                    _ => (from + 1) % total,
+                };
+                // Wrapping past the last frame restarts the track with the picture.
+                if next < from {
+                    audio_armed = false;
+                }
+                current.set(next);
             }
         }
     });
 }
 
 /// Bump `rev` whenever the watcher swaps in a reloaded model, so the `<img>`
-/// refetches the (now changed) current frame.
+/// refetches the (now changed) current frame — and re-mix the preview audio for
+/// whatever scenario is now loaded. The mix has to follow the model: opening
+/// another file, or editing this one's tracks, otherwise keeps playing the
+/// previous scenario's sound.
 pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
     use_future(move || {
         let shared = shared.clone();
         async move {
-            let mut last_gen = 0u64;
+            let mut last_gen: Option<u64> = None;
             loop {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                let g = shared.lock().unwrap_or_else(|e| e.into_inner()).generation;
-                if g != last_gen {
-                    last_gen = g;
-                    rev.set(rev() + 1);
+                let (g, scenario, total) = {
+                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    (m.generation, m.scenario.clone(), m.total_frames)
+                };
+                if last_gen != Some(g) {
+                    if last_gen.is_some() {
+                        rev.set(rev() + 1);
+                    }
+                    last_gen = Some(g);
+                    let fps = scenario.video.fps.max(1);
+                    super::audio::prepare(scenario, total as f64 / fps as f64);
                 }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
     });
@@ -94,6 +129,8 @@ pub fn PlaybackBar(
     current: Signal<u32>,
     playing: Signal<bool>,
     total: u32,
+    fps: u32,
+    mut muted: Signal<bool>,
     diff_active: Signal<bool>,
     mut diff_side: Signal<super::diff_panel::DiffSide>,
     mut preview_scale: Signal<u16>,
@@ -103,6 +140,7 @@ pub fn PlaybackBar(
     let max = total.saturating_sub(1);
     let cur = current().min(max);
     let is_playing = playing();
+    let is_muted = muted();
     let side = diff_side();
 
     rsx! {
@@ -122,6 +160,21 @@ pub fn PlaybackBar(
                     Pause { size: 15 }
                 } else {
                     Play { size: 15 }
+                }
+            }
+            Button {
+                variant: ButtonVariant::Secondary,
+                size: ButtonSize::IconSm,
+                title: if is_muted { "Unmute" } else { "Mute" },
+                onclick: move |_| {
+                    let next = !muted();
+                    muted.set(next);
+                    super::audio::set_muted(next);
+                },
+                if is_muted {
+                    VolumeX { size: 15 }
+                } else {
+                    Volume2 { size: 15 }
                 }
             }
             if diff_active() {
@@ -163,6 +216,9 @@ pub fn PlaybackBar(
                 oninput: move |e| {
                     if let Ok(v) = e.value().parse::<u32>() {
                         current.set(v);
+                        if playing() {
+                            super::audio::play_from_frame(v, fps);
+                        }
                     }
                 },
             }

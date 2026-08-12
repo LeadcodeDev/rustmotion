@@ -22,6 +22,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["time"] }
 dioxus-icons = { version = "0.1.0", default-features = false }
 rfd = "0.17"
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
 dirs = "6.0.0"
 palette = { version = "0.7.6", default-features = false }
 schemars = "0.8"
