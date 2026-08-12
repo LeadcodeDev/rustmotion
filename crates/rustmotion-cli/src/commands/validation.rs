@@ -82,11 +82,19 @@ impl ValidationReport {
     /// every caller blocks on them without extra wiring); the direct
     /// `attr_warnings` check below is defence in depth for a
     /// `ValidationReport` assembled some other way.
+    ///
+    /// `unresolved_vars` is deliberately **not** blocking. `variables.rs`
+    /// (constat #7) settled that a leftover `$word` cannot be told apart from
+    /// legitimate literal `$` content — a price tag, a terminal `$PATH` — so it
+    /// is reported as a loud warning and the document renders. Blocking here
+    /// contradicted that: `validate` printed "Valid scenario" and exited 0 on a
+    /// file `render` then refused, while the refusal told the user to run
+    /// `validate` for details it would never print. A declared variable can
+    /// never be left unresolved (every name in `defs` is present in
+    /// defaults ∪ overrides), and a `for-each`/`use` mistake is caught by name
+    /// in `expand.rs` — so nothing that reaches here is a diagnosable typo.
     pub fn is_blocking(&self, lenient: bool) -> bool {
         if !self.schema_errors.is_empty() {
-            return true;
-        }
-        if !self.unresolved_vars.is_empty() {
             return true;
         }
         if !self.attr_warnings.is_empty() {
@@ -394,6 +402,38 @@ mod html_css_error_tests {
             report.schema_errors
         );
         assert!(report.is_blocking(false), "must block rendering");
+    }
+
+    /// `validate` and `render` must agree. A leftover `$word` is a warning by
+    /// design (variables.rs, constat #7: a price tag or a `$PATH` is
+    /// indistinguishable from a typo), and `validate` treated it that way —
+    /// but `is_blocking` did not, so the same file passed validation and was
+    /// refused at render, with the refusal pointing back at validate.
+    #[test]
+    fn an_unresolved_variable_warns_without_blocking() {
+        let json = r##"{
+            "version": "1.0",
+            "video": {"width": 320, "height": 180, "fps": 30, "background": "#000"},
+            "scenes": [{"duration": 1.0, "children": [
+                {"type": "text", "content": "$9.99 a month",
+                 "style": {"font-size": 20, "color": "#FFF"}}]}]
+        }"##;
+        let loaded = load(ValidationSource::Inline(json)).expect("loads");
+        let report = run_checks(&loaded, false);
+
+        assert!(
+            !report.unresolved_vars.is_empty(),
+            "a literal `$` must still be reported: {:?}",
+            report.unresolved_vars
+        );
+        assert!(
+            !report.is_blocking(false),
+            "a literal `$` in content must not stop the render"
+        );
+        assert!(
+            !report.is_clean(),
+            "it is still an advisory — is_clean must stay false so it gets printed"
+        );
     }
 
     #[test]
