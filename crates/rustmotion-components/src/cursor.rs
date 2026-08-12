@@ -104,6 +104,10 @@ pub enum CursorPathEasing {
     EaseOut,
     #[default]
     EaseInOut,
+    /// No interpolation: hold each waypoint until the next one's time, then
+    /// jump. What a text caret does — it never slides between two positions —
+    /// and the only way to express that, since every other easing glides.
+    Step,
 }
 
 rustmotion_core::impl_traits!(Cursor {
@@ -174,6 +178,9 @@ impl Cursor {
 
         // Apply easing
         let t = match self.path_easing {
+            // Hold the departure point for the whole segment; the jump happens
+            // when `time` reaches the next waypoint and the segment changes.
+            CursorPathEasing::Step => 0.0,
             CursorPathEasing::Linear => raw_t,
             CursorPathEasing::EaseOut => 1.0 - (1.0 - raw_t).powi(3),
             CursorPathEasing::EaseInOut => {
@@ -285,5 +292,57 @@ impl Painter for Cursor {
         if path_dx.abs() > 0.001 || path_dy.abs() > 0.001 {
             canvas.restore();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caret(easing: CursorPathEasing) -> Cursor {
+        serde_json::from_value(serde_json::json!({
+            "path_easing": easing,
+            "click_duration": 0.0,
+            "auto_path": [
+                {"time": 1.0, "x": 100.0, "y": 0.0},
+                {"time": 2.0, "x": 500.0, "y": 0.0},
+            ],
+        }))
+        .expect("cursor fixture")
+    }
+
+    /// A caret jumps between positions; it must never be caught between two
+    /// fields. Every other easing interpolates, so `step` is the only way to
+    /// say that.
+    #[test]
+    fn step_easing_holds_the_departure_point_until_the_next_waypoint() {
+        let c = caret(CursorPathEasing::Step);
+        for t in [1.0, 1.25, 1.5, 1.75, 1.99] {
+            assert_eq!(
+                c.auto_path_offset(t),
+                (100.0, 0.0),
+                "step must hold the first waypoint at t={t}"
+            );
+        }
+        assert_eq!(c.auto_path_offset(2.0), (500.0, 0.0));
+        assert_eq!(c.auto_path_offset(9.0), (500.0, 0.0));
+    }
+
+    /// The other easings keep gliding — `step` is additive, not a change of
+    /// default behaviour.
+    #[test]
+    fn linear_easing_still_interpolates() {
+        let (x, _) = caret(CursorPathEasing::Linear).auto_path_offset(1.5);
+        assert!(
+            (x - 300.0).abs() < 0.5,
+            "linear should be halfway at t=1.5, got {x}"
+        );
+    }
+
+    #[test]
+    fn step_is_spelled_snake_case_in_json() {
+        let c: Cursor = serde_json::from_value(serde_json::json!({"path_easing": "step"}))
+            .expect("`step` must parse");
+        assert_eq!(c.path_easing, CursorPathEasing::Step);
     }
 }

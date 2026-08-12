@@ -1693,8 +1693,13 @@ Animated cursor with click effects, blinking, and path animation between waypoin
 | `click_at`      | array  | `[]`          | Times to trigger click animation (seconds)           |
 | `auto_path`     | array  | `[]`          | Waypoints: `[{ "time", "x", "y" }]`                 |
 | `click_duration`| f32    | `0.3`         | Click animation duration                             |
-| `cursor_style`  | string | `"default"`   | Cursor appearance style                              |
-| `path_easing`   | string | `"ease_in_out"` | Path interpolation: `"linear"`, `"ease_out"`, `"ease_in_out"` |
+| `cursor_style`  | string | `"default"`   | `"default"` or `"pointer"` — metadata only: both draw the same bar |
+| `path_easing`   | string | `"ease_in_out"` | Path interpolation: `"linear"`, `"ease_out"`, `"ease_in_out"`, `"step"` |
+
+> The component draws a **caret** (a rounded vertical bar), not an arrow. Staged as a
+> text caret it should use `"path_easing": "step"`, which holds each waypoint and jumps
+> to the next — a caret never slides between two fields. The interpolating easings are
+> for a pointer travelling over a surface.
 
 **Notes:** When `auto_path` is set, click animations trigger automatically at each waypoint time. Cursor movement uses Catmull-Rom spline interpolation for smooth curves.
 
