@@ -221,9 +221,6 @@ pub fn mix_audio_tracks_segment(
             .unwrap_or(scenario_samples)
             .min(scenario_samples);
 
-        let fade_in_samples = track.fade_in.unwrap_or(0.0) * TARGET_SAMPLE_RATE as f64;
-        let fade_out_samples = track.fade_out.unwrap_or(0.0) * TARGET_SAMPLE_RATE as f64;
-
         // How much of the track is ever audible in the scenario, regardless
         // of which segment we are materializing right now. Fades are
         // computed against this, not against the segment's own bounds.
@@ -251,25 +248,12 @@ pub fn mix_audio_tracks_segment(
             }
 
             let frame = i / TARGET_CHANNELS as usize;
-            let current_time = track.start + (frame as f64 / TARGET_SAMPLE_RATE as f64);
-            let vol = if !track.volume_keyframes.is_empty() {
-                interpolate_volume_keyframes(&track.volume_keyframes, current_time)
-            } else {
-                track.volume
-            };
-            let mut sample = src_sample * vol;
-
-            // Apply fade in
-            if fade_in_samples > 0.0 && (frame as f64) < fade_in_samples {
-                sample *= frame as f32 / fade_in_samples as f32;
-            }
-
-            // Apply fade out — against the track's own total audible
-            // frames in the scenario, not this segment's length.
-            let frames_from_end = total_frames - frame;
-            if fade_out_samples > 0.0 && (frames_from_end as f64) < fade_out_samples {
-                sample *= frames_from_end as f32 / fade_out_samples as f32;
-            }
+            let sample = src_sample
+                * track_gain_at(
+                    track,
+                    frame as f64 / TARGET_SAMPLE_RATE as f64,
+                    total_frames as f64 / TARGET_SAMPLE_RATE as f64,
+                );
 
             mix_buffer[dst_idx] += sample;
         }
@@ -284,6 +268,40 @@ pub fn mix_audio_tracks_segment(
     }
 
     Ok(Some(pcm_bytes))
+}
+
+/// The gain applied to a track `t_in_track` seconds after its own first sample,
+/// given that `audible` seconds of it are ever heard.
+///
+/// Expressed in seconds rather than sample indices so the mixer (which works at
+/// `OUTPUT_SAMPLE_RATE` on resampled audio) and the analysis (which works at the
+/// file's own rate on the decoded source) can share it. They must: a waveform
+/// that draws an envelope the mix does not produce is the component lying about
+/// the very track it claims to react to.
+pub(crate) fn track_gain_at(
+    track: &crate::schema::AudioTrack,
+    t_in_track: f64,
+    audible: f64,
+) -> f32 {
+    let mut gain = if track.volume_keyframes.is_empty() {
+        track.volume
+    } else {
+        // Keyframe times are on the *scenario* timeline, not the track's.
+        interpolate_volume_keyframes(&track.volume_keyframes, track.start + t_in_track)
+    };
+
+    if let Some(fade_in) = track.fade_in {
+        if fade_in > 0.0 && t_in_track < fade_in {
+            gain *= (t_in_track / fade_in) as f32;
+        }
+    }
+    if let Some(fade_out) = track.fade_out {
+        let remaining = audible - t_in_track;
+        if fade_out > 0.0 && remaining < fade_out {
+            gain *= (remaining.max(0.0) / fade_out) as f32;
+        }
+    }
+    gain
 }
 
 /// Interpolate volume at a given time using volume keyframes with easing
