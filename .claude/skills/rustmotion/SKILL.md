@@ -732,7 +732,21 @@ Config types: `string`, `number`, `boolean`, `object`, `array`. Omitted override
 { "type": "fade", "duration": 0.5 }
 ```
 
-**13 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `none`
+**14 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `corner_reveal`, `none`
+
+`corner_reveal` uncovers the incoming scene through a rectangle anchored at one
+corner: two edges stay pinned to the frame, the other two travel until it fills.
+The incoming scene sits still behind the growing window — it is *uncovered*,
+not pushed, which is what separates it from `slide` and from the full-width
+`wipe_*` band.
+
+```json
+{ "type": "corner_reveal", "duration": 0.5, "corner": "top_right",
+  "easing": "ease_in_out" }
+```
+
+`corner` takes `top_right` (default), `top_left`, `bottom_right`, `bottom_left`
+and is ignored by every other type.
 
 Default duration: `0.5` seconds.
 
