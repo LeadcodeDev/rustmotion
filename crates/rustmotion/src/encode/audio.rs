@@ -112,6 +112,36 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
     Ok((all_samples, sample_rate, channels))
 }
 
+/// Duration, sample rate and channel count of a local audio file — the
+/// `rustmotion info` answer to "how long is this audio track?".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioProbe {
+    pub duration_secs: f64,
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+/// Probes a local audio file's duration/sample-rate/channel-count by calling
+/// [`decode_audio_file`] — the *exact* decode `mix_audio_tracks_segment`
+/// performs at render time, not a second, independently-drifting decode path
+/// (e.g. reading a container's declared duration without decoding, which can
+/// disagree with what the decoder actually produces for a file with an
+/// imprecise header). The cost is a full decode of the file, same as at
+/// render time; there is no cheaper header-only path in this codebase for
+/// audio (unlike image dimensions, where the underlying decoder does expose
+/// one — see `rustmotion_core::engine::renderer::probe_image_dimensions`).
+pub fn probe_audio_metadata(path: &str) -> Result<AudioProbe> {
+    let (samples, sample_rate, channels) = decode_audio_file(path)?;
+    let channels = channels.max(1);
+    let frames = samples.len() as f64 / channels as f64;
+    let duration_secs = frames / sample_rate.max(1) as f64;
+    Ok(AudioProbe {
+        duration_secs,
+        sample_rate,
+        channels,
+    })
+}
+
 /// Mix multiple audio tracks into a single PCM i16 buffer for minimp4.
 /// Output: interleaved i16, stereo, 44100Hz.
 ///
@@ -756,5 +786,77 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&wav_path);
+    }
+
+    // ── media-io: probe_audio_metadata ──────────────────────────────────────
+    //
+    // `rustmotion info` (crates/rustmotion-cli/src/commands/info.rs) needs
+    // "how long is this audio file, at what rate/channel count" for every
+    // `audio[].src` a scenario declares. The brief for that fix is explicit:
+    // reuse `decode_audio_file` — the exact decode `mix_audio_tracks_segment`
+    // performs at render time — rather than opening a second, independently
+    // drifting decode path (e.g. reading `symphonia`'s track metadata
+    // directly without decoding, which can disagree with what actually gets
+    // decoded for a file with an imprecise container-level duration).
+
+    #[test]
+    fn probe_audio_metadata_reports_duration_rate_and_channels() {
+        let wav_path = std::env::temp_dir().join(format!(
+            "rm_audio_probe_test_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // 0.5s of mono audio at 22050Hz.
+        write_minimal_wav(&wav_path, 22_050, 11_025);
+
+        let probe = probe_audio_metadata(wav_path.to_str().unwrap()).expect("must probe wav");
+        assert_eq!(probe.sample_rate, 22_050);
+        assert_eq!(probe.channels, 1);
+        assert!(
+            (probe.duration_secs - 0.5).abs() < 0.01,
+            "duration: {}",
+            probe.duration_secs
+        );
+
+        let _ = std::fs::remove_file(&wav_path);
+    }
+
+    #[test]
+    fn probe_audio_metadata_on_a_missing_file_is_an_error_not_a_panic() {
+        let path = std::env::temp_dir().join(format!(
+            "rm_audio_probe_missing_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let result = probe_audio_metadata(path.to_str().unwrap());
+        assert!(
+            matches!(result, Err(RustmotionError::AudioOpen { .. })),
+            "expected AudioOpen for a missing file, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn probe_audio_metadata_on_garbage_bytes_is_an_error_not_a_panic() {
+        let path = std::env::temp_dir().join(format!(
+            "rm_audio_probe_garbage_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"this is not an audio file at all").unwrap();
+        let result = probe_audio_metadata(path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "unreadable content must be an error, not a panic: {result:?}"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

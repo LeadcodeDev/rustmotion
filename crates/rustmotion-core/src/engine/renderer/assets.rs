@@ -249,6 +249,205 @@ pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Res
     Ok(output.stdout)
 }
 
+// ─── Media metadata probing ────────────────────────────────────────────────
+//
+// "How long is this audio file? What are the dimensions of this image?" —
+// `rustmotion info` (`crates/rustmotion-cli/src/commands/info.rs`) answers
+// these by calling the functions below, one per asset kind. Two rules tie
+// them together:
+//
+// 1. Never touch the network. A `src` starting with `http://`/`https://` is
+//    identified and reported by the *caller* as "remote, not probed" before
+//    any of these functions ever run — probing a remote asset could mean
+//    downloading an unbounded amount of data just to read a header (e.g. a
+//    large file whose metadata atom sits at the end). These functions are
+//    written and tested only against local paths on the assumption the
+//    caller has already filtered URLs out; they do not special-case `http(s)
+//    ://` themselves.
+// 2. Cheap when a cheap path exists, honest when it does not. Image
+//    dimensions come from the `image` crate's `into_dimensions()`, which
+//    parses only the header bytes the decoder needs — not a full raster
+//    decode. Video has no such shortcut available in this codebase (nothing
+//    here links an ffmpeg *library*, only the `ffmpeg`/`ffprobe`
+//    *binaries*), so `probe_video_metadata` shells out to `ffprobe` — the
+//    same "assume PATH, fail with an actionable message otherwise" contract
+//    `ffmpeg_available`/`extract_video_frame` above already establish for
+//    ffmpeg itself.
+
+/// Cheap (header-only) dimensions of a local raster image file. The `image`
+/// crate's `ImageReader::into_dimensions` builds just enough of the decoder
+/// to read its declared dimensions, without decoding any pixel data —
+/// unlike every existing paint-time image load in this codebase (`image.rs`,
+/// `avatar.rs`, `mockup.rs`, ...), which all go through
+/// `skia_safe::Image::from_encoded` and pay for a full raster decode because
+/// they need the pixels themselves. A metadata-only query has no such need,
+/// so it takes the cheaper of the two paths instead of reusing theirs.
+pub fn probe_image_dimensions(path: &str) -> Result<(u32, u32)> {
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| RustmotionError::ImageLoad {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })?
+        .with_guessed_format()
+        .map_err(|e| RustmotionError::ImageLoad {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })?;
+    reader
+        .into_dimensions()
+        .map_err(|e| RustmotionError::ImageLoad {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })
+}
+
+/// Returns `true` if `ffprobe` is on `PATH`. Mirrors [`ffmpeg_available`]
+/// above — ffprobe ships alongside ffmpeg in every common distribution but
+/// is its own binary, so its own check.
+pub fn ffprobe_available() -> bool {
+    std::process::Command::new("ffprobe")
+        .args(["-version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Duration, dimensions and frame rate of a local video file, read from its
+/// container/stream metadata via `ffprobe` — never by decoding a frame (that
+/// is [`extract_video_frame`]'s job, and it decodes exactly one, not the
+/// metadata).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoProbe {
+    pub width: u32,
+    pub height: u32,
+    pub duration_secs: f64,
+    /// `None` when ffprobe reports no parseable frame rate for the stream —
+    /// absence is reported as such, never guessed at.
+    pub fps: Option<f64>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct FfprobeOutput {
+    #[serde(default)]
+    streams: Vec<FfprobeStream>,
+    #[serde(default)]
+    format: Option<FfprobeFormat>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct FfprobeStream {
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    r_frame_rate: Option<String>,
+    #[serde(default)]
+    duration: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct FfprobeFormat {
+    #[serde(default)]
+    duration: Option<String>,
+}
+
+/// Parses ffprobe's `r_frame_rate` field ("30/1", "30000/1001", ...) into a
+/// float. `None` on anything that is not a clean `num/den` pair — including
+/// a zero denominator, which ffprobe can itself report for a stream with no
+/// meaningful frame rate.
+fn parse_frame_rate(s: &str) -> Option<f64> {
+    let (num, den) = s.split_once('/')?;
+    let num: f64 = num.trim().parse().ok()?;
+    let den: f64 = den.trim().parse().ok()?;
+    if den == 0.0 {
+        return None;
+    }
+    Some(num / den)
+}
+
+/// Probes a local video file's metadata via `ffprobe -show_streams
+/// -show_format -of json`, a single subprocess call (no frame decode, no
+/// download): the first video stream's width/height/frame rate, and a
+/// duration that prefers the stream's own `duration` field but falls back to
+/// the container's `format.duration` (some containers — notably ones
+/// produced by streaming muxers — only populate the latter).
+pub fn probe_video_metadata(src: &str) -> Result<VideoProbe> {
+    if !ffprobe_available() {
+        return Err(RustmotionError::Generic(format!(
+            "Cannot read metadata for '{src}': ffprobe not found on PATH. ffprobe ships with \
+             ffmpeg — install it with `brew install ffmpeg` (macOS) or see \
+             https://ffmpeg.org/download.html."
+        )));
+    }
+
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+            src,
+        ])
+        .output()
+        .map_err(|e| RustmotionError::Generic(format!("Failed to run ffprobe on '{src}': {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RustmotionError::Generic(format!(
+            "ffprobe could not read '{src}': {}",
+            stderr.trim()
+        )));
+    }
+
+    let parsed: FfprobeOutput = serde_json::from_slice(&output.stdout).map_err(|e| {
+        RustmotionError::Generic(format!(
+            "ffprobe produced output that could not be parsed for '{src}': {e}"
+        ))
+    })?;
+
+    let stream = parsed.streams.first().ok_or_else(|| {
+        RustmotionError::Generic(format!("'{src}' has no video stream ffprobe could find"))
+    })?;
+
+    let width = stream
+        .width
+        .ok_or_else(|| RustmotionError::Generic(format!("'{src}': ffprobe reported no width")))?;
+    let height = stream
+        .height
+        .ok_or_else(|| RustmotionError::Generic(format!("'{src}': ffprobe reported no height")))?;
+
+    let duration_secs = stream
+        .duration
+        .as_deref()
+        .and_then(|d| d.parse::<f64>().ok())
+        .or_else(|| {
+            parsed
+                .format
+                .as_ref()
+                .and_then(|f| f.duration.as_deref())
+                .and_then(|d| d.parse::<f64>().ok())
+        })
+        .ok_or_else(|| {
+            RustmotionError::Generic(format!("'{src}': ffprobe reported no duration"))
+        })?;
+
+    let fps = stream.r_frame_rate.as_deref().and_then(parse_frame_rate);
+
+    Ok(VideoProbe {
+        width,
+        height,
+        duration_secs,
+        fps,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +574,189 @@ mod tests {
         // on the host. This just proves the probe itself cannot panic or
         // hang the preload path that depends on it (item 3).
         let _ = ffmpeg_available();
+    }
+
+    // ── media-io: probe_image_dimensions ────────────────────────────────────
+
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rm_assets_probe_test_{}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            name
+        ))
+    }
+
+    fn write_test_png(path: &Path, w: u32, h: u32) {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([10, 20, 30]));
+        img.save(path).expect("write PNG fixture");
+    }
+
+    fn write_test_gif(path: &Path, w: u32, h: u32) {
+        use image::codecs::gif::GifEncoder;
+        let file = std::fs::File::create(path).expect("create GIF fixture");
+        let mut encoder = GifEncoder::new(file);
+        let frame = image::Frame::new(image::RgbaImage::from_pixel(
+            w,
+            h,
+            image::Rgba([200, 50, 10, 255]),
+        ));
+        encoder.encode_frame(frame).expect("encode GIF fixture");
+    }
+
+    #[test]
+    fn probe_image_dimensions_reads_a_png_header() {
+        let path = scratch_path("dims.png");
+        write_test_png(&path, 37, 21);
+        let (w, h) = probe_image_dimensions(path.to_str().unwrap()).expect("must read PNG dims");
+        assert_eq!((w, h), (37, 21));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Issue: nothing in `rustmotion-core` decoded GIF before this fix
+    /// (`Cargo.toml`'s `image` dependency only enabled png/jpeg/webp) — the
+    /// `gif` feature this test depends on is itself part of the fix.
+    #[test]
+    fn probe_image_dimensions_reads_a_gif_header() {
+        let path = scratch_path("dims.gif");
+        write_test_gif(&path, 12, 9);
+        let (w, h) = probe_image_dimensions(path.to_str().unwrap()).expect("must read GIF dims");
+        assert_eq!((w, h), (12, 9));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn probe_image_dimensions_on_a_missing_file_is_an_error_not_a_panic() {
+        let path = scratch_path("does-not-exist.png");
+        let result = probe_image_dimensions(path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "missing file must be an error, not a panic"
+        );
+    }
+
+    #[test]
+    fn probe_image_dimensions_on_garbage_bytes_is_an_error_not_a_panic() {
+        let path = scratch_path("garbage.png");
+        std::fs::write(&path, b"this is not an image").unwrap();
+        let result = probe_image_dimensions(path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "unreadable content must be an error, not a panic"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── media-io: parse_frame_rate ──────────────────────────────────────────
+
+    #[test]
+    fn parse_frame_rate_reads_integer_and_ntsc_fractions() {
+        assert_eq!(parse_frame_rate("30/1"), Some(30.0));
+        assert!((parse_frame_rate("30000/1001").unwrap() - 29.97).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_frame_rate_rejects_zero_denominator_and_garbage() {
+        assert_eq!(parse_frame_rate("30/0"), None);
+        assert_eq!(parse_frame_rate("not-a-rate"), None);
+    }
+
+    // ── media-io: probe_video_metadata ──────────────────────────────────────
+
+    fn make_test_video(path: &Path, width: u32, height: u32, fps: u32, duration_s: u32) -> bool {
+        std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=size={width}x{height}:rate={fps}:duration={duration_s}"),
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn probe_video_metadata_reads_dimensions_duration_and_fps() {
+        if !ffmpeg_available() || !ffprobe_available() {
+            eprintln!(
+                "probe_video_metadata_reads_dimensions_duration_and_fps: ffmpeg/ffprobe not \
+                 found on PATH — skipping"
+            );
+            return;
+        }
+        let path = scratch_path("probe.mp4");
+        assert!(
+            make_test_video(&path, 64, 36, 25, 2),
+            "fixture video must encode"
+        );
+
+        let probe =
+            probe_video_metadata(path.to_str().unwrap()).expect("must probe video metadata");
+        assert_eq!(probe.width, 64);
+        assert_eq!(probe.height, 36);
+        assert!(
+            (probe.duration_secs - 2.0).abs() < 0.2,
+            "duration: {}",
+            probe.duration_secs
+        );
+        assert!(probe.fps.is_some(), "expected a frame rate");
+        assert!(
+            (probe.fps.unwrap() - 25.0).abs() < 0.1,
+            "fps: {:?}",
+            probe.fps
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn probe_video_metadata_on_a_missing_file_is_an_error_not_a_panic() {
+        if !ffprobe_available() {
+            eprintln!(
+                "probe_video_metadata_on_a_missing_file_is_an_error_not_a_panic: ffprobe not \
+                 found on PATH — skipping"
+            );
+            return;
+        }
+        let path = scratch_path("does-not-exist.mp4");
+        let result = probe_video_metadata(path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "missing file must be an error, not a panic"
+        );
+    }
+
+    #[test]
+    fn probe_video_metadata_on_garbage_bytes_is_an_error_not_a_panic() {
+        if !ffprobe_available() {
+            eprintln!(
+                "probe_video_metadata_on_garbage_bytes_is_an_error_not_a_panic: ffprobe not \
+                 found on PATH — skipping"
+            );
+            return;
+        }
+        let path = scratch_path("garbage.mp4");
+        std::fs::write(&path, b"not a real video file").unwrap();
+        let result = probe_video_metadata(path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "unreadable content must be an error, not a panic"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ffprobe_available_does_not_panic_either_way() {
+        let _ = ffprobe_available();
     }
 }
