@@ -637,6 +637,18 @@ mod codec_container_tests {
         check_codec_container("av1", "mp4").expect("unknown codec must not be second-guessed");
     }
 
+    /// A `--frame` still is written by `render_single_frame`, never by an
+    /// encoder, so the codec is not part of that operation at all. The guard
+    /// is skipped for it in `cmd_render`/`cmd_watch`; this pins the reason a
+    /// `.png` extension is not in any codec's list.
+    #[test]
+    fn png_is_not_a_container_any_codec_claims() {
+        assert!(
+            check_codec_container("h264", "png").is_err(),
+            "a still is not an h264 container — the caller must not ask"
+        );
+    }
+
     /// These containers never reach the ffmpeg muxer.
     #[test]
     fn own_path_containers_are_left_alone() {

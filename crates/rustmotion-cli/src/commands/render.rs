@@ -56,7 +56,10 @@ pub fn cmd_render(
     // Refuse a codec the container cannot hold before rendering anything:
     // ffmpeg otherwise discovers it after every frame is done, and reports it
     // as a raw -22 with no output file.
-    {
+    //
+    // `--frame` is exempt: it writes a PNG still through `render_single_frame`
+    // and never reaches an encoder, so the codec is not part of that operation.
+    if frame.is_none() {
         let container = format
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
@@ -262,10 +265,9 @@ pub fn cmd_watch(
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
 
-    // Refuse a codec the container cannot hold before rendering anything:
-    // ffmpeg otherwise discovers it after every frame is done, and reports it
-    // as a raw -22 with no output file.
-    {
+    // Refuse a codec the container cannot hold before rendering anything (see
+    // `cmd_render`; `--frame` is exempt for the same reason).
+    if frame.is_none() {
         let container = format
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
