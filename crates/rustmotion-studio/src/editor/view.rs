@@ -11,7 +11,7 @@ use crate::scenario::{
 use super::annotations::AnnotationsPanel;
 use super::diff_panel::{DiffPanel, DiffSide};
 use super::export::ExportToast;
-use super::frames::{baseline_arcs, frame_hits, render_frame, scene_prefix, HitPct};
+use super::frames::{baseline_arcs, frame_hits, render_frame_deep, scene_prefix, HitPct};
 use super::inspector::InspectorPanel;
 use super::playback::{
     playback_action, use_hot_reload, use_playback_clock, PlaybackAction, PlaybackBar,
@@ -386,7 +386,7 @@ fn serve_or_render(
         return Err(());
     }
     let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        render_frame(scenario, tasks, idx, scale_factor(key.scale_pct))
+        render_frame_deep(scenario, tasks, idx, scale_factor(key.scale_pct))
     }))
     .map_err(|_| {
         fail_ledger()

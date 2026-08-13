@@ -5,6 +5,44 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rustmotion::encode::video::FrameTask;
 use rustmotion::schema::ResolvedScenario;
 
+/// Stack for any thread that renders a frame.
+///
+/// The depth cost is **deserialisation**, not painting: `prepare_scene` calls
+/// `deserialize_children` on every frame, and `ChildComponent` → `Component` →
+/// `Container`/`Card` recurses once per level of nesting. Because those enums
+/// are untagged, serde buffers each level through `ContentDeserializer`, so a
+/// level is expensive in stack as well as deep — and a debug build's frames are
+/// several times fatter than a release build's.
+///
+/// Measured: a scenario nested ~28 levels — which a UI composed from small
+/// helper functions reaches without trying — needs between 2 and 4 MiB in debug.
+/// Rust's default for a spawned thread is 2 MiB, so the prefetch workers
+/// overflowed and aborted the process; the same file rendered fine from the CLI,
+/// which happens to run on the 8 MiB main thread. The two webview asset handlers
+/// get whatever stack the platform hands their callback, which is no better.
+///
+/// Address space is cheap and committed lazily; take a wide margin.
+pub const RENDER_STACK: usize = 32 * 1024 * 1024;
+
+/// [`render_frame`] on a thread with [`RENDER_STACK`], for callers that are not
+/// on the main thread. Scoped, so the scenario and tasks are borrowed rather
+/// than cloned.
+pub fn render_frame_deep(
+    scenario: &ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+    scale: f32,
+) -> Vec<u8> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(RENDER_STACK)
+            .spawn_scoped(scope, || render_frame(scenario, tasks, frame, scale))
+            .expect("spawn render thread")
+            .join()
+            .unwrap_or_default()
+    })
+}
+
 /// Render one frame and encode it to JPEG bytes (preview-only; the final video
 /// render path does not use this). JPEG keeps the encode cost low enough for
 /// the webview transport to keep up with playback.
