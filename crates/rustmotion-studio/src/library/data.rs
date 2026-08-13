@@ -132,7 +132,7 @@ pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     if tasks.is_empty() {
         return None;
     }
-    Some(crate::editor::frames::render_frame(
+    Some(crate::editor::frames::render_frame_deep(
         &scenario, &tasks, 0, 0.25,
     ))
 }

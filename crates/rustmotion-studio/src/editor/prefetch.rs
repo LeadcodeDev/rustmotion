@@ -299,7 +299,12 @@ pub fn ensure_prefetcher() {
             .map(|n| n.get())
             .unwrap_or(4);
         for _ in 0..worker_count(cores) {
-            std::thread::spawn(prefetch_loop);
+            // Explicit stack: these workers render, and the 2 MiB default is
+            // not enough for a deeply nested scenario in a debug build. Sized
+            // once here rather than per frame — see `frames::RENDER_STACK`.
+            let _ = std::thread::Builder::new()
+                .stack_size(crate::editor::frames::RENDER_STACK)
+                .spawn(prefetch_loop);
         }
     });
 }
