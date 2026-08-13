@@ -1,4 +1,4 @@
-# Rule: The Terminal-Product Register
+# Rule: The Pixel-Product Register
 
 A visual register for demonstrating a **command-line product**: two alternating
 grounds, one statement per beat, a terminal window as the recurring subject, and
