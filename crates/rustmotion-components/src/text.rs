@@ -68,6 +68,11 @@ fn apply_text_anim_preset(
     cursor_x: f32,
     line_y: f32,
     unit_width: f32,
+    // The tracking the *cursor* was advanced with. Drawing at 0 while the
+    // advance carries a negative value makes the glyphs overrun their slot and
+    // swallow the inter-word space — visible only once the overrun approaches
+    // a space's width, i.e. at small sizes or long words.
+    letter_spacing: f32,
     preset: &CharAnimPreset,
     t: f32,
     time: f64,
@@ -99,12 +104,30 @@ fn apply_text_anim_preset(
             canvas.translate((center_x, center_y));
             canvas.scale((scale, scale));
             canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, paint);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                paint,
+            );
         }
         CharAnimPreset::FadeIn => {
             let mut p = paint.clone();
             p.set_alpha_f(t * paint.alpha_f());
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, &p);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                &p,
+            );
         }
         CharAnimPreset::Wave => {
             let wave_offset =
@@ -116,7 +139,7 @@ fn apply_text_anim_preset(
                 text,
                 font,
                 emoji_font,
-                0.0,
+                letter_spacing,
                 cursor_x,
                 line_y + wave_offset,
                 &p,
@@ -133,7 +156,16 @@ fn apply_text_anim_preset(
             canvas.translate((center_x, center_y));
             canvas.scale((scale, scale));
             canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, paint);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                paint,
+            );
         }
         CharAnimPreset::RotateIn => {
             let angle = (1.0 - t) * -90.0;
@@ -142,7 +174,16 @@ fn apply_text_anim_preset(
             canvas.translate((center_x, center_y));
             canvas.rotate(angle, None);
             canvas.translate((-center_x, -center_y));
-            draw_text_with_fallback(canvas, text, font, emoji_font, 0.0, cursor_x, line_y, &p);
+            draw_text_with_fallback(
+                canvas,
+                text,
+                font,
+                emoji_font,
+                letter_spacing,
+                cursor_x,
+                line_y,
+                &p,
+            );
         }
         CharAnimPreset::SlideUp => {
             let offset_y = (1.0 - t) * font_size * 0.8;
@@ -153,7 +194,7 @@ fn apply_text_anim_preset(
                 text,
                 font,
                 emoji_font,
-                0.0,
+                letter_spacing,
                 cursor_x,
                 line_y + offset_y,
                 &p,
@@ -183,7 +224,7 @@ fn apply_text_anim_preset(
                 text,
                 font,
                 emoji_font,
-                0.0,
+                letter_spacing,
                 cursor_x,
                 line_y + offset_y,
                 &p,
@@ -291,6 +332,7 @@ fn render_char_animation(
                     cursor_x,
                     line_y,
                     word_width,
+                    letter_spacing,
                     &char_anim.preset,
                     t,
                     time,
@@ -334,6 +376,11 @@ fn render_char_animation(
                     cursor_x,
                     line_y,
                     ch_width,
+                    // Single characters carry no internal tracking, so this is
+                    // 0 by construction — passed explicitly rather than left
+                    // to a default, since the word path above needs the real
+                    // value and the two must not drift apart.
+                    0.0,
                     &char_anim.preset,
                     t,
                     time,

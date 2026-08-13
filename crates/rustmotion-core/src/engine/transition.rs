@@ -1,5 +1,7 @@
 use crate::engine::animator::ease;
-use crate::schema::{EasingType, PanBackground, TransitionCorner, TransitionType};
+use crate::schema::{
+    EasingType, PanBackground, PixelDissolveOrder, TransitionCorner, TransitionType,
+};
 use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
 
 /// Composite two RGBA frames during a transition.
@@ -12,6 +14,9 @@ pub fn apply_transition(
     progress: f64,
     transition_type: &TransitionType,
     corner: TransitionCorner,
+    cell: f32,
+    seed: u32,
+    order: PixelDissolveOrder,
 ) -> Vec<u8> {
     let progress = progress.clamp(0.0, 1.0) as f32;
 
@@ -38,6 +43,9 @@ pub fn apply_transition(
         TransitionType::Dissolve => dissolve_transition(frame_a, frame_b, width, height, progress),
         TransitionType::CornerReveal => {
             corner_reveal(frame_a, frame_b, width, height, progress, corner)
+        }
+        TransitionType::PixelDissolve => {
+            pixel_dissolve(frame_a, frame_b, width, height, progress, cell, seed, order)
         }
         TransitionType::CameraPan => blend_fade(frame_a, frame_b, progress),
         TransitionType::None => {
@@ -103,6 +111,130 @@ fn corner_rect(corner: TransitionCorner, w: f32, h: f32, progress: f32) -> skia_
         TransitionCorner::BottomRight => skia_safe::Rect::from_xywh(w - rw, h - rh, rw, rh),
         TransitionCorner::BottomLeft => skia_safe::Rect::from_xywh(0.0, h - rh, rw, rh),
     }
+}
+
+/// How much a cell's own position pulls its threshold, against the hash. Enough
+/// to read as a front travelling inward, little enough that the front stays
+/// ragged instead of collapsing to a clean rectangle closing in.
+const SPATIAL_WEIGHT: f32 = 0.72;
+
+/// Deterministic 0..1 threshold for a cell — the moment it starts to turn.
+///
+/// A hash of the cell's coordinates, not a random draw: the transition must
+/// dissolve the same way on every render, and re-rolling per frame would make
+/// the mosaic boil instead of resolve.
+fn cell_hash01(col: i32, row: i32, seed: u32) -> f32 {
+    let mut h = seed
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add((col as u32).wrapping_mul(0x85EB_CA6B))
+        .wrapping_add((row as u32).wrapping_mul(0xC2B2_AE35));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7FEB_352D);
+    h ^= h >> 15;
+    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
+}
+
+/// The threshold once the spatial order is folded in.
+///
+/// `EdgesIn` gives border cells an early threshold and the centre a late one,
+/// so the subject in the middle is the last thing to go. The hash still
+/// contributes: without it the front is a rectangle closing in, which reads as
+/// a wipe rather than a dissolve.
+fn cell_threshold(
+    col: i32,
+    row: i32,
+    cols: i32,
+    rows: i32,
+    seed: u32,
+    order: PixelDissolveOrder,
+) -> f32 {
+    let noise = cell_hash01(col, row, seed);
+    if order == PixelDissolveOrder::Random {
+        return noise;
+    }
+    // Chebyshev distance from the centre, 0 at the middle and 1 at the border:
+    // it follows the frame's own rectangle, where a Euclidean radius would
+    // leave the corners lagging behind the edges.
+    let (cx, cy) = ((cols - 1) as f32 / 2.0, (rows - 1) as f32 / 2.0);
+    let dx = if cx > 0.0 {
+        (col as f32 - cx).abs() / cx
+    } else {
+        0.0
+    };
+    let dy = if cy > 0.0 {
+        (row as f32 - cy).abs() / cy
+    } else {
+        0.0
+    };
+    let edge = dx.max(dy).clamp(0.0, 1.0);
+    let spatial = match order {
+        PixelDissolveOrder::EdgesIn => 1.0 - edge,
+        PixelDissolveOrder::CenterOut => edge,
+        PixelDissolveOrder::Random => unreachable!("handled above"),
+    };
+    (spatial * SPATIAL_WEIGHT + noise * (1.0 - SPATIAL_WEIGHT)).clamp(0.0, 1.0)
+}
+
+/// Cross-fade the two frames cell by cell on a square lattice.
+///
+/// Each cell has its own start time, so at any instant the frame is a mosaic of
+/// both scenes with a band of half-faded cells between them — which is what
+/// separates this from `dissolve` (one global opacity, no structure) and from
+/// the wipes (a single hard boundary). `feather` is what makes a cell *fade*
+/// rather than flip: with it at 0 the effect degrades to a hard checkerboard.
+fn pixel_dissolve(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    cell: f32,
+    seed: u32,
+    order: PixelDissolveOrder,
+) -> Vec<u8> {
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_a = match frame_to_image(frame_a, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let img_b = match frame_to_image(frame_b, width, height) {
+        Some(i) => i,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+
+    let cell = cell.max(1.0);
+    let cols = (width as f32 / cell).ceil() as i32;
+    let rows = (height as f32 / cell).ceil() as i32;
+
+    let canvas = surface.canvas();
+    canvas.draw_image(&img_a, (0.0, 0.0), None);
+
+    // The whole run has to finish by progress 1, so the schedule is compressed
+    // to leave room for the last cell's own fade.
+    const FEATHER: f32 = 0.35;
+    let p = progress.clamp(0.0, 1.0) * (1.0 + FEATHER);
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let t = cell_threshold(col, row, cols, rows, seed, order);
+            let alpha = ((p - t) / FEATHER).clamp(0.0, 1.0);
+            if alpha <= 0.001 {
+                continue;
+            }
+            let rect = Rect::from_xywh(col as f32 * cell, row as f32 * cell, cell, cell);
+            canvas.save();
+            canvas.clip_rect(rect, skia_safe::ClipOp::Intersect, false);
+            let mut paint = Paint::default();
+            paint.set_alpha_f(alpha);
+            canvas.draw_image(&img_b, (0.0, 0.0), Some(&paint));
+            canvas.restore();
+        }
+    }
+
+    surface_to_pixels(surface, width, height)
 }
 
 fn blend_fade(frame_a: &[u8], frame_b: &[u8], progress: f32) -> Vec<u8> {
@@ -843,6 +975,153 @@ mod corner_reveal_tests {
                 r.width() >= 0.0 && r.height() >= 0.0,
                 "inverted rect at {p}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod pixel_dissolve_tests {
+    use super::*;
+
+    /// `edges_in` must turn the border before the middle — that is the whole
+    /// point: whatever sits in the centre is the last thing to go.
+    #[test]
+    fn edges_in_turns_the_border_first() {
+        let (cols, rows) = (40, 24);
+        let border: Vec<f32> = (0..cols)
+            .map(|c| cell_threshold(c, 0, cols, rows, 11, PixelDissolveOrder::EdgesIn))
+            .collect();
+        let middle: Vec<f32> = (0..cols)
+            .map(|c| cell_threshold(c, rows / 2, cols, rows, 11, PixelDissolveOrder::EdgesIn))
+            .collect();
+        let avg = |v: &Vec<f32>| v.iter().sum::<f32>() / v.len() as f32;
+        assert!(
+            avg(&border) < avg(&middle) - 0.15,
+            "border {:.2} must clearly precede the middle {:.2}",
+            avg(&border),
+            avg(&middle)
+        );
+        // The very centre goes last.
+        let centre = cell_threshold(
+            cols / 2,
+            rows / 2,
+            cols,
+            rows,
+            11,
+            PixelDissolveOrder::EdgesIn,
+        );
+        assert!(centre > 0.6, "the centre cell must be late, got {centre}");
+    }
+
+    /// …and `center_out` is its mirror, or the option is decoration.
+    #[test]
+    fn center_out_is_the_mirror_of_edges_in() {
+        let (cols, rows) = (40, 24);
+        for (c, r) in [(0, 0), (20, 12), (39, 5)] {
+            let a = cell_threshold(c, r, cols, rows, 11, PixelDissolveOrder::EdgesIn);
+            let b = cell_threshold(c, r, cols, rows, 11, PixelDissolveOrder::CenterOut);
+            // Same hash contribution, opposite spatial term.
+            assert!(
+                (a + b - (SPATIAL_WEIGHT + 2.0 * (1.0 - SPATIAL_WEIGHT) * cell_hash01(c, r, 11)))
+                    .abs()
+                    < 1e-5
+            );
+        }
+    }
+
+    /// The front has to stay ragged. A purely spatial threshold would close a
+    /// clean rectangle inward, which reads as a wipe, not a dissolve — so
+    /// neighbours at the same distance from the centre must still differ.
+    #[test]
+    fn the_front_is_ragged_not_a_closing_rectangle() {
+        let (cols, rows) = (40, 24);
+        let top: Vec<f32> = (0..cols)
+            .map(|c| cell_threshold(c, 0, cols, rows, 11, PixelDissolveOrder::EdgesIn))
+            .collect();
+        let spread = top.iter().cloned().fold(f32::MIN, f32::max)
+            - top.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            spread > 0.15,
+            "the border turns as one block: spread {spread}"
+        );
+    }
+
+    /// `random` keeps its old behaviour — the spatial term must not leak in.
+    #[test]
+    fn random_ignores_position() {
+        let t = cell_threshold(7, 3, 40, 24, 11, PixelDissolveOrder::Random);
+        assert_eq!(t, cell_hash01(7, 3, 11));
+    }
+
+    /// The same cell must turn at the same moment on every render: a per-frame
+    /// draw would make the mosaic boil instead of resolve.
+    #[test]
+    fn a_cell_keeps_its_threshold() {
+        assert_eq!(cell_hash01(4, 9, 11), cell_hash01(4, 9, 11));
+        let t = cell_hash01(4, 9, 11);
+        assert!(
+            (0.0..1.0).contains(&t),
+            "threshold must be a fraction, got {t}"
+        );
+    }
+
+    /// …and two seeds must dissolve in a different order, or `seed` is a lie.
+    #[test]
+    fn the_seed_changes_the_order() {
+        let a: Vec<f32> = (0..40).map(|i| cell_hash01(i, 0, 11)).collect();
+        let b: Vec<f32> = (0..40).map(|i| cell_hash01(i, 0, 12)).collect();
+        assert_ne!(a, b);
+    }
+
+    /// Neighbours must not turn in step — a threshold that tracks the
+    /// coordinate sweeps a diagonal line, which is a wipe, not a dissolve.
+    #[test]
+    fn neighbouring_cells_turn_at_unrelated_times() {
+        let close = (0..30)
+            .flat_map(|c| (0..30).map(move |r| (c, r)))
+            .filter(|&(c, r)| (cell_hash01(c, r, 11) - cell_hash01(c + 1, r, 11)).abs() < 0.05)
+            .count();
+        // 900 pairs; a swept threshold would put nearly all of them under 0.05.
+        assert!(
+            close < 200,
+            "{close}/900 neighbours turn together — that is a wipe"
+        );
+    }
+
+    /// The spread is the whole point: at half-way the frame must hold cells in
+    /// *both* states plus some mid-fade, not one global opacity.
+    #[test]
+    fn midway_the_frame_holds_both_scenes_and_a_fading_band() {
+        const FEATHER: f32 = 0.35;
+        let p = 0.5 * (1.0 + FEATHER);
+        let alphas: Vec<f32> = (0..40)
+            .flat_map(|c| (0..40).map(move |r| cell_hash01(c, r, 11)))
+            .map(|t| ((p - t) / FEATHER).clamp(0.0, 1.0))
+            .collect();
+        let done = alphas.iter().filter(|&&a| a >= 0.999).count();
+        let waiting = alphas.iter().filter(|&&a| a <= 0.001).count();
+        let fading = alphas.iter().filter(|&&a| a > 0.001 && a < 0.999).count();
+        assert!(done > 100 && waiting > 100, "both states must be present");
+        assert!(
+            fading > 50,
+            "cells must fade, not flip: only {fading} mid-transition"
+        );
+    }
+
+    /// Every cell must be settled by the end, or the last of the outgoing scene
+    /// survives into the next one.
+    #[test]
+    fn every_cell_completes_by_the_end() {
+        const FEATHER: f32 = 0.35;
+        let p = 1.0 * (1.0 + FEATHER);
+        for c in 0..60 {
+            for r in 0..60 {
+                let a = ((p - cell_hash01(c, r, 11)) / FEATHER).clamp(0.0, 1.0);
+                assert!(
+                    a >= 0.999,
+                    "cell ({c},{r}) still at {a} when the transition ends"
+                );
+            }
         }
     }
 }
