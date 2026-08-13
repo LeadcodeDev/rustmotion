@@ -224,7 +224,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/stagger-animations.md](rules/stagger-animations.md) - Stagger animations with increasing style.animation.delay
 - [rules/layer-order.md](rules/layer-order.md) - Layer order matters: first in array = behind, last = front
 - [rules/card-flex-layout.md](rules/card-flex-layout.md) - Scene = implicit flex container; use card/flex for nested layout
-- [rules/terminal-product-register.md](rules/terminal-product-register.md) - Complete visual register for demonstrating a CLI product: palette, the two type scales, the composed terminal pane, beat proportions, and which transition to spend where. Every value measured, with the derivations kept.
+- [rules/pixel-product-register.md](rules/pixel-product-register.md) - Complete visual register for demonstrating a CLI product: palette, the two type scales, the composed terminal pane, beat proportions, and which transition to spend where. Every value measured, with the derivations kept.
 - [rules/world-view.md](rules/world-view.md) - **CRITICAL:** `world` view = the only mechanism for real continuity across beats (no scene-boundary cuts); `world-position` coordinate model + ambient-halo recipe
 - [rules/continuous-presets.md](rules/continuous-presets.md) - Continuous presets (pulse, float, shake, spin) need loop: true
 - [rules/timing-constraints.md](rules/timing-constraints.md) - Timing: start_at must be < end_at, duration > 0
