@@ -203,19 +203,19 @@ fn theme_set() -> &'static ThemeSet {
         let catppuccin_themes: &[(&str, &str)] = &[
             (
                 "catppuccin-latte",
-                include_str!("../../../../themes/Catppuccin Latte.tmTheme"),
+                include_str!("../../themes/Catppuccin Latte.tmTheme"),
             ),
             (
                 "catppuccin-frappe",
-                include_str!("../../../../themes/Catppuccin Frappe.tmTheme"),
+                include_str!("../../themes/Catppuccin Frappe.tmTheme"),
             ),
             (
                 "catppuccin-macchiato",
-                include_str!("../../../../themes/Catppuccin Macchiato.tmTheme"),
+                include_str!("../../themes/Catppuccin Macchiato.tmTheme"),
             ),
             (
                 "catppuccin-mocha",
-                include_str!("../../../../themes/Catppuccin Mocha.tmTheme"),
+                include_str!("../../themes/Catppuccin Mocha.tmTheme"),
             ),
         ];
         for (name, xml) in catppuccin_themes {
@@ -228,241 +228,223 @@ fn theme_set() -> &'static ThemeSet {
         let vscode_themes: &[(&str, &str)] = &[
             (
                 "andromeeda",
-                include_str!("../../../../themes/vscode/andromeeda.json"),
+                include_str!("../../themes/vscode/andromeeda.json"),
             ),
             (
                 "aurora-x",
-                include_str!("../../../../themes/vscode/aurora-x.json"),
+                include_str!("../../themes/vscode/aurora-x.json"),
             ),
             (
                 "ayu-dark",
-                include_str!("../../../../themes/vscode/ayu-dark.json"),
+                include_str!("../../themes/vscode/ayu-dark.json"),
             ),
             (
                 "ayu-light",
-                include_str!("../../../../themes/vscode/ayu-light.json"),
+                include_str!("../../themes/vscode/ayu-light.json"),
             ),
             (
                 "ayu-mirage",
-                include_str!("../../../../themes/vscode/ayu-mirage.json"),
+                include_str!("../../themes/vscode/ayu-mirage.json"),
             ),
             (
                 "dark-plus",
-                include_str!("../../../../themes/vscode/dark-plus.json"),
+                include_str!("../../themes/vscode/dark-plus.json"),
             ),
-            (
-                "dracula",
-                include_str!("../../../../themes/vscode/dracula.json"),
-            ),
+            ("dracula", include_str!("../../themes/vscode/dracula.json")),
             (
                 "dracula-soft",
-                include_str!("../../../../themes/vscode/dracula-soft.json"),
+                include_str!("../../themes/vscode/dracula-soft.json"),
             ),
             (
                 "everforest-dark",
-                include_str!("../../../../themes/vscode/everforest-dark.json"),
+                include_str!("../../themes/vscode/everforest-dark.json"),
             ),
             (
                 "everforest-light",
-                include_str!("../../../../themes/vscode/everforest-light.json"),
+                include_str!("../../themes/vscode/everforest-light.json"),
             ),
             (
                 "github-dark",
-                include_str!("../../../../themes/vscode/github-dark.json"),
+                include_str!("../../themes/vscode/github-dark.json"),
             ),
             (
                 "github-dark-default",
-                include_str!("../../../../themes/vscode/github-dark-default.json"),
+                include_str!("../../themes/vscode/github-dark-default.json"),
             ),
             (
                 "github-dark-dimmed",
-                include_str!("../../../../themes/vscode/github-dark-dimmed.json"),
+                include_str!("../../themes/vscode/github-dark-dimmed.json"),
             ),
             (
                 "github-dark-high-contrast",
-                include_str!("../../../../themes/vscode/github-dark-high-contrast.json"),
+                include_str!("../../themes/vscode/github-dark-high-contrast.json"),
             ),
             (
                 "github-light",
-                include_str!("../../../../themes/vscode/github-light.json"),
+                include_str!("../../themes/vscode/github-light.json"),
             ),
             (
                 "github-light-default",
-                include_str!("../../../../themes/vscode/github-light-default.json"),
+                include_str!("../../themes/vscode/github-light-default.json"),
             ),
             (
                 "github-light-high-contrast",
-                include_str!("../../../../themes/vscode/github-light-high-contrast.json"),
+                include_str!("../../themes/vscode/github-light-high-contrast.json"),
             ),
             (
                 "gruvbox-dark-hard",
-                include_str!("../../../../themes/vscode/gruvbox-dark-hard.json"),
+                include_str!("../../themes/vscode/gruvbox-dark-hard.json"),
             ),
             (
                 "gruvbox-dark-medium",
-                include_str!("../../../../themes/vscode/gruvbox-dark-medium.json"),
+                include_str!("../../themes/vscode/gruvbox-dark-medium.json"),
             ),
             (
                 "gruvbox-dark-soft",
-                include_str!("../../../../themes/vscode/gruvbox-dark-soft.json"),
+                include_str!("../../themes/vscode/gruvbox-dark-soft.json"),
             ),
             (
                 "gruvbox-light-hard",
-                include_str!("../../../../themes/vscode/gruvbox-light-hard.json"),
+                include_str!("../../themes/vscode/gruvbox-light-hard.json"),
             ),
             (
                 "gruvbox-light-medium",
-                include_str!("../../../../themes/vscode/gruvbox-light-medium.json"),
+                include_str!("../../themes/vscode/gruvbox-light-medium.json"),
             ),
             (
                 "gruvbox-light-soft",
-                include_str!("../../../../themes/vscode/gruvbox-light-soft.json"),
+                include_str!("../../themes/vscode/gruvbox-light-soft.json"),
             ),
-            (
-                "horizon",
-                include_str!("../../../../themes/vscode/horizon.json"),
-            ),
+            ("horizon", include_str!("../../themes/vscode/horizon.json")),
             (
                 "horizon-bright",
-                include_str!("../../../../themes/vscode/horizon-bright.json"),
+                include_str!("../../themes/vscode/horizon-bright.json"),
             ),
-            (
-                "houston",
-                include_str!("../../../../themes/vscode/houston.json"),
-            ),
+            ("houston", include_str!("../../themes/vscode/houston.json")),
             (
                 "kanagawa-dragon",
-                include_str!("../../../../themes/vscode/kanagawa-dragon.json"),
+                include_str!("../../themes/vscode/kanagawa-dragon.json"),
             ),
             (
                 "kanagawa-lotus",
-                include_str!("../../../../themes/vscode/kanagawa-lotus.json"),
+                include_str!("../../themes/vscode/kanagawa-lotus.json"),
             ),
             (
                 "kanagawa-wave",
-                include_str!("../../../../themes/vscode/kanagawa-wave.json"),
+                include_str!("../../themes/vscode/kanagawa-wave.json"),
             ),
             (
                 "laserwave",
-                include_str!("../../../../themes/vscode/laserwave.json"),
+                include_str!("../../themes/vscode/laserwave.json"),
             ),
             (
                 "light-plus",
-                include_str!("../../../../themes/vscode/light-plus.json"),
+                include_str!("../../themes/vscode/light-plus.json"),
             ),
             (
                 "material-theme",
-                include_str!("../../../../themes/vscode/material-theme.json"),
+                include_str!("../../themes/vscode/material-theme.json"),
             ),
             (
                 "material-theme-darker",
-                include_str!("../../../../themes/vscode/material-theme-darker.json"),
+                include_str!("../../themes/vscode/material-theme-darker.json"),
             ),
             (
                 "material-theme-lighter",
-                include_str!("../../../../themes/vscode/material-theme-lighter.json"),
+                include_str!("../../themes/vscode/material-theme-lighter.json"),
             ),
             (
                 "material-theme-ocean",
-                include_str!("../../../../themes/vscode/material-theme-ocean.json"),
+                include_str!("../../themes/vscode/material-theme-ocean.json"),
             ),
             (
                 "material-theme-palenight",
-                include_str!("../../../../themes/vscode/material-theme-palenight.json"),
+                include_str!("../../themes/vscode/material-theme-palenight.json"),
             ),
             (
                 "min-dark",
-                include_str!("../../../../themes/vscode/min-dark.json"),
+                include_str!("../../themes/vscode/min-dark.json"),
             ),
             (
                 "min-light",
-                include_str!("../../../../themes/vscode/min-light.json"),
+                include_str!("../../themes/vscode/min-light.json"),
             ),
-            (
-                "monokai",
-                include_str!("../../../../themes/vscode/monokai.json"),
-            ),
+            ("monokai", include_str!("../../themes/vscode/monokai.json")),
             (
                 "night-owl",
-                include_str!("../../../../themes/vscode/night-owl.json"),
+                include_str!("../../themes/vscode/night-owl.json"),
             ),
             (
                 "night-owl-light",
-                include_str!("../../../../themes/vscode/night-owl-light.json"),
+                include_str!("../../themes/vscode/night-owl-light.json"),
             ),
-            ("nord", include_str!("../../../../themes/vscode/nord.json")),
+            ("nord", include_str!("../../themes/vscode/nord.json")),
             (
                 "one-dark-pro",
-                include_str!("../../../../themes/vscode/one-dark-pro.json"),
+                include_str!("../../themes/vscode/one-dark-pro.json"),
             ),
             (
                 "one-light",
-                include_str!("../../../../themes/vscode/one-light.json"),
+                include_str!("../../themes/vscode/one-light.json"),
             ),
-            (
-                "plastic",
-                include_str!("../../../../themes/vscode/plastic.json"),
-            ),
+            ("plastic", include_str!("../../themes/vscode/plastic.json")),
             (
                 "poimandres",
-                include_str!("../../../../themes/vscode/poimandres.json"),
+                include_str!("../../themes/vscode/poimandres.json"),
             ),
-            ("red", include_str!("../../../../themes/vscode/red.json")),
+            ("red", include_str!("../../themes/vscode/red.json")),
             (
                 "rose-pine",
-                include_str!("../../../../themes/vscode/rose-pine.json"),
+                include_str!("../../themes/vscode/rose-pine.json"),
             ),
             (
                 "rose-pine-dawn",
-                include_str!("../../../../themes/vscode/rose-pine-dawn.json"),
+                include_str!("../../themes/vscode/rose-pine-dawn.json"),
             ),
             (
                 "rose-pine-moon",
-                include_str!("../../../../themes/vscode/rose-pine-moon.json"),
+                include_str!("../../themes/vscode/rose-pine-moon.json"),
             ),
             (
                 "slack-dark",
-                include_str!("../../../../themes/vscode/slack-dark.json"),
+                include_str!("../../themes/vscode/slack-dark.json"),
             ),
             (
                 "slack-ochin",
-                include_str!("../../../../themes/vscode/slack-ochin.json"),
+                include_str!("../../themes/vscode/slack-ochin.json"),
             ),
             (
                 "snazzy-light",
-                include_str!("../../../../themes/vscode/snazzy-light.json"),
+                include_str!("../../themes/vscode/snazzy-light.json"),
             ),
             (
                 "solarized-dark",
-                include_str!("../../../../themes/vscode/solarized-dark.json"),
+                include_str!("../../themes/vscode/solarized-dark.json"),
             ),
             (
                 "solarized-light",
-                include_str!("../../../../themes/vscode/solarized-light.json"),
+                include_str!("../../themes/vscode/solarized-light.json"),
             ),
             (
                 "synthwave-84",
-                include_str!("../../../../themes/vscode/synthwave-84.json"),
+                include_str!("../../themes/vscode/synthwave-84.json"),
             ),
             (
                 "tokyo-night",
-                include_str!("../../../../themes/vscode/tokyo-night.json"),
+                include_str!("../../themes/vscode/tokyo-night.json"),
             ),
-            (
-                "vesper",
-                include_str!("../../../../themes/vscode/vesper.json"),
-            ),
+            ("vesper", include_str!("../../themes/vscode/vesper.json")),
             (
                 "vitesse-black",
-                include_str!("../../../../themes/vscode/vitesse-black.json"),
+                include_str!("../../themes/vscode/vitesse-black.json"),
             ),
             (
                 "vitesse-dark",
-                include_str!("../../../../themes/vscode/vitesse-dark.json"),
+                include_str!("../../themes/vscode/vitesse-dark.json"),
             ),
             (
                 "vitesse-light",
-                include_str!("../../../../themes/vscode/vitesse-light.json"),
+                include_str!("../../themes/vscode/vitesse-light.json"),
             ),
         ];
         for (name, json) in vscode_themes {
