@@ -52,6 +52,6 @@ jobs:
       # pouvait donc jamais reussir, et la release 0.6.0 s'est arretee la — apres
       # avoir publie rustmotion-core, definitivement.
       #
-      # studio et cli ne sont pas publiees.
+      # studio et cli portent `publish = false` : cargo les saute tout seul.
       - name: Publish all crates
-        run: cargo publish --workspace --exclude rustmotion-studio --exclude rustmotion-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
