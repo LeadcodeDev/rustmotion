@@ -2,8 +2,8 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint};
 
 use crate::schema::{
     AnimatedBackground, BackgroundPreset, ConcentricCirclesConfig, GradientShiftConfig,
-    GradientType, GridDotsConfig, HaloConfig, HaloZone, HeropatternConfig, PixelDensityRamp,
-    PixelGridConfig, PixelGridMotion, ScrollDirection,
+    GradientType, GridDotsConfig, GridLinesConfig, HaloConfig, HaloZone, HeropatternConfig,
+    PixelDensityRamp, PixelGridConfig, PixelGridMotion, ScrollDirection,
 };
 use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex};
 
@@ -42,6 +42,7 @@ pub(super) fn draw_animated_background(
         BackgroundPreset::GridDots(cfg) => {
             draw_bg_grid_dots(canvas, cfg, time, width, height, phase_origin)
         }
+        BackgroundPreset::GridLines(cfg) => draw_bg_grid_lines(canvas, cfg, width, height),
         BackgroundPreset::ConcentricCircles(cfg) => {
             draw_bg_concentric_circles(canvas, cfg, bg.speed, time, width, height)
         }
@@ -387,6 +388,45 @@ fn draw_bg_grid_dots(
             x += spacing;
         }
         y += spacing;
+    }
+}
+
+/// A ruled grid of horizontal and vertical lines.
+///
+/// Unlike `grid_dots`, nothing here pulses: a grid is structure behind the
+/// content, and structure that breathes competes with what sits on it. The
+/// motion, if any, comes from the shared `speed`/`direction` scroll applied by
+/// the caller's canvas translate.
+fn draw_bg_grid_lines(canvas: &Canvas, cfg: &GridLinesConfig, width: f32, height: f32) {
+    let cell = cfg.cell.max(4.0);
+    let mut minor = paint_from_hex(&cfg.color);
+    minor.set_anti_alias(false); // hairlines stay crisp unblurred
+    minor.set_stroke_width(cfg.weight.max(0.5));
+    minor.set_style(skia_safe::PaintStyle::Stroke);
+    let mut major = minor.clone();
+    major.set_stroke_width(cfg.major_weight.max(0.5));
+
+    // One cell of overscan on every side: the caller wraps the scroll offset
+    // into `(-cell, cell)`, so without the margin a scrolled grid leaves a
+    // blank band on the leading edge (the same trap `draw_bg_grid_dots`
+    // documents on its own loop).
+    let pick = |index: i32| -> &Paint {
+        if cfg.major_every > 0 && index.rem_euclid(cfg.major_every as i32) == 0 {
+            &major
+        } else {
+            &minor
+        }
+    };
+
+    let cols = ((width / cell).ceil() as i32) + 2;
+    for i in -1..cols {
+        let x = i as f32 * cell;
+        canvas.draw_line((x, -cell), (x, height + cell), pick(i));
+    }
+    let rows = ((height / cell).ceil() as i32) + 2;
+    for j in -1..rows {
+        let y = j as f32 * cell;
+        canvas.draw_line((-cell, y), (width + cell, y), pick(j));
     }
 }
 
@@ -754,6 +794,7 @@ pub(super) fn interpolate_animated_bg(
 fn tile_spacing(preset: &BackgroundPreset) -> f32 {
     match preset {
         BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
+        BackgroundPreset::GridLines(cfg) => cfg.cell.max(4.0),
         // The lattice repeats on `spacing`, so the world-view camera can wrap
         // on it and the tiling stays seamless as the camera pans.
         BackgroundPreset::PixelGrid(cfg) => cfg.spacing.max(cfg.size.max(1.0)),
@@ -1240,5 +1281,140 @@ mod pixel_grid_tests {
         let mut over = cfg();
         over.density = 5.0;
         draw_bg_pixel_grid(canvas, &over, 1.0, 0.0, 32.0, 32.0);
+    }
+}
+
+#[cfg(test)]
+mod grid_lines_tests {
+    //! `grid_lines` is the ruled counterpart of `grid_dots`: dots mark the
+    //! intersections and read as texture, lines read as structure. The
+    //! properties worth pinning are that the lines actually land on the cell
+    //! pitch, that `major_every` thickens the right ones, and that the grid
+    //! covers the frame edge to edge (the trap `grid_dots` already documents
+    //! on its own loop: an asymmetric overscan leaves a blank leading band
+    //! once the background scrolls).
+
+    use super::*;
+    use crate::schema::GridLinesConfig;
+
+    const W: i32 = 200;
+    const H: i32 = 120;
+
+    fn render(cfg: GridLinesConfig) -> Vec<u8> {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        draw_bg_grid_lines(surface.canvas(), &cfg, W as f32, H as f32);
+        let snapshot = surface.image_snapshot();
+        let info = ImageInfo::new(
+            (W, H),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        assert!(snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        ));
+        buf
+    }
+
+    fn alpha_at(buf: &[u8], x: i32, y: i32) -> u8 {
+        buf[((y * W + x) * 4) as usize + 3]
+    }
+
+    fn column_ink(buf: &[u8], x: i32) -> u32 {
+        (0..H).map(|y| alpha_at(buf, x, y) as u32).sum()
+    }
+
+    fn base(cell: f32) -> GridLinesConfig {
+        GridLinesConfig {
+            color: "#FFFFFFFF".into(),
+            cell,
+            weight: 1.0,
+            major_every: 0,
+            major_weight: 2.0,
+        }
+    }
+
+    #[test]
+    fn lines_land_on_the_cell_pitch() {
+        let buf = render(base(40.0));
+        for x in [0, 40, 80, 120, 160] {
+            assert!(
+                column_ink(&buf, x) > 0,
+                "a vertical line should sit at x={x} (one cell pitch apart)"
+            );
+        }
+        // And a mid-cell column carries only where the *horizontal* lines
+        // cross it — a few pixels, not a full column. Without that gap this
+        // would be a wash, not a grid.
+        for x in [20, 60, 100] {
+            assert!(
+                column_ink(&buf, x) * 10 < column_ink(&buf, 40),
+                "x={x} sits mid-cell: it should only carry the horizontal crossings ({}) not a \
+                 full line ({})",
+                column_ink(&buf, x),
+                column_ink(&buf, 40)
+            );
+        }
+    }
+
+    #[test]
+    fn the_grid_reaches_all_four_edges() {
+        let buf = render(base(40.0));
+        // Corners: the horizontal line at y=0 and the vertical at x=0 both
+        // pass through, and the far edges are covered by the overscan.
+        assert!(alpha_at(&buf, 0, 0) > 0, "top-left corner is on the grid");
+        assert!(
+            (0..H).any(|y| alpha_at(&buf, W - 1, y) > 0),
+            "the right edge must be reached by horizontal lines"
+        );
+        assert!(
+            (0..W).any(|x| alpha_at(&buf, x, H - 1) > 0),
+            "the bottom edge must be reached by vertical lines"
+        );
+    }
+
+    #[test]
+    fn major_every_thickens_only_the_major_lines() {
+        let cfg = GridLinesConfig {
+            major_every: 2,
+            major_weight: 5.0,
+            ..base(40.0)
+        };
+        let buf = render(cfg);
+        // Index 2 (x=80) is major, index 1 (x=40) is not. Compare the ink in
+        // a band around each: the thick line spills into its neighbours.
+        let band =
+            |centre: i32| -> u32 { (centre - 3..=centre + 3).map(|x| column_ink(&buf, x)).sum() };
+        assert!(
+            band(80) > band(40) * 2,
+            "the major line at x=80 should be markedly heavier than the minor one at x=40 \
+             (major={}, minor={})",
+            band(80),
+            band(40)
+        );
+    }
+
+    #[test]
+    fn a_zero_major_every_leaves_every_line_the_same_weight() {
+        let buf = render(base(40.0));
+        let band =
+            |centre: i32| -> u32 { (centre - 3..=centre + 3).map(|x| column_ink(&buf, x)).sum() };
+        assert_eq!(
+            band(40),
+            band(80),
+            "with major_every: 0 no line is special-cased"
+        );
+    }
+
+    #[test]
+    fn a_degenerate_cell_does_not_hang_the_render() {
+        // 0 would be an infinite loop's worth of lines; the painter clamps.
+        let buf = render(base(0.0));
+        assert_eq!(buf.len(), (W * H * 4) as usize, "it still produced a frame");
     }
 }

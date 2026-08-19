@@ -8,7 +8,7 @@
 //! disappears.
 
 use crate::css::style::CssStyle;
-use crate::css::style::{FilterFn, TransformFn};
+use crate::css::style::{FilterFn, Size, TransformFn};
 use crate::css::units::{Length, LengthPercentage};
 use crate::engine::animator::AnimatedProperties;
 
@@ -92,12 +92,26 @@ pub fn apply_animated_props(css: &mut CssStyle, props: &AnimatedProperties) {
         css.perspective = Some(Length::Px(props.perspective));
     }
 
-    // Note: `border_radius`, `font_size`, `width`, `height`, `gap`, `padding`,
-    // `stroke_width`, `shadow_blur`, `draw_progress`, `motion_progress`,
-    // `visible_chars*`, `char_animation`, `color` are NOT translated to CSS
-    // here. Those are component-internal animations and remain accessible
-    // through the legacy props on the dispatcher path. They will move into
-    // CSS once each component's painter is migrated.
+    // ---- box size ----
+    // An animated `width`/`height` has to reach taffy, not just the painter:
+    // resizing a card is a *layout* change (its children reflow inside the new
+    // box), which is what separates it from a `scale` transform stretching the
+    // pixels it already had. The animator's sentinel for "never animated" is
+    // -1.0 (see `AnimatedProperties::default`), so a 0 is a real, authored 0.
+    // The layout pass runs per frame, so writing here is enough.
+    if props.width >= 0.0 {
+        css.width = Some(Size::Length(LengthPercentage::Px(props.width)));
+    }
+    if props.height >= 0.0 {
+        css.height = Some(Size::Length(LengthPercentage::Px(props.height)));
+    }
+
+    // Note: `border_radius`, `font_size`, `gap`, `padding`, `stroke_width`,
+    // `shadow_blur`, `draw_progress`, `motion_progress`, `visible_chars*`,
+    // `char_animation`, `color` are NOT translated to CSS here. Those are
+    // component-internal animations and remain accessible through the legacy
+    // props on the dispatcher path. They will move into CSS once each
+    // component's painter is migrated.
 }
 
 #[cfg(test)]

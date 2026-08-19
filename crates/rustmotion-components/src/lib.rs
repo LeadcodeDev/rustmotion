@@ -35,8 +35,10 @@ pub mod lottie;
 pub mod marquee;
 pub mod mockup;
 pub mod notification;
+pub mod number_wheel;
 pub mod particle;
 pub mod pill_nav;
+pub mod pointer;
 pub mod positioned;
 pub mod progress;
 pub mod qrcode;
@@ -48,6 +50,7 @@ pub mod slider;
 pub mod sparkline;
 pub mod stat;
 pub mod stepper;
+pub mod success_check;
 pub mod svg;
 pub mod switch;
 pub mod table;
@@ -99,8 +102,10 @@ pub use lottie::Lottie;
 pub use marquee::Marquee;
 pub use mockup::Mockup;
 pub use notification::Notification;
+pub use number_wheel::NumberWheel;
 pub use particle::Particle;
 pub use pill_nav::PillNav;
+pub use pointer::Pointer;
 pub use positioned::Positioned;
 pub use progress::Progress;
 pub use qrcode::QrCode;
@@ -112,6 +117,7 @@ pub use slider::Slider;
 pub use sparkline::Sparkline;
 pub use stat::Stat;
 pub use stepper::Stepper;
+pub use success_check::SuccessCheck;
 pub use svg::Svg;
 pub use switch::Switch;
 pub use table::Table;
@@ -385,6 +391,9 @@ pub enum Component {
     #[serde(alias = "progress_bar")]
     Progress(Progress),
     QrCode(QrCode),
+    NumberWheel(NumberWheel),
+    SuccessCheck(SuccessCheck),
+    Pointer(Pointer),
     Rating(Rating),
     Skeleton(Skeleton),
     Slider(Slider),
@@ -451,6 +460,9 @@ impl Component {
             Component::PillNav(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::NumberWheel(c) => Some(c),
+            Component::SuccessCheck(c) => Some(c),
+            Component::Pointer(c) => Some(c),
             Component::Rating(c) => Some(c),
             Component::Skeleton(c) => Some(c),
             Component::Slider(c) => Some(c),
@@ -512,6 +524,9 @@ impl Component {
             Component::PillNav(c) => Some(c),
             Component::Progress(c) => Some(c),
             Component::QrCode(c) => Some(c),
+            Component::NumberWheel(c) => Some(c),
+            Component::SuccessCheck(c) => Some(c),
+            Component::Pointer(c) => Some(c),
             Component::Rating(c) => Some(c),
             Component::Skeleton(c) => Some(c),
             Component::Slider(c) => Some(c),
@@ -575,6 +590,9 @@ impl Component {
             Component::PillNav(c) => c,
             Component::Progress(c) => c,
             Component::QrCode(c) => c,
+            Component::NumberWheel(c) => c,
+            Component::SuccessCheck(c) => c,
+            Component::Pointer(c) => c,
             Component::Rating(c) => c,
             Component::Skeleton(c) => c,
             Component::Slider(c) => c,
@@ -631,6 +649,9 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Switch(c) => Some(c),
             Component::Slider(c) => Some(c),
+            Component::NumberWheel(c) => Some(c),
+            Component::SuccessCheck(c) => Some(c),
+            Component::Pointer(c) => Some(c),
             Component::Rating(c) => Some(c),
             Component::Stepper(c) => Some(c),
             Component::Comparison(c) => Some(c),

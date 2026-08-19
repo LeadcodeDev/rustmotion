@@ -232,12 +232,22 @@ Transitions blend between two consecutive scenes. Set on the **second** scene.
 | `iris` | Expanding circle from the center reveals scene B |
 | `slide` | Scene B pushes scene A to the left |
 | `dissolve` | Per-pixel noise dissolve |
+| `corner_reveal` | Rectangular uncover anchored at a corner |
+| `pixel_dissolve` | Cell-by-cell dissolve on a scattered order |
+| `camera_pan` | Foregrounds slide over a composited background |
+| `chromatic_wipe` | Fast slide whose reveal edge splits into red/cyan at the peak |
 | `none` | Hard cut at the midpoint |
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `type` | `string` | (required) | One of the transition types above |
 | `duration` | `f64` | `0.5` | Transition duration in seconds |
+| `easing` | `string` | `ease_in_out` | Easing of the transition's own progress |
+| `corner` | `string` | `top_right` | `corner_reveal` only |
+| `cell` / `seed` / `order` | | `48` / `11` | `pixel_dissolve` only |
+| `background` | `string` | `static` | `camera_pan` only |
+| `direction` | `string` | `left` | `chromatic_wipe` only — `left`/`right`/`up`/`down` |
+| `aberration` | `f32` | `1.0` | `chromatic_wipe` only — channel-split multiplier; `0` leaves a plain fast slide |
 
 ---
 
@@ -391,7 +401,29 @@ All visual properties are inside a `"style"` object:
 }
 ```
 
-**Root fields:** `content` (required), `max_width`
+**Root fields:** `content` (required), `max_width`, `caret`, `states`, `swap`
+
+`caret` pins a caret to a `typewriter` reveal's head, so it travels with the text instead of standing where you put it:
+
+| `caret` field | Type | Default | Description |
+|---|---|---|---|
+| `shape` | `string` | `"line"` | `"line"` (thin rule) or `"block"` (terminal) |
+| `color` | `string` | | Defaults to the text's own colour |
+| `blink` | `f32` | `1.0` | Full off/on period in seconds; `0` = solid |
+| `hide_when_done` | `bool` | `false` | Remove the caret once the reveal finishes instead of parking it |
+
+`states` + `swap` cross a label into a later one — the outgoing rises and blurs out, the incoming rises from below and sharpens:
+
+```json
+{
+  "type": "text",
+  "content": "Saving draft",
+  "states": [{ "at": 2.6, "content": "Saved" }],
+  "swap": { "duration": 0.45, "distance": 22, "blur": 9 }
+}
+```
+
+Without `swap`, the labels cut over at each `at`. The box is measured for the **longest** label the text can show, not the first — otherwise a swap back to a longer label would overflow a box the geometry validator had already signed off on.
 
 | Style field | Type | Default | Description |
 |---|---|---|---|
@@ -1293,6 +1325,94 @@ Animated cursor with click effects, blinking, and smooth path animation.
 
 When `auto_path` is set, clicks trigger at each waypoint. Uses Catmull-Rom spline interpolation for smooth curves.
 
+> `cursor` is a **text caret** — a blinking bar. For a simulated *mouse* pointer, see `pointer` below.
+
+---
+
+### Pointer
+
+A simulated mouse pointer: the arrow glyph plus the ring that pulses out of its tip when it clicks. For product walkthroughs and agent demos.
+
+```json
+{
+  "type": "pointer",
+  "position": "absolute",
+  "x": 0,
+  "y": 0,
+  "size": 52,
+  "tone": "light",
+  "click_ring": "bold",
+  "path": [
+    { "time": 0.4, "x": 1500, "y": 820 },
+    { "time": 2.0, "x": 480, "y": 330 }
+  ]
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `size` | `f32` | `44.0` | Arrow height in px; the click ring scales with it |
+| `tone` | `string` | `"light"` | `"light"` (white arrow, dark outline) or `"dark"` |
+| `color` / `outline_color` | `string` | | Override `tone` |
+| `click_ring` | `string` | `"standard"` | `"subtle"`, `"standard"`, `"bold"`, `"none"` |
+| `ring_color` | `string` | | Defaults to the arrow's fill |
+| `path` | `array` | `[]` | Waypoints `[{ "time", "x", "y" }]`; the pointer clicks on arrival at each |
+| `click_at` | `f64[]` | `[]` | Clicks for a stationary pointer — ignored when `path` is set |
+| `click_duration` | `f32` | `0.45` | Click duration, and the pause on a waypoint before moving on |
+| `path_easing` | `string` | `"ease_in_out"` | `"linear"`, `"ease_out"`, `"ease_in_out"`, `"step"` |
+
+Waypoint `x`/`y` are relative to the component's own origin. Place it at `position: absolute, x: 0, y: 0` and they read as scene coordinates. The box is the arrow glyph, not the travel — `pointer` is exempt from the viewport-overflow check, like `marquee` and `cursor`.
+
+---
+
+### Number Wheel
+
+Odometer-style digits that roll into place. Distinct from `counter`, which interpolates a *value* and rewrites the number each frame (its glyphs jump).
+
+```json
+{
+  "type": "number_wheel",
+  "value": "30,222",
+  "spin": "double",
+  "duration": 1.1,
+  "stagger_per_column": 0.09,
+  "style": { "font-size": 120, "font-weight": 700, "color": "#38BDF8" }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `value` | `string` | (required) | The figure as written. Digits roll; separators, signs and units stay put |
+| `spin` | `string` | `"single"` | `"single"`, `"double"`, `"triple"` — 0-9 revolutions before landing |
+| `duration` | `f64` | `1.2` | How long **one** reel takes to land |
+| `delay` | `f64` | `0.0` | Before the first reel starts |
+| `stagger_per_column` | `f64` | `0.08` | Per-column delay, left to right |
+| `easing` | `string` | `"ease_out_cubic"` | Curve of a reel's travel |
+
+`spin` changes the speed, not the duration: every reel takes `duration` regardless. Each column reserves the width of the font's widest digit, so a `111` doesn't overflow while a `0` rolls past.
+
+---
+
+### Success Check
+
+A checkmark drawing itself inside a halo, arriving with a pop and a rotation it resolves as it lands.
+
+```json
+{ "type": "success_check", "size": 110, "tint": "#22C55E", "delay": 1.6, "duration": 0.8 }
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `size` | `f32` | `82.0` | Halo diameter in px; the stroke scales with it |
+| `tint` | `string` | `"#22C55E"` | Colour of the mark |
+| `ring` | `f32` | `0.28` | Halo opacity, 0..1 |
+| `ring_color` | `string` | | Overrides `tint` for the halo |
+| `spin` | `f32` | `1.0` | Entrance-rotation multiplier; `0` lands square. The mark always finishes upright |
+| `stroke_width` | `f32` | `size * 0.09` | Stroke width of the mark |
+| `delay` / `duration` | `f64` | `0` / `0.7` | Arrival window |
+
+The stroke starts once the halo has landed — a mark that writes itself while still flying in reads as two animations fighting.
+
 ---
 
 ### Line
@@ -1431,10 +1551,20 @@ When `transition` is specified, background properties interpolate smoothly from 
 | `colors` | `string[]` | `[]` | Gradient colors (hex) |
 | `speed` | `f32` | `30.0` | Animation speed |
 | `gradient_type` | `string` | `"linear"` | `"linear"` or `"radial"` |
-| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"` |
+| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"grid_lines"`, `"halo"`, `"pixel_grid"`, `"heropattern"` |
 | `element_size` | `f32` | `4.0` | Dot size for grid_dots; stroke width for concentric_circles |
 | `spacing` | `f32` | `60.0` | Element spacing for grid_dots/concentric_circles |
 | `count` | `u32` | | Number of circles for concentric_circles (overrides spacing) |
+
+**`grid_lines`** is the ruled counterpart of `grid_dots`: dots mark the intersections and read as texture, ruled lines read as structure — the one to put behind a chart or a code panel. Nothing pulses; motion comes only from the shared `speed`/`direction` scroll.
+
+| `grid_lines` field | Type | Default | Description |
+|---|---|---|---|
+| `color` | `string` | `"#FFFFFF14"` | Line colour (alpha welcome) |
+| `cell` | `f32` | `72.0` | Cell edge in px (small = graph paper, large = panels) |
+| `weight` | `f32` | `1.0` | Line thickness in px |
+| `major_every` | `u32` | `0` | Draw every Nth line heavier; `0` = no major lines |
+| `major_weight` | `f32` | `2.0` | Thickness of a major line |
 
 **Background transition fields** (inside `$ref` entries):
 
@@ -1467,12 +1597,13 @@ All animation effects are defined inside `style.animation` as a **typed array**,
 | Effect name | Fields | Description |
 |---|---|---|
 | *preset name* | `delay`, `duration`, `loop`, `overshoot` | Any of the 39 presets (e.g. `fade_in_up`, `scale_in`) |
-| *char preset* | `delay`, `duration`, `stagger`, `granularity`, `easing`, `overshoot` | Per-char/word text animation: `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up` |
+| *char preset* | `delay`, `duration`, `stagger`, `granularity`, `easing`, `overshoot`, `direction`, `distance`, `scale_from`, `jitter`, `seed`, `ink_from`, `blur` | Per-char/word text animation: `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`, `char_blur_in` |
 | `glow` | `color`, `radius`, `intensity` | Luminous halo effect |
 | `wiggle` | `property`, `amplitude`, `frequency`, `mode`, `seed`, ... | Procedural noise animation |
 | `orbit` | `radius_x`, `radius_y`, `speed`, `depth`, `tilt`, ... | Elliptical orbital motion with pseudo-3D |
 | `keyframes` | `keyframes` | Custom keyframe animations |
 | `motion_blur` | `intensity` | Motion blur effect |
+| `shimmer` | `delay`, `duration`, `color`, `width`, `intensity`, `angle`, `loop` | A band of light sweeping across the element's **own painted pixels** (composited `SrcATop` inside the node's layer, so on a `text` it catches the glyphs, not the box) |
 
 Components also support a `timeline` field (array of `{ "at": f64, "animation": [...] }` steps) for multi-phase sequential animations within a scene.
 
@@ -1511,6 +1642,7 @@ Components also support a `timeline` field (array of `{ "at": f64, "animation": 
 | `blur_in` | Fade in from blurred |
 | `rotate_in` | Rotate + scale from half size |
 | `elastic_in` | Elastic underdamped spring scale |
+| `pop_in` | Back-out scale that *places* the element, then a short elastic pulse (`overshoot` sets its amplitude, default 0.18) |
 
 #### Exit Presets
 
@@ -1677,7 +1809,7 @@ Creates continuous circular or elliptical orbital motion with pseudo-3D depth. A
 
 Animate each character or word independently with staggered timing. Use `char_*` animation presets inside `style.animation` on `text` components.
 
-**Char animation presets:** `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`
+**Char animation presets:** `char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`, `char_blur_in`
 
 ```json
 {
@@ -1698,6 +1830,14 @@ Animate each character or word independently with staggered timing. Use `char_*`
 | `easing` | `string` | `"linear"` | Easing function |
 | `granularity` | `string` | `"char"` | `"char"` (per-character) or `"word"` (per-word) |
 | `overshoot` | `f64` | `0.08` | Overshoot intensity for `char_scale_in`/`char_bounce` (0.0 = none) |
+| `blur` | `f64` | `14.0` | Starting blur sigma, `char_blur_in` only |
+| `direction` | `string` | `"up"` | Where each unit travels in from: `"up"`, `"down"`, `"left"`, `"right"`. Read by the translate-based presets (`char_slide_up`, `char_blur_in`); the others have no travel axis and ignore it |
+| `distance` | `f64` | `1.0` | Multiplier on the travel distance (~0.5 tight, ~1.85 pronounced) |
+| `scale_from` | `f64` | | Scale each unit starts at, growing to 1.0. Composes with the preset's own motion; ignored by `char_scale_in`/`char_bounce`, which own their scale curve |
+| `jitter` + `seed` | `f64`, `u32` | `0`, `0` | Randomise each unit's start by ±`jitter × stagger`, so units arrive in uneven bursts rather than on a metronome. Derived from `seed` and the unit index — never from an RNG, so a frame renders identically in any process or `--frames` segment |
+| `ink_from` | `string` | | Colour each unit starts at, converging to `style.color` over its animation |
+
+`char_slide_up` with `"direction": "down"` drops letters in from above — the name is historical (it is *the* translate preset, `up` is its default); there is no `char_slide_down`.
 
 **Per-word mode** (`"granularity": "word"`) splits text by whitespace and animates each word as a unit. Use larger stagger values (0.1–0.3s) for word reveals:
 

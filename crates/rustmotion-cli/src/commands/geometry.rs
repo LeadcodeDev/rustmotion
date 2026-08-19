@@ -383,7 +383,14 @@ fn bbox_of(layout: &BoxLayout) -> BBox {
 }
 
 fn is_exempted(c: &Component) -> bool {
-    matches!(c, Component::Marquee(_) | Component::Cursor(_))
+    matches!(
+        c,
+        // A pointer joins `marquee`/`cursor` for the same reason: its
+        // waypoints are authored against the scene, so a demo that walks it
+        // to a control near the edge legitimately puts the arrow's tail
+        // past it. Its box is the glyph, not the content it points at.
+        Component::Marquee(_) | Component::Cursor(_) | Component::Pointer(_)
+    )
 }
 
 /// Extends the exemption above with an *opt-in* declaration: a component
@@ -1159,6 +1166,9 @@ fn component_kind(c: &Component) -> &'static str {
         Component::Gif(_) => "gif",
         Component::Counter(_) => "counter",
         Component::Cursor(_) => "cursor",
+        Component::Pointer(_) => "pointer",
+        Component::NumberWheel(_) => "number_wheel",
+        Component::SuccessCheck(_) => "success_check",
         Component::Caption(_) => "caption",
         Component::Codeblock(_) => "codeblock",
         Component::Avatar(_) => "avatar",

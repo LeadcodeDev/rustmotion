@@ -794,6 +794,7 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::BlurIn(t)
         | AnimationEffect::RotateIn(t)
         | AnimationEffect::ElasticIn(t)
+        | AnimationEffect::PopIn(t)
         | AnimationEffect::Pulse(t)
         | AnimationEffect::Float(t)
         | AnimationEffect::Shake(t)
@@ -824,6 +825,17 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::CharRotateIn(t)
         | AnimationEffect::CharSlideUp(t)
         | AnimationEffect::CharBlurIn(t) => char_budget(t),
+
+        // A sweep of light is decoration over an element that is already
+        // there — it has a completion time like an entrance does, so it is
+        // budgeted the same way, but a looping one never completes.
+        AnimationEffect::Shimmer(s) => {
+            if s.repeat {
+                None
+            } else {
+                Some((s.delay, s.duration))
+            }
+        }
 
         // Custom keyframes
         AnimationEffect::Keyframes(k) => {

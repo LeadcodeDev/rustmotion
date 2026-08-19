@@ -129,14 +129,31 @@ impl Cursor {
     /// Compute cursor position offset from auto_path at the given time.
     /// Returns (dx, dy) translation to apply.
     fn auto_path_offset(&self, time: f64) -> (f32, f32) {
-        if self.auto_path.len() < 2 {
-            if let Some(wp) = self.auto_path.first() {
+        waypoint_offset(&self.auto_path, time, self.click_duration, self.path_easing)
+    }
+}
+
+/// Where a waypoint path sits at `time`: `(dx, dy)` from the component's own
+/// origin.
+///
+/// Shared by `cursor` (a text caret) and `pointer` (a mouse pointer). They
+/// draw entirely different glyphs, but "hold at the first waypoint, glide to
+/// each next one on a Catmull-Rom curve, pause for the click before moving
+/// on" is the same walkthrough choreography in both, and it is worth having
+/// exactly one implementation of it.
+pub(crate) fn waypoint_offset(
+    waypoints: &[CursorWaypoint],
+    time: f64,
+    click_duration: f32,
+    path_easing: CursorPathEasing,
+) -> (f32, f32) {
+    {
+        if waypoints.len() < 2 {
+            if let Some(wp) = waypoints.first() {
                 return (wp.x, wp.y);
             }
             return (0.0, 0.0);
         }
-
-        let waypoints = &self.auto_path;
 
         // Before first waypoint: stay at first position
         if time <= waypoints[0].time {
@@ -166,7 +183,7 @@ impl Cursor {
         }
 
         // Account for click pause: don't start moving until click animation finishes
-        let click_end = wp0.time + self.click_duration as f64;
+        let click_end = wp0.time + click_duration as f64;
         let move_start = if seg_idx > 0 { click_end } else { wp0.time };
         let move_duration = wp1.time - move_start;
 
@@ -177,7 +194,7 @@ impl Cursor {
         let raw_t = ((time - move_start) / move_duration).clamp(0.0, 1.0);
 
         // Apply easing
-        let t = match self.path_easing {
+        let t = match path_easing {
             // Hold the departure point for the whole segment; the jump happens
             // when `time` reaches the next waypoint and the segment changes.
             CursorPathEasing::Step => 0.0,

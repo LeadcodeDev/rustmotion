@@ -46,6 +46,49 @@ fn default_grid_dots_color() -> String {
     "#FFFFFF15".to_string()
 }
 
+/// Config for the `grid_lines` preset — a ruled grid, not a dotted one.
+///
+/// `grid_dots` marks the intersections and reads as texture; ruled lines read
+/// as structure, which is what a SaaS/data scene wants behind a chart or a
+/// code panel. Same scroll machinery (`x`/`y`/`speed`/`direction`) as the
+/// other tiled presets.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GridLinesConfig {
+    /// Line colour (hex, alpha welcome).
+    #[serde(default = "default_grid_lines_color")]
+    pub color: String,
+    /// Cell edge in px. Small reads as graph paper, large as panels.
+    #[serde(default = "default_grid_lines_cell")]
+    pub cell: f32,
+    /// Line thickness in px.
+    #[serde(default = "default_grid_lines_weight")]
+    pub weight: f32,
+    /// Draw every Nth line at `major_weight` instead, for the
+    /// graph-paper look where the coarse grid reads through the fine one.
+    /// `0` (default) means no major lines.
+    #[serde(default)]
+    pub major_every: u32,
+    /// Thickness of a major line.
+    #[serde(default = "default_grid_lines_major_weight")]
+    pub major_weight: f32,
+}
+
+fn default_grid_lines_color() -> String {
+    "#FFFFFF14".to_string()
+}
+
+fn default_grid_lines_cell() -> f32 {
+    72.0
+}
+
+fn default_grid_lines_weight() -> f32 {
+    1.0
+}
+
+fn default_grid_lines_major_weight() -> f32 {
+    2.0
+}
+
 /// Config for the `concentric_circles` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConcentricCirclesConfig {
@@ -196,6 +239,7 @@ fn default_hero_scale() -> f32 {
 pub enum BackgroundPreset {
     GradientShift(GradientShiftConfig),
     GridDots(GridDotsConfig),
+    GridLines(GridLinesConfig),
     ConcentricCircles(ConcentricCirclesConfig),
     Halo(HaloConfig),
     PixelGrid(PixelGridConfig),
@@ -207,6 +251,7 @@ impl BackgroundPreset {
         match self {
             BackgroundPreset::GradientShift(_) => "gradient_shift",
             BackgroundPreset::GridDots(_) => "grid_dots",
+            BackgroundPreset::GridLines(_) => "grid_lines",
             BackgroundPreset::ConcentricCircles(_) => "concentric_circles",
             BackgroundPreset::Halo(_) => "halo",
             BackgroundPreset::PixelGrid(_) => "pixel_grid",
@@ -238,6 +283,7 @@ impl Serialize for AnimatedBackground {
         match &self.preset {
             BackgroundPreset::GradientShift(cfg) => map.serialize_entry("gradient_shift", cfg)?,
             BackgroundPreset::GridDots(cfg) => map.serialize_entry("grid_dots", cfg)?,
+            BackgroundPreset::GridLines(cfg) => map.serialize_entry("grid_lines", cfg)?,
             BackgroundPreset::ConcentricCircles(cfg) => {
                 map.serialize_entry("concentric_circles", cfg)?
             }
@@ -266,6 +312,7 @@ impl Serialize for AnimatedBackground {
 const KNOWN_BACKGROUND_PRESETS: &[&str] = &[
     "gradient_shift",
     "grid_dots",
+    "grid_lines",
     "concentric_circles",
     "halo",
     "pixel_grid",
@@ -462,6 +509,9 @@ fn deserialize_preset_config<E: serde::de::Error>(
         "grid_dots" => Ok(BackgroundPreset::GridDots(
             serde_json::from_value(sub).map_err(E::custom)?,
         )),
+        "grid_lines" => Ok(BackgroundPreset::GridLines(
+            serde_json::from_value(sub).map_err(E::custom)?,
+        )),
         "concentric_circles" => Ok(BackgroundPreset::ConcentricCircles(
             serde_json::from_value(sub).map_err(E::custom)?,
         )),
@@ -507,6 +557,10 @@ impl JsonSchema for AnimatedBackground {
         props.insert(
             "grid_dots".to_string(),
             gen.subschema_for::<Option<GridDotsConfig>>(),
+        );
+        props.insert(
+            "grid_lines".to_string(),
+            gen.subschema_for::<Option<GridLinesConfig>>(),
         );
         props.insert(
             "concentric_circles".to_string(),
