@@ -62,5 +62,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Package publishable crates
-        # studio et cli portent `publish = false` : cargo les saute tout seul.
-        run: cargo package --workspace
+        # Les exclusions sont nécessaires ICI et pas dans publish.yaml : les deux
+        # commandes ne traitent pas `publish = false` de la même façon.
+        # `cargo publish --workspace` saute ces crates ; `cargo package
+        # --workspace` les empaquette quand même, et échoue sur studio, qui
+        # dépend de rustmotion par `path` sans version — une dépendance sans
+        # version ne peut pas être empaquetée.
+        run: cargo package --workspace --exclude rustmotion-studio --exclude rustmotion-cli
