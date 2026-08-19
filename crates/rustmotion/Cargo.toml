@@ -1,6 +1,6 @@
 [package]
 name = "rustmotion"
-version = "0.6.1"
+version.workspace = true
 edition = "2021"
 description = "A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary."
 license = "MIT"
@@ -10,9 +10,9 @@ repository = "https://github.com/LeadcodeDev/rustmotion"
 path = "src/lib.rs"
 
 [dependencies]
-rustmotion-core = { path = "../rustmotion-core", version = "0.6.1" }
-rustmotion-components = { path = "../rustmotion-components", version = "0.6.1", features = ["lottie-native"] }
-rustmotion-html = { path = "../rustmotion-html", version = "0.6.1" }
+rustmotion-core.workspace = true
+rustmotion-components = { workspace = true, features = ["lottie-native"] }
+rustmotion-html.workspace = true
 skia-safe = "0.82"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

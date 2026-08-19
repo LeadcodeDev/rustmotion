@@ -1,6 +1,6 @@
 [package]
 name = "rustmotion-core"
-version = "0.6.1"
+version.workspace = true
 edition = "2021"
 description = "Core types, traits, and rendering utilities for rustmotion"
 license = "MIT"

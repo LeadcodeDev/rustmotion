@@ -22,9 +22,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # La version se lit via `cargo metadata`, pas en grepant un manifeste : elle
+      # est déclarée dans `[workspace.package]` et héritée, donc un `grep
+      # '^version'` sur la crate tomberait sur `version.workspace = true` et
+      # comparerait le tag à cette chaîne. cargo répond la version résolue, où
+      # qu'elle soit écrite.
       - name: Verify tag matches Cargo.toml version
         run: |
-          CARGO_VERSION=$(grep '^version' crates/rustmotion/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name=="rustmotion") | .version')
           TAG_VERSION=${GITHUB_REF#refs/tags/}
           if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
             echo "Tag $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"

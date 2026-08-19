@@ -9,6 +9,21 @@ members = [
     "crates/rustmotion-html",
 ]
 
+# Les six crates avancent ensemble. La version se change ici, et nulle part
+# ailleurs : elle était auparavant répétée dix fois — une par manifeste, plus une
+# par dépendance interne — et une seule oubliée fait échouer la publication après
+# que les précédentes soient parties, ce qui ne se rattrape pas.
+[workspace.package]
+version = "0.6.1"
+
+# Les dépendances internes portent aussi la version, donc elles se déclarent ici
+# pour la même raison. `path` sert au développement, `version` à ce que cargo
+# écrit dans le paquet publié : les deux doivent coexister, et rester d'accord.
+[workspace.dependencies]
+rustmotion-core = { path = "crates/rustmotion-core", version = "0.6.1" }
+rustmotion-components = { path = "crates/rustmotion-components", version = "0.6.1" }
+rustmotion-html = { path = "crates/rustmotion-html", version = "0.6.1" }
+
 # Optimize dependencies even in dev builds. Our own crates stay at opt-level 0
 # (fast incremental + debuggable), but heavy compute in deps (image encoding,
 # etc.) runs optimized — without this, `cargo run` image encode is ~20x slower.

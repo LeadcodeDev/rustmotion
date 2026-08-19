@@ -1,6 +1,6 @@
 [package]
 name = "rustmotion-studio"
-version = "0.6.1"
+version.workspace = true
 edition = "2021"
 publish = false
 
