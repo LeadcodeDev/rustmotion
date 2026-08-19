@@ -40,6 +40,16 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # Repetition deliberee : l'etape suivante empaquette et verifie deja tout
+      # avant de televerser, donc ce dry-run recompile les quatre crates une
+      # seconde fois et n'attrape rien de plus. Ce qu'il achete est un signal, pas
+      # une garantie — un echec ici arrive avant que la commande de publication
+      # soit lancee, donc le log dit sans ambiguite que rien n'a pu partir. Apres
+      # 0.6.0, qui s'est arretee avec une crate deja publiee, la distinction vaut
+      # le temps de compilation.
+      - name: Dry-run the workspace publish
+        run: cargo publish --workspace --dry-run
+
       # Un seul appel, et c'est ce qui porte la garantie : cargo empaquette et
       # recompile les quatre crates depuis leur propre tarball AVANT de televerser
       # quoi que ce soit. Si une seule ne se construit pas, rien ne part. Il
