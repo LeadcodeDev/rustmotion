@@ -2215,20 +2215,19 @@ mod tests {
                 skia_safe::IPoint::new(0, 0),
                 skia_safe::image::CachingHint::Disallow,
             ));
-            // Only fully-opaque pixels — antialiased edges carry blended
-            // colour that would muddy the reading.
-            let (sum, n) = (0..(TUNING_W * TUNING_H) as usize).fold((0u64, 0u64), |(s, n), i| {
-                if buf[i * 4 + 3] == 255 {
-                    (s + buf[i * 4 + 1] as u64, n + 1)
-                } else {
-                    (s, n)
-                }
-            });
-            assert!(
-                n > 0,
-                "some fully-opaque glyph pixels must exist at t={time}"
-            );
-            sum as f32 / n as f32
+            // Weight by alpha rather than requiring `alpha == 255`: the fill
+            // colour is uniform across a unit regardless of AA coverage, so
+            // this reads the same value it would with an opaque-only filter
+            // — but it stays correct once `char_scale_in` has shrunk the
+            // glyph enough (early in its ramp) that no single pixel is fully
+            // covered.
+            let (weighted, alpha_sum) =
+                (0..(TUNING_W * TUNING_H) as usize).fold((0u64, 0u64), |(s, a), i| {
+                    let alpha = buf[i * 4 + 3] as u64;
+                    (s + buf[i * 4 + 1] as u64 * alpha, a + alpha)
+                });
+            assert!(alpha_sum > 0, "some inked pixels must exist at t={time}");
+            weighted as f32 / alpha_sum as f32
         };
 
         let early = mean_green(0.1);
