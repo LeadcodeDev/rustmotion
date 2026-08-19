@@ -22,9 +22,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # La version se lit via `cargo metadata`, pas en grepant un manifeste : elle
+      # est déclarée dans `[workspace.package]` et héritée, donc un `grep
+      # '^version'` sur la crate tomberait sur `version.workspace = true` et
+      # comparerait le tag à cette chaîne. cargo répond la version résolue, où
+      # qu'elle soit écrite.
       - name: Verify tag matches Cargo.toml version
         run: |
-          CARGO_VERSION=$(grep '^version' crates/rustmotion/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name=="rustmotion") | .version')
           TAG_VERSION=${GITHUB_REF#refs/tags/}
           if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
             echo "Tag $TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
@@ -34,58 +40,28 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Publish rustmotion-core
-        run: cargo publish -p rustmotion-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # Repetition deliberee : l'etape suivante empaquette et verifie deja tout
+      # avant de televerser, donc ce dry-run recompile les quatre crates une
+      # seconde fois et n'attrape rien de plus. Ce qu'il achete est un signal, pas
+      # une garantie — un echec ici arrive avant que la commande de publication
+      # soit lancee, donc le log dit sans ambiguite que rien n'a pu partir. Apres
+      # 0.6.0, qui s'est arretee avec une crate deja publiee, la distinction vaut
+      # le temps de compilation.
+      - name: Dry-run the workspace publish
+        run: cargo publish --workspace --dry-run
 
-      - name: Wait for rustmotion-core on crates.io
-        run: |
-          VERSION=$(grep '^version' crates/rustmotion-core/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/rustmotion-core/$VERSION" > /dev/null; then
-              echo "rustmotion-core $VERSION available"
-              exit 0
-            fi
-            echo "Waiting... ($i)"
-            sleep 5
-          done
-          echo "Timeout waiting for rustmotion-core" && exit 1
-
-      - name: Publish rustmotion-components
-        run: cargo publish -p rustmotion-components --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for rustmotion-components on crates.io
-        run: |
-          VERSION=$(grep '^version' crates/rustmotion-components/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/rustmotion-components/$VERSION" > /dev/null; then
-              echo "rustmotion-components $VERSION available"
-              exit 0
-            fi
-            echo "Waiting... ($i)"
-            sleep 5
-          done
-          echo "Timeout waiting for rustmotion-components" && exit 1
-
-      # rustmotion dépend de rustmotion-html au même titre que de core et
-      # components. Sans cette étape, `cargo publish -p rustmotion` échoue sur une
-      # dépendance introuvable — mais en troisième position, core et components
-      # étant alors déjà publiées. Une publication crates.io ne se défait pas :
-      # l'échec obligerait à repasser tout le workspace en version suivante.
-      - name: Publish rustmotion-html
-        run: cargo publish -p rustmotion-html --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for rustmotion-html on crates.io
-        run: |
-          VERSION=$(grep '^version' crates/rustmotion-html/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          for i in $(seq 1 30); do
-            if curl -sf "https://crates.io/api/v1/crates/rustmotion-html/$VERSION" > /dev/null; then
-              echo "rustmotion-html $VERSION available"
-              exit 0
-            fi
-            echo "Waiting... ($i)"
-            sleep 5
-          done
-          echo "Timeout waiting for rustmotion-html" && exit 1
-
-      - name: Publish rustmotion
-        run: cargo publish -p rustmotion --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # Un seul appel, et c'est ce qui porte la garantie : cargo empaquette et
+      # recompile les quatre crates depuis leur propre tarball AVANT de televerser
+      # quoi que ce soit. Si une seule ne se construit pas, rien ne part. Il
+      # televerse ensuite dans l'ordre des dependances et attend lui-meme la
+      # propagation de l'index.
+      #
+      # Les sept etapes manuelles qui precedaient interrogeaient
+      # https://crates.io/api/v1/crates/<nom>/<version> pour attendre chaque crate.
+      # Cet endpoint refuse une requete sans User-Agent identifiant : la boucle ne
+      # pouvait donc jamais reussir, et la release 0.6.0 s'est arretee la — apres
+      # avoir publie rustmotion-core, definitivement.
+      #
+      # studio et cli portent `publish = false` : cargo les saute tout seul.
+      - name: Publish all crates
+        run: cargo publish --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
