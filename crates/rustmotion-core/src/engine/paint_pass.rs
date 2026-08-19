@@ -426,6 +426,25 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
+    // 7.5. shimmer layer. The band composites against the pixels this node
+    // paints, which do not exist yet — so an isolated layer is opened here,
+    // filled by steps 9 and 10 below, and the band is stamped onto it with
+    // `SrcATop` just before it closes.
+    let shimmer = active_shimmer(&node.css, ctx.frame.time);
+    let opened_shimmer_layer = if shimmer.is_some() {
+        let bounds = Rect::from_xywh(
+            box_layout.x,
+            box_layout.y,
+            box_layout.width,
+            box_layout.height,
+        );
+        let rec = SaveLayerRec::default().bounds(&bounds);
+        canvas.save_layer(&rec);
+        true
+    } else {
+        false
+    };
+
     // 8. clip overflow:hidden / clip — scoped to this node's own content and
     // its children only (see step 5-7's comment for why the box's own
     // decorations must stay outside this clip).
@@ -479,10 +498,107 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
+    if let Some((cfg, progress)) = shimmer {
+        paint_shimmer_band(canvas, box_layout, cfg, progress);
+    }
+    if opened_shimmer_layer {
+        canvas.restore();
+    }
+
     if opened_opacity_layer {
         canvas.restore();
     }
     canvas.restore();
+}
+
+/// The shimmer effect on this node and how far through its sweep it is at
+/// `time`, or `None` when there is none or the sweep is not running.
+///
+/// Returning `None` outside the sweep window is what keeps the cost off every
+/// other node and every other frame: no window, no isolated layer.
+fn active_shimmer(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShimmerConfig, f32)> {
+    let cfg = css.animation.iter().find_map(|e| match e {
+        crate::schema::AnimationEffect::Shimmer(c) => Some(c),
+        _ => None,
+    })?;
+    if cfg.duration <= 0.0 || cfg.intensity <= 0.0 {
+        return None;
+    }
+    let elapsed = time - cfg.delay;
+    if elapsed < 0.0 {
+        return None;
+    }
+    let progress = if cfg.repeat {
+        (elapsed / cfg.duration).rem_euclid(1.0)
+    } else if elapsed > cfg.duration {
+        return None;
+    } else {
+        elapsed / cfg.duration
+    };
+    Some((cfg, progress as f32))
+}
+
+/// Stamp the sweeping band onto the layer built by steps 9-10, restricted to
+/// the pixels that layer actually painted.
+fn paint_shimmer_band(
+    canvas: &Canvas,
+    layout: &BoxLayout,
+    cfg: &crate::schema::ShimmerConfig,
+    progress: f32,
+) {
+    if layout.width <= 0.0 || layout.height <= 0.0 {
+        return;
+    }
+    let (r, g, b, a) = crate::engine::renderer::parse_hex_color(&cfg.color);
+    let peak_alpha = (cfg.intensity.clamp(0.0, 1.0) * a as f32) as u8;
+    let transparent = SColor::from_argb(0, r, g, b);
+    let highlight = SColor::from_argb(peak_alpha, r, g, b);
+
+    // The band's axis, and the extent of the box measured along it. Using the
+    // projected extent rather than the width keeps an angled band sweeping
+    // fully off both ends instead of stopping short on the diagonal.
+    let theta = cfg.angle.to_radians();
+    let (dx, dy) = (theta.cos(), theta.sin());
+    let cx = layout.x + layout.width / 2.0;
+    let cy = layout.y + layout.height / 2.0;
+    let half_extent = (layout.width * dx).abs() / 2.0 + (layout.height * dy).abs() / 2.0;
+
+    let band = (cfg.width.max(0.01) * half_extent * 2.0).max(1.0);
+    // Travel from fully off one end to fully off the other, so the element is
+    // clean at both ends of the sweep rather than starting mid-glint.
+    let start = -half_extent - band;
+    let centre = start + progress * (2.0 * half_extent + 2.0 * band);
+
+    let p0 = Point::new(cx + dx * (centre - band), cy + dy * (centre - band));
+    let p1 = Point::new(cx + dx * (centre + band), cy + dy * (centre + band));
+
+    let Some(shader) = skia_safe::shader::Shader::linear_gradient(
+        (p0, p1),
+        skia_safe::gradient_shader::GradientShaderColors::Colors(&[
+            transparent,
+            highlight,
+            transparent,
+        ]),
+        None,
+        skia_safe::TileMode::Clamp,
+        None,
+        None,
+    ) else {
+        return;
+    };
+
+    let mut paint = Paint::default();
+    paint.set_style(PaintStyle::Fill);
+    paint.set_anti_alias(true);
+    paint.set_shader(shader);
+    // The whole point: light only the pixels the element itself painted, so
+    // the sheen reads as catching the glyphs rather than as a rectangle
+    // sliding past them.
+    paint.set_blend_mode(skia_safe::BlendMode::SrcATop);
+    canvas.draw_rect(
+        Rect::from_xywh(layout.x, layout.y, layout.width, layout.height),
+        &paint,
+    );
 }
 
 /// Conservative outward bleed (px) a `filter` chain can paint beyond the

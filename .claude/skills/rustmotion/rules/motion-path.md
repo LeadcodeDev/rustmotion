@@ -61,6 +61,22 @@ hint: at t=1.70s (57% of scene), animation transforms (tx=1886, ty=0, …)
 
 C'est la raison de préférer `motion_path` à une position calculée à la main : une trajectoire écrite en dur dans des keyframes reste vérifiable, mais tu perds l'orientation automatique et la vitesse constante le long de la courbe.
 
+## Recette : l'arc
+
+L'effet « arc motion path » — une pastille qui décrit une courbe en pivotant pour rester face à sa trajectoire — est un `motion_path` à une seule cubique et `orient: true`. Il n'y a pas de raccourci `arc` : une cubique le décrit exactement, et lisiblement.
+
+```json
+"animation": [{
+  "name": "motion_path",
+  "path": "M0,0 C260,-220 620,-220 880,0",
+  "duration": 2.4,
+  "orient": true,
+  "easing": "ease_in_out"
+}]
+```
+
+Les deux points de contrôle à la même hauteur (`-220`) donnent un arc symétrique ; les rapprocher de leurs extrémités respectives l'aplatit au milieu et le creuse aux bouts. Pour un arc **descendant**, inverse le signe : `C260,220 620,220 880,0`.
+
 ## Cas dégénérés
 
 Un chemin vide ou impossible à parser est **rejeté au chargement**. Un chemin d'un seul point, ou de longueur nulle, tient la position avec une rotation nulle. Une `duration` négative ou nulle est rejetée par `validate`. Aucun de ces cas ne produit de `NaN`.

@@ -56,13 +56,21 @@ Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$ind
 
 Un scénario est soit une liste plate `scenes` (racine) — implicitement enveloppée dans une seule vue `slide` — soit un `composition: [...]` explicite, un tableau de **vues** typées `"slide"` ou `"world"`. Les deux sont mutuellement exclusifs (`CompositionAndScenesConflict` si les deux sont présents).
 
-Dans une vue `slide`, les `transition` entre scènes sont des **composites pixel de deux frame-buffers déjà rendus** (fade, wipe, zoom, flip, iris, slide…) : aucun élément ne survit à la coupe, seuls les pixels sont mélangés.
+Dans une vue `slide`, les `transition` entre scènes sont des **composites pixel de deux frame-buffers déjà rendus** (fade, wipe, zoom, flip, iris, slide, chromatic_wipe…) : aucun élément ne survit à la coupe, seuls les pixels sont mélangés.
+
+> `chromatic_wipe` est un slide rapide dont le bord de révélation se dédouble en rouge/cyan au pic puis se recompose. `direction` (`left`/`right`/`up`/`down`) l'oriente, `aberration` dose l'écart des canaux (`0` = slide nu, `2` = doublé). Le flash est nul aux deux extrémités : une frange résiduelle sur la dernière frame baverait dans la scène suivante.
 
 La vue **`world`** est le seul mécanisme qui produit une continuité réelle entre beats : une caméra virtuelle se déplace en continu à travers un espace 2D où chaque scène occupe une position (`world-position`), avec un fondu de recouvrement pendant le pan au lieu d'une coupe. C'est la brique à utiliser pour une vidéo qui doit se lire comme un plan continu, sans limite de scène perceptible. Voir [rules/world-view.md](.claude/skills/rustmotion/rules/world-view.md) pour le modèle de coordonnées (le piège `world-position` = waypoint caméra, pas origine de scène), la recette du halo ambiant en `view.background`, et un exemple multi-beat validé.
 
 **Piège de casing à connaître :** `world-position` (scène) est en kebab-case, alors que son voisin `freeze_at` (même struct `Scene`) est en snake_case. Vraie inconsistance du schéma, pas une faute de frappe — copier la casse telle quelle.
 
-## Composants disponibles (57)
+## Fonds animés
+
+`scene["animated-background"]` (kebab-case, comme `world-position`) accepte un `preset` parmi `gradient_shift`, `grid_dots`, `grid_lines`, `concentric_circles`, `halo`, `pixel_grid`, `heropattern`, avec sa config sous une clé du même nom, plus les `x`/`y`/`speed`/`direction` communs qui font dériver la texture.
+
+> `grid_dots` marque les intersections et lit comme une texture ; `grid_lines` est une grille de **lignes** réglées et lit comme une structure — c'est celle à mettre derrière un graphe ou un panneau de code. Config : `cell`, `weight`, `color`, plus `major_every`/`major_weight` pour l'effet papier millimétré.
+
+## Composants disponibles (60)
 
 ### Basiques
 `text`, `shape`, `image`, `icon`, `svg`, `video`, `gif`, `caption`, `rich_text`, `gradient_text`
@@ -82,6 +90,7 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng
 - `progress` — barre linéaire ou circulaire
 - `counter` — compteur animé (standalone uniquement, pas dans les cards)
+- `number_wheel` — chiffres qui défilent façon compteur mécanique et atterrissent sur la figure. À ne pas confondre avec `counter`, qui interpole une valeur et réécrit le nombre (ses glyphes sautent). Voir [rules/number-wheel.md](.claude/skills/rustmotion/rules/number-wheel.md).
 - `table` — tableau avec column_widths, column_align, cell_padding, show_borders
 
 ### UI Components
@@ -103,6 +112,8 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `tag_cloud` — nuage de mots avec tailles pondérées
 - `callout` — bulle avec flèche
 - `divider` — séparateur visuel
+- `success_check` — coche qui se trace dans un halo, avec pop et rotation résorbée
+- `pointer` — curseur de **souris** simulé (flèche + anneau de clic) suivant des waypoints. `cursor` est un caret texte, pas ça. Voir [rules/pointer-walkthrough.md](.claude/skills/rustmotion/rules/pointer-walkthrough.md).
 
 ### Code & Terminal
 - `codeblock` — code syntax-highlighted avec reveal, diff mode (`diff: true`), state transitions
@@ -121,6 +132,19 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `audio_spectrum` — barres de spectre audio réactives (FFT)
 
 > Voir [rules/audio-reactive.md](.claude/skills/rustmotion/rules/audio-reactive.md) pour lier un composant à une piste `audio` via `style.audio-reactive`.
+
+## Finitions de texte
+
+Quatre mécanismes qui demandaient chacun un sous-arbre bricolé à la main. Détails et pièges dans [rules/text-polish.md](.claude/skills/rustmotion/rules/text-polish.md).
+
+- **`shimmer`** — effet d'animation : une bande de lumière balaie l'élément. Composée en `SrcATop` dans la couche du nœud, donc elle n'éclaire **que les pixels réellement peints** (les glyphes, pas la boîte). Combinée à `char_blur_in`, c'est le « text stagger ».
+- **`text.states` + `text.swap`** — un libellé qui en devient un autre : le sortant monte en floutant, l'entrant monte du bas en se défloutant. La boîte est mesurée sur le libellé **le plus long**, pas le premier.
+- **`text.caret`** — un caret (`line` ou `block`) accroché à la tête de révélation d'un `typewriter`. Un `cursor` composé à côté resterait où on l'a mis pendant que le texte pousse sous lui.
+- **`pop_in`** — preset d'entrée en deux temps : scale back-out qui *place* l'élément, puis courte impulsion élastique qui y ramène l'œil.
+
+Les sept presets `char_*` se règlent par `direction` (up/down/left/right), `distance`, `scale_from`, `jitter`+`seed` (irrégularité déterministe du stagger) et `ink_from` (couleur de départ de chaque unité). Voir [rules/char-animation-tuning.md](.claude/skills/rustmotion/rules/char-animation-tuning.md) et, pour l'arrivée de tokens, [rules/streaming-text.md](.claude/skills/rustmotion/rules/streaming-text.md).
+
+> Si on te demande un effet nommé dans le vocabulaire Hyperframes (« streaming text », « number wheel », « badge pop », « top-down letters »…), consulte d'abord la table de correspondance : [rules/hyperframes-mapping.md](.claude/skills/rustmotion/rules/hyperframes-mapping.md).
 
 ## Architecture
 

@@ -1,8 +1,16 @@
 use crate::schema::{
     Animation, AnimationEffect, AnimationPreset, CharAnimPreset, EasingType, GlowConfig, Keyframe,
-    KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig, TextAnimGranularity,
-    WiggleConfig,
+    KeyframeValue, MotionPathConfig, OrbitConfig, PresetConfig, SpringConfig, TextAnimDirection,
+    TextAnimGranularity, WiggleConfig,
 };
+
+/// Default starting blur sigma (px) for `char_blur_in` when
+/// `CharAnimationTiming.blur` is not set. Tuned against rendered output at
+/// 120px display type (see issue #118's render proof): low enough that
+/// individual letterforms stay ghost-legible at the start of a unit's
+/// reveal (this is a *reveal*, not a smoke effect), high enough that the
+/// blur is unmistakable next to the settled, sharp frame.
+pub const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
 
 /// Safe division that returns `fallback` when the denominator is too small to
 /// produce a meaningful result (within 1e-9). Use this for any calculation
@@ -39,6 +47,50 @@ pub struct ResolvedCharAnimation {
     pub easing: EasingType,
     pub delay: f32,
     pub overshoot: f32,
+    /// Starting blur sigma in px (`char_blur_in` only; 0 elsewhere).
+    pub blur: f32,
+    /// Travel direction for the presets whose motion is a translate.
+    pub direction: TextAnimDirection,
+    /// Multiplier on the preset's own travel distance (1.0 = as tuned).
+    pub distance: f32,
+    /// Scale each unit starts at, or `None` for no scaling.
+    pub scale_from: Option<f32>,
+    /// ±fraction of `stagger` each unit's start is nudged by (0 = even).
+    pub jitter: f32,
+    /// Seed for the deterministic jitter offsets.
+    pub seed: u32,
+    /// Colour each unit starts at before settling to the text's own.
+    pub ink_from: Option<String>,
+}
+
+impl ResolvedCharAnimation {
+    /// When unit `idx` starts, in seconds, including its jitter nudge.
+    ///
+    /// The nudge is a pure function of `(idx, seed)` — deliberately not an
+    /// RNG. Frames are rendered out of order, in parallel, and sometimes in
+    /// separate processes (`--frames a-b` segments), so anything stateful
+    /// here would make a unit jump between neighbouring frames.
+    ///
+    /// It is also clamped so a unit never starts before the effect's own
+    /// `delay`: a negative start would make the first units appear already
+    /// half-animated on frame 0.
+    pub fn unit_start(&self, idx: usize) -> f64 {
+        let even = self.delay as f64 + idx as f64 * self.stagger as f64;
+        if self.jitter.abs() < 1e-6 || self.stagger.abs() < 1e-6 {
+            return even;
+        }
+        // Bit-mixing hash (splitmix64's finalizer) over the unit index and
+        // seed → a well-distributed value in -1.0..1.0.
+        let mut h = (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (self.seed as u64);
+        h ^= h >> 30;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 31;
+        let unit = (h >> 11) as f64 / (1u64 << 53) as f64; // 0.0..1.0
+        let nudge = (unit * 2.0 - 1.0) * self.jitter as f64 * self.stagger as f64;
+        (even + nudge).max(self.delay as f64)
+    }
 }
 
 /// Extracted and categorized animation effects from an AnimationEffect slice.
@@ -115,7 +167,8 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                 | AnimationEffect::CharWave(t)
                 | AnimationEffect::CharBounce(t)
                 | AnimationEffect::CharRotateIn(t)
-                | AnimationEffect::CharSlideUp(t) => {
+                | AnimationEffect::CharSlideUp(t)
+                | AnimationEffect::CharBlurIn(t) => {
                     let preset = match effect {
                         AnimationEffect::CharScaleIn(_) => CharAnimPreset::ScaleIn,
                         AnimationEffect::CharFadeIn(_) => CharAnimPreset::FadeIn,
@@ -123,6 +176,12 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                         AnimationEffect::CharBounce(_) => CharAnimPreset::Bounce,
                         AnimationEffect::CharRotateIn(_) => CharAnimPreset::RotateIn,
                         AnimationEffect::CharSlideUp(_) => CharAnimPreset::SlideUp,
+                        // `char_blur_in` used to be resolved separately, off
+                        // `style.animation` inside `text.rs`'s painter, which
+                        // meant it silently missed container-level stagger
+                        // shifting and `timeline`-embedded copies. It goes
+                        // through the same door as its five siblings now.
+                        AnimationEffect::CharBlurIn(_) => CharAnimPreset::BlurIn,
                         _ => unreachable!(),
                     };
                     result.char_animation = Some(ResolvedCharAnimation {
@@ -133,6 +192,13 @@ pub fn extract_effects(effects: &[AnimationEffect]) -> ExtractedEffects<'_> {
                         easing: t.easing.clone(),
                         delay: t.delay as f32,
                         overshoot: t.overshoot.unwrap_or(0.08) as f32,
+                        blur: t.blur.map(|b| b as f32).unwrap_or(DEFAULT_CHAR_BLUR_SIGMA),
+                        direction: t.direction,
+                        distance: t.distance.unwrap_or(1.0) as f32,
+                        scale_from: t.scale_from.map(|s| s as f32),
+                        jitter: t.jitter.unwrap_or(0.0) as f32,
+                        seed: t.seed.unwrap_or(0),
+                        ink_from: t.ink_from.clone(),
                     });
                 }
                 AnimationEffect::Glow(config) => {
@@ -1603,6 +1669,52 @@ fn expand_preset_inner(preset: &AnimationPreset, config: &PresetConfig) -> Vec<A
         ],
         AnimationPreset::ElasticIn => {
             vec![kf_anim_spring_underdamped("scale", delay, 0.0, end, 1.0)]
+        }
+        AnimationPreset::PopIn => {
+            // Two beats, not one: the back-out scale places the element, then
+            // a short pulse draws the eye back to it. Collapsing them into a
+            // single overshooting curve reads as one wobble instead — the
+            // second beat has to land *after* the element has visibly settled.
+            let pulse = 1.0 + config.overshoot.unwrap_or(0.18);
+            let placed = delay + dur * 0.6;
+            let peak = delay + dur * 0.8;
+            vec![
+                kf_anim(
+                    "opacity",
+                    delay,
+                    0.0,
+                    delay + dur * 0.25,
+                    1.0,
+                    EasingType::EaseOut,
+                ),
+                Animation {
+                    property: "scale".to_string(),
+                    keyframes: vec![
+                        Keyframe {
+                            time: delay,
+                            value: KeyframeValue::Number(0.0),
+                            easing: Some(EasingType::EaseOutBack),
+                        },
+                        Keyframe {
+                            time: placed,
+                            value: KeyframeValue::Number(1.0),
+                            easing: Some(EasingType::EaseOutQuad),
+                        },
+                        Keyframe {
+                            time: peak,
+                            value: KeyframeValue::Number(pulse),
+                            easing: Some(EasingType::EaseOutElastic),
+                        },
+                        Keyframe {
+                            time: end,
+                            value: KeyframeValue::Number(1.0),
+                            easing: None,
+                        },
+                    ],
+                    easing: EasingType::EaseOut,
+                    spring: None,
+                },
+            ]
         }
 
         // ── Sorties ──────────────────────────────────────────────────────
@@ -3268,5 +3380,110 @@ mod motion_path_tests {
             "expected ~halfway along a straight 400px path, got {}",
             a.translate_x
         );
+    }
+}
+
+#[cfg(test)]
+mod char_animation_tuning_tests {
+    use super::*;
+
+    fn anim(stagger: f32, jitter: f32, seed: u32) -> ResolvedCharAnimation {
+        ResolvedCharAnimation {
+            preset: CharAnimPreset::SlideUp,
+            granularity: TextAnimGranularity::Word,
+            stagger,
+            duration: 0.4,
+            easing: EasingType::Linear,
+            delay: 0.5,
+            overshoot: 0.08,
+            blur: DEFAULT_CHAR_BLUR_SIGMA,
+            direction: TextAnimDirection::Up,
+            distance: 1.0,
+            scale_from: None,
+            jitter,
+            seed,
+            ink_from: None,
+        }
+    }
+
+    #[test]
+    fn without_jitter_units_are_evenly_spaced() {
+        let a = anim(0.2, 0.0, 0);
+        for i in 0..6 {
+            let expected = 0.5 + i as f64 * 0.2;
+            // f32 fields widened to f64 — compare at f32 precision.
+            assert!(
+                (a.unit_start(i) - expected).abs() < 1e-6,
+                "unit {i} should start at {expected}, got {}",
+                a.unit_start(i)
+            );
+        }
+    }
+
+    #[test]
+    fn jitter_is_a_pure_function_of_index_and_seed() {
+        // Frames are rendered out of order, in parallel, and across separate
+        // processes (`--frames a-b` segments). If the nudge came from an RNG,
+        // a word would land at a different time in each of those, i.e. jump
+        // between neighbouring frames of the same video.
+        let a = anim(0.2, 0.6, 42);
+        let b = anim(0.2, 0.6, 42);
+        for i in 0..32 {
+            assert_eq!(
+                a.unit_start(i).to_bits(),
+                b.unit_start(i).to_bits(),
+                "unit {i} must resolve bit-identically for the same seed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_different_seed_reshuffles_the_rhythm() {
+        let a = anim(0.2, 0.6, 1);
+        let b = anim(0.2, 0.6, 2);
+        let differing = (0..32)
+            .filter(|&i| a.unit_start(i) != b.unit_start(i))
+            .count();
+        assert!(
+            differing > 24,
+            "changing the seed should move nearly every unit, but only {differing}/32 moved"
+        );
+    }
+
+    #[test]
+    fn jitter_actually_perturbs_the_even_spacing() {
+        let even = anim(0.2, 0.0, 7);
+        let jittered = anim(0.2, 0.8, 7);
+        let moved = (1..32)
+            .filter(|&i| (even.unit_start(i) - jittered.unit_start(i)).abs() > 1e-6)
+            .count();
+        assert!(
+            moved > 20,
+            "jitter should visibly perturb the march, but only {moved}/31 units moved"
+        );
+    }
+
+    #[test]
+    fn no_unit_starts_before_the_effects_own_delay() {
+        // A negative nudge on the first unit would have it appear already
+        // half-animated on frame 0 — the one artefact the clamp exists for.
+        let a = anim(0.2, 2.0, 99);
+        for i in 0..64 {
+            assert!(
+                a.unit_start(i) >= 0.5 - 1e-9,
+                "unit {i} started at {} — before the effect's own 0.5s delay",
+                a.unit_start(i)
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_stagger_is_unaffected_by_jitter() {
+        // Nothing to spread out: every unit shares one start time, and
+        // `jitter` scales off `stagger`, so it has nothing to scale.
+        let a = anim(0.0, 1.0, 3);
+        for i in 0..8 {
+            assert!((a.unit_start(i) - 0.5).abs() < 1e-9);
+        }
     }
 }

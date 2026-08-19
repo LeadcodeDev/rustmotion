@@ -49,6 +49,12 @@ mod component_smoke {
             "qr_code",
             r#"{"type":"qr_code","content":"https://example.com"}"#,
         ),
+        ("success_check", r#"{"type":"success_check"}"#),
+        ("number_wheel", r#"{"type":"number_wheel","value":"30222"}"#),
+        (
+            "pointer",
+            r#"{"type":"pointer","path":[{"time":0.0,"x":0.0,"y":0.0},{"time":1.0,"x":200.0,"y":120.0}]}"#,
+        ),
         ("rating", r#"{"type":"rating","value":3.5}"#),
         ("skeleton", r#"{"type":"skeleton"}"#),
         ("slider", r#"{"type":"slider","value":50}"#),

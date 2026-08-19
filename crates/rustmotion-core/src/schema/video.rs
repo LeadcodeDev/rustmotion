@@ -34,6 +34,12 @@ pub enum AnimationEffect {
     BlurIn(AnimationTiming),
     RotateIn(AnimationTiming),
     ElasticIn(AnimationTiming),
+    /// Scale up from nothing with a back-out overshoot, then a short elastic
+    /// pulse before settling — the notification-badge arrival, where the
+    /// second beat is what draws the eye after the first has placed the
+    /// element. `AnimationTiming.overshoot` sets the pulse amplitude
+    /// (default 0.18 = 118%); 0 reduces it to a plain back-out scale-in.
+    PopIn(AnimationTiming),
     // --- Exit presets ---
     FadeOut(AnimationTiming),
     FadeOutUp(AnimationTiming),
@@ -78,20 +84,21 @@ pub enum AnimationEffect {
     /// a slight upward translate and an opacity ramp — one continuous
     /// per-unit animation driven by the same progress value, not three
     /// independently-timed effects. `CharAnimationTiming.blur` sets the
-    /// starting blur sigma in px (default tuned for 100px+ display type;
-    /// see `crates/rustmotion-components/src/text.rs`).
+    /// starting blur sigma in px (default
+    /// `engine::animator::DEFAULT_CHAR_BLUR_SIGMA`, tuned for 100px+ display
+    /// type).
     ///
-    /// Resolved directly off `style.animation` inside
-    /// `rustmotion_components::text::Text::paint` rather than through
-    /// `engine::animator::extract_effects`/`ResolvedCharAnimation` like its
-    /// five siblings — that resolution path lives in a file outside this
-    /// workstream's scope (chantier #117 W1). Functionally equivalent for
-    /// the documented use (a top-level `style.animation` entry); it does
-    /// not participate in container-level stagger delay shifting the way
-    /// the other char presets do when nested in a staggered list/grid.
+    /// Resolved through `engine::animator::extract_effects` →
+    /// `ResolvedCharAnimation` like its five siblings, so it picks up
+    /// container-level stagger shifting and `timeline`-embedded copies. (It
+    /// used to be read directly off `style.animation` inside
+    /// `rustmotion_components::text::Text::paint` and therefore missed both.)
     CharBlurIn(CharAnimationTiming),
     // --- Non-preset effects ---
     Glow(GlowConfig),
+    /// A band of light sweeping across the element's own painted pixels.
+    /// See [`ShimmerConfig`].
+    Shimmer(ShimmerConfig),
     Wiggle(WiggleConfig),
     Orbit(OrbitConfig),
     Keyframes(KeyframesConfig),
@@ -117,17 +124,18 @@ impl AnimationEffect {
         match self {
             FadeIn(t) | FadeInUp(t) | FadeInDown(t) | FadeInLeft(t) | FadeInRight(t)
             | SlideInLeft(t) | SlideInRight(t) | SlideInUp(t) | SlideInDown(t) | ScaleIn(t)
-            | BounceIn(t) | BlurIn(t) | RotateIn(t) | ElasticIn(t) | FadeOut(t) | FadeOutUp(t)
-            | FadeOutDown(t) | SlideOutLeft(t) | SlideOutRight(t) | SlideOutUp(t)
-            | SlideOutDown(t) | ScaleOut(t) | BounceOut(t) | BlurOut(t) | RotateOut(t)
-            | Pulse(t) | Float(t) | Shake(t) | Spin(t) | FlipInX(t) | FlipInY(t) | FlipOutX(t)
-            | FlipOutY(t) | DrawIn(t) | StrokeReveal(t) | Typewriter(t) | WipeLeft(t)
-            | WipeRight(t) | Float3d(t) => t.delay += by,
+            | BounceIn(t) | BlurIn(t) | RotateIn(t) | ElasticIn(t) | PopIn(t) | FadeOut(t)
+            | FadeOutUp(t) | FadeOutDown(t) | SlideOutLeft(t) | SlideOutRight(t)
+            | SlideOutUp(t) | SlideOutDown(t) | ScaleOut(t) | BounceOut(t) | BlurOut(t)
+            | RotateOut(t) | Pulse(t) | Float(t) | Shake(t) | Spin(t) | FlipInX(t) | FlipInY(t)
+            | FlipOutX(t) | FlipOutY(t) | DrawIn(t) | StrokeReveal(t) | Typewriter(t)
+            | WipeLeft(t) | WipeRight(t) | Float3d(t) => t.delay += by,
             TiltIn(c) => c.delay += by,
             CharScaleIn(c) | CharFadeIn(c) | CharWave(c) | CharBounce(c) | CharRotateIn(c)
             | CharSlideUp(c) | CharBlurIn(c) => c.delay += by,
             Keyframes(c) => c.delay += by,
             MotionPath(c) => c.delay += by,
+            Shimmer(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }
@@ -149,6 +157,7 @@ impl AnimationEffect {
             Self::BlurIn(t) => Some((AnimationPreset::BlurIn, t)),
             Self::RotateIn(t) => Some((AnimationPreset::RotateIn, t)),
             Self::ElasticIn(t) => Some((AnimationPreset::ElasticIn, t)),
+            Self::PopIn(t) => Some((AnimationPreset::PopIn, t)),
             Self::FadeOut(t) => Some((AnimationPreset::FadeOut, t)),
             Self::FadeOutUp(t) => Some((AnimationPreset::FadeOutUp, t)),
             Self::FadeOutDown(t) => Some((AnimationPreset::FadeOutDown, t)),
@@ -291,6 +300,66 @@ pub struct CharAnimationTiming {
     /// in issue #118).
     #[serde(default)]
     pub blur: Option<f64>,
+    /// Which way each unit travels in from. Only `char_slide_up` and
+    /// `char_blur_in` have a travel axis to redirect; the other presets
+    /// ignore it. Default `up` — the historical behaviour.
+    #[serde(default)]
+    pub direction: TextAnimDirection,
+    /// Multiplier on how far each unit travels, `1.0` being each preset's
+    /// own tuned distance (0.8em for `slide_up`, 0.12em for `blur_in`).
+    /// Use ~0.5 for a tighter arrival, ~1.85 for a pronounced staircase.
+    #[serde(default)]
+    pub distance: Option<f64>,
+    /// Scale each unit starts at, growing to 1.0 over its animation —
+    /// combined with, not instead of, the preset's own motion. 0.82 gives
+    /// the punchy "number pops in" arrival, 0.92 a barely-perceptible
+    /// settle. Unset means no scaling (the historical behaviour); the
+    /// scale-based presets (`char_scale_in`, `char_bounce`) own their scale
+    /// curve outright and ignore this.
+    #[serde(default)]
+    pub scale_from: Option<f64>,
+    /// Randomises each unit's start time by up to ±`jitter × stagger`, so
+    /// the units arrive in uneven bursts instead of a metronomic march.
+    /// This is what separates a streaming-token look from a typewriter:
+    /// language models don't emit words on a clock. 0 (default) keeps the
+    /// exact even spacing.
+    ///
+    /// The offsets are derived from `seed` and the unit's index, never from
+    /// a live RNG — a frame must render identically no matter which
+    /// process, thread or `--frames` segment computes it.
+    #[serde(default)]
+    pub jitter: Option<f64>,
+    /// Seed for `jitter`. Changing it reshuffles the arrival rhythm without
+    /// changing its statistics.
+    #[serde(default)]
+    pub seed: Option<u32>,
+    /// Colour each unit starts at before settling to the text's own colour
+    /// over its animation. A dim grey here reproduces the way freshly
+    /// streamed tokens read as unsettled before the eye accepts them.
+    #[serde(default)]
+    pub ink_from: Option<String>,
+}
+
+impl Default for CharAnimationTiming {
+    /// Mirrors the serde defaults exactly, so `CharAnimationTiming::default()`
+    /// and `serde_json::from_value(json!({}))` describe the same animation.
+    fn default() -> Self {
+        Self {
+            delay: 0.0,
+            duration: default_char_duration_f64(),
+            stagger: default_char_stagger_f64(),
+            granularity: TextAnimGranularity::default(),
+            easing: EasingType::default(),
+            overshoot: None,
+            blur: None,
+            direction: TextAnimDirection::default(),
+            distance: None,
+            scale_from: None,
+            jitter: None,
+            seed: None,
+            ink_from: None,
+        }
+    }
 }
 
 fn default_char_stagger_f64() -> f64 {
@@ -334,6 +403,43 @@ pub enum TextAnimGranularity {
     Char,
     /// Animate each word as a unit.
     Word,
+}
+
+/// Which way a per-unit entrance travels from before it settles.
+///
+/// The unit starts offset in the *opposite* direction of travel and moves
+/// towards its laid-out position: `Up` (the default, and the historical
+/// behaviour) starts below the baseline and rises; `Down` starts above and
+/// falls, which is the "letters cascading from the top" look.
+///
+/// Read by the `slide_up` and `blur_in` char presets — the ones whose motion
+/// is a translate. `scale_in`, `bounce`, `rotate_in`, `fade_in` and `wave`
+/// have no travel axis to redirect and ignore it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAnimDirection {
+    /// Starts below its line and rises into place (default).
+    #[default]
+    Up,
+    /// Starts above its line and falls into place.
+    Down,
+    /// Starts to the right and slides left into place.
+    Left,
+    /// Starts to the left and slides right into place.
+    Right,
+}
+
+impl TextAnimDirection {
+    /// The `(x, y)` offset, in px, a unit sits at when its animation has not
+    /// started yet. `travel` is the distance the unit covers.
+    pub fn offset(self, travel: f32) -> (f32, f32) {
+        match self {
+            Self::Up => (0.0, travel),
+            Self::Down => (0.0, -travel),
+            Self::Left => (travel, 0.0),
+            Self::Right => (-travel, 0.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -932,6 +1038,171 @@ pub struct GlowConfig {
     /// Intensity multiplier (higher = brighter glow, default 1.0)
     #[serde(default = "default_glow_intensity")]
     pub intensity: f32,
+}
+
+/// A later label a `text` swaps to, and when.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TextState {
+    /// Time (seconds, scene-local) at which this label takes over.
+    pub at: f64,
+    /// The label from `at` onwards.
+    pub content: String,
+}
+
+/// How a `text` crosses from one of its `states` to the next.
+///
+/// Both labels are on screen at once during the window: the outgoing one
+/// leaves upwards while blurring out, the incoming one arrives from below
+/// while sharpening. Cutting between them instead reads as a glitch, and
+/// fading alone reads as two unrelated labels rather than one value changing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TextSwapConfig {
+    /// How long the crossing takes (seconds).
+    #[serde(default = "default_swap_duration")]
+    pub duration: f64,
+    /// Vertical travel of each label, in px.
+    #[serde(default = "default_swap_distance")]
+    pub distance: f32,
+    /// Peak blur sigma (px) reached by a label at the far end of its travel.
+    /// `0` gives a pure slide-and-fade.
+    #[serde(default = "default_swap_blur")]
+    pub blur: f32,
+}
+
+impl Default for TextSwapConfig {
+    fn default() -> Self {
+        Self {
+            duration: default_swap_duration(),
+            distance: default_swap_distance(),
+            blur: default_swap_blur(),
+        }
+    }
+}
+
+fn default_swap_duration() -> f64 {
+    0.45
+}
+
+fn default_swap_distance() -> f32 {
+    18.0
+}
+
+fn default_swap_blur() -> f32 {
+    8.0
+}
+
+/// Shape of a text caret.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaretShape {
+    /// A thin vertical rule, like a text editor's insertion point.
+    #[default]
+    Line,
+    /// A filled block covering a character cell, like a terminal.
+    Block,
+}
+
+/// A caret pinned to a `text`'s reveal head.
+///
+/// Only meaningful alongside a `typewriter` animation: the caret follows the
+/// last revealed character and stops at the end of the line once the reveal
+/// finishes. Composing a standalone `cursor` component next to the text gets
+/// you a caret that stays where you put it while the text grows out from
+/// under it, which is the thing this exists to avoid.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CaretConfig {
+    /// Caret shape.
+    #[serde(default)]
+    pub shape: CaretShape,
+    /// Caret colour (hex). Defaults to the text's own colour, so a caret
+    /// inherits a theme change without being restated.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Blink period in seconds — one full off/on cycle. `0` disables the
+    /// blink and leaves the caret solid.
+    #[serde(default = "default_caret_blink")]
+    pub blink: f32,
+    /// Hide the caret once the reveal has finished, instead of leaving it
+    /// parked at the end of the text.
+    #[serde(default)]
+    pub hide_when_done: bool,
+}
+
+impl Default for CaretConfig {
+    fn default() -> Self {
+        Self {
+            shape: CaretShape::default(),
+            color: None,
+            blink: default_caret_blink(),
+            hide_when_done: false,
+        }
+    }
+}
+
+fn default_caret_blink() -> f32 {
+    1.0
+}
+
+/// A band of light sweeping across the element, restricted to the pixels the
+/// element actually painted.
+///
+/// That restriction is the whole point: painted over the element's *box*, a
+/// sheen reads as a rectangle sliding past. Painted over the element's own
+/// alpha, it reads as light catching the glyphs (or the icon, or the chart
+/// bars) themselves. See `engine::paint_pass`, which composites it with
+/// `BlendMode::SrcATop` inside the node's own layer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ShimmerConfig {
+    /// Delay before the sweep starts (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// How long one sweep takes (seconds).
+    #[serde(default = "default_shimmer_duration")]
+    pub duration: f64,
+    /// Colour of the band (hex).
+    #[serde(default = "default_shimmer_color")]
+    pub color: String,
+    /// Band width as a fraction of the distance it sweeps (0.35 = a band
+    /// covering roughly a third of the element at any instant). Wider reads
+    /// as a soft wash, narrower as a hard glint.
+    #[serde(default = "default_shimmer_width")]
+    pub width: f32,
+    /// Peak opacity of the band (0..1).
+    #[serde(default = "default_shimmer_intensity")]
+    pub intensity: f32,
+    /// Lean of the band in degrees. `0` is an upright band sweeping
+    /// left-to-right; the default 20 tilts it, which is what makes it read
+    /// as a reflection rather than a wipe. The band always travels
+    /// perpendicular to itself, so this angles the travel too.
+    #[serde(default = "default_shimmer_angle")]
+    pub angle: f32,
+    /// Repeat the sweep for the rest of the scene.
+    #[serde(default, rename = "loop")]
+    pub repeat: bool,
+}
+
+fn default_shimmer_duration() -> f64 {
+    0.9
+}
+
+fn default_shimmer_color() -> String {
+    "#FFFFFF".to_string()
+}
+
+fn default_shimmer_width() -> f32 {
+    0.35
+}
+
+fn default_shimmer_intensity() -> f32 {
+    0.75
+}
+
+fn default_shimmer_angle() -> f32 {
+    20.0
 }
 
 fn default_glow_color() -> String {

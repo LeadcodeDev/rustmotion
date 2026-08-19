@@ -159,6 +159,7 @@ pub enum AnimationPreset {
     BlurIn,
     RotateIn,
     ElasticIn,
+    PopIn,
     // Sorties
     FadeOut,
     FadeOutUp,

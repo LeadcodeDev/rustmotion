@@ -621,6 +621,18 @@ pub enum TransitionCorner {
     BottomLeft,
 }
 
+/// Which way a directional transition travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionDirection {
+    /// Both frames travel leftwards; the incoming one enters from the right.
+    #[default]
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Transition {
@@ -639,6 +651,15 @@ pub struct Transition {
     /// `pixel_dissolve` only: which cells turn first.
     #[serde(default)]
     pub order: PixelDissolveOrder,
+    /// Which way a `chromatic_wipe` travels. Ignored by every other type —
+    /// the `wipe_*`/`slide` family encodes its direction in the type name.
+    #[serde(default)]
+    pub direction: TransitionDirection,
+    /// `chromatic_wipe` only: how far the red and cyan channels split at the
+    /// peak of the wipe, as a multiple of the tuned default. `0` removes the
+    /// colour flash and leaves a plain fast slide; `2` doubles it.
+    #[serde(default = "default_transition_aberration")]
+    pub aberration: f32,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -685,6 +706,10 @@ pub enum TransitionType {
     CornerReveal,
     PixelDissolve,
     CameraPan,
+    /// A fast slide in which the reveal edge splits into its red and cyan
+    /// channels at the peak and recombines as it lands — the glitch-flash
+    /// cut. `direction` steers it, `aberration` scales the split.
+    ChromaticWipe,
     None,
 }
 
@@ -694,6 +719,10 @@ fn default_transition_cell() -> f32 {
 
 fn default_transition_seed() -> u32 {
     11
+}
+
+fn default_transition_aberration() -> f32 {
+    1.0
 }
 
 fn default_transition_duration() -> f64 {

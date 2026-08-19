@@ -126,7 +126,16 @@ impl TextIntrinsic {
             text.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
-        Self::from_parts_with_wrap(&text.content, &text.style, text.max_width, wrap)
+        // Measure the *longest* label the text can ever show, not just the
+        // first: a box sized for "Saved" would be overrun the moment a
+        // `states` entry swapped in "Saving draft…", and the geometry
+        // validator — which measures through here — would have signed off on
+        // the overflow.
+        let widest = text
+            .all_labels()
+            .max_by_key(|label| label.chars().count())
+            .unwrap_or(&text.content);
+        Self::from_parts_with_wrap(widest, &text.style, text.max_width, wrap)
             .with_autofit(matches!(text.style.text_autofit, Some(true)))
     }
 
@@ -641,6 +650,57 @@ impl IntrinsicMeasure for CounterIntrinsic {
     }
 }
 
+/// Intrinsic measurer for [`crate::number_wheel::NumberWheel`].
+///
+/// Every digit column is as wide as the *widest* digit, because that is how
+/// the painter lays the reels out — otherwise a figure that lands on `111`
+/// would reserve a narrow box and then overflow it while a `0` rolls past.
+/// Measuring the value once per possible digit and keeping the largest gives
+/// exactly the painter's own `max over digits` per column, separators
+/// included, without duplicating its layout arithmetic here.
+pub struct NumberWheelIntrinsic(TextIntrinsic);
+
+impl NumberWheelIntrinsic {
+    pub fn from_number_wheel(w: &crate::number_wheel::NumberWheel) -> Self {
+        let widest = (0..10)
+            .map(|d| {
+                let ch = char::from_digit(d, 10).expect("0..10 is a digit");
+                w.value
+                    .chars()
+                    .map(|c| if c.is_ascii_digit() { ch } else { c })
+                    .collect::<String>()
+            })
+            .max_by(|a, b| {
+                let measure = |s: &str| {
+                    TextIntrinsic::from_parts_with_wrap(s, &w.style, None, false)
+                        .measure(
+                            (None, None),
+                            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        )
+                        .0
+                };
+                measure(a)
+                    .partial_cmp(&measure(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or_else(|| w.value.clone());
+        // A wheel is atomic: it never wraps.
+        Self(TextIntrinsic::from_parts_with_wrap(
+            &widest, &w.style, None, false,
+        ))
+    }
+}
+
+impl IntrinsicMeasure for NumberWheelIntrinsic {
+    fn measure(
+        &self,
+        known: (Option<f32>, Option<f32>),
+        available: (AvailableSpace, AvailableSpace),
+    ) -> (f32, f32) {
+        self.0.measure(known, available)
+    }
+}
+
 /// Intrinsic measurer for [`Badge`] — measures the label text plus icon, gap,
 /// and the size-derived horizontal/vertical padding.
 pub struct BadgeIntrinsic {
@@ -1070,6 +1130,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(
@@ -1099,6 +1162,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (_w_unwrapped, h_unwrapped) = m.measure(
@@ -1132,6 +1198,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         };
         let m = TextIntrinsic::from_text(&text);
         let (w, h) = m.measure(
@@ -1159,6 +1228,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         }
     }
 
@@ -1439,6 +1511,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         }
     }
 
@@ -1754,6 +1829,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         }
     }
 

@@ -1,0 +1,192 @@
+{
+  "video": { "width": 1920, "height": 1080, "fps": 30 },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "background": "#0B1120",
+      "animated-background": [
+        {
+          "preset": "grid_lines",
+          "grid_lines": { "color": "#38BDF81A", "cell": 72, "weight": 1, "major_every": 4, "major_weight": 2 },
+          "speed": 6,
+          "direction": "up_left"
+        }
+      ],
+      "transition": { "type": "chromatic_wipe", "direction": "left", "aberration": 1.2, "duration": 0.45 },
+      "children": [
+        {
+          "type": "flex",
+          "position": "absolute",
+          "x": 200,
+          "y": 300,
+          "style": { "flex-direction": "column", "gap": 28, "width": "1520px" },
+          "children": [
+            {
+              "type": "text",
+              "content": "Letters cascade from above",
+              "style": {
+                "font-size": 92,
+                "font-weight": 700,
+                "color": "#F8FAFC",
+                "animation": [{
+                  "name": "char_slide_up",
+                  "direction": "down",
+                  "distance": 1.6,
+                  "duration": 0.5,
+                  "stagger": 0.035,
+                  "easing": "ease_out_cubic"
+                }]
+              }
+            },
+            {
+              "type": "text",
+              "content": "and words arrive in uneven bursts, the way tokens do",
+              "style": {
+                "font-size": 40,
+                "color": "#94A3B8",
+                "animation": [{
+                  "name": "char_blur_in",
+                  "granularity": "word",
+                  "delay": 0.8,
+                  "duration": 0.3,
+                  "stagger": 0.09,
+                  "jitter": 0.7,
+                  "seed": 12,
+                  "ink_from": "#334155",
+                  "blur": 6
+                }]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 4.5,
+      "background": "#0B1120",
+      "transition": { "type": "chromatic_wipe", "direction": "up", "aberration": 0.8, "duration": 0.4 },
+      "children": [
+        {
+          "type": "flex",
+          "position": "absolute",
+          "x": 260,
+          "y": 380,
+          "style": { "flex-direction": "row", "align-items": "center", "gap": 80 },
+          "children": [
+            {
+              "type": "number_wheel",
+              "value": "30,222",
+              "spin": "double",
+              "duration": 1.1,
+              "stagger_per_column": 0.09,
+              "style": { "font-size": 120, "font-weight": 700, "color": "#38BDF8" }
+            },
+            { "type": "success_check", "size": 110, "tint": "#22C55E", "delay": 1.6, "duration": 0.8 },
+            {
+              "type": "badge",
+              "text": "LIVE",
+              "variant": "solid",
+              "dot": true,
+              "dot_color": "#22C55E",
+              "style": { "animation": [{ "name": "pop_in", "delay": 2.1, "duration": 0.7, "overshoot": 0.2 }] }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "Saving draft",
+          "position": "absolute",
+          "x": 260,
+          "y": 620,
+          "states": [{ "at": 2.6, "content": "Saved" }],
+          "swap": { "duration": 0.45, "distance": 22, "blur": 9 },
+          "style": { "font-size": 52, "color": "#E2E8F0", "white-space": "nowrap", "max-width": "600px" }
+        }
+      ]
+    },
+    {
+      "duration": 5.0,
+      "background": "#0B1120",
+      "transition": { "type": "chromatic_wipe", "direction": "left", "aberration": 1.0, "duration": 0.4 },
+      "children": [
+        {
+          "type": "card",
+          "position": "absolute",
+          "x": 260,
+          "y": 260,
+          "style": {
+            "width": "330px",
+            "height": "132px",
+            "background": "#111C33",
+            "border-radius": 20,
+            "justify-content": "center",
+            "align-items": "center",
+            "animation": [{
+              "name": "keyframes",
+              "duration": 0.9,
+              "delay": 1.2,
+              "keyframes": [
+                { "property": "width", "easing": "ease_out_cubic", "keyframes": [{ "time": 0.0, "value": 330 }, { "time": 0.9, "value": 620 }] },
+                { "property": "height", "easing": "ease_out_cubic", "keyframes": [{ "time": 0.0, "value": 132 }, { "time": 0.9, "value": 240 }] }
+              ]
+            }]
+          },
+          "children": [
+            {
+              "type": "text",
+              "content": "The card resizes, and its content reflows inside the new box",
+              "style": { "font-size": 26, "color": "#CBD5E1", "text-align": "center" }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "content": "light catches the letters",
+          "position": "absolute",
+          "x": 260,
+          "y": 660,
+          "style": {
+            "font-size": 64,
+            "font-weight": 700,
+            "color": "#F8FAFC",
+            "white-space": "nowrap",
+            "max-width": "1100px",
+            "animation": [{ "name": "shimmer", "delay": 1.0, "duration": 1.1, "color": "#7DD3FC", "intensity": 0.85, "width": 0.3, "angle": 22, "loop": true }]
+          }
+        },
+        {
+          "type": "text",
+          "content": "rustmotion --frames 0-60",
+          "position": "absolute",
+          "x": 260,
+          "y": 830,
+          "caret": { "shape": "block", "blink": 0.9, "color": "#38BDF8" },
+          "style": {
+            "font-size": 40,
+            "font-family": "JetBrains Mono",
+            "color": "#94A3B8",
+            "white-space": "nowrap",
+            "max-width": "900px",
+            "animation": [{ "name": "typewriter", "delay": 0.6, "duration": 2.0 }]
+          }
+        },
+        {
+          "type": "pointer",
+          "position": "absolute",
+          "x": 0,
+          "y": 0,
+          "size": 52,
+          "tone": "light",
+          "click_ring": "bold",
+          "ring_color": "#38BDF8",
+          "click_duration": 0.5,
+          "path": [
+            { "time": 0.4, "x": 1500, "y": 820 },
+            { "time": 2.0, "x": 480, "y": 330 },
+            { "time": 3.6, "x": 900, "y": 690 }
+          ]
+        }
+      ]
+    }
+  ]
+}

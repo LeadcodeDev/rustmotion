@@ -10,25 +10,17 @@ use rustmotion_core::css::style::{
     TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
-use rustmotion_core::engine::animator::AnimatedProperties;
+use rustmotion_core::engine::animator::{AnimatedProperties, ResolvedCharAnimation};
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
     typeface_with_fallback, wrap_text_with_tracking,
 };
 use rustmotion_core::schema::{
-    AnimationEffect, CharAnimPreset, CharAnimation, FontStyleType, FontWeight, Stroke, TextAlign,
-    TextAnimGranularity, TextBackground, TextShadow, TimelineStep,
+    CaretConfig, CaretShape, CharAnimPreset, FontStyleType, FontWeight, Stroke, TextAlign,
+    TextAnimGranularity, TextBackground, TextShadow, TextState, TextSwapConfig, TimelineStep,
 };
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
-
-/// Default starting blur sigma (px) for `char_blur_in` when
-/// `CharAnimationTiming.blur` is not set. Tuned against rendered output at
-/// 120px display type (see issue #118's render proof): low enough that
-/// individual letterforms stay ghost-legible at the start of a unit's
-/// reveal (this is a *reveal*, not a smoke effect), high enough that the
-/// blur is unmistakable next to the settled, sharp frame.
-const DEFAULT_CHAR_BLUR_SIGMA: f32 = 14.0;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
@@ -49,6 +41,16 @@ pub struct Text {
     pub stroke: Option<Stroke>,
     #[serde(default, rename = "text-background")]
     pub text_background: Option<TextBackground>,
+    /// A caret pinned to the reveal head of a `typewriter` animation.
+    /// See [`CaretConfig`].
+    #[serde(default)]
+    pub caret: Option<CaretConfig>,
+    /// Later labels this text swaps to. See [`TextState`].
+    #[serde(default)]
+    pub states: Vec<TextState>,
+    /// How the crossing between `states` is animated. See [`TextSwapConfig`].
+    #[serde(default)]
+    pub swap: Option<TextSwapConfig>,
 }
 
 rustmotion_core::impl_traits!(Text {
@@ -56,6 +58,41 @@ rustmotion_core::impl_traits!(Text {
     Timed => timing,
     Styled => style,
 });
+
+/// Eased progress (0..1) of unit `idx` at `time`, honouring the config's
+/// deterministic jitter.
+fn unit_progress(cfg: &ResolvedCharAnimation, idx: usize, time: f64) -> f32 {
+    let unit_start = cfg.unit_start(idx);
+    let unit_end = unit_start + cfg.duration as f64;
+    let raw_t = if time <= unit_start {
+        0.0
+    } else if time >= unit_end {
+        1.0
+    } else {
+        (time - unit_start) / (unit_end - unit_start)
+    };
+    ease(raw_t, &cfg.easing) as f32
+}
+
+/// The paint a unit draws with at progress `t`: the base paint, tinted from
+/// `ink_from` towards the text's own colour when the config asks for it.
+///
+/// `None` means "use the base paint unchanged" — worth keeping distinct from
+/// a clone, since the caller may already be mutating its own copy.
+fn ink_paint(cfg: &ResolvedCharAnimation, paint: &Paint, t: f32) -> Option<Paint> {
+    let from = cfg.ink_from.as_deref()?;
+    let start = paint_from_hex(from).color();
+    let end = paint.color();
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)) as u8;
+    let mut p = paint.clone();
+    p.set_color(skia_safe::Color::from_argb(
+        end.a(),
+        lerp(start.r(), end.r()),
+        lerp(start.g(), end.g()),
+        lerp(start.b(), end.b()),
+    ));
+    Some(p)
+}
 
 /// Apply a text animation preset to a single unit (char or word).
 /// Returns the text draw position adjustments and paint modifications.
@@ -73,16 +110,33 @@ fn apply_text_anim_preset(
     // swallow the inter-word space — visible only once the overrun approaches
     // a space's width, i.e. at small sizes or long words.
     letter_spacing: f32,
-    preset: &CharAnimPreset,
+    cfg: &ResolvedCharAnimation,
     t: f32,
     time: f64,
     unit_idx: usize,
     font_size: f32,
-    overshoot: f32,
-    blur_radius: f32,
 ) {
+    let preset = &cfg.preset;
+    let overshoot = cfg.overshoot;
+    let blur_radius = cfg.blur;
     let center_x = cursor_x + unit_width / 2.0;
     let center_y = line_y;
+
+    // `ink_from` and `scale_from` are cross-cutting: they compose with
+    // whatever the preset itself does rather than replacing it, so they are
+    // resolved once here instead of inside each arm.
+    let inked = ink_paint(cfg, paint, t);
+    let paint = inked.as_ref().unwrap_or(paint);
+    if let Some(from) = cfg.scale_from {
+        // The scale-driven presets own their scale curve outright; stacking a
+        // second one on top would fight it rather than compose with it.
+        if !matches!(preset, CharAnimPreset::ScaleIn | CharAnimPreset::Bounce) {
+            let s = from + (1.0 - from) * t.clamp(0.0, 1.0);
+            canvas.translate((center_x, center_y));
+            canvas.scale((s, s));
+            canvas.translate((-center_x, -center_y));
+        }
+    }
 
     match preset {
         CharAnimPreset::ScaleIn => {
@@ -186,7 +240,10 @@ fn apply_text_anim_preset(
             );
         }
         CharAnimPreset::SlideUp => {
-            let offset_y = (1.0 - t) * font_size * 0.8;
+            // Despite the name, the travel axis is `direction`'s to choose —
+            // `up` (the default) is what the preset has always done.
+            let travel = (1.0 - t) * font_size * 0.8 * cfg.distance;
+            let (dx, dy) = cfg.direction.offset(travel);
             let mut p = paint.clone();
             p.set_alpha_f(t * paint.alpha_f());
             draw_text_with_fallback(
@@ -195,8 +252,8 @@ fn apply_text_anim_preset(
                 font,
                 emoji_font,
                 letter_spacing,
-                cursor_x,
-                line_y + offset_y,
+                cursor_x + dx,
+                line_y + dy,
                 &p,
             );
         }
@@ -205,7 +262,8 @@ fn apply_text_anim_preset(
             // components at once (blur settle, upward drift, opacity
             // ramp) rather than sequencing them as separate effects.
             let tt = t.clamp(0.0, 1.0);
-            let offset_y = (1.0 - tt) * font_size * 0.12;
+            let travel = (1.0 - tt) * font_size * 0.12 * cfg.distance;
+            let (dx, dy) = cfg.direction.offset(travel);
             let sigma = ((1.0 - tt) * blur_radius).max(0.0);
             let mut p = paint.clone();
             p.set_alpha_f(tt * paint.alpha_f());
@@ -225,8 +283,8 @@ fn apply_text_anim_preset(
                 font,
                 emoji_font,
                 letter_spacing,
-                cursor_x,
-                line_y + offset_y,
+                cursor_x + dx,
+                line_y + dy,
                 &p,
             );
         }
@@ -246,10 +304,8 @@ fn render_char_animation(
     line_height_val: f32,
     baseline_offset: f32,
     lines: &[String],
-    char_anim: &CharAnimation,
+    char_anim: &ResolvedCharAnimation,
     time: f64,
-    overshoot: f32,
-    blur_radius: f32,
 ) {
     let is_word_mode = matches!(char_anim.granularity, TextAnimGranularity::Word);
     let mut global_unit_idx = 0usize;
@@ -310,17 +366,7 @@ fn render_char_animation(
                     measure_text_with_fallback(&word, font, emoji_font, letter_spacing);
 
                 // Calculate animation progress for this word
-                let unit_start =
-                    char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
-                let unit_end = unit_start + char_anim.duration as f64;
-                let raw_t = if time <= unit_start {
-                    0.0
-                } else if time >= unit_end {
-                    1.0
-                } else {
-                    (time - unit_start) / (unit_end - unit_start)
-                };
-                let t = ease(raw_t, &char_anim.easing) as f32;
+                let t = unit_progress(char_anim, global_unit_idx, time);
 
                 canvas.save();
                 apply_text_anim_preset(
@@ -333,13 +379,11 @@ fn render_char_animation(
                     line_y,
                     word_width,
                     letter_spacing,
-                    &char_anim.preset,
+                    char_anim,
                     t,
                     time,
                     global_unit_idx,
                     font.size(),
-                    overshoot,
-                    blur_radius,
                 );
                 canvas.restore();
 
@@ -354,17 +398,7 @@ fn render_char_animation(
                 let (ch_width, _) = font.measure_str(&ch_str, None);
                 let ch_width = ch_width + letter_spacing;
 
-                let unit_start =
-                    char_anim.delay as f64 + global_unit_idx as f64 * char_anim.stagger as f64;
-                let unit_end = unit_start + char_anim.duration as f64;
-                let raw_t = if time <= unit_start {
-                    0.0
-                } else if time >= unit_end {
-                    1.0
-                } else {
-                    (time - unit_start) / (unit_end - unit_start)
-                };
-                let t = ease(raw_t, &char_anim.easing) as f32;
+                let t = unit_progress(char_anim, global_unit_idx, time);
 
                 canvas.save();
                 apply_text_anim_preset(
@@ -381,13 +415,11 @@ fn render_char_animation(
                     // to a default, since the word path above needs the real
                     // value and the two must not drift apart.
                     0.0,
-                    &char_anim.preset,
+                    char_anim,
                     t,
                     time,
                     global_unit_idx,
                     font.size(),
-                    overshoot,
-                    blur_radius,
                 );
                 canvas.restore();
 
@@ -399,6 +431,56 @@ fn render_char_animation(
 }
 
 impl Text {
+    /// Every label this text can display, in order — `content` followed by
+    /// each state's.
+    ///
+    /// Used for measurement: a box sized for the first label alone would be
+    /// overrun the moment the text swapped to a longer one, and the geometry
+    /// validator would have signed off on it.
+    pub fn all_labels(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.content.as_str()).chain(self.states.iter().map(|s| s.content.as_str()))
+    }
+
+    /// The label showing at `time`: the last state whose `at` has passed, or
+    /// `content` before any of them.
+    fn label_at(&self, time: f64) -> &str {
+        self.states
+            .iter()
+            .rfind(|s| s.at <= time)
+            .map(|s| s.content.as_str())
+            .unwrap_or(&self.content)
+    }
+
+    /// The swap in progress at `time`, if any.
+    ///
+    /// `None` when the text declares no `swap` config, even if it declares
+    /// `states`: the labels then simply cut over at each `at`, which is a
+    /// legitimate (if abrupt) choice and the one the field's absence asks
+    /// for.
+    fn active_swap(&self, time: f64) -> Option<ActiveSwap> {
+        let cfg = self.swap.as_ref()?;
+        if cfg.duration <= 0.0 {
+            return None;
+        }
+        let (idx, state) = self
+            .states
+            .iter()
+            .enumerate()
+            .find(|(_, s)| time >= s.at && time < s.at + cfg.duration)?;
+        let from = if idx == 0 {
+            self.content.clone()
+        } else {
+            self.states[idx - 1].content.clone()
+        };
+        Some(ActiveSwap {
+            from,
+            to: state.content.clone(),
+            progress: ((time - state.at) / cfg.duration) as f32,
+            distance: cfg.distance,
+            blur: cfg.blur,
+        })
+    }
+
     fn paint(
         &self,
         canvas: &Canvas,
@@ -543,16 +625,21 @@ impl Text {
         let wrap_width = if nowrap { None } else { box_width };
 
         // Apply typewriter effect: limit visible characters based on animation progress
+        let label = self.label_at(time);
         let content = if props.visible_chars_progress >= 0.0 {
-            let chars: Vec<char> = self.content.chars().collect();
+            let chars: Vec<char> = label.chars().collect();
             let visible = (props.visible_chars_progress * chars.len() as f32).round() as usize;
             let visible = visible.min(chars.len());
-            if visible == 0 {
+            if visible == 0 && self.caret.is_none() {
                 return Ok(());
             }
+            // With a caret, an empty reveal still has something to paint: the
+            // caret itself, sitting where the first character is about to
+            // appear. Bailing out here would make it pop into existence
+            // alongside that character instead of waiting for it.
             chars[..visible].iter().collect::<String>()
         } else {
-            self.content.clone()
+            label.to_string()
         };
 
         // Tracking-aware wrap (issue #125 §1): the fit test now measures
@@ -614,16 +701,11 @@ impl Text {
             max_w
         };
 
-        // Per-character animation mode (via style.animation char_* presets)
+        // Per-character animation mode (via style.animation char_* presets).
+        // All seven presets — `char_blur_in` included since it was routed
+        // through `extract_effects` like its siblings — arrive here already
+        // resolved, with container-level stagger folded into `delay`.
         if let Some(ref resolved) = props.char_animation {
-            let char_anim = CharAnimation {
-                preset: resolved.preset.clone(),
-                granularity: resolved.granularity.clone(),
-                stagger: resolved.stagger,
-                duration: resolved.duration,
-                easing: resolved.easing.clone(),
-                delay: resolved.delay,
-            };
             render_char_animation(
                 canvas,
                 &content,
@@ -636,125 +718,262 @@ impl Text {
                 line_height_val,
                 baseline_offset,
                 &lines,
-                &char_anim,
+                resolved,
                 time,
-                resolved.overshoot,
-                0.0, // blur is only meaningful for char_blur_in, handled below
             );
             return Ok(());
         }
 
-        // `char_blur_in` is read directly off `style.animation` rather than
-        // through `engine::animator::extract_effects` → `props.char_animation`
-        // like its five siblings above: that resolution path lives outside
-        // this workstream's file scope (schema/video.rs + text.rs only, see
-        // issue #118 / chantier #117 W1). This is a top-level
-        // `style.animation` entry lookup, so — unlike the branch above — it
-        // does not pick up container-level stagger delay shifting or
-        // `timeline`-step-embedded copies.
-        if let Some(timing) = self.style.animation.iter().find_map(|effect| match effect {
-            AnimationEffect::CharBlurIn(t) => Some(t),
-            _ => None,
-        }) {
-            let char_anim = CharAnimation {
-                preset: CharAnimPreset::BlurIn,
-                granularity: timing.granularity.clone(),
-                stagger: timing.stagger as f32,
-                duration: timing.duration as f32,
-                easing: timing.easing.clone(),
-                delay: timing.delay as f32,
-            };
-            render_char_animation(
-                canvas,
-                &content,
-                &font,
-                &emoji_font,
-                &paint,
-                letter_spacing,
-                align,
-                align_width,
-                line_height_val,
-                baseline_offset,
-                &lines,
-                &char_anim,
-                time,
-                timing.overshoot.unwrap_or(0.08) as f32,
-                timing
-                    .blur
-                    .map(|b| b as f32)
-                    .unwrap_or(DEFAULT_CHAR_BLUR_SIGMA),
-            );
-            return Ok(());
-        }
-
-        for (i, line) in lines.iter().enumerate() {
-            if line.is_empty() {
-                continue;
-            }
-
-            let advance_width =
-                measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
-
-            let x = match align {
-                TextAlign::Left => 0.0,
-                TextAlign::Center => (align_width - advance_width) / 2.0,
-                TextAlign::Right => align_width - advance_width,
-            };
-            let y = i as f32 * line_height_val + baseline_offset;
-
-            // Draw background highlight behind text
-            if let Some(ref bg) = self.text_background {
-                let bg_paint = paint_from_hex(&bg.color);
-                let (_, font_rect) = font.measure_str(line, None);
-                let bg_rect = Rect::from_xywh(
-                    x - bg.padding + font_rect.left,
-                    y + font_rect.top - bg.padding / 2.0,
-                    advance_width + bg.padding * 2.0,
-                    -font_rect.top + font_rect.bottom + bg.padding,
-                );
-                if bg.corner_radius > 0.0 {
-                    let rrect =
-                        skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
-                    canvas.draw_rrect(rrect, &bg_paint);
-                } else {
-                    canvas.draw_rect(bg_rect, &bg_paint);
+        // A state swap has two labels on screen at once, each with its own
+        // travel, blur and opacity. Everything above — font, alignment,
+        // metrics, decorations — is shared between them; only the label text
+        // and the motion differ.
+        if let Some(swap) = self.active_swap(time) {
+            for (label, offset_y, blur, alpha) in swap.labels() {
+                let label_lines =
+                    wrap_text_with_tracking(&label, &font, &emoji_font, wrap_width, letter_spacing);
+                let mut p = paint.clone();
+                p.set_alpha_f(alpha * paint.alpha_f());
+                if blur > 0.05 {
+                    if let Some(filter) = skia_safe::image_filters::blur(
+                        (blur, blur),
+                        skia_safe::TileMode::Clamp,
+                        None,
+                        None,
+                    ) {
+                        p.set_image_filter(filter);
+                    }
                 }
-            }
-
-            // Draw shadows — reverse order so the first CSS shadow ends on top.
-            for (sp, ox, oy) in shadow_paints.iter().rev() {
-                draw_text_with_fallback(
+                draw_text_lines(
                     canvas,
-                    line,
+                    &label_lines,
                     &font,
                     &emoji_font,
+                    &p,
+                    &shadow_paints,
+                    stroke_paint.as_ref(),
+                    self.text_background.as_ref(),
                     letter_spacing,
-                    x + ox,
-                    y + oy,
-                    sp,
+                    &align,
+                    align_width,
+                    line_height_val,
+                    baseline_offset,
+                    offset_y,
                 );
             }
+            return Ok(());
+        }
 
-            // Draw stroke (outline)
-            if let Some(ref sp) = stroke_paint {
-                draw_text_with_fallback(canvas, line, &font, &emoji_font, letter_spacing, x, y, sp);
+        draw_text_lines(
+            canvas,
+            &lines,
+            &font,
+            &emoji_font,
+            &paint,
+            &shadow_paints,
+            stroke_paint.as_ref(),
+            self.text_background.as_ref(),
+            letter_spacing,
+            &align,
+            align_width,
+            line_height_val,
+            baseline_offset,
+            0.0,
+        );
+
+        // The caret rides the reveal head: the end of the last line that has
+        // been revealed so far, which is where the next character will land.
+        if let Some(caret) = &self.caret {
+            let done = props.visible_chars_progress < 0.0 || props.visible_chars_progress >= 1.0;
+            if !(done && caret.hide_when_done) {
+                let last = lines.len().saturating_sub(1);
+                let line = lines.last().map(String::as_str).unwrap_or("");
+                let advance_width =
+                    measure_text_with_fallback(line, &font, &emoji_font, letter_spacing);
+                let x = match align {
+                    TextAlign::Left => 0.0,
+                    TextAlign::Center => (align_width - advance_width) / 2.0,
+                    TextAlign::Right => align_width - advance_width,
+                };
+                let baseline = last as f32 * line_height_val + baseline_offset;
+                draw_caret(
+                    canvas,
+                    caret,
+                    x + advance_width,
+                    baseline,
+                    &font,
+                    &paint,
+                    time,
+                );
             }
-
-            // Draw fill
-            draw_text_with_fallback(
-                canvas,
-                line,
-                &font,
-                &emoji_font,
-                letter_spacing,
-                x,
-                y,
-                &paint,
-            );
         }
 
         Ok(())
     }
+}
+
+/// Draw already-wrapped `lines` with their background, shadows, stroke and
+/// fill, shifted down by `offset_y`.
+///
+/// Shared by the plain draw and by each half of a state swap, so a swapping
+/// label keeps the decorations (`text-background`, `text-shadow`, `stroke`)
+/// the same text has when it is not swapping.
+#[allow(clippy::too_many_arguments)]
+fn draw_text_lines(
+    canvas: &Canvas,
+    lines: &[String],
+    font: &Font,
+    emoji_font: &Option<Font>,
+    paint: &Paint,
+    shadow_paints: &[(Paint, f32, f32)],
+    stroke_paint: Option<&Paint>,
+    text_background: Option<&TextBackground>,
+    letter_spacing: f32,
+    align: &TextAlign,
+    align_width: f32,
+    line_height_val: f32,
+    baseline_offset: f32,
+    offset_y: f32,
+) {
+    for (i, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let advance_width = measure_text_with_fallback(line, font, emoji_font, letter_spacing);
+
+        let x = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => (align_width - advance_width) / 2.0,
+            TextAlign::Right => align_width - advance_width,
+        };
+        let y = i as f32 * line_height_val + baseline_offset + offset_y;
+
+        // Draw background highlight behind text
+        if let Some(bg) = text_background {
+            let bg_paint = paint_from_hex(&bg.color);
+            let (_, font_rect) = font.measure_str(line, None);
+            let bg_rect = Rect::from_xywh(
+                x - bg.padding + font_rect.left,
+                y + font_rect.top - bg.padding / 2.0,
+                advance_width + bg.padding * 2.0,
+                -font_rect.top + font_rect.bottom + bg.padding,
+            );
+            if bg.corner_radius > 0.0 {
+                let rrect =
+                    skia_safe::RRect::new_rect_xy(bg_rect, bg.corner_radius, bg.corner_radius);
+                canvas.draw_rrect(rrect, &bg_paint);
+            } else {
+                canvas.draw_rect(bg_rect, &bg_paint);
+            }
+        }
+
+        // Draw shadows — reverse order so the first CSS shadow ends on top.
+        for (sp, ox, oy) in shadow_paints.iter().rev() {
+            draw_text_with_fallback(
+                canvas,
+                line,
+                font,
+                emoji_font,
+                letter_spacing,
+                x + ox,
+                y + oy,
+                sp,
+            );
+        }
+
+        // Draw stroke (outline)
+        if let Some(sp) = stroke_paint {
+            draw_text_with_fallback(canvas, line, font, emoji_font, letter_spacing, x, y, sp);
+        }
+
+        // Draw fill
+        draw_text_with_fallback(canvas, line, font, emoji_font, letter_spacing, x, y, paint);
+    }
+}
+
+/// A state swap in progress: the label leaving, the label arriving, and how
+/// far through the crossing we are.
+struct ActiveSwap {
+    from: String,
+    to: String,
+    progress: f32,
+    distance: f32,
+    blur: f32,
+}
+
+impl ActiveSwap {
+    /// `(label, offset_y, blur_sigma, alpha)` for each of the two labels.
+    ///
+    /// The outgoing label leaves upwards and the incoming one arrives from
+    /// below, so the pair reads as one value moving up a slot rather than as
+    /// two labels passing each other.
+    fn labels(&self) -> [(String, f32, f32, f32); 2] {
+        let p = self.progress.clamp(0.0, 1.0);
+        [
+            (
+                self.from.clone(),
+                -self.distance * p,
+                self.blur * p,
+                1.0 - p,
+            ),
+            (
+                self.to.clone(),
+                self.distance * (1.0 - p),
+                self.blur * (1.0 - p),
+                p,
+            ),
+        ]
+    }
+}
+
+/// Paint a caret whose left edge sits at `x`, aligned to the text `baseline`.
+fn draw_caret(
+    canvas: &Canvas,
+    cfg: &CaretConfig,
+    x: f32,
+    baseline: f32,
+    font: &Font,
+    text_paint: &Paint,
+    time: f64,
+) {
+    // A blink is a square wave over one full period, so `blink: 1.0` reads as
+    // "on for half a second, off for half a second" rather than as a rate
+    // nobody can predict from the number.
+    if cfg.blink > 0.0 {
+        let phase = (time / cfg.blink as f64).rem_euclid(1.0);
+        if phase >= 0.5 {
+            return;
+        }
+    }
+
+    let (_, metrics) = font.metrics();
+    let ascent = -metrics.ascent;
+    let descent = metrics.descent;
+    let size = font.size();
+
+    let (width, gap) = match cfg.shape {
+        // Proportional to the type size: a 3px rule that reads as a caret at
+        // 24px is a hairline at 120px.
+        CaretShape::Line => ((size * 0.07).max(1.5), size * 0.05),
+        // Roughly one character cell, the terminal look.
+        CaretShape::Block => (size * 0.55, size * 0.04),
+    };
+
+    let mut paint = match &cfg.color {
+        Some(hex) => paint_from_hex(hex),
+        None => text_paint.clone(),
+    };
+    paint.set_style(PaintStyle::Fill);
+    paint.set_anti_alias(true);
+    // A caret is a solid mark, not a ghost: it must not inherit a stroke or
+    // image filter the text set up for itself.
+    paint.set_image_filter(None);
+
+    canvas.draw_rect(
+        Rect::from_xywh(x + gap, baseline - ascent, width, ascent + descent),
+        &paint,
+    );
 }
 
 impl Painter for Text {
@@ -784,7 +1003,9 @@ mod tests {
     use rustmotion_core::css::style::CssStyle;
     use rustmotion_core::css::Length;
     use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
-    use rustmotion_core::schema::{CharAnimationTiming, EasingType};
+    use rustmotion_core::schema::{
+        AnimationEffect, CharAnimationTiming, EasingType, TextAnimDirection,
+    };
 
     fn make_text(content: &str, white_space: Option<CssWhiteSpace>) -> Text {
         Text {
@@ -802,6 +1023,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         }
     }
 
@@ -939,6 +1163,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         };
         const W: i32 = 400;
         const H: i32 = 200;
@@ -977,6 +1204,9 @@ mod tests {
             text_shadow: None,
             stroke: None,
             text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
         };
         const W: i32 = 400;
         const H: i32 = 200;
@@ -1028,6 +1258,20 @@ mod tests {
         soft as f32 / inked as f32
     }
 
+    /// Resolve `style.animation` the way the engine does before it paints, so
+    /// a char-animation test exercises the real wiring
+    /// (`extract_effects` → `props.char_animation`) instead of a
+    /// painter-private lookup.
+    fn props_for(text: &Text) -> AnimatedProperties {
+        AnimatedProperties {
+            char_animation: rustmotion_core::engine::animator::extract_effects(
+                &text.style.animation,
+            )
+            .char_animation,
+            ..Default::default()
+        }
+    }
+
     /// Build the same `Font` the renderer would build for `family`/`px`, so
     /// tests can measure exact word boundaries instead of guessing pixel
     /// coordinates.
@@ -1056,14 +1300,13 @@ mod tests {
             stagger: 0.03,
             granularity: TextAnimGranularity::Word,
             easing: EasingType::Linear,
-            overshoot: None,
-            blur: None,
+            ..Default::default()
         })];
 
         const W: i32 = 700;
         const H: i32 = 220;
         let ctx = test_ctx();
-        let props = AnimatedProperties::default();
+        let props = props_for(&text);
 
         let render_at = |t: f64| -> Vec<u8> {
             let mut surface =
@@ -1126,14 +1369,14 @@ mod tests {
             stagger: 0.2,
             granularity: TextAnimGranularity::Word,
             easing: EasingType::Linear,
-            overshoot: None,
             blur: Some(18.0),
+            ..Default::default()
         })];
 
         const W: i32 = 1400;
         const H: i32 = 180;
         let ctx = test_ctx();
-        let props = AnimatedProperties::default();
+        let props = props_for(&text);
 
         let font = inter_font(FONT_PX);
         let first_w = measure_text_with_fallback("FIRST", &font, &None, 0.0);
@@ -1177,14 +1420,14 @@ mod tests {
             stagger: 0.6,
             granularity: TextAnimGranularity::Word,
             easing: EasingType::Linear,
-            overshoot: None,
             blur: Some(16.0),
+            ..Default::default()
         })];
 
         const W: i32 = 900;
         const H: i32 = 180;
         let ctx = test_ctx();
-        let props = AnimatedProperties::default();
+        let props = props_for(&text);
         let font = inter_font(FONT_PX);
         let word1_end = measure_text_with_fallback("ONE", &font, &None, 0.0) as i32;
 
@@ -1485,6 +1728,526 @@ mod tests {
         assert!(
             has_ink_in(&grid, W, 260, W, 0, 45),
             "without text-autofit, nowrap must still bleed past its box exactly as before"
+        );
+    }
+
+    // ─── Text state swap ──────────────────────────────────────────────────────
+
+    fn swapping_text(swap: Option<TextSwapConfig>) -> Text {
+        let mut text = make_text("Saving draft", Some(CssWhiteSpace::Nowrap));
+        text.style.font_size = Some(Length::Px(48.0));
+        text.states = vec![TextState {
+            at: 1.0,
+            content: "Saved".into(),
+        }];
+        text.swap = swap;
+        text
+    }
+
+    fn render_plain(text: &Text, time: f64) -> Vec<u8> {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((CARET_W, CARET_H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            text.paint(
+                canvas,
+                CARET_W as f32,
+                None,
+                time,
+                &AnimatedProperties::default(),
+                &test_ctx(),
+            )
+            .expect("paint succeeds");
+        }
+        alpha_grid(&mut surface, CARET_W, CARET_H)
+    }
+
+    #[test]
+    fn states_cut_over_at_their_own_time_without_a_swap_config() {
+        // `states` on its own is a hard cut: abrupt, but it is exactly what
+        // omitting `swap` asks for, and it must not silently animate.
+        let text = swapping_text(None);
+        let before = render_plain(&text, 0.5);
+        let after = render_plain(&text, 1.5);
+
+        let width_of = |g: &[u8]| max_ink_x(g, CARET_W, CARET_H).unwrap_or(0);
+        assert!(
+            width_of(&before) > width_of(&after) + 20,
+            "\"Saving draft\" should be visibly wider than \"Saved\" — the label must actually \
+             have changed at t=1.0"
+        );
+        // A cut has exactly one label on screen at each instant, so the frame
+        // right after the boundary equals the settled one.
+        assert_eq!(
+            render_plain(&text, 1.01),
+            render_plain(&text, 1.5),
+            "without a `swap`, the new label must be fully in place immediately"
+        );
+    }
+
+    #[test]
+    fn a_swap_puts_both_labels_on_screen_at_once() {
+        let text = swapping_text(Some(TextSwapConfig::default()));
+
+        // Just before, only the outgoing label; mid-window, both; well after,
+        // only the incoming one. "Both" shows up as ink covering more rows
+        // than either label alone occupies, since they are offset vertically.
+        let rows_with_ink = |time: f64| -> usize {
+            let grid = render_plain(&text, time);
+            (0..CARET_H)
+                .filter(|&y| (0..CARET_W).any(|x| grid[(y * CARET_W + x) as usize] > 0))
+                .count()
+        };
+
+        let settled = rows_with_ink(0.5);
+        let mid = rows_with_ink(1.0 + 0.45 / 2.0);
+        assert!(
+            mid > settled,
+            "mid-swap, the two offset labels should span more rows than one settled label \
+             (settled={settled}, mid={mid})"
+        );
+    }
+
+    #[test]
+    fn a_finished_swap_settles_on_the_incoming_label_alone() {
+        let swapped = swapping_text(Some(TextSwapConfig::default()));
+        let cut = swapping_text(None);
+        // Past `at + duration` the animated version must be indistinguishable
+        // from a plain cut — no residual offset, blur or ghost of the old
+        // label parked behind the new one.
+        assert_eq!(
+            render_plain(&swapped, 2.0),
+            render_plain(&cut, 2.0),
+            "once the swap window has passed, the frame must match a plain cut exactly"
+        );
+    }
+
+    #[test]
+    fn the_box_is_measured_for_the_widest_label_not_the_first() {
+        // A box sized for "Saved" would be overrun the instant the text
+        // swapped back to "Saving draft" — and the geometry validator, which
+        // measures through this same intrinsic, would have signed off on it.
+        let mut short_first = make_text("Saved", Some(CssWhiteSpace::Nowrap));
+        short_first.states = vec![TextState {
+            at: 1.0,
+            content: "Saving draft".into(),
+        }];
+        let only_short = make_text("Saved", Some(CssWhiteSpace::Nowrap));
+
+        let measure = |t: &Text| {
+            TextIntrinsic::from_text(t)
+                .measure(
+                    (None, None),
+                    (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                )
+                .0
+        };
+
+        assert!(
+            measure(&short_first) > measure(&only_short) + 10.0,
+            "the reserved width must cover the longest label the text can show \
+             (with states={}, without={})",
+            measure(&short_first),
+            measure(&only_short)
+        );
+    }
+
+    // ─── Typewriter caret ─────────────────────────────────────────────────────
+
+    const CARET_W: i32 = 900;
+    const CARET_H: i32 = 160;
+
+    fn typewriter_text(caret: Option<CaretConfig>) -> Text {
+        let mut text = make_text("HELLO WORLD", Some(CssWhiteSpace::Nowrap));
+        text.style.font_size = Some(Length::Px(64.0));
+        text.caret = caret;
+        text
+    }
+
+    /// Render a `visible_chars_progress` reveal at `progress`, at `time`.
+    fn render_reveal(text: &Text, progress: f32, time: f64) -> Vec<u8> {
+        let props = AnimatedProperties {
+            visible_chars_progress: progress,
+            ..AnimatedProperties::default()
+        };
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((CARET_W, CARET_H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            text.paint(canvas, CARET_W as f32, None, time, &props, &test_ctx())
+                .expect("paint succeeds");
+        }
+        alpha_grid(&mut surface, CARET_W, CARET_H)
+    }
+
+    #[test]
+    fn the_caret_follows_the_reveal_head_instead_of_standing_still() {
+        // The whole reason this is a field on `text` rather than a separate
+        // `cursor` component placed next to it: a hand-placed caret stays
+        // put while the text grows out from under it.
+        let text = typewriter_text(Some(CaretConfig {
+            blink: 0.0,
+            ..Default::default()
+        }));
+        let plain = typewriter_text(None);
+
+        // Rightmost ink, with and without the caret: the difference is the
+        // caret's own position.
+        let caret_x = |progress: f32| -> i32 {
+            let with = render_reveal(&text, progress, 0.0);
+            let without = render_reveal(&plain, progress, 0.0);
+            let with_right = max_ink_x(&with, CARET_W, CARET_H).expect("caret paints");
+            let without_right = max_ink_x(&without, CARET_W, CARET_H).unwrap_or(0);
+            assert!(
+                with_right > without_right,
+                "the caret should extend past the last revealed glyph \
+                 (with={with_right}, without={without_right}) at progress {progress}"
+            );
+            with_right
+        };
+
+        let early = caret_x(0.25);
+        let late = caret_x(0.75);
+        assert!(
+            late > early + 40,
+            "the caret should have travelled with the reveal head (early={early}, late={late})"
+        );
+    }
+
+    #[test]
+    fn the_caret_blinks_off_for_half_of_each_period() {
+        let text = typewriter_text(Some(CaretConfig {
+            blink: 1.0,
+            ..Default::default()
+        }));
+        let plain = typewriter_text(None);
+
+        let right_edge = |grid: &[u8]| max_ink_x(grid, CARET_W, CARET_H).unwrap_or(0);
+        let baseline = right_edge(&render_reveal(&plain, 0.5, 0.0));
+
+        // First half of the period: caret visible, so ink extends past the
+        // text. Second half: it must be gone, i.e. back to the text's own
+        // right edge.
+        let on = right_edge(&render_reveal(&text, 0.5, 0.1));
+        let off = right_edge(&render_reveal(&text, 0.5, 0.6));
+        assert!(on > baseline, "caret should be visible at phase 0.1");
+        assert_eq!(
+            off, baseline,
+            "caret should be blinked out at phase 0.6, leaving only the text's own ink"
+        );
+    }
+
+    #[test]
+    fn hide_when_done_removes_the_caret_once_the_reveal_finishes() {
+        let hiding = typewriter_text(Some(CaretConfig {
+            blink: 0.0,
+            hide_when_done: true,
+            ..Default::default()
+        }));
+        let staying = typewriter_text(Some(CaretConfig {
+            blink: 0.0,
+            ..Default::default()
+        }));
+        let plain = typewriter_text(None);
+
+        let right_edge = |t: &Text, progress: f32| {
+            max_ink_x(&render_reveal(t, progress, 0.0), CARET_W, CARET_H).unwrap_or(0)
+        };
+        let text_edge = right_edge(&plain, 1.0);
+
+        assert_eq!(
+            right_edge(&hiding, 1.0),
+            text_edge,
+            "with hide_when_done, a finished reveal must leave no caret behind"
+        );
+        assert!(
+            right_edge(&staying, 1.0) > text_edge,
+            "without hide_when_done, the caret parks at the end of the text"
+        );
+    }
+
+    #[test]
+    fn the_caret_is_there_before_the_first_character_is() {
+        // At 0% reveal there is no text yet, but a typewriter that starts
+        // with a blank frame and pops both caret and first letter together
+        // reads as a glitch rather than as typing.
+        let text = typewriter_text(Some(CaretConfig {
+            blink: 0.0,
+            ..Default::default()
+        }));
+        let grid = render_reveal(&text, 0.0, 0.0);
+        assert!(
+            has_ink_in(&grid, CARET_W, 0, CARET_W, 0, CARET_H),
+            "the caret must be painting at 0% reveal, before any glyph"
+        );
+    }
+
+    // ─── Char-animation tuning (direction / distance / scale_from / ink_from) ──
+
+    const TUNING_W: i32 = 520;
+    const TUNING_H: i32 = 360;
+
+    /// A single 90px word carrying `timing` as a `char_slide_up` effect.
+    fn tuned_slide_up(timing: CharAnimationTiming) -> Text {
+        let mut text = make_text("GO", None);
+        text.style.font_size = Some(Length::Px(90.0));
+        text.style.white_space = Some(CssWhiteSpace::Nowrap);
+        text.style.animation = vec![AnimationEffect::CharSlideUp(timing)];
+        text
+    }
+
+    fn render_alpha(text: &Text, time: f64) -> Vec<u8> {
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((TUNING_W, TUNING_H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            text.paint(
+                canvas,
+                TUNING_W as f32,
+                None,
+                time,
+                &props_for(text),
+                &test_ctx(),
+            )
+            .expect("paint succeeds");
+        }
+        alpha_grid(&mut surface, TUNING_W, TUNING_H)
+    }
+
+    /// Topmost inked row, i.e. how high on the canvas the glyphs sit.
+    fn min_ink_y(grid: &[u8], surface_width: i32, height: i32) -> Option<i32> {
+        (0..height)
+            .find(|&y| (0..surface_width).any(|x| grid[(y * surface_width + x) as usize] > 0))
+    }
+
+    #[test]
+    fn direction_down_starts_the_unit_above_its_line_instead_of_below() {
+        // `char_slide_up` used to hardcode a downward starting offset. With
+        // `direction: "down"` the same preset has to start *above* the line
+        // and fall — the "letters cascading from the top" look. Sampled
+        // mid-travel, where the two are furthest apart.
+        let base = || CharAnimationTiming {
+            duration: 1.0,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            distance: Some(0.5),
+            ..Default::default()
+        };
+        let up = tuned_slide_up(CharAnimationTiming {
+            direction: TextAnimDirection::Up,
+            ..base()
+        });
+        let down = tuned_slide_up(CharAnimationTiming {
+            direction: TextAnimDirection::Down,
+            ..base()
+        });
+
+        let up_grid = render_alpha(&up, 0.5);
+        let down_grid = render_alpha(&down, 0.5);
+
+        let up_top = min_ink_y(&up_grid, TUNING_W, TUNING_H).expect("up-travelling word paints");
+        let down_top =
+            min_ink_y(&down_grid, TUNING_W, TUNING_H).expect("down-travelling word paints");
+
+        assert!(
+            down_top < up_top - 10,
+            "at the same instant, a `down` unit should sit clearly higher on the canvas than an \
+             `up` one (down_top={down_top}, up_top={up_top})"
+        );
+    }
+
+    #[test]
+    fn distance_scales_how_far_the_unit_travels() {
+        let base = || CharAnimationTiming {
+            duration: 1.0,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            ..Default::default()
+        };
+        let close = tuned_slide_up(CharAnimationTiming {
+            distance: Some(0.25),
+            ..base()
+        });
+        let far = tuned_slide_up(CharAnimationTiming {
+            distance: Some(1.0),
+            ..base()
+        });
+
+        // Same instant, same preset: the only difference is how far each has
+        // left to travel, which shows up as how far below its line it sits.
+        let close_top =
+            min_ink_y(&render_alpha(&close, 0.5), TUNING_W, TUNING_H).expect("close word paints");
+        let far_top =
+            min_ink_y(&render_alpha(&far, 0.5), TUNING_W, TUNING_H).expect("far word paints");
+
+        assert!(
+            far_top > close_top + 10,
+            "a `distance: 1.0` unit should still be further below its line than a `0.25` one at \
+             the same instant (far_top={far_top}, close_top={close_top})"
+        );
+    }
+
+    #[test]
+    fn settled_units_land_in_the_same_place_whatever_the_direction_and_distance() {
+        // Whatever route it took, a unit's resting position is its laid-out
+        // one — otherwise the tuning knobs would silently move the finished
+        // frame, which is the frame that has to match the layout.
+        let settled = |timing: CharAnimationTiming| {
+            let grid = render_alpha(&tuned_slide_up(timing), 5.0);
+            min_ink_y(&grid, TUNING_W, TUNING_H).expect("settled word paints")
+        };
+        let base = || CharAnimationTiming {
+            duration: 1.0,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            ..Default::default()
+        };
+
+        let plain = settled(base());
+        let downward = settled(CharAnimationTiming {
+            direction: TextAnimDirection::Down,
+            distance: Some(1.85),
+            ..base()
+        });
+        let sideways = settled(CharAnimationTiming {
+            direction: TextAnimDirection::Right,
+            distance: Some(1.85),
+            ..base()
+        });
+
+        assert_eq!(
+            plain, downward,
+            "a settled `down` unit must land on its line"
+        );
+        assert_eq!(
+            plain, sideways,
+            "a settled `right` unit must land on its line"
+        );
+    }
+
+    #[test]
+    fn scale_from_shrinks_the_unit_at_the_start_and_releases_it_by_the_end() {
+        let timing = CharAnimationTiming {
+            duration: 1.0,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            // Isolate the scale: no travel to move the ink around.
+            distance: Some(0.0),
+            scale_from: Some(0.5),
+            ..Default::default()
+        };
+        let text = tuned_slide_up(timing);
+
+        let ink_width = |time: f64| -> i32 {
+            let grid = render_alpha(&text, time);
+            let left = (0..TUNING_W)
+                .find(|&x| (0..TUNING_H).any(|y| grid[(y * TUNING_W + x) as usize] > 0));
+            let right = (0..TUNING_W)
+                .rev()
+                .find(|&x| (0..TUNING_H).any(|y| grid[(y * TUNING_W + x) as usize] > 0));
+            match (left, right) {
+                (Some(l), Some(r)) => r - l,
+                _ => 0,
+            }
+        };
+
+        let early = ink_width(0.35);
+        let settled = ink_width(5.0);
+        assert!(early > 0, "the word must be painting by t=0.35");
+        assert!(
+            (early as f32) < settled as f32 * 0.9,
+            "a `scale_from: 0.5` unit should still be visibly narrower than its settled self \
+             early on (early={early}px, settled={settled}px)"
+        );
+    }
+
+    #[test]
+    fn ink_from_starts_at_the_given_colour_and_settles_to_the_texts_own() {
+        // `char_scale_in` is the one preset that leaves alpha alone, so the
+        // measurement reads the colour ramp instead of a fade.
+        let mut text = make_text("INK", None);
+        text.style.font_size = Some(Length::Px(90.0));
+        text.style.white_space = Some(CssWhiteSpace::Nowrap);
+        text.style.color = Some(rustmotion_core::css::style::Color::String("#FFFFFF".into()));
+        text.style.animation = vec![AnimationEffect::CharScaleIn(CharAnimationTiming {
+            duration: 1.0,
+            stagger: 0.0,
+            granularity: TextAnimGranularity::Word,
+            easing: EasingType::Linear,
+            overshoot: Some(0.0),
+            // Pure red start → the green channel is the whole measurement.
+            ink_from: Some("#FF0000".into()),
+            ..Default::default()
+        })];
+
+        // Mean green over inked pixels: 0 at pure red, 255 once white.
+        let mean_green = |time: f64| -> f32 {
+            let mut surface = skia_safe::surfaces::raster_n32_premul((TUNING_W, TUNING_H))
+                .expect("raster surface");
+            {
+                let canvas = surface.canvas();
+                text.paint(
+                    canvas,
+                    TUNING_W as f32,
+                    None,
+                    time,
+                    &props_for(&text),
+                    &test_ctx(),
+                )
+                .expect("paint succeeds");
+            }
+            let snapshot = surface.image_snapshot();
+            let info = skia_safe::ImageInfo::new(
+                (TUNING_W, TUNING_H),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+                None,
+            );
+            let mut buf = vec![0u8; (TUNING_W * TUNING_H * 4) as usize];
+            assert!(snapshot.read_pixels(
+                &info,
+                &mut buf,
+                (TUNING_W * 4) as usize,
+                skia_safe::IPoint::new(0, 0),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            // Only fully-opaque pixels — antialiased edges carry blended
+            // colour that would muddy the reading.
+            let (sum, n) = (0..(TUNING_W * TUNING_H) as usize).fold((0u64, 0u64), |(s, n), i| {
+                if buf[i * 4 + 3] == 255 {
+                    (s + buf[i * 4 + 1] as u64, n + 1)
+                } else {
+                    (s, n)
+                }
+            });
+            assert!(
+                n > 0,
+                "some fully-opaque glyph pixels must exist at t={time}"
+            );
+            sum as f32 / n as f32
+        };
+
+        let early = mean_green(0.1);
+        let mid = mean_green(0.5);
+        let settled = mean_green(5.0);
+
+        assert!(
+            early < 60.0,
+            "at 10% the word should read nearly pure red (mean green {early:.1})"
+        );
+        assert!(
+            mid > early + 40.0 && mid < settled - 40.0,
+            "at 50% the word should be halfway between its start colour and the text colour \
+             (early={early:.1}, mid={mid:.1}, settled={settled:.1})"
+        );
+        assert!(
+            settled > 250.0,
+            "once settled the word must be the text's own white, not a tint of it \
+             (mean green {settled:.1})"
         );
     }
 }

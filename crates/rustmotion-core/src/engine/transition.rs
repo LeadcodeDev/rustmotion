@@ -1,8 +1,57 @@
 use crate::engine::animator::ease;
 use crate::schema::{
-    EasingType, PanBackground, PixelDissolveOrder, TransitionCorner, TransitionType,
+    EasingType, PanBackground, PixelDissolveOrder, Transition, TransitionCorner,
+    TransitionDirection, TransitionType,
 };
 use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
+
+/// The per-type knobs a transition may read, bundled.
+///
+/// Each of these is inert for every transition but the one or two that read
+/// it, so they travel together rather than as a growing tail of positional
+/// arguments threaded through the render task queue — a shape that made
+/// adding a transition a five-file edit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransitionOptions {
+    /// `corner_reveal`: which corner the reveal grows from.
+    pub corner: TransitionCorner,
+    /// `pixel_dissolve`: cell edge in px.
+    pub cell: f32,
+    /// `pixel_dissolve`: scatter seed.
+    pub seed: u32,
+    /// `pixel_dissolve`: which cells turn first.
+    pub order: PixelDissolveOrder,
+    /// `chromatic_wipe`: which way it travels.
+    pub direction: TransitionDirection,
+    /// `chromatic_wipe`: channel-split multiplier.
+    pub aberration: f32,
+}
+
+impl Default for TransitionOptions {
+    fn default() -> Self {
+        Self {
+            corner: TransitionCorner::default(),
+            cell: 48.0,
+            seed: 11,
+            order: PixelDissolveOrder::default(),
+            direction: TransitionDirection::default(),
+            aberration: 1.0,
+        }
+    }
+}
+
+impl From<&Transition> for TransitionOptions {
+    fn from(t: &Transition) -> Self {
+        Self {
+            corner: t.corner,
+            cell: t.cell,
+            seed: t.seed,
+            order: t.order,
+            direction: t.direction,
+            aberration: t.aberration,
+        }
+    }
+}
 
 /// Composite two RGBA frames during a transition.
 /// `progress` goes from 0.0 (fully frame_a) to 1.0 (fully frame_b).
@@ -13,12 +62,17 @@ pub fn apply_transition(
     height: u32,
     progress: f64,
     transition_type: &TransitionType,
-    corner: TransitionCorner,
-    cell: f32,
-    seed: u32,
-    order: PixelDissolveOrder,
+    opts: &TransitionOptions,
 ) -> Vec<u8> {
     let progress = progress.clamp(0.0, 1.0) as f32;
+    let TransitionOptions {
+        corner,
+        cell,
+        seed,
+        order,
+        direction,
+        aberration,
+    } = *opts;
 
     match transition_type {
         TransitionType::Fade => blend_fade(frame_a, frame_b, progress),
@@ -48,6 +102,9 @@ pub fn apply_transition(
             pixel_dissolve(frame_a, frame_b, width, height, progress, cell, seed, order)
         }
         TransitionType::CameraPan => blend_fade(frame_a, frame_b, progress),
+        TransitionType::ChromaticWipe => chromatic_wipe(
+            frame_a, frame_b, width, height, progress, direction, aberration,
+        ),
         TransitionType::None => {
             if progress < 0.5 {
                 frame_a.to_vec()
@@ -555,6 +612,80 @@ fn slide_transition(
     canvas.draw_image(&img_b, (offset + w, 0.0), None);
 
     surface_to_pixels(surface, width, height)
+}
+
+/// A fast slide whose reveal edge splits into red and cyan at the peak.
+///
+/// Both frames travel the same way — the incoming one is simply one screen
+/// behind — so the edge between them is a hard seam rather than a dissolve.
+/// The channel split is applied to that composite, peaking mid-transition and
+/// gone by the time it lands, so the flash reads as an artefact of the *speed*
+/// of the cut rather than as a colour treatment on either scene.
+fn chromatic_wipe(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    direction: TransitionDirection,
+    aberration: f32,
+) -> Vec<u8> {
+    let (w, h) = (width as f32, height as f32);
+    // Slide axis, as a unit vector. Both frames move along it; B starts one
+    // full screen back.
+    let (ux, uy) = match direction {
+        TransitionDirection::Left => (-1.0, 0.0),
+        TransitionDirection::Right => (1.0, 0.0),
+        TransitionDirection::Up => (0.0, -1.0),
+        TransitionDirection::Down => (0.0, 1.0),
+    };
+
+    let slid = {
+        let mut surface = match create_skia_surface(width, height) {
+            Some(s) => s,
+            None => return blend_fade(frame_a, frame_b, progress),
+        };
+        let (Some(img_a), Some(img_b)) = (
+            frame_to_image(frame_a, width, height),
+            frame_to_image(frame_b, width, height),
+        ) else {
+            return blend_fade(frame_a, frame_b, progress);
+        };
+        let canvas = surface.canvas();
+        let (dx, dy) = (ux * progress * w, uy * progress * h);
+        canvas.draw_image(&img_a, (dx, dy), None);
+        canvas.draw_image(&img_b, (dx - ux * w, dy - uy * h), None);
+        surface_to_pixels(surface, width, height)
+    };
+
+    // Peak at the midpoint, nothing at either end: a split still present on
+    // the last frame would bleed into the scene that follows.
+    let peak = 1.0 - (progress * 2.0 - 1.0).abs();
+    let shift = (aberration.max(0.0) * peak * w * 0.012).round() as i32;
+    if shift == 0 {
+        return slid;
+    }
+
+    // Red leads the travel, blue trails it — the two channels sampled from
+    // either side of where green is, which is what a lens does under speed.
+    let mut out = slid.clone();
+    let (sx, sy) = (
+        (ux * shift as f32).round() as i32,
+        (uy * shift as f32).round() as i32,
+    );
+    let sample = |buf: &[u8], x: i32, y: i32, channel: usize| -> u8 {
+        let cx = x.clamp(0, width as i32 - 1);
+        let cy = y.clamp(0, height as i32 - 1);
+        buf[((cy as u32 * width + cx as u32) * 4) as usize + channel]
+    };
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let base = ((y as u32 * width + x as u32) * 4) as usize;
+            out[base] = sample(&slid, x - sx, y - sy, 0);
+            out[base + 2] = sample(&slid, x + sx, y + sy, 2);
+        }
+    }
+    out
 }
 
 fn dissolve_transition(

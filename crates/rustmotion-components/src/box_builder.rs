@@ -326,6 +326,7 @@ fn build_ghosts<'a>(
                 apply_animated_props(&mut css, &props);
             }
             apply_glow_effect(&mut css, &ghost_effects);
+            carry_paint_pass_effects(&mut css, &ghost_effects);
         }
         // Scale opacity: multiply the base opacity by the ghost opacity factor.
         let base_opacity = css.opacity.unwrap_or(1.0);
@@ -527,9 +528,11 @@ fn build_child<'a>(
     }
 
     // Resolve animations and apply transform/opacity/filter overrides on the
-    // box's CSS. Only paint-time properties (transform, opacity, filter,
-    // perspective) flow into CSS — internal animations like draw_progress or
-    // char_animation remain on the `AnimatedProperties` legacy path.
+    // box's CSS. Paint-time properties (transform, opacity, filter,
+    // perspective) plus the box size (`width`/`height`, which taffy needs so a
+    // resize reflows its children instead of stretching pixels) flow into CSS
+    // — internal animations like draw_progress or char_animation remain on the
+    // `AnimatedProperties` legacy path.
     if let Some(actx) = local_actx {
         if let Some(effects) = effective_effects(&child.component, stagger_delay) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
@@ -537,6 +540,7 @@ fn build_child<'a>(
                 apply_animated_props(&mut css, &props);
             }
             apply_glow_effect(&mut css, &effects);
+            carry_paint_pass_effects(&mut css, &effects);
         }
     }
 
@@ -1039,6 +1043,40 @@ fn props_has_paint_overrides(p: &AnimatedProperties) -> bool {
         || p.blur > 0.0
         || (p.glow_radius > 0.0 && p.glow_intensity > 0.0)
         || p.perspective > 0.0
+        // An animated box size is a *layout* override rather than a paint one,
+        // but it travels through the same bridge, so the gate has to let it
+        // through or `apply_animated_props` never runs for a scenario whose
+        // only animated property is `width`/`height` (the card-resize case).
+        // -1.0 is the animator's "never animated" sentinel.
+        || p.width >= 0.0
+        || p.height >= 0.0
+}
+
+/// Hand the effects that the *paint pass* resolves for itself down to the box
+/// node, in their delay-shifted form.
+///
+/// Everything else on this path is resolved here and lands on `css` as a
+/// finished value. `shimmer` cannot be: it composites against the pixels the
+/// node paints, which do not exist until the paint pass has run. So the paint
+/// pass reads it off `css.animation` — and it has to read the *shifted* copy
+/// (container stagger, `timeline` step `at`) rather than the author's raw
+/// `style.animation`, or a shimmer inside a staggered list would sweep in step
+/// with the list's first item instead of its own.
+fn carry_paint_pass_effects(
+    css: &mut CssStyle,
+    effects: &[rustmotion_core::schema::AnimationEffect],
+) {
+    use rustmotion_core::schema::AnimationEffect;
+    if effects
+        .iter()
+        .any(|e| matches!(e, AnimationEffect::Shimmer(_)))
+    {
+        css.animation = effects
+            .iter()
+            .filter(|e| matches!(e, AnimationEffect::Shimmer(_)))
+            .cloned()
+            .collect();
+    }
 }
 
 /// M3: apply the static `glow` animation effect (a coloured halo — not
@@ -1109,6 +1147,9 @@ fn component_intrinsic(
         Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(
             c,
         ))),
+        NumberWheel(w) => Some(Arc::new(
+            crate::intrinsic::NumberWheelIntrinsic::from_number_wheel(w),
+        )),
         Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
         Terminal(t) => Some(Arc::new(
             crate::intrinsic::TerminalIntrinsic::from_terminal(t),
@@ -1396,6 +1437,24 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             }
             if css.height.is_none() {
                 css.height = Some(CSize::Length(CLP::Px(cur.height)));
+            }
+        }
+        SuccessCheck(c) => {
+            // The halo is the box: the entrance scales *within* it (0.72→1),
+            // so the mark never needs more room than its own diameter.
+            apply_default_size(css, c.size, c.size);
+        }
+        Pointer(p) => {
+            // The box is the arrow glyph, not the area it travels over: the
+            // waypoints translate the glyph away from this box, and the
+            // geometry checker exempts `pointer` for exactly that reason.
+            // Sizing the box to the travel instead would make the pointer
+            // shove its flex siblings around.
+            if css.width.is_none() {
+                css.width = Some(CSize::Length(CLP::Px(p.size * 0.6)));
+            }
+            if css.height.is_none() {
+                css.height = Some(CSize::Length(CLP::Px(p.size)));
             }
         }
         Particle(_) => {
@@ -2000,6 +2059,9 @@ fn component_style(c: &Component) -> &CssStyle {
         PillNav(c) => &c.style,
         Progress(c) => &c.style,
         QrCode(c) => &c.style,
+        NumberWheel(c) => &c.style,
+        SuccessCheck(c) => &c.style,
+        Pointer(c) => &c.style,
         Rating(c) => &c.style,
         Skeleton(c) => &c.style,
         Slider(c) => &c.style,
@@ -2064,6 +2126,9 @@ pub fn component_kind(c: &Component) -> &'static str {
         PillNav(_) => "pill_nav",
         Progress(_) => "progress",
         QrCode(_) => "qrcode",
+        NumberWheel(_) => "number_wheel",
+        SuccessCheck(_) => "success_check",
+        Pointer(_) => "pointer",
         Rating(_) => "rating",
         Skeleton(_) => "skeleton",
         Slider(_) => "slider",
@@ -2148,6 +2213,9 @@ mod tests {
                 text_shadow: None,
                 stroke: None,
                 text_background: None,
+                caret: None,
+                states: Vec::new(),
+                swap: None,
             }),
             position: None,
             x: None,
@@ -2326,6 +2394,9 @@ mod tests {
                 text_shadow: None,
                 stroke: None,
                 text_background: None,
+                caret: None,
+                states: Vec::new(),
+                swap: None,
             }),
             position: None,
             x: None,
