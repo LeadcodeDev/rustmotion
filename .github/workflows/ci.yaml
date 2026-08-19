@@ -53,6 +53,19 @@ jobs:
   # dossier situé hors de la crate, donc absent de l'archive. Sans ce job, cette
   # famille de défaut ne se découvre qu'en publiant — et une publication
   # crates.io ne se défait pas, elle se yanke.
+  # La version est déclarée une fois dans [workspace.package] et héritée, mais
+  # cargo n'a aucune syntaxe pour injecter cette même version dans une exigence de
+  # dépendance interne : [workspace.dependencies] doit porter un littéral, puisque
+  # une crate publiée ne peut pas dépendre d'un simple `path`. Rien dans cargo ne
+  # vérifie donc que les deux s'accordent, et un désaccord ne se voit qu'à la
+  # publication — après que les crates précédentes soient parties.
+  version-agreement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every crate and internal dependency agree on the version
+        run: python3 scripts/check-version-agreement.py
+
   package:
     runs-on: ubuntu-latest
     steps:
