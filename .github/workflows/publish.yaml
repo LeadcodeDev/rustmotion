@@ -66,5 +66,26 @@ jobs:
           done
           echo "Timeout waiting for rustmotion-components" && exit 1
 
+      # rustmotion dépend de rustmotion-html au même titre que de core et
+      # components. Sans cette étape, `cargo publish -p rustmotion` échoue sur une
+      # dépendance introuvable — mais en troisième position, core et components
+      # étant alors déjà publiées. Une publication crates.io ne se défait pas :
+      # l'échec obligerait à repasser tout le workspace en version suivante.
+      - name: Publish rustmotion-html
+        run: cargo publish -p rustmotion-html --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for rustmotion-html on crates.io
+        run: |
+          VERSION=$(grep '^version' crates/rustmotion-html/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          for i in $(seq 1 30); do
+            if curl -sf "https://crates.io/api/v1/crates/rustmotion-html/$VERSION" > /dev/null; then
+              echo "rustmotion-html $VERSION available"
+              exit 0
+            fi
+            echo "Waiting... ($i)"
+            sleep 5
+          done
+          echo "Timeout waiting for rustmotion-html" && exit 1
+
       - name: Publish rustmotion
         run: cargo publish -p rustmotion --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
