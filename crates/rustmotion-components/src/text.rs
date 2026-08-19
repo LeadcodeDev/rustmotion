@@ -882,12 +882,9 @@ fn draw_text_lines(
             );
         }
 
-        // Draw stroke (outline)
         if let Some(sp) = stroke_paint {
             draw_text_with_fallback(canvas, line, font, emoji_font, letter_spacing, x, y, sp);
         }
-
-        // Draw fill
         draw_text_with_fallback(canvas, line, font, emoji_font, letter_spacing, x, y, paint);
     }
 }

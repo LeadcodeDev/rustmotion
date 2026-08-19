@@ -1,8 +1,8 @@
-# Rule: Curseur de souris simulé (`pointer`)
+# Rule: Simulated mouse pointer (`pointer`)
 
-Pour une démo produit ou un walkthrough d'agent — la flèche qui se déplace vers un contrôle et clique dessus — utilise `pointer`.
+For a product demo or an agent walkthrough — the arrow that moves to a control and clicks it — use `pointer`.
 
-**`cursor` n'est pas ça.** `cursor` est un caret texte : une barre verticale clignotante. Son champ `cursor_style: "pointer"` est de la métadonnée morte, il dessine une barre dans les deux cas.
+**`cursor` is not that.** `cursor` is a text caret: a blinking vertical bar. Its `cursor_style: "pointer"` field is dead metadata — it draws a bar either way.
 
 ```json
 {
@@ -23,27 +23,27 @@ Pour une démo produit ou un walkthrough d'agent — la flèche qui se déplace 
 }
 ```
 
-| Champ | Rôle |
+| Field | Role |
 |---|---|
-| `size` | Hauteur de la flèche en px. L'anneau de clic suit. |
-| `tone` | `light` (flèche blanche, contour sombre) ou `dark` |
-| `color` / `outline_color` | Surchargent `tone` |
+| `size` | Height of the arrow in px. The click ring scales with it. |
+| `tone` | `light` (white arrow, dark outline) or `dark` |
+| `color` / `outline_color` | Override `tone` |
 | `click_ring` | `subtle` / `standard` / `bold` / `none` |
-| `path` | Waypoints `{time, x, y}` — le pointeur **clique en arrivant** sur chacun |
-| `click_at` | Clics d'un pointeur immobile. **Ignoré si `path` est présent** |
-| `click_duration` | Durée du clic, *et* pause sur le waypoint avant de repartir |
-| `path_easing` | `ease_in_out` (défaut), `linear`, `ease_out`, `step` |
+| `path` | Waypoints `{time, x, y}` — the pointer **clicks on arrival** at each one |
+| `click_at` | Clicks for a stationary pointer. **Ignored if `path` is present** |
+| `click_duration` | Duration of the click, *and* the pause on the waypoint before moving on |
+| `path_easing` | `ease_in_out` (default), `linear`, `ease_out`, `step` |
 
-## Les coordonnées partent de l'origine du composant
+## Coordinates are relative to the component's own origin
 
-`x`/`y` d'un waypoint sont relatifs à la boîte du `pointer`, pas au device. Place le composant en `position: absolute, x: 0, y: 0` et les waypoints se lisent alors comme des coordonnées de scène — c'est la forme à privilégier pour un walkthrough.
+A waypoint's `x`/`y` are relative to the `pointer`'s box, not to the device. Place the component with `position: absolute, x: 0, y: 0` and the waypoints then read as scene coordinates — that's the form to prefer for a walkthrough.
 
-## La boîte est le glyphe, pas le parcours
+## The box is the glyph, not the path
 
-La boîte du composant fait la taille de la flèche : ce sont les waypoints qui la translatent. Dimensionner la boîte au parcours ferait pousser les frères d'un `flex` par un élément qui n'est qu'un curseur.
+The component's box is the size of the arrow: the waypoints translate it. Sizing the box to the path would push a `flex` sibling around because of an element that's just a cursor.
 
-Corollaire : `pointer` est **exempté du contrôle de débordement viewport**, comme `marquee` et `cursor`. Une démo qui amène la flèche près d'un bord met légitimement sa queue dehors.
+Corollary: `pointer` is **exempt from the viewport overflow check**, like `marquee` and `cursor`. A demo that brings the arrow near an edge legitimately puts its tail off-screen.
 
-## Le déplacement fait une pause sur le clic
+## The move pauses on the click
 
-Entre deux waypoints, le pointeur ne repart qu'une fois l'animation de clic finie (`click_duration`). C'est ce qui rend le geste lisible : arriver, cliquer, repartir. Un `click_duration` proche de l'écart entre deux waypoints laisse à peine le temps du trajet — laisse au moins le double.
+Between two waypoints, the pointer doesn't set off again until the click animation is done (`click_duration`). That's what makes the gesture read: arrive, click, leave. A `click_duration` close to the gap between two waypoints barely leaves time for the travel — leave at least double.

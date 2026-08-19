@@ -1,10 +1,10 @@
-# Rule: Les quatre finitions de texte
+# Rule: The four text finishes
 
-Quatre mécanismes qui demandaient chacun un sous-arbre bricolé à la main s'écrivent maintenant en une ligne. Aucun ne remplace un preset d'entrée : ils s'ajoutent par-dessus.
+Four mechanisms that each used to demand a hand-assembled sub-tree now write in one line. None of them replaces an entry preset: they layer on top.
 
-## `shimmer` — la lumière passe sur les lettres
+## `shimmer` — the light sweeps over the letters
 
-Effet d'animation, pas champ de composant. La bande n'éclaire **que les pixels réellement peints** (composée en `SrcATop` dans la couche du nœud) : sur un `text`, la lumière accroche les glyphes, pas la boîte.
+An animation effect, not a component field. The band only lights up **pixels that are actually painted** (composited `SrcATop` inside the node's layer): on a `text`, the light catches the glyphs, not the box.
 
 ```json
 "animation": [{
@@ -15,11 +15,11 @@ Effet d'animation, pas champ de composant. La bande n'éclaire **que les pixels 
 }]
 ```
 
-`width` est la largeur de la bande en fraction du trajet (0.3 = glint net, 0.8 = lavage doux). `angle` incline la bande : `0` est verticale et balaie de gauche à droite ; ~20° est ce qui la fait lire comme un reflet plutôt que comme un essuyage. La couche isolée n'est ouverte que pendant la fenêtre de l'effet — un `shimmer` non bouclé ne coûte rien le reste de la scène.
+`width` is the band's width as a fraction of the sweep (0.3 = a sharp glint, 0.8 = a soft wash). `angle` tilts the band: `0` is vertical and sweeps left to right; ~20° is what makes it read as a reflection rather than a wipe. The isolated layer is only opened during the effect's window — an unlooped `shimmer` costs nothing for the rest of the scene.
 
-Combiné à `char_blur_in` sur le même `text`, ça reproduit le « text stagger » : les mots montent en se défloutant, puis la lumière passe.
+Combined with `char_blur_in` on the same `text`, this reproduces "text stagger": the words rise while unblurring, then the light sweeps through.
 
-## `text.states` — un libellé qui en devient un autre
+## `text.states` — a label that becomes another
 
 ```json
 {
@@ -31,11 +31,11 @@ Combiné à `char_blur_in` sur le même `text`, ça reproduit le « text stagger
 }
 ```
 
-Sans `swap`, les libellés se coupent net à chaque `at` — abrupt, mais c'est exactement ce que demande l'absence du champ. Avec `swap`, les deux sont à l'écran pendant la fenêtre : le sortant monte en floutant, l'entrant monte du bas en se défloutant.
+Without `swap`, labels cut sharply at each `at` — abrupt, but that's exactly what omitting the field asks for. With `swap`, both are on screen during the window: the outgoing one rises while blurring, the incoming one rises from below while unblurring.
 
-**La boîte est mesurée sur le libellé le plus long**, pas sur le premier. Une boîte dimensionnée pour `"Saved"` déborderait à l'instant du retour vers `"Saving draft"` — et le validateur aurait signé.
+**The box is measured on the longest label**, not the first one. A box sized for `"Saved"` would overflow the moment it returns to `"Saving draft"` — and the validator would have caught it.
 
-## `text.caret` — le caret suit la révélation
+## `text.caret` — the caret follows the reveal
 
 ```json
 { "type": "text", "content": "rustmotion --frames 0-60",
@@ -43,12 +43,12 @@ Sans `swap`, les libellés se coupent net à chaque `at` — abrupt, mais c'est 
   "style": { "animation": [{ "name": "typewriter", "duration": 2.0 }] } }
 ```
 
-`shape`: `line` (règle fine) ou `block` (terminal). `blink` est la période complète en secondes (`0` = fixe). `hide_when_done: true` retire le caret une fois la révélation finie au lieu de le laisser garé.
+`shape`: `line` (thin rule) or `block` (terminal-style). `blink` is the full period in seconds (`0` = fixed). `hide_when_done: true` removes the caret once the reveal is finished instead of leaving it parked.
 
-C'est la raison d'être du champ : un `cursor` composé à côté du texte reste où on l'a mis pendant que le texte pousse sous lui. Le caret est aussi présent **avant** le premier caractère, sinon la première frame est vide puis caret et lettre apparaissent ensemble, ce qui lit comme un glitch.
+That's the field's reason to exist: a `cursor` composited next to the text would stay where it was placed while the text grows underneath it. The caret is also present **before** the first character, otherwise the first frame is empty and then caret and letter appear together, which reads as a glitch.
 
-## `pop_in` — l'arrivée de badge
+## `pop_in` — the badge arrival
 
-Preset d'animation : l'élément grossit depuis rien avec un dépassement `back-out`, **puis** une courte impulsion élastique une fois posé. `overshoot` règle l'amplitude de l'impulsion (défaut 0.18 = 118 %) ; `0` la supprime et laisse un simple scale-in.
+An animation preset: the element grows from nothing with a `back-out` overshoot, **then** a short elastic pulse once it settles. `overshoot` sets the pulse's amplitude (default 0.18 = 118%); `0` removes it and leaves a plain scale-in.
 
-Les deux temps comptent : le premier place l'élément, le second y ramène l'œil. Fondus en une seule courbe, ils lisent comme un tremblement.
+Both beats matter: the first *places* the element, the second draws the eye back to it. Merged into a single curve, they'd read as a tremor.

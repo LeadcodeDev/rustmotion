@@ -158,18 +158,19 @@ impl Pointer {
         )
     }
 
-    /// The classic arrow, drawn tip-first at the origin and scaled to
-    /// `size`. Coordinates are in units of the pointer's height, so the
-    /// glyph keeps its proportions at any size.
+    /// The classic arrow — tip, left edge, tail notch, and back up the right
+    /// shoulder — drawn tip-first at the origin and scaled to `size`.
+    /// Coordinates are in units of the pointer's height, so the glyph keeps
+    /// its proportions at any size.
     fn arrow_path(size: f32) -> Path {
         const OUTLINE: [(f32, f32); 7] = [
-            (0.0, 0.0),   // tip
-            (0.0, 0.72),  // down the left edge
-            (0.19, 0.56), // into the notch
-            (0.30, 0.84), // out along the tail
-            (0.43, 0.78), // tail's far side
-            (0.32, 0.51), // back up
-            (0.54, 0.51), // the right shoulder
+            (0.0, 0.0),
+            (0.0, 0.72),
+            (0.19, 0.56),
+            (0.30, 0.84),
+            (0.43, 0.78),
+            (0.32, 0.51),
+            (0.54, 0.51),
         ];
         let mut path = Path::new();
         for (i, (x, y)) in OUTLINE.iter().enumerate() {

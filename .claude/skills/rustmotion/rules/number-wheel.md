@@ -1,10 +1,10 @@
 # Rule: `number_wheel` vs `counter`
 
-Deux composants affichent un nombre qui s'anime. Ils ne racontent pas la même chose.
+Two components display an animated number. They don't tell the same story.
 
-**`counter`** interpole une *valeur* et réécrit le nombre à chaque frame. Il répond à « combien, en ce moment ? » — une jauge qui monte, un total qui se cumule. Ses glyphes sautent, parce que 8 999 puis 9 000 n'ont rien en commun.
+**`counter`** interpolates a *value* and rewrites the number every frame. It answers "how much, right now?" — a rising gauge, an accumulating total. Its glyphs jump, because 8,999 and then 9,000 have nothing in common.
 
-**`number_wheel`** fait défiler des bandes de chiffres, comme un compteur mécanique. Il répond à « la figure atterrit » — un KPI qui se pose, un résultat qui se révèle. Ce qu'on regarde, c'est le mouvement ; ce qui reste, c'est le chiffre demandé.
+**`number_wheel`** scrolls strips of digits, like a mechanical odometer. It answers "the figure lands" — a KPI settling, a result being revealed. What you watch is the motion; what remains is the requested digit.
 
 ```json
 {
@@ -18,27 +18,27 @@ Deux composants affichent un nombre qui s'anime. Ils ne racontent pas la même c
 }
 ```
 
-| Champ | Rôle | Défaut |
+| Field | Role | Default |
 |---|---|---|
-| `value` | La figure telle qu'écrite : `"30,222"`, `"5.7"`, `"98%"` | requis |
-| `spin` | `single` / `double` / `triple` — tours de 0-9 avant l'atterrissage | `single` |
-| `duration` | Durée d'atterrissage **d'une** roue | `1.2` |
-| `delay` | Avant le départ de la première roue | `0` |
-| `stagger_per_column` | Décalage par colonne, de gauche à droite | `0.08` |
-| `easing` | Courbe du trajet | `ease_out_cubic` |
+| `value` | The figure exactly as written: `"30,222"`, `"5.7"`, `"98%"` | required |
+| `spin` | `single` / `double` / `triple` — 0-9 loops before landing | `single` |
+| `duration` | Landing time for **one** reel | `1.2` |
+| `delay` | Before the first reel starts | `0` |
+| `stagger_per_column` | Offset per column, left to right | `0.08` |
+| `easing` | Curve of the travel | `ease_out_cubic` |
 
-## `value` est une chaîne, pas un nombre
+## `value` is a string, not a number
 
-Les chiffres roulent ; tout le reste — virgule, point, signe, unité — est peint à sa place, immobile. C'est ce qui permet d'écrire `"1 204 €"` ou `"98%"` sans que le séparateur ne parte en vrille.
+The digits roll; everything else — comma, dot, sign, unit — is painted where it stands, motionless. That's what lets you write `"1,204 €"` or `"98%"` without the separator going haywire.
 
-## `spin` change la vitesse, pas la durée
+## `spin` changes the speed, not the duration
 
-Chaque roue prend `duration` quoi qu'il arrive. `triple` ne rend pas l'animation plus longue : il fait défiler trois fois plus de chiffres dans le même temps. Un `triple` sur une `duration` courte devient une bouillie illisible.
+Every reel takes `duration` no matter what. `triple` doesn't make the animation longer: it scrolls three times as many digits in the same time. A `triple` on a short `duration` turns into an unreadable blur.
 
-## `stagger_per_column: 0` est un défaut à éviter
+## `stagger_per_column: 0` is a default to avoid
 
-Toutes les roues atterrissent alors ensemble, ce qui lit comme un simple flip. Le décalage gauche→droite est ce qui fait que le dernier chiffre est celui qui *règle* la figure.
+All the reels land together, which reads as a single flip. The left-to-right offset is what makes the last digit the one that *settles* the figure.
 
-## La boîte réserve la place du chiffre le plus large
+## The box reserves space for the widest digit
 
-Chaque colonne fait la largeur du chiffre le plus large de la police, pas celle du chiffre final : sinon un `111` réserverait une boîte étroite puis déborderait pendant qu'un `0` défile. Le validateur mesure la même chose.
+Each column is as wide as the widest digit in the font, not the width of the final digit — otherwise a `111` would reserve a narrow box and then overflow while a `0` scrolls past. The validator measures the same thing.

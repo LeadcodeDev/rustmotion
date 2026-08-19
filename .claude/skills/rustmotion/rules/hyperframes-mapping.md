@@ -1,30 +1,30 @@
-# Rule: Correspondance Hyperframes → rustmotion
+# Rule: Hyperframes → rustmotion mapping
 
-Si on te demande un effet du catalogue Hyperframes (ou un effet décrit dans ce vocabulaire — «streaming text», «number wheel», «badge pop»…), **cherche-le dans cette table avant d'écrire quoi que ce soit**. La moitié de ces effets existe déjà sous un autre nom, et la reconstruire à la main donne un résultat moins bon et non vérifiable par le validateur.
+If you're asked for an effect from the Hyperframes catalogue (or an effect described in that vocabulary — "streaming text", "number wheel", "badge pop"…), **look it up in this table before writing anything**. Half of these effects already exist under another name, and hand-rebuilding them gives a worse result the validator can't verify.
 
-| Hyperframes | En rustmotion |
+| Hyperframes | In rustmotion |
 |---|---|
 | Blur In | `style.animation: [{ "name": "char_blur_in", "granularity": "word" }]` |
 | Staggered Fade Up | `char_blur_in` / `char_slide_up` + `direction`, `distance`, `scale_from` |
-| Top Down Letters | `char_slide_up` avec `"direction": "down"` |
-| Text Stagger | `char_blur_in` (montée) + effet `shimmer` (balayage) sur le même `text` |
-| Number Pop In | `char_blur_in` avec `"granularity": "char"`, `"scale_from": 0.82` |
-| Streaming Text | `char_blur_in` avec `jitter`/`seed`/`ink_from` — voir [streaming-text.md](streaming-text.md) |
-| Typewriter | preset `typewriter` + `text.caret` |
+| Top Down Letters | `char_slide_up` with `"direction": "down"` |
+| Text Stagger | `char_blur_in` (rise) + `shimmer` effect (sweep) on the same `text` |
+| Number Pop In | `char_blur_in` with `"granularity": "char"`, `"scale_from": 0.82` |
+| Streaming Text | `char_blur_in` with `jitter`/`seed`/`ink_from` — see [streaming-text.md](streaming-text.md) |
+| Typewriter | `typewriter` preset + `text.caret` |
 | Text State Swap | `text.states` + `text.swap` |
-| Number Wheel | composant `number_wheel` — voir [number-wheel.md](number-wheel.md) |
+| Number Wheel | `number_wheel` component — see [number-wheel.md](number-wheel.md) |
 | Badge Pop | `badge` + `style.animation: [{ "name": "pop_in" }]` |
-| Success Check | composant `success_check` |
-| Simulated Cursor | composant `pointer` — voir [pointer-walkthrough.md](pointer-walkthrough.md) |
-| Card Resize | `keyframes` sur `width`/`height` — voir [card-resize.md](card-resize.md) |
-| Arc Motion Path | effet `motion_path` + `orient` — voir [motion-path.md](motion-path.md) |
-| SVG Line Draw Loader | preset `draw_in` / `stroke_reveal` sur un `svg` |
+| Success Check | `success_check` component |
+| Simulated Cursor | `pointer` component — see [pointer-walkthrough.md](pointer-walkthrough.md) |
+| Card Resize | `keyframes` on `width`/`height` — see [card-resize.md](card-resize.md) |
+| Arc Motion Path | `motion_path` effect + `orient` — see [motion-path.md](motion-path.md) |
+| SVG Line Draw Loader | `draw_in` / `stroke_reveal` preset on an `svg` |
 | Dynamic Grid | `animated-background` preset `grid_lines` |
 | Page Slide | `transition: { "type": "slide" }` |
 | Chromatic Aberration Wipe | `transition: { "type": "chromatic_wipe" }` |
 
-## Deux pièges de nommage
+## Two naming traps
 
-`cursor` **n'est pas** un curseur de souris : c'est un caret texte (une barre clignotante). Le pointeur de souris avec son anneau de clic, c'est `pointer`.
+`cursor` is **not** a mouse pointer: it's a text caret (a blinking bar). The mouse pointer with its click ring is `pointer`.
 
-`counter` **n'est pas** une roue de chiffres : il interpole une *valeur* et réécrit le nombre à chaque frame, donc les glyphes sautent. `number_wheel` fait défiler des bandes de chiffres, comme un compteur mécanique. Un compteur qui monte de 0 à 30 222 → `counter`. Un chiffre qui atterrit → `number_wheel`.
+`counter` is **not** a digit wheel: it interpolates a *value* and rewrites the number every frame, so the glyphs jump. `number_wheel` scrolls strips of digits, like a mechanical odometer. A count going from 0 to 30,222 → `counter`. A figure landing → `number_wheel`.

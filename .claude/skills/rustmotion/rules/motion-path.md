@@ -61,9 +61,9 @@ hint: at t=1.70s (57% of scene), animation transforms (tx=1886, ty=0, …)
 
 C'est la raison de préférer `motion_path` à une position calculée à la main : une trajectoire écrite en dur dans des keyframes reste vérifiable, mais tu perds l'orientation automatique et la vitesse constante le long de la courbe.
 
-## Recette : l'arc
+## Recipe: the arc
 
-L'effet « arc motion path » — une pastille qui décrit une courbe en pivotant pour rester face à sa trajectoire — est un `motion_path` à une seule cubique et `orient: true`. Il n'y a pas de raccourci `arc` : une cubique le décrit exactement, et lisiblement.
+The "arc motion path" effect — a dot that traces a curve while rotating to keep facing its trajectory — is a `motion_path` with a single cubic and `orient: true`. There's no `arc` shortcut: a cubic describes it exactly, and legibly.
 
 ```json
 "animation": [{
@@ -75,7 +75,7 @@ L'effet « arc motion path » — une pastille qui décrit une courbe en pivotan
 }]
 ```
 
-Les deux points de contrôle à la même hauteur (`-220`) donnent un arc symétrique ; les rapprocher de leurs extrémités respectives l'aplatit au milieu et le creuse aux bouts. Pour un arc **descendant**, inverse le signe : `C260,220 620,220 880,0`.
+Both control points at the same height (`-220`) give a symmetric arc; pulling them closer to their respective endpoints flattens the middle and deepens the ends. For a **downward** arc, flip the sign: `C260,220 620,220 880,0`.
 
 ## Cas dégénérés
 

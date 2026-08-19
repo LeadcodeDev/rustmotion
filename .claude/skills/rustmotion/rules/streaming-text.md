@@ -1,11 +1,11 @@
-# Rule: Texte qui « streame » (arrivée de tokens)
+# Rule: Text that "streams" (tokens arriving)
 
-Pour figurer une réponse de modèle en train de s'écrire, **n'utilise pas `typewriter`** : un typewriter révèle caractère par caractère à cadence fixe, ce qui lit comme une machine à écrire, pas comme un flux de tokens. Un modèle émet des mots entiers, par bouffées inégales, et chaque mot s'installe visuellement au lieu d'apparaître net d'un coup.
+To depict a model's response being written, **don't use `typewriter`**: a typewriter reveals character by character at a fixed cadence, which reads as a typewriter, not as a stream of tokens. A model emits whole words, in uneven bursts, and each word settles visually instead of snapping in all at once.
 
 ```json
 {
   "type": "text",
-  "content": "Les mots arrivent par bouffées inégales, comme des tokens.",
+  "content": "Words arrive in uneven bursts, like tokens.",
   "style": {
     "font-size": 40,
     "color": "#E2E8F0",
@@ -23,20 +23,20 @@ Pour figurer une réponse de modèle en train de s'écrire, **n'utilise pas `typ
 }
 ```
 
-Trois champs font tout le travail :
+Three fields do all the work:
 
-- **`granularity: "word"`** — l'unité est le mot, pas la lettre.
-- **`jitter`** — décale le départ de chaque unité de ±`jitter × stagger`. C'est ce qui casse la cadence métronomique. 0.5–0.8 lit comme du streaming ; au-delà de 1.0 les mots se croisent et l'ordre de lecture se brouille.
-- **`ink_from`** — chaque mot démarre dans cette couleur et converge vers `style.color` sur sa durée. Un gris désaturé reproduit le token « pas encore accepté par l'œil ».
+- **`granularity: "word"`** — the unit is the word, not the letter.
+- **`jitter`** — offsets each unit's start by ±`jitter × stagger`. This is what breaks the metronomic cadence. 0.5–0.8 reads as streaming; past 1.0 words overlap and the reading order gets muddled.
+- **`ink_from`** — each word starts in this colour and converges to `style.color` over its duration. A desaturated grey reproduces the "not yet accepted by the eye" token.
 
-## Le `jitter` est déterministe, pas aléatoire
+## `jitter` is deterministic, not random
 
-Les décalages sont dérivés de `seed` et de l'index de l'unité, jamais d'un RNG. C'est une contrainte, pas un détail : les frames sont rendues dans le désordre, en parallèle, et parfois dans des processus séparés (`--frames a-b`). Un mot dont le départ dépendrait d'un tirage sauterait entre deux frames voisines.
+The offsets are derived from `seed` and the unit's index, never from an RNG. This is a constraint, not a detail: frames are rendered out of order, in parallel, and sometimes in separate processes (`--frames a-b`). A word whose start depended on a random draw would jump between two neighbouring frames.
 
-Changer `seed` rebat le rythme sans en changer la statistique — utile pour que deux paragraphes voisins ne « respirent » pas à l'identique.
+Changing `seed` reshuffles the rhythm without changing its statistics — useful so two neighbouring paragraphs don't "breathe" identically.
 
-Aucune unité ne peut démarrer avant le `delay` de l'effet : un décalage négatif sur la première unité la ferait apparaître à moitié animée dès la frame 0.
+No unit can start before the effect's `delay`: a negative offset on the first unit would make it appear half-animated right from frame 0.
 
 ## Budget
 
-`stagger × nombre de mots + duration` est le temps total d'installation. Sur une phrase de 12 mots avec `stagger: 0.09`, c'est ~1.4 s — vérifie que la scène est assez longue, `validate` le signale sinon.
+`stagger × word count + duration` is the total settling time. For a 12-word sentence with `stagger: 0.09`, that's ~1.4s — check the scene is long enough; `validate` flags it if not.

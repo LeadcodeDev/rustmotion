@@ -58,17 +58,17 @@ Un scénario est soit une liste plate `scenes` (racine) — implicitement envelo
 
 Dans une vue `slide`, les `transition` entre scènes sont des **composites pixel de deux frame-buffers déjà rendus** (fade, wipe, zoom, flip, iris, slide, chromatic_wipe…) : aucun élément ne survit à la coupe, seuls les pixels sont mélangés.
 
-> `chromatic_wipe` est un slide rapide dont le bord de révélation se dédouble en rouge/cyan au pic puis se recompose. `direction` (`left`/`right`/`up`/`down`) l'oriente, `aberration` dose l'écart des canaux (`0` = slide nu, `2` = doublé). Le flash est nul aux deux extrémités : une frange résiduelle sur la dernière frame baverait dans la scène suivante.
+> `chromatic_wipe` is a fast slide whose reveal edge splits into red/cyan at its peak, then recomposes. `direction` (`left`/`right`/`up`/`down`) orients it, `aberration` sets how far the channels split (`0` = a plain slide, `2` = fully doubled). The flash is zero at both ends: a leftover fringe on the last frame would bleed into the next scene.
 
 La vue **`world`** est le seul mécanisme qui produit une continuité réelle entre beats : une caméra virtuelle se déplace en continu à travers un espace 2D où chaque scène occupe une position (`world-position`), avec un fondu de recouvrement pendant le pan au lieu d'une coupe. C'est la brique à utiliser pour une vidéo qui doit se lire comme un plan continu, sans limite de scène perceptible. Voir [rules/world-view.md](.claude/skills/rustmotion/rules/world-view.md) pour le modèle de coordonnées (le piège `world-position` = waypoint caméra, pas origine de scène), la recette du halo ambiant en `view.background`, et un exemple multi-beat validé.
 
 **Piège de casing à connaître :** `world-position` (scène) est en kebab-case, alors que son voisin `freeze_at` (même struct `Scene`) est en snake_case. Vraie inconsistance du schéma, pas une faute de frappe — copier la casse telle quelle.
 
-## Fonds animés
+## Animated backgrounds
 
-`scene["animated-background"]` (kebab-case, comme `world-position`) accepte un `preset` parmi `gradient_shift`, `grid_dots`, `grid_lines`, `concentric_circles`, `halo`, `pixel_grid`, `heropattern`, avec sa config sous une clé du même nom, plus les `x`/`y`/`speed`/`direction` communs qui font dériver la texture.
+`scene["animated-background"]` (kebab-case, like `world-position`) accepts a `preset` from `gradient_shift`, `grid_dots`, `grid_lines`, `concentric_circles`, `halo`, `pixel_grid`, `heropattern`, with its config under a key of the same name, plus the common `x`/`y`/`speed`/`direction` that drift the texture.
 
-> `grid_dots` marque les intersections et lit comme une texture ; `grid_lines` est une grille de **lignes** réglées et lit comme une structure — c'est celle à mettre derrière un graphe ou un panneau de code. Config : `cell`, `weight`, `color`, plus `major_every`/`major_weight` pour l'effet papier millimétré.
+> `grid_dots` marks the intersections and reads as a texture; `grid_lines` is a grid of ruled **lines** and reads as a structure — the one to put behind a chart or a code panel. Config: `cell`, `weight`, `color`, plus `major_every`/`major_weight` for the graph-paper effect.
 
 ## Composants disponibles (60)
 
@@ -90,7 +90,7 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `dot_map` — carte mondiale en dot-pattern avec points de données, pulse, lat/lng
 - `progress` — barre linéaire ou circulaire
 - `counter` — compteur animé (standalone uniquement, pas dans les cards)
-- `number_wheel` — chiffres qui défilent façon compteur mécanique et atterrissent sur la figure. À ne pas confondre avec `counter`, qui interpole une valeur et réécrit le nombre (ses glyphes sautent). Voir [rules/number-wheel.md](.claude/skills/rustmotion/rules/number-wheel.md).
+- `number_wheel` — digits that scroll like a mechanical odometer and land on the figure. Not to be confused with `counter`, which interpolates a value and rewrites the number (its glyphs jump). See [rules/number-wheel.md](.claude/skills/rustmotion/rules/number-wheel.md).
 - `table` — tableau avec column_widths, column_align, cell_padding, show_borders
 
 ### UI Components
@@ -112,8 +112,8 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 - `tag_cloud` — nuage de mots avec tailles pondérées
 - `callout` — bulle avec flèche
 - `divider` — séparateur visuel
-- `success_check` — coche qui se trace dans un halo, avec pop et rotation résorbée
-- `pointer` — curseur de **souris** simulé (flèche + anneau de clic) suivant des waypoints. `cursor` est un caret texte, pas ça. Voir [rules/pointer-walkthrough.md](.claude/skills/rustmotion/rules/pointer-walkthrough.md).
+- `success_check` — a checkmark that draws itself inside a halo, with a pop and a settling rotation
+- `pointer` — a simulated **mouse** cursor (arrow + click ring) following waypoints. `cursor` is a text caret, not this. See [rules/pointer-walkthrough.md](.claude/skills/rustmotion/rules/pointer-walkthrough.md).
 
 ### Code & Terminal
 - `codeblock` — code syntax-highlighted avec reveal, diff mode (`diff: true`), state transitions
@@ -133,18 +133,18 @@ La vue **`world`** est le seul mécanisme qui produit une continuité réelle en
 
 > Voir [rules/audio-reactive.md](.claude/skills/rustmotion/rules/audio-reactive.md) pour lier un composant à une piste `audio` via `style.audio-reactive`.
 
-## Finitions de texte
+## Text finishes
 
-Quatre mécanismes qui demandaient chacun un sous-arbre bricolé à la main. Détails et pièges dans [rules/text-polish.md](.claude/skills/rustmotion/rules/text-polish.md).
+Four mechanisms that each used to demand a hand-assembled sub-tree. Details and pitfalls in [rules/text-polish.md](.claude/skills/rustmotion/rules/text-polish.md).
 
-- **`shimmer`** — effet d'animation : une bande de lumière balaie l'élément. Composée en `SrcATop` dans la couche du nœud, donc elle n'éclaire **que les pixels réellement peints** (les glyphes, pas la boîte). Combinée à `char_blur_in`, c'est le « text stagger ».
-- **`text.states` + `text.swap`** — un libellé qui en devient un autre : le sortant monte en floutant, l'entrant monte du bas en se défloutant. La boîte est mesurée sur le libellé **le plus long**, pas le premier.
-- **`text.caret`** — un caret (`line` ou `block`) accroché à la tête de révélation d'un `typewriter`. Un `cursor` composé à côté resterait où on l'a mis pendant que le texte pousse sous lui.
-- **`pop_in`** — preset d'entrée en deux temps : scale back-out qui *place* l'élément, puis courte impulsion élastique qui y ramène l'œil.
+- **`shimmer`** — animation effect: a band of light sweeps over the element. Composited `SrcATop` inside the node's layer, so it only lights up **pixels that are actually painted** (the glyphs, not the box). Combined with `char_blur_in`, this is "text stagger".
+- **`text.states` + `text.swap`** — a label that becomes another one: the outgoing one rises while blurring, the incoming one rises from below while unblurring. The box is measured on the **longest** label, not the first one.
+- **`text.caret`** — a caret (`line` or `block`) pinned to a `typewriter`'s reveal head. A `cursor` composited alongside would stay where it was placed while the text grows underneath it.
+- **`pop_in`** — a two-beat entry preset: a back-out scale that *places* the element, then a short elastic pulse that draws the eye back to it.
 
-Les sept presets `char_*` se règlent par `direction` (up/down/left/right), `distance`, `scale_from`, `jitter`+`seed` (irrégularité déterministe du stagger) et `ink_from` (couleur de départ de chaque unité). Voir [rules/char-animation-tuning.md](.claude/skills/rustmotion/rules/char-animation-tuning.md) et, pour l'arrivée de tokens, [rules/streaming-text.md](.claude/skills/rustmotion/rules/streaming-text.md).
+The seven `char_*` presets are tuned via `direction` (up/down/left/right), `distance`, `scale_from`, `jitter`+`seed` (deterministic stagger irregularity) and `ink_from` (each unit's starting colour). See [rules/char-animation-tuning.md](.claude/skills/rustmotion/rules/char-animation-tuning.md) and, for tokens arriving, [rules/streaming-text.md](.claude/skills/rustmotion/rules/streaming-text.md).
 
-> Si on te demande un effet nommé dans le vocabulaire Hyperframes (« streaming text », « number wheel », « badge pop », « top-down letters »…), consulte d'abord la table de correspondance : [rules/hyperframes-mapping.md](.claude/skills/rustmotion/rules/hyperframes-mapping.md).
+> If you're asked for an effect named in the Hyperframes vocabulary ("streaming text", "number wheel", "badge pop", "top-down letters"…), check the mapping table first: [rules/hyperframes-mapping.md](.claude/skills/rustmotion/rules/hyperframes-mapping.md).
 
 ## Architecture
 

@@ -1,6 +1,6 @@
-# Rule: Régler une animation par caractère ou par mot
+# Rule: Tuning a per-character or per-word animation
 
-Les sept presets `char_*` (`char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`, `char_blur_in`) partagent une même config. Six champs la règlent, tous optionnels, **tous par défaut au comportement historique** : un scénario existant ne bouge pas.
+The seven `char_*` presets (`char_scale_in`, `char_fade_in`, `char_wave`, `char_bounce`, `char_rotate_in`, `char_slide_up`, `char_blur_in`) share one config. Six fields tune it, all optional, **all defaulting to the historical behaviour**: an existing scenario doesn't move.
 
 ```json
 {
@@ -20,29 +20,29 @@ Les sept presets `char_*` (`char_scale_in`, `char_fade_in`, `char_wave`, `char_b
 }
 ```
 
-| Champ | Rôle | Défaut |
+| Field | Role | Default |
 |---|---|---|
-| `direction` | `up` / `down` / `left` / `right` — d'où l'unité arrive | `up` |
-| `distance` | Multiplicateur du déplacement (0.5 serré, 1.85 marqué) | `1.0` |
-| `scale_from` | Échelle de départ de chaque unité (0.82 = «pop», 0.92 = à peine) | absent |
-| `jitter` + `seed` | Irrégularité déterministe du `stagger` | `0` |
-| `ink_from` | Couleur de départ, converge vers `style.color` | absent |
-| `blur` | Sigma de départ (`char_blur_in` seul) | `14` |
+| `direction` | `up` / `down` / `left` / `right` — where the unit arrives from | `up` |
+| `distance` | Displacement multiplier (0.5 tight, 1.85 pronounced) | `1.0` |
+| `scale_from` | Starting scale of each unit (0.82 = "pop", 0.92 = barely) | absent |
+| `jitter` + `seed` | Deterministic irregularity of the `stagger` | `0` |
+| `ink_from` | Starting colour, converges to `style.color` | absent |
+| `blur` | Starting sigma (`char_blur_in` only) | `14` |
 
-## Ce que chaque preset lit
+## What each preset actually reads
 
-`direction` et `distance` n'ont de sens que pour les presets dont le mouvement **est** une translation : `char_slide_up` et `char_blur_in`. Les autres (`scale_in`, `bounce`, `rotate_in`, `fade_in`, `wave`) n'ont pas d'axe de déplacement à rediriger et les ignorent.
+`direction` and `distance` only make sense for presets whose motion **is** a translation: `char_slide_up` and `char_blur_in`. The others (`scale_in`, `bounce`, `rotate_in`, `fade_in`, `wave`) have no displacement axis to redirect, and ignore them.
 
-`scale_from` se **compose** avec le preset au lieu de le remplacer — sauf sur `char_scale_in` et `char_bounce`, qui possèdent déjà leur propre courbe d'échelle et l'ignorent (deux échelles empilées se battent au lieu de se composer).
+`scale_from` **composes** with the preset instead of replacing it — except on `char_scale_in` and `char_bounce`, which already own their own scale curve and ignore it (two stacked scale curves fight each other instead of composing).
 
-## Le nom `char_slide_up` ne contraint pas la direction
+## The name `char_slide_up` doesn't constrain the direction
 
-`char_slide_up` avec `"direction": "down"` fait tomber les lettres depuis le haut. Le nom est historique : c'est le preset «translation», `up` en est le défaut. Il n'existe pas de `char_slide_down`.
+`char_slide_up` with `"direction": "down"` makes the letters fall from above. The name is historical: it's the "translation" preset, and `up` is its default. There is no `char_slide_down`.
 
-## `granularity` décide de ce qu'est une unité
+## `granularity` decides what a unit is
 
-`"granularity": "word"` anime des mots, `"char"` (défaut) des caractères. Un titre de 40 caractères animé en `char` avec `stagger: 0.05` prend 2 s à s'installer avant même sa `duration` — compte le nombre d'unités avant de choisir le `stagger`, ou passe en `word`.
+`"granularity": "word"` animates words, `"char"` (default) animates characters. A 40-character title animated at `char` granularity with `stagger: 0.05` takes 2s to settle before even hitting its own `duration` — count the number of units before picking a `stagger`, or switch to `word`.
 
-## Rappel sur `char_blur_in`
+## A note on `char_blur_in`
 
-Il passe par le même chemin de résolution que ses six frères : il **hérite** du `stagger` d'un conteneur parent et fonctionne dans une étape de `timeline`. (Ça n'a pas toujours été le cas.)
+It goes through the same resolution path as its six siblings: it **inherits** `stagger` from a parent container and works inside a `timeline` step. (That wasn't always the case.)
