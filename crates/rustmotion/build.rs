@@ -1,5 +1,5 @@
 //! Generates the `SKILL_FILES` table embedded into the `rustmotion` binary by
-//! `src/skills.rs`.
+//! `src/cli/skills.rs`.
 //!
 //! `rustmotion skills install` is the only channel through which an LLM agent
 //! receives the generation rules under `.claude/skills/rustmotion/`. Before
@@ -42,19 +42,13 @@ fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
-    // crates/rustmotion-cli -> crates -> <workspace root>
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected {} to live at <workspace>/crates/rustmotion-cli",
-                manifest_dir.display()
-            )
-        })
-        .to_path_buf();
 
-    let skills_root = workspace_root.join(".claude/skills/rustmotion");
+    // L'arbre des skills vit DANS la crate, et `.claude/skills/rustmotion` à la
+    // racine du dépôt n'en est qu'un lien symbolique. C'est ce qui permet à
+    // `cargo package` de l'embarquer : il n'archive que ce qui est sous le
+    // répertoire du paquet, et une lecture hors de ce périmètre produit un
+    // tarball qui ne compile chez personne.
+    let skills_root = manifest_dir.join("skills");
 
     // Rerun whenever any file under the skills tree is added, removed, or
     // edited — Cargo scans directories given to rerun-if-changed recursively.
@@ -84,10 +78,14 @@ fn main() {
 
     let mut generated = String::from("&[\n");
     for path in &all_files {
-        let rel_path = path
-            .strip_prefix(&workspace_root)
-            .unwrap_or(path)
+        // Le chemin embarqué est celui que `skills install` écrira chez
+        // l'utilisateur, pas celui d'où le fichier vient : la source a beau
+        // vivre dans la crate, la destination reste l'emplacement que Claude
+        // Code sait découvrir.
+        let rel_path = Path::new(".claude/skills/rustmotion")
+            .join(path.strip_prefix(&skills_root).unwrap_or(path))
             .to_str()
+            .map(str::to_owned)
             .unwrap_or_else(|| panic!("non-UTF-8 skill file path: {}", path.display()))
             .replace('\\', "/"); // normalize separators if built on Windows
         let abs_path = path

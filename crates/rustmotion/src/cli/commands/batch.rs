@@ -22,8 +22,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::commands::render::cmd_render;
-use crate::commands::validation::{self, ValidationSource};
+use crate::cli::commands::render::cmd_render;
+use crate::cli::commands::validation::{self, ValidationSource};
 
 /// One row parsed from the JSONL data file.
 struct BatchRow {
@@ -872,7 +872,7 @@ mod batch_integration_tests {
     /// because `std::env::set_var`/`remove_var` are `unsafe`: the standard
     /// library only guarantees soundness when nothing else in the process
     /// reads or writes the environment concurrently. This is the only test
-    /// file in `rustmotion-cli` whose tests spawn a real (non `png-seq` /
+    /// file in the CLI whose tests spawn a real (non `png-seq` /
     /// `gif` / `raw`) video encode — every other test in this crate's test
     /// binary never reads `PATH` — so this lock only needs to protect
     /// against concurrent runs of tests within this file.

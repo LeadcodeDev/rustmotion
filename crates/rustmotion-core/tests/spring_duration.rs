@@ -1,6 +1,6 @@
 //! Issue #167 lot E: `SpringConfig::duration`/`rest_threshold` and
 //! `engine::animator::spring_rest_time` are meant to be used from outside
-//! `rustmotion-core` (by `rustmotion-cli`'s `info` command, in particular).
+//! `rustmotion-core` (by `rustmotion`'s `info` command, in particular).
 //! This is a black-box check that the public surface actually works end to
 //! end — the white-box coverage (settle-time correctness against a
 //! brute-force reference, over/under-damped edge cases, shape preservation)

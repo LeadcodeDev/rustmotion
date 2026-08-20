@@ -4,12 +4,11 @@ members = [
     "crates/rustmotion-core",
     "crates/rustmotion-components",
     "crates/rustmotion",
-    "crates/rustmotion-cli",
     "crates/rustmotion-studio",
     "crates/rustmotion-html",
 ]
 
-# Les six crates avancent ensemble. La version se change ici, et nulle part
+# Les cinq crates avancent ensemble. La version se change ici, et nulle part
 # ailleurs : elle était auparavant répétée dix fois — une par manifeste, plus une
 # par dépendance interne — et une seule oubliée fait échouer la publication après
 # que les précédentes soient parties, ce qui ne se rattrape pas.

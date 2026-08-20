@@ -5053,11 +5053,16 @@ dependencies = [
 name = "rustmotion"
 version = "0.6.1"
 dependencies = [
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "dirs",
  "gif 0.13.3",
  "image",
  "minimp4",
  "notify",
  "openh264",
+ "ratatui",
  "rayon",
  "resvg",
  "rubato",
@@ -5075,25 +5080,6 @@ dependencies = [
  "tiny-skia",
  "ureq",
  "usvg",
-]
-
-[[package]]
-name = "rustmotion-cli"
-version = "0.6.1"
-dependencies = [
- "clap",
- "clap_complete",
- "crossterm",
- "dirs",
- "image",
- "notify",
- "ratatui",
- "rayon",
- "rustmotion",
- "rustmotion-studio",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]

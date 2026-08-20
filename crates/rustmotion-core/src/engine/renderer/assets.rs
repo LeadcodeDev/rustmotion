@@ -252,7 +252,7 @@ pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Res
 // ─── Media metadata probing ────────────────────────────────────────────────
 //
 // "How long is this audio file? What are the dimensions of this image?" —
-// `rustmotion info` (`crates/rustmotion-cli/src/commands/info.rs`) answers
+// `rustmotion info` (`crates/rustmotion/src/cli/commands/info.rs`) answers
 // these by calling the functions below, one per asset kind. Two rules tie
 // them together:
 //

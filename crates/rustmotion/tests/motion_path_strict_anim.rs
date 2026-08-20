@@ -13,8 +13,8 @@
 //! viewport while following its curve would pass validation silently. This
 //! test is run against the actual compiled `rustmotion` binary (not an
 //! internal call into `validate_geometry_animated`) because
-//! `rustmotion-cli::commands` is a private module (`mod commands;` in
-//! `src/lib.rs`) — the CLI subprocess is the only externally-observable
+//! `rustmotion::cli::commands` is a private module (`mod commands;` in
+//! `src/cli/mod.rs`) — the CLI subprocess is the only externally-observable
 //! contract for "`--strict-anim` sees this".
 //!
 //! Three scenarios, each isolating one variable:
@@ -36,7 +36,7 @@ struct ScratchFile(PathBuf);
 impl ScratchFile {
     fn new(label: &str) -> Self {
         let unique = format!(
-            "rustmotion-cli-motion-path-test-{label}-{}-{}",
+            "rustmotion-motion-path-test-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

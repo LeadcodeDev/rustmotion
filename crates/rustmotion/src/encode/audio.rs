@@ -808,7 +808,7 @@ mod tests {
 
     // ── media-io: probe_audio_metadata ──────────────────────────────────────
     //
-    // `rustmotion info` (crates/rustmotion-cli/src/commands/info.rs) needs
+    // `rustmotion info` (crates/rustmotion/src/cli/commands/info.rs) needs
     // "how long is this audio file, at what rate/channel count" for every
     // `audio[].src` a scenario declares. The brief for that fix is explicit:
     // reuse `decode_audio_file` — the exact decode `mix_audio_tracks_segment`

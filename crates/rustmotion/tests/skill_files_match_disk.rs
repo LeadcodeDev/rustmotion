@@ -1,6 +1,6 @@
 //! Guards `rustmotion skills install` against silently dropping rule files.
 //!
-//! `SKILL_FILES` (embedded by `build.rs`, see `src/skills.rs`) is meant to
+//! `SKILL_FILES` (embedded by `build.rs`, see `src/cli/skills.rs`) is meant to
 //! mirror every `.md` file under `.claude/skills/rustmotion/` exactly.
 //! Before `build.rs` existed, that table was a hand-maintained literal list
 //! that fell 17 files behind disk without ever failing a build or a test
@@ -18,12 +18,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// `crates/rustmotion-cli` -> `crates` -> `<workspace root>`.
+/// `crates/rustmotion` -> `crates` -> `<workspace root>`.
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
-        .expect("rustmotion-cli is expected at <workspace>/crates/rustmotion-cli")
+        .expect("rustmotion is expected at <workspace>/crates/rustmotion")
         .to_path_buf()
 }
 
@@ -60,7 +60,7 @@ struct ScratchDir(PathBuf);
 impl ScratchDir {
     fn new(label: &str) -> Self {
         let unique = format!(
-            "rustmotion-cli-test-{label}-{}-{}",
+            "rustmotion-skills-test-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -983,7 +983,7 @@ mod style_warning_tests {
     fn negative_spring_damping_is_an_error() {
         // Constat #6: damping < 0 makes the spring solver diverge instead of
         // settle (a `SpringConfig` accepts any f64 — nothing in
-        // `rustmotion-cli` checked `damping`/`stiffness` before this).
+        // `rustmotion`'s CLI checked `damping`/`stiffness` before this).
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",

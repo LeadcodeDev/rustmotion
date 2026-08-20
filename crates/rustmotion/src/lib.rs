@@ -1,3 +1,10 @@
+// `cli` était une crate séparée qui consommait celle-ci sous le nom
+// `rustmotion::`. Cet alias garde ces chemins valides depuis l'intérieur, ce
+// qui laisse le module CLI écrire `rustmotion::schema::…` exactement comme
+// n'importe quel consommateur externe — sans quoi il faudrait réécrire des
+// centaines de chemins en `crate::` pour un déplacement de fichiers.
+extern crate self as rustmotion;
+
 // Re-export core and components for downstream users
 pub use rustmotion_core as core;
 pub use rustmotion_core::error;
@@ -19,6 +26,7 @@ pub mod engine {
 
 // Local modules
 pub mod assets;
+pub mod cli;
 pub mod encode;
 pub mod include;
 pub mod loader;
