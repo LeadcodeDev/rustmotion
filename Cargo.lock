@@ -5071,7 +5071,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -5104,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-components"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "dashmap",
  "gif 0.13.3",
@@ -5125,7 +5125,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "cosmic-text",
  "dashmap",
@@ -5149,7 +5149,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-html"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "html5ever 0.39.0",
  "markup5ever_rcdom",
@@ -5159,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "rustmotion-studio"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap",
  "dioxus",
