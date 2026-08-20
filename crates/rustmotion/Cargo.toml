@@ -5,6 +5,7 @@ edition = "2021"
 description = "A CLI tool that renders motion design videos from JSON scenarios. No browser, no Node.js — just a single Rust binary."
 license = "MIT"
 repository = "https://github.com/LeadcodeDev/rustmotion"
+readme = "../../README.md"
 
 [lib]
 path = "src/lib.rs"

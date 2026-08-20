@@ -5,6 +5,7 @@ edition = "2021"
 description = "HTML/CSS front-end transpiler for rustmotion scenarios"
 license = "MIT"
 repository = "https://github.com/LeadcodeDev/rustmotion"
+readme = "../../README.md"
 
 [dependencies]
 html5ever = "0.39.0"

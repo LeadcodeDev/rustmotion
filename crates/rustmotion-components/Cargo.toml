@@ -5,6 +5,7 @@ edition = "2021"
 description = "Component library for rustmotion (51 components)"
 license = "MIT"
 repository = "https://github.com/LeadcodeDev/rustmotion"
+readme = "../../README.md"
 
 [features]
 default = ["lottie-native"]
