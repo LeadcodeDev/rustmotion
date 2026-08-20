@@ -1,6 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, PathBuilder, Point, Rect};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{
+    Canvas, Color, Color4f, ColorType, ImageInfo, Paint, PaintStyle, PathBuilder, Point, Rect,
+};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -83,10 +86,6 @@ rustmotion_core::impl_traits!(Stat {
 });
 
 impl Stat {
-    // The non-deprecated gradient API moves TileMode out of the signature;
-    // the transposition is tracked in #215, and doing it here without pixel
-    // tests would change rendering silently.
-    #[allow(deprecated)]
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
@@ -361,15 +360,12 @@ impl Stat {
             let (r, g, b, _) = parse_hex_color(spark_color);
             let top_color = Color::from_argb(50, r, g, b);
             let bottom_color = Color::from_argb(0, r, g, b);
-            let shader = skia_safe::shader::Shader::linear_gradient(
+            let colors4f = [Color4f::from(top_color), Color4f::from(bottom_color)];
+            let stops = Colors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+            let grad = Gradient::new(stops, gradient::Interpolation::default());
+            let shader = gradient::shaders::linear_gradient(
                 (Point::new(0.0, spark_y), Point::new(0.0, spark_y + spark_h)),
-                skia_safe::gradient_shader::GradientShaderColors::Colors(&[
-                    top_color,
-                    bottom_color,
-                ]),
-                None,
-                skia_safe::TileMode::Clamp,
-                None,
+                &grad,
                 None,
             );
             if let Some(shader) = shader {

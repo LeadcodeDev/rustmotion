@@ -41,10 +41,6 @@ rustmotion_core::impl_traits!(Shape {
 });
 
 impl Painter for Shape {
-    // The non-deprecated gradient API moves TileMode out of the signature;
-    // the transposition is tracked in #215, and doing it here without pixel
-    // tests would change rendering silently.
-    #[allow(deprecated)]
     fn paint_content(
         &self,
         canvas: &Canvas,
@@ -87,31 +83,34 @@ impl Painter for Shape {
                             let dy = (h / 2.0) * rad.sin();
                             let start = Point::new(cx - dx, cy - dy);
                             let end = Point::new(cx + dx, cy + dy);
-                            skia_safe::shader::Shader::linear_gradient(
-                                (start, end),
-                                skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(
-                                    &colors,
-                                    Some(skia_safe::ColorSpace::new_srgb()),
-                                ),
+                            let gradient_colors = skia_safe::gradient::Colors::new(
+                                &colors,
                                 stops.as_deref(),
                                 skia_safe::TileMode::Clamp,
-                                None,
-                                None,
-                            )
+                                Some(skia_safe::ColorSpace::new_srgb()),
+                            );
+                            let g = skia_safe::gradient::Gradient::new(
+                                gradient_colors,
+                                skia_safe::gradient::Interpolation::default(),
+                            );
+                            skia_safe::gradient::shaders::linear_gradient((start, end), &g, None)
                         }
                         GradientType::Radial => {
                             let center = Point::new(w / 2.0, h / 2.0);
                             let radius = w.max(h) / 2.0;
-                            skia_safe::shader::Shader::radial_gradient(
-                                center,
-                                radius,
-                                skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(
-                                    &colors,
-                                    Some(skia_safe::ColorSpace::new_srgb()),
-                                ),
+                            let gradient_colors = skia_safe::gradient::Colors::new(
+                                &colors,
                                 stops.as_deref(),
                                 skia_safe::TileMode::Clamp,
-                                None,
+                                Some(skia_safe::ColorSpace::new_srgb()),
+                            );
+                            let g = skia_safe::gradient::Gradient::new(
+                                gradient_colors,
+                                skia_safe::gradient::Interpolation::default(),
+                            );
+                            skia_safe::gradient::shaders::radial_gradient(
+                                (center, radius),
+                                &g,
                                 None,
                             )
                         }

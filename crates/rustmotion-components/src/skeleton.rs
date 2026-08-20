@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Color, PaintStyle, Point, Rect};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{Canvas, Color, Color4f, PaintStyle, Point, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -85,10 +86,6 @@ rustmotion_core::impl_traits!(Skeleton {
 });
 
 impl Skeleton {
-    // The non-deprecated gradient API moves TileMode out of the signature;
-    // the transposition is tracked in #215, and doing it here without pixel
-    // tests would change rendering silently.
-    #[allow(deprecated)]
     fn draw_shimmer_rect(&self, canvas: &Canvas, rect: Rect, radius: f32, time: f64) {
         let w = rect.width();
 
@@ -109,19 +106,19 @@ impl Skeleton {
         let transparent = Color::from_argb(0, r, g, b);
         let highlight = Color::from_argb(180, r, g, b);
 
-        let shader = skia_safe::shader::Shader::linear_gradient(
+        let colors4f = [
+            Color4f::from(transparent),
+            Color4f::from(highlight),
+            Color4f::from(transparent),
+        ];
+        let stops = Colors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(stops, gradient::Interpolation::default());
+        let shader = gradient::shaders::linear_gradient(
             (
                 Point::new(shimmer_x, 0.0),
                 Point::new(shimmer_x + shimmer_w, 0.0),
             ),
-            skia_safe::gradient_shader::GradientShaderColors::Colors(&[
-                transparent,
-                highlight,
-                transparent,
-            ]),
-            None,
-            skia_safe::TileMode::Clamp,
-            None,
+            &grad,
             None,
         );
 

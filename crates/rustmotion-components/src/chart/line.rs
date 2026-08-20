@@ -1,5 +1,6 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, Color, PaintStyle, PathBuilder, Point, Rect};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{Canvas, Color, Color4f, PaintStyle, PathBuilder, Point, Rect};
 
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 
@@ -127,10 +128,6 @@ impl Chart {
         Ok(())
     }
 
-    // The non-deprecated gradient API moves TileMode out of the signature;
-    // the transposition is tracked in #215, and doing it here without pixel
-    // tests would change rendering silently.
-    #[allow(deprecated)]
     pub(super) fn render_area(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let (mt, mr, mb, ml) = self.chart_margins();
         let chart_w = w - ml - mr;
@@ -231,12 +228,12 @@ impl Chart {
         let top_color = Color::from_argb((self.fill_opacity * 255.0) as u8, r, g, b);
         let bottom_color = Color::from_argb(0, r, g, b);
 
-        let shader = skia_safe::shader::Shader::linear_gradient(
+        let colors4f = [Color4f::from(top_color), Color4f::from(bottom_color)];
+        let stops = Colors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(stops, gradient::Interpolation::default());
+        let shader = gradient::shaders::linear_gradient(
             (Point::new(0.0, mt), Point::new(0.0, mt + chart_h)),
-            skia_safe::gradient_shader::GradientShaderColors::Colors(&[top_color, bottom_color]),
-            None,
-            skia_safe::TileMode::Clamp,
-            None,
+            &grad,
             None,
         );
 
