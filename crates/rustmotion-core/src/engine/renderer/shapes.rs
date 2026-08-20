@@ -13,35 +13,35 @@ pub fn build_shape_path(
 ) -> Option<skia_safe::Path> {
     match shape_type {
         ShapeType::Rect => {
-            let mut path = skia_safe::Path::new();
-            path.add_rect(Rect::from_xywh(x, y, w, h), None);
-            Some(path)
+            let mut path = skia_safe::PathBuilder::new();
+            path.add_rect(Rect::from_xywh(x, y, w, h), None, None);
+            Some(path.detach())
         }
         ShapeType::RoundedRect => {
             let r = corner_radius.unwrap_or(8.0);
             let rrect = skia_safe::RRect::new_rect_xy(Rect::from_xywh(x, y, w, h), r, r);
-            let mut path = skia_safe::Path::new();
-            path.add_rrect(rrect, None);
-            Some(path)
+            let mut path = skia_safe::PathBuilder::new();
+            path.add_rrect(rrect, None, None);
+            Some(path.detach())
         }
         ShapeType::Circle => {
             let radius = w.min(h) / 2.0;
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             path.add_circle((x + w / 2.0, y + h / 2.0), radius, None);
-            Some(path)
+            Some(path.detach())
         }
         ShapeType::Ellipse => {
-            let mut path = skia_safe::Path::new();
-            path.add_oval(Rect::from_xywh(x, y, w, h), None);
-            Some(path)
+            let mut path = skia_safe::PathBuilder::new();
+            path.add_oval(Rect::from_xywh(x, y, w, h), None, None);
+            Some(path.detach())
         }
         ShapeType::Triangle => {
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             path.move_to((x + w / 2.0, y));
             path.line_to((x + w, y + h));
             path.line_to((x, y + h));
             path.close();
-            Some(path)
+            Some(path.detach())
         }
         ShapeType::Star { points } => {
             let cx = x + w / 2.0;
@@ -49,7 +49,7 @@ pub fn build_shape_path(
             let outer_r = w.min(h) / 2.0;
             let inner_r = outer_r * 0.4;
             let n = *points as usize;
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             for i in 0..(n * 2) {
                 let angle =
                     (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
@@ -63,14 +63,14 @@ pub fn build_shape_path(
                 }
             }
             path.close();
-            Some(path)
+            Some(path.detach())
         }
         ShapeType::Polygon { sides } => {
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
             let r = w.min(h) / 2.0;
             let n = *sides as usize;
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             for i in 0..n {
                 let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32
                     - std::f32::consts::FRAC_PI_2;
@@ -83,7 +83,7 @@ pub fn build_shape_path(
                 }
             }
             path.close();
-            Some(path)
+            Some(path.detach())
         }
         ShapeType::Path { data } => skia_safe::Path::from_svg(data),
     }
@@ -117,12 +117,12 @@ pub fn draw_shape_path(
             canvas.draw_oval(rect, paint);
         }
         ShapeType::Triangle => {
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             path.move_to((x + w / 2.0, y));
             path.line_to((x + w, y + h));
             path.line_to((x, y + h));
             path.close();
-            canvas.draw_path(&path, paint);
+            canvas.draw_path(&path.detach(), paint);
         }
         ShapeType::Star { points } => {
             let cx = x + w / 2.0;
@@ -130,7 +130,7 @@ pub fn draw_shape_path(
             let outer_r = w.min(h) / 2.0;
             let inner_r = outer_r * 0.4;
             let n = *points as usize;
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             for i in 0..(n * 2) {
                 let angle =
                     (i as f32) * std::f32::consts::PI / n as f32 - std::f32::consts::FRAC_PI_2;
@@ -144,14 +144,14 @@ pub fn draw_shape_path(
                 }
             }
             path.close();
-            canvas.draw_path(&path, paint);
+            canvas.draw_path(&path.detach(), paint);
         }
         ShapeType::Polygon { sides } => {
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
             let r = w.min(h) / 2.0;
             let n = *sides as usize;
-            let mut path = skia_safe::Path::new();
+            let mut path = skia_safe::PathBuilder::new();
             for i in 0..n {
                 let angle = (i as f32) * 2.0 * std::f32::consts::PI / n as f32
                     - std::f32::consts::FRAC_PI_2;
@@ -164,7 +164,7 @@ pub fn draw_shape_path(
                 }
             }
             path.close();
-            canvas.draw_path(&path, paint);
+            canvas.draw_path(&path.detach(), paint);
         }
         ShapeType::Path { data } => {
             if let Some(path) = skia_safe::Path::from_svg(data) {

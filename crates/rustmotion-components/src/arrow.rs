@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
+use skia_safe::{Canvas, PaintStyle, Path, PathBuilder, PathMeasure, Point};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -87,7 +87,7 @@ rustmotion_core::impl_traits!(Arrow {
 impl Arrow {
     /// Build the bezier path for this arrow (without arrowheads).
     fn build_path(&self) -> Path {
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
         path.move_to((self.x1, self.y1));
 
         if let (Some(cp1), Some(cp2)) = (&self.cp1, &self.cp2) {
@@ -112,7 +112,7 @@ impl Arrow {
             path.line_to((self.x2, self.y2));
         }
 
-        path
+        path.detach()
     }
 
     /// Draw an arrowhead at the given position along the path.
@@ -146,7 +146,7 @@ impl Arrow {
         let angle = tangent.y.atan2(tangent.x);
         let half_angle = std::f32::consts::PI / 6.0; // 30 degrees
 
-        let mut arrow_path = Path::new();
+        let mut arrow_path = PathBuilder::new();
         arrow_path.move_to(pos);
         arrow_path.line_to((
             pos.x - size * (angle - half_angle).cos(),
@@ -161,7 +161,7 @@ impl Arrow {
         let mut arrow_paint = paint.clone();
         arrow_paint.set_path_effect(None);
         arrow_paint.set_stroke_cap(skia_safe::PaintCap::Round);
-        canvas.draw_path(&arrow_path, &arrow_paint);
+        canvas.draw_path(&arrow_path.detach(), &arrow_paint);
     }
 
     fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {

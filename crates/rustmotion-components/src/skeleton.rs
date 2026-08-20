@@ -85,6 +85,10 @@ rustmotion_core::impl_traits!(Skeleton {
 });
 
 impl Skeleton {
+    // The non-deprecated gradient API moves TileMode out of the signature;
+    // the transposition is tracked in #215, and doing it here without pixel
+    // tests would change rendering silently.
+    #[allow(deprecated)]
     fn draw_shimmer_rect(&self, canvas: &Canvas, rect: Rect, radius: f32, time: f64) {
         let w = rect.width();
 

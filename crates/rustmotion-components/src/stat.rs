@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, Path, Point, Rect};
+use skia_safe::{Canvas, Color, ColorType, ImageInfo, Paint, PaintStyle, PathBuilder, Point, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -83,6 +83,10 @@ rustmotion_core::impl_traits!(Stat {
 });
 
 impl Stat {
+    // The non-deprecated gradient API moves TileMode out of the signature;
+    // the transposition is tracked in #215, and doing it here without pixel
+    // tests would change rendering silently.
+    #[allow(deprecated)]
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32) {
         let w = layout_w;
         let h = layout_h;
@@ -333,8 +337,8 @@ impl Stat {
 
             let spark_color = self.sparkline_color.as_deref().unwrap_or("#3B82F6");
 
-            let mut line_path = Path::new();
-            let mut fill_path = Path::new();
+            let mut line_path = PathBuilder::new();
+            let mut fill_path = PathBuilder::new();
 
             for (i, &val) in self.sparkline_data.iter().enumerate() {
                 let x = pad + (i as f32 / (n - 1) as f32) * spark_w;
@@ -373,7 +377,7 @@ impl Stat {
                 fp.set_style(PaintStyle::Fill);
                 fp.set_anti_alias(true);
                 fp.set_shader(shader);
-                canvas.draw_path(&fill_path, &fp);
+                canvas.draw_path(&fill_path.detach(), &fp);
             }
 
             let mut line_paint = paint_from_hex(spark_color);
@@ -382,7 +386,7 @@ impl Stat {
             line_paint.set_anti_alias(true);
             line_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
             line_paint.set_stroke_join(skia_safe::paint::Join::Round);
-            canvas.draw_path(&line_path, &line_paint);
+            canvas.draw_path(&line_path.detach(), &line_paint);
         }
 
         canvas.restore();

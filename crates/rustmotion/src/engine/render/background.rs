@@ -103,6 +103,10 @@ pub(super) fn draw_world_bg_with_parallax(
     }
 }
 
+// The non-deprecated gradient API moves TileMode out of the signature; the
+// transposition is tracked in #215, and doing it here without pixel tests
+// would change rendering silently.
+#[allow(deprecated)]
 fn draw_bg_gradient_shift(
     canvas: &Canvas,
     cfg: &GradientShiftConfig,

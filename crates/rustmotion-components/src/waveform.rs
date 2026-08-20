@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Color, Paint, PaintStyle, Path};
+use skia_safe::{Canvas, Color, Paint, PaintStyle, PathBuilder};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -116,12 +116,12 @@ impl Painter for Waveform {
                 if points.len() < 2 {
                     return;
                 }
-                let mut path = Path::new();
+                let mut path = PathBuilder::new();
                 path.move_to((points[0].0, points[0].1));
                 for &(x, y) in &points[1..] {
                     path.line_to((x, y));
                 }
-                canvas.draw_path(&path, &paint);
+                canvas.draw_path(&path.detach(), &paint);
             }
             DrawStyle::Filled => {
                 // Filled area
@@ -132,26 +132,26 @@ impl Painter for Waveform {
                 if points.is_empty() {
                     return;
                 }
-                let mut fill_path = Path::new();
+                let mut fill_path = PathBuilder::new();
                 fill_path.move_to((0.0, h / 2.0));
                 for &(x, y) in &points {
                     fill_path.line_to((x, y));
                 }
                 fill_path.line_to((w, h / 2.0));
                 fill_path.close();
-                canvas.draw_path(&fill_path, &paint);
+                canvas.draw_path(&fill_path.detach(), &paint);
 
                 // Outline
                 paint.set_style(PaintStyle::Stroke);
                 paint.set_stroke_width(1.5);
                 paint.set_color(color);
                 if points.len() >= 2 {
-                    let mut outline = Path::new();
+                    let mut outline = PathBuilder::new();
                     outline.move_to((points[0].0, points[0].1));
                     for &(x, y) in &points[1..] {
                         outline.line_to((x, y));
                     }
-                    canvas.draw_path(&outline, &paint);
+                    canvas.draw_path(&outline.detach(), &paint);
                 }
             }
         }

@@ -41,6 +41,10 @@ rustmotion_core::impl_traits!(Shape {
 });
 
 impl Painter for Shape {
+    // The non-deprecated gradient API moves TileMode out of the signature;
+    // the transposition is tracked in #215, and doing it here without pixel
+    // tests would change rendering silently.
+    #[allow(deprecated)]
     fn paint_content(
         &self,
         canvas: &Canvas,

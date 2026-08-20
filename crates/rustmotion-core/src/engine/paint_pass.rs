@@ -18,8 +18,8 @@
 use std::cell::RefCell;
 
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, Path, Point,
-    RRect, Rect, M44, V3,
+    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, PathBuilder,
+    Point, RRect, Rect, M44, V3,
 };
 
 use crate::css::style::{
@@ -540,6 +540,10 @@ fn active_shimmer(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShimmerC
 
 /// Stamp the sweeping band onto the layer built by steps 9-10, restricted to
 /// the pixels that layer actually painted.
+// The non-deprecated gradient API moves TileMode out of the signature; the
+// transposition is tracked in #215, and doing it here without pixel tests
+// would change rendering silently.
+#[allow(deprecated)]
 fn paint_shimmer_band(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -1183,6 +1187,10 @@ fn paint_background(
     }
 }
 
+// The non-deprecated gradient API moves TileMode out of the signature; the
+// transposition is tracked in #215, and doing it here without pixel tests
+// would change rendering silently.
+#[allow(deprecated)]
 fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
@@ -1339,6 +1347,10 @@ fn paint_border(
 /// The gradient is linear along `gb.angle` with the **same angle convention as
 /// `background` linear gradients** (see [`gradient_endpoints`]) so the two
 /// stay visually consistent within one style block. Colors are evenly spaced.
+// The non-deprecated gradient API moves TileMode out of the signature; the
+// transposition is tracked in #215, and doing it here without pixel tests
+// would change rendering silently.
+#[allow(deprecated)]
 fn paint_gradient_border(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -1533,11 +1545,11 @@ fn paint_box_shadow(
             }
         }
         // Cheap approximation — TODO: proper inset shadow with subtraction path.
-        let mut path = Path::new();
-        path.add_rrect(outer, None);
-        path.add_rrect(inner, None);
+        let mut path = PathBuilder::new();
+        path.add_rrect(outer, None, None);
+        path.add_rrect(inner, None, None);
         path.set_fill_type(skia_safe::PathFillType::EvenOdd);
-        canvas.draw_path(&path, &clear);
+        canvas.draw_path(&path.detach(), &clear);
         canvas.restore();
     }
 }

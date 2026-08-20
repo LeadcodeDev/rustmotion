@@ -83,6 +83,10 @@ impl GradientText {
 }
 
 impl GradientText {
+    // The non-deprecated gradient API moves TileMode out of the signature;
+    // the transposition is tracked in #215, and doing it here without pixel
+    // tests would change rendering silently.
+    #[allow(deprecated)]
     fn paint(
         &self,
         canvas: &Canvas,

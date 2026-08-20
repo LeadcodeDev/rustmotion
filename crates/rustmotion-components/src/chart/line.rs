@@ -1,5 +1,5 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
+use skia_safe::{Canvas, Color, PaintStyle, PathBuilder, Point, Rect};
 
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 
@@ -67,8 +67,8 @@ impl Chart {
             return Ok(());
         }
 
-        let mut path = Path::new();
-        let mut fill_path = Path::new();
+        let mut path = PathBuilder::new();
+        let mut fill_path = PathBuilder::new();
 
         for (i, dp) in self.data.iter().enumerate() {
             let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
@@ -102,14 +102,14 @@ impl Chart {
         let mut fill_paint = paint_from_hex(line_color);
         fill_paint.set_style(PaintStyle::Fill);
         fill_paint.set_alpha_f(0.15);
-        canvas.draw_path(&fill_path, &fill_paint);
+        canvas.draw_path(&fill_path.detach(), &fill_paint);
 
         // Line stroke
         let mut line_paint = paint_from_hex(line_color);
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
-        canvas.draw_path(&path, &line_paint);
+        canvas.draw_path(&path.detach(), &line_paint);
 
         // Dots
         for (i, dp) in self.data.iter().enumerate() {
@@ -127,6 +127,10 @@ impl Chart {
         Ok(())
     }
 
+    // The non-deprecated gradient API moves TileMode out of the signature;
+    // the transposition is tracked in #215, and doing it here without pixel
+    // tests would change rendering silently.
+    #[allow(deprecated)]
     pub(super) fn render_area(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let (mt, mr, mb, ml) = self.chart_margins();
         let chart_w = w - ml - mr;
@@ -168,8 +172,8 @@ impl Chart {
             })
             .collect();
 
-        let mut line_path = Path::new();
-        let mut fill_path = Path::new();
+        let mut line_path = PathBuilder::new();
+        let mut fill_path = PathBuilder::new();
 
         if self.smooth && pts.len() >= 3 {
             // Catmull-Rom -> cubic bezier for smooth curves
@@ -241,7 +245,7 @@ impl Chart {
             fill_paint.set_style(PaintStyle::Fill);
             fill_paint.set_anti_alias(true);
             fill_paint.set_shader(shader);
-            canvas.draw_path(&fill_path, &fill_paint);
+            canvas.draw_path(&fill_path.detach(), &fill_paint);
         }
 
         // Line stroke
@@ -249,7 +253,7 @@ impl Chart {
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
-        canvas.draw_path(&line_path, &line_paint);
+        canvas.draw_path(&line_path.detach(), &line_paint);
 
         // Dots
         for &(x, y) in &pts {

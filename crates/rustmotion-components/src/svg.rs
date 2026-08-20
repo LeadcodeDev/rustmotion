@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, ColorType, ImageInfo, Matrix, Paint, PaintStyle, Path, PathMeasure, Rect};
+use skia_safe::{
+    Canvas, ColorType, ImageInfo, Matrix, Paint, PaintStyle, Path, PathBuilder, PathMeasure, Rect,
+};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -60,7 +62,7 @@ fn tiny_path_to_skia(tsp: &tiny_skia::Path, abs_transform: tiny_skia::Transform)
     let t = abs_transform;
     let matrix = Matrix::new_all(t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0.0, 0.0, 1.0);
 
-    let mut skia_path = Path::new();
+    let mut skia_path = PathBuilder::new();
     for segment in tsp.segments() {
         match segment {
             tiny_skia::PathSegment::MoveTo(p) => {
@@ -87,7 +89,7 @@ fn tiny_path_to_skia(tsp: &tiny_skia::Path, abs_transform: tiny_skia::Transform)
             }
         }
     }
-    skia_path
+    skia_path.detach()
 }
 
 /// Recursively collect (skia_path, skia_color, stroke_width) for each visible
