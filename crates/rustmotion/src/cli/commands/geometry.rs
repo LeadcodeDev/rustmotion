@@ -4122,7 +4122,7 @@ mod legibility_tests {
 
     #[test]
     fn legibility_never_blocks_validation() {
-        use crate::commands::validate_schema::validate_scenario;
+        use crate::cli::commands::validate_schema::validate_scenario;
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{

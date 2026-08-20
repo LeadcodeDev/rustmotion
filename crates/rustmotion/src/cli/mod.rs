@@ -1,11 +1,19 @@
+//! Le binaire `rustmotion` : analyse des arguments et aiguillage vers
+//! `commands`.
+//!
+//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app Dioxus
+//! qui dépend de cette crate ; l'appeler depuis ce module ferait dépendre
+//! `rustmotion` de `rustmotion-studio`, donc d'elle-même, et cargo refuse le
+//! cycle. Le studio s'ouvre par son propre binaire, `rustmotion-studio -f
+//! scenario.json`.
+
 mod claude_md;
 mod commands;
 mod skills;
-pub mod tui;
+mod tui;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
-use rustmotion::loader::load_input;
 use rustmotion::schema::ResolvedScenario;
 use std::collections::HashMap;
 use std::io::Write;
@@ -32,13 +40,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Open a live preview window with hot-reload
-    Studio {
-        /// Path to the JSON scenario file
-        #[arg(short, long)]
-        file: PathBuf,
-    },
-
     /// Render a JSON scenario to video or a single frame
     Render {
         /// Path to the JSON scenario file
@@ -651,10 +652,6 @@ pub fn run() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Studio { file } => match load_input(&file) {
-            Ok(scenario) => rustmotion_studio::run_preview(scenario, Some(file), true),
-            Err(e) => rustmotion_studio::run_preview_with_error(format!("{}", e), Some(file), true),
-        },
         Commands::Render {
             file,
             json,
@@ -884,12 +881,6 @@ pub fn run() -> Result<()> {
                     "rustmotion",
                     &mut std::io::stdout(),
                 );
-                clap_complete::generate(
-                    shell,
-                    &mut rustmotion_studio::command(),
-                    "rustmotion-studio",
-                    &mut std::io::stdout(),
-                );
                 Ok(())
             }
             CompletionsAction::Install => install_completions(),
@@ -920,12 +911,6 @@ fn install_completions() -> Result<()> {
 
     let mut buf = Vec::new();
     clap_complete::generate(shell, &mut Cli::command(), "rustmotion", &mut buf);
-    clap_complete::generate(
-        shell,
-        &mut rustmotion_studio::command(),
-        "rustmotion-studio",
-        &mut buf,
-    );
     let completions = String::from_utf8(buf).unwrap();
 
     let home = dirs::home_dir()

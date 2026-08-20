@@ -116,7 +116,7 @@ pub struct TextIntrinsic {
 impl TextIntrinsic {
     /// M1: `white-space: nowrap|pre` disables wrapping — the geometry
     /// validator's `unwrappable_text_overflow`/`ContentOverflowsBox` checks
-    /// (crates/rustmotion-cli/src/commands/geometry.rs) already branch on
+    /// (crates/rustmotion/src/cli/commands/geometry.rs) already branch on
     /// exactly this pair of variants and re-measure via this same
     /// `TextIntrinsic`, so the wrap decision here must match theirs exactly
     /// or the validator's assumption about what the renderer produces is
@@ -164,7 +164,7 @@ impl TextIntrinsic {
         // No *real* `LengthContext` (real viewport, real parent width) is
         // reachable here without changing this constructor's signature —
         // its only callers are `box_builder.rs` and
-        // `rustmotion-cli/src/commands/geometry.rs`, both outside this
+        // `rustmotion/src/cli/commands/geometry.rs`, both outside this
         // workstream's scope (box_builder.rs is a sibling's live file this
         // wave; the geometry validator re-measures via this exact type and
         // must keep agreeing with it byte-for-byte, so changing what it

@@ -13,10 +13,10 @@ use super::units::{Length, LengthContext, LengthPercentage, ParsedLength};
 // shape either way — a css-local mirror would only duplicate the struct.
 use crate::schema::{deserialize_animation_effects, AnimationEffect, GradientBorder, InnerShadow};
 
-// ─── Legibility floor (relocated from `rustmotion-cli/src/commands/
+// ─── Legibility floor (relocated from `rustmotion/src/cli/commands/
 // geometry.rs`'s `check_legibility`, issue #110/#102 — moved here, not
 // duplicated, so `text-autofit` below can shrink down to the exact same
-// calibrated threshold instead of inventing a second one; `rustmotion-cli`
+// calibrated threshold instead of inventing a second one; `rustmotion`
 // depends on `rustmotion-core`, never the other way around, so the shared
 // value has to live on this side of that boundary) ─────────────────────────
 //
@@ -124,7 +124,7 @@ pub struct CssStyle {
     /// instead of overflowing it. This is what lets an author declare "this
     /// text must fit here" and closes `ContentOverflowsBox` as a possible
     /// validator failure for that node — see `apply_fixes`
-    /// (`rustmotion-cli/src/commands/validate.rs`)'s comment on why it
+    /// (`rustmotion/src/cli/commands/validate.rs`)'s comment on why it
     /// deliberately refuses to auto-fix that violation today: growing the
     /// box, shrinking the font, and shortening the copy are all legitimate
     /// fixes, and picking one was never this tool's call to make silently.
@@ -163,7 +163,7 @@ pub struct CssStyle {
     ///
     /// **The floor.** Never shrinks below [`TEXT_AUTOFIT_MIN_FONT_PX`] — the
     /// same calibrated legibility ratio `check_legibility`
-    /// (`rustmotion-cli/src/commands/geometry.rs`) already enforces, not a
+    /// (`rustmotion/src/cli/commands/geometry.rs`) already enforces, not a
     /// new threshold. If the content still doesn't fit at the floor, the
     /// floor size is used anyway (illegible-but-smallest beats an even
     /// larger overflow) and the geometry validator's `ContentOverflowsBox`

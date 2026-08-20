@@ -9,6 +9,16 @@ repository = "https://github.com/LeadcodeDev/rustmotion"
 [lib]
 path = "src/lib.rs"
 
+# Le binaire vit ici, et pas dans une crate à part, parce que c'est la seule
+# façon que `cargo install rustmotion` livre une commande : une crate qui n'a
+# qu'une `[lib]` installe une bibliothèque et rien d'exécutable. La
+# sous-commande `studio` ne peut pas y être : `rustmotion-studio` dépend de
+# `rustmotion`, donc la dépendance inverse — même optionnelle — est un cycle
+# que cargo refuse. Le studio garde son propre binaire `rustmotion-studio`.
+[[bin]]
+name = "rustmotion"
+path = "src/bin/main.rs"
+
 [dependencies]
 rustmotion-core.workspace = true
 rustmotion-components = { workspace = true, features = ["lottie-native"] }
@@ -16,6 +26,15 @@ rustmotion-html.workspace = true
 skia-safe = "0.99"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4.6.0"
+ratatui = "0.29"
+crossterm = "0.28"
+dirs = "6.0.0"
+# Le CLI produit le JSON Schema (`rustmotion schema`) et s'en sert pour la
+# détection d'attributs inconnus : schemars passe donc de dev-dependency à
+# dépendance normale.
+schemars = "0.8"
 openh264 = "0.6"
 minimp4 = { version = "0.1", features = ["aac"] }
 gif = "0.13"
@@ -38,6 +57,3 @@ ffmpeg_integration = []
 ## Re-expose native Lottie decoding (default-on). Activating this feature here
 ## propagates to rustmotion-components so consumers only need to touch rustmotion.
 lottie-native = ["rustmotion-components/lottie-native"]
-
-[dev-dependencies]
-schemars = "0.8"

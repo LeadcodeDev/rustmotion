@@ -1,12 +1,12 @@
-use crate::tui;
-use crate::OutputFormat;
+use crate::cli::tui;
+use crate::cli::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
 
-use crate::commands::validation::{self, ValidationSource};
+use crate::cli::commands::validation::{self, ValidationSource};
 
 /// Load + validate a scenario for watch mode. On validation failure prints the
 /// report and returns the typed error so the caller can decide how to handle it.

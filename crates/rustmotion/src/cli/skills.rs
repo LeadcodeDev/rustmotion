@@ -10,7 +10,7 @@ struct SkillFile {
 }
 
 /// CLAUDE.md project instructions (written at project root).
-const CLAUDE_MD: &str = include_str!("../../../CLAUDE.md");
+const CLAUDE_MD: &str = include_str!("../../CLAUDE.md");
 
 /// All skill files embedded at compile time.
 ///
@@ -79,7 +79,7 @@ pub fn install(global: bool) -> Result<()> {
     if !global {
         let claude_path = root.join("CLAUDE.md");
         let existing = std::fs::read_to_string(&claude_path).ok();
-        let merged = crate::claude_md::merge(existing.as_deref(), CLAUDE_MD);
+        let merged = crate::cli::claude_md::merge(existing.as_deref(), CLAUDE_MD);
         if write_if_changed(&claude_path, &merged)? {
             written += 1;
         } else {
@@ -194,7 +194,7 @@ pub fn uninstall(global: bool) -> Result<()> {
     if !global {
         let claude_path = root.join("CLAUDE.md");
         if let Ok(existing) = std::fs::read_to_string(&claude_path) {
-            match crate::claude_md::strip(&existing) {
+            match crate::cli::claude_md::strip(&existing) {
                 Some(remaining) => {
                     if remaining != existing {
                         std::fs::write(&claude_path, remaining)?;

@@ -70,7 +70,7 @@ Only set `world-position` explicitly when the path isn't a straight horizontal f
 
 A scene's `children` are laid out exactly like a `slide`-view scene: `0..video_width` × `0..video_height`, independent of that scene's `world-position`. The camera translation is applied to the whole scene as one block, after layout — a child never needs to know where its scene sits in world space.
 
-This was verified against the geometry validator (`crates/rustmotion-cli/src/commands/geometry.rs`, `validate_geometry`): it checks every scene's children against `(scenario.video.width, scenario.video.height)` regardless of that scene's `world-position`. Placing a child at what looks like the world-space X (e.g. `2880` for the second beat) is rejected as viewport overflow:
+This was verified against the geometry validator (`crates/rustmotion/src/cli/commands/geometry.rs`, `validate_geometry`): it checks every scene's children against `(scenario.video.width, scenario.video.height)` regardless of that scene's `world-position`. Placing a child at what looks like the world-space X (e.g. `2880` for the second beat) is rejected as viewport overflow:
 
 ```json
 // Scene 2 has "world-position": {"x": 2880, ...}. A child positioned at

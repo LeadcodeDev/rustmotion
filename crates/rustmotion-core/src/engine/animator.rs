@@ -596,7 +596,7 @@ fn spring_settle_time(damping: f64, stiffness: f64, mass: f64, threshold: f64, m
 /// set, else `DEFAULT_SPRING_REST_THRESHOLD`, floored so `spring_settle_time`
 /// always has a well-defined (nonzero) target — the same belt-and-suspenders
 /// pattern `spring_value` already applies to `damping`/`stiffness`/`mass`.
-/// `rustmotion-cli`'s `check_spring_config` rejects non-positive or absurd
+/// the CLI's `check_spring_config` rejects non-positive or absurd
 /// (`>= 1.0`) values at the author-facing layer; this floor is the
 /// solver-side backstop.
 fn spring_rest_threshold(config: &SpringConfig) -> f64 {
@@ -1369,7 +1369,7 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
 /// apply_animated_props` already bridges into `css.transform`'s
 /// `translate`/`rotate` functions. That bridge — not a new one — is what
 /// makes a `motion_path` excursion past the viewport visible to
-/// `--strict-anim` (`rustmotion-cli::commands::geometry::
+/// `--strict-anim` (`rustmotion::cli::commands::geometry::
 /// apply_static_node_transform`, which folds `css.transform` to detect
 /// overflow): this function must never write position/orientation anywhere
 /// else, or that detection silently stops seeing it.

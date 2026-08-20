@@ -185,7 +185,7 @@ fn truncate(msg: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::validation::{load, run_checks, ValidationSource};
+    use crate::cli::commands::validation::{load, run_checks, ValidationSource};
 
     fn resolved(children: serde_json::Value) -> ResolvedScenario {
         let json = serde_json::json!({
