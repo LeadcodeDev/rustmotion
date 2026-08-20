@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Paint, PaintStyle, Path, RRect, Rect};
+use skia_safe::{Canvas, Paint, PaintStyle, PathBuilder, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -270,7 +270,7 @@ impl Mockup {
         // Base (trapezoid)
         let base_y = screen_h;
         let inset = w * 0.05;
-        let mut base_path = Path::new();
+        let mut base_path = PathBuilder::new();
         base_path.move_to((inset, base_y));
         base_path.line_to((w - inset, base_y));
         base_path.line_to((w + inset, h));
@@ -280,7 +280,7 @@ impl Mockup {
         let mut base_paint = paint_from_hex(self.theme.bezel_color());
         base_paint.set_style(PaintStyle::Fill);
         base_paint.set_anti_alias(true);
-        canvas.draw_path(&base_path, &base_paint);
+        canvas.draw_path(&base_path.detach(), &base_paint);
 
         Ok(())
     }

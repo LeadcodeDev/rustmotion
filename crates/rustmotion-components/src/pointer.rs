@@ -11,7 +11,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Paint, PaintStyle, Path};
+use skia_safe::{Canvas, Paint, PaintStyle, Path, PathBuilder};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -172,7 +172,7 @@ impl Pointer {
             (0.32, 0.51),
             (0.54, 0.51),
         ];
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
         for (i, (x, y)) in OUTLINE.iter().enumerate() {
             let p = (x * size, y * size);
             if i == 0 {
@@ -182,7 +182,7 @@ impl Pointer {
             }
         }
         path.close();
-        path
+        path.detach()
     }
 }
 

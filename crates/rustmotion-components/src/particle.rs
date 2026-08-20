@@ -195,7 +195,7 @@ impl Painter for Particle {
                     paint.set_alpha_f(twinkle);
 
                     let s = size / 2.0;
-                    let mut path = skia_safe::Path::new();
+                    let mut path = skia_safe::PathBuilder::new();
                     path.move_to((x, y - s));
                     path.line_to((x + s * 0.3, y - s * 0.3));
                     path.line_to((x + s, y));
@@ -205,7 +205,7 @@ impl Painter for Particle {
                     path.line_to((x - s, y));
                     path.line_to((x - s * 0.3, y - s * 0.3));
                     path.close();
-                    canvas.draw_path(&path, &paint);
+                    canvas.draw_path(&path.detach(), &paint);
                 }
                 ParticleType::Bubbles => {
                     let rise_speed = 50.0 * speed_var;

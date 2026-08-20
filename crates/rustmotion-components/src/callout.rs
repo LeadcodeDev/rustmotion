@@ -2,7 +2,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::error::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, RRect, Rect};
+use skia_safe::{Canvas, PaintStyle, Path, PathBuilder, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -89,7 +89,7 @@ impl Callout {
     }
 
     fn arrow_path(&self, w: f32, h: f32) -> Path {
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
         let a = self.arrow_size;
         // Overlap the arrow base 1px into the bubble to eliminate anti-aliasing seam
         let overlap = 1.0;
@@ -129,7 +129,7 @@ impl Callout {
             }
         }
 
-        path
+        path.detach()
     }
 }
 

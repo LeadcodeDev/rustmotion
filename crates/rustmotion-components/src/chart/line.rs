@@ -1,5 +1,6 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{Canvas, Color, Color4f, PaintStyle, PathBuilder, Point, Rect};
 
 use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 
@@ -67,8 +68,8 @@ impl Chart {
             return Ok(());
         }
 
-        let mut path = Path::new();
-        let mut fill_path = Path::new();
+        let mut path = PathBuilder::new();
+        let mut fill_path = PathBuilder::new();
 
         for (i, dp) in self.data.iter().enumerate() {
             let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
@@ -102,14 +103,14 @@ impl Chart {
         let mut fill_paint = paint_from_hex(line_color);
         fill_paint.set_style(PaintStyle::Fill);
         fill_paint.set_alpha_f(0.15);
-        canvas.draw_path(&fill_path, &fill_paint);
+        canvas.draw_path(&fill_path.detach(), &fill_paint);
 
         // Line stroke
         let mut line_paint = paint_from_hex(line_color);
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
-        canvas.draw_path(&path, &line_paint);
+        canvas.draw_path(&path.detach(), &line_paint);
 
         // Dots
         for (i, dp) in self.data.iter().enumerate() {
@@ -168,8 +169,8 @@ impl Chart {
             })
             .collect();
 
-        let mut line_path = Path::new();
-        let mut fill_path = Path::new();
+        let mut line_path = PathBuilder::new();
+        let mut fill_path = PathBuilder::new();
 
         if self.smooth && pts.len() >= 3 {
             // Catmull-Rom -> cubic bezier for smooth curves
@@ -227,12 +228,12 @@ impl Chart {
         let top_color = Color::from_argb((self.fill_opacity * 255.0) as u8, r, g, b);
         let bottom_color = Color::from_argb(0, r, g, b);
 
-        let shader = skia_safe::shader::Shader::linear_gradient(
+        let colors4f = [Color4f::from(top_color), Color4f::from(bottom_color)];
+        let stops = Colors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(stops, gradient::Interpolation::default());
+        let shader = gradient::shaders::linear_gradient(
             (Point::new(0.0, mt), Point::new(0.0, mt + chart_h)),
-            skia_safe::gradient_shader::GradientShaderColors::Colors(&[top_color, bottom_color]),
-            None,
-            skia_safe::TileMode::Clamp,
-            None,
+            &grad,
             None,
         );
 
@@ -241,7 +242,7 @@ impl Chart {
             fill_paint.set_style(PaintStyle::Fill);
             fill_paint.set_anti_alias(true);
             fill_paint.set_shader(shader);
-            canvas.draw_path(&fill_path, &fill_paint);
+            canvas.draw_path(&fill_path.detach(), &fill_paint);
         }
 
         // Line stroke
@@ -249,7 +250,7 @@ impl Chart {
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
-        canvas.draw_path(&line_path, &line_paint);
+        canvas.draw_path(&line_path.detach(), &line_paint);
 
         // Dots
         for &(x, y) in &pts {

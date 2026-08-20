@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path};
+use skia_safe::{Canvas, PaintStyle, Path, PathBuilder};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -81,7 +81,7 @@ impl Rating {
 
     fn star_path(cx: f32, cy: f32, outer_radius: f32) -> Path {
         let inner_radius = outer_radius * 0.4;
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
 
         for i in 0..10 {
             let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
@@ -100,7 +100,7 @@ impl Rating {
             }
         }
         path.close();
-        path
+        path.detach()
     }
 }
 

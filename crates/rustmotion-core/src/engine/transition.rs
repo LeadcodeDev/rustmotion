@@ -3,7 +3,7 @@ use crate::schema::{
     EasingType, PanBackground, PixelDissolveOrder, Transition, TransitionCorner,
     TransitionDirection, TransitionType,
 };
-use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, Path, Rect};
+use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, PathBuilder, Rect};
 
 /// The per-type knobs a transition may read, bundled.
 ///
@@ -522,7 +522,7 @@ fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress:
     let sweep_angle = progress * 360.0;
     let start_angle = -90.0; // Start from top
 
-    let mut path = Path::new();
+    let mut path = PathBuilder::new();
     path.move_to((cx, cy));
     path.arc_to(
         Rect::from_xywh(cx - radius, cy - radius, radius * 2.0, radius * 2.0),
@@ -533,7 +533,7 @@ fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress:
     path.close();
 
     canvas.save();
-    canvas.clip_path(&path, skia_safe::ClipOp::Intersect, true);
+    canvas.clip_path(&path.detach(), skia_safe::ClipOp::Intersect, true);
     canvas.draw_image(&img_b, (0.0, 0.0), None);
     canvas.restore();
 
@@ -572,11 +572,11 @@ fn iris_transition(
     canvas.draw_image(&img_a, (0.0, 0.0), None);
 
     // Clip frame B to an expanding circle
-    let mut path = Path::new();
+    let mut path = PathBuilder::new();
     path.add_circle((cx, cy), radius, None);
 
     canvas.save();
-    canvas.clip_path(&path, skia_safe::ClipOp::Intersect, true);
+    canvas.clip_path(&path.detach(), skia_safe::ClipOp::Intersect, true);
     canvas.draw_image(&img_b, (0.0, 0.0), None);
     canvas.restore();
 

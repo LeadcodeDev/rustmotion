@@ -1,5 +1,5 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, PaintStyle, Path, Rect};
+use skia_safe::{Canvas, PaintStyle, PathBuilder, Rect};
 
 use rustmotion_core::engine::renderer::paint_from_hex;
 
@@ -93,7 +93,7 @@ impl Chart {
                     canvas.draw_circle((cx, cy), outer_r, &paint);
                 }
             } else {
-                let mut path = Path::new();
+                let mut path = PathBuilder::new();
                 if inner_r > 0.0 {
                     // Outer arc forward, inner arc back: a closed annulus sector.
                     path.arc_to(outer, start_angle, sweep, false);
@@ -103,7 +103,7 @@ impl Chart {
                     path.arc_to(outer, start_angle, sweep, false);
                 }
                 path.close();
-                canvas.draw_path(&path, &paint);
+                canvas.draw_path(&path.detach(), &paint);
             }
 
             start_angle += sweep;

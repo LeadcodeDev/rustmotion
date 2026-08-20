@@ -1,5 +1,5 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, PaintStyle, Path};
+use skia_safe::{Canvas, PaintStyle, PathBuilder};
 
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
@@ -67,13 +67,13 @@ impl Chart {
             paint.set_style(PaintStyle::Fill);
             paint.set_anti_alias(true);
 
-            let mut path = Path::new();
+            let mut path = PathBuilder::new();
             path.move_to((top_x, y_top));
             path.line_to((top_x + top_w, y_top));
             path.line_to((bot_x + bot_w, y_bot));
             path.line_to((bot_x, y_bot));
             path.close();
-            canvas.draw_path(&path, &paint);
+            canvas.draw_path(&path.detach(), &paint);
 
             if self.show_labels {
                 if let Some(label) = &dp.label {
@@ -148,13 +148,13 @@ impl Chart {
             paint.set_style(PaintStyle::Fill);
             paint.set_anti_alias(true);
 
-            let mut path = Path::new();
+            let mut path = PathBuilder::new();
             path.move_to((x_left, left_y));
             path.line_to((x_right, right_y));
             path.line_to((x_right, right_y + right_h));
             path.line_to((x_left, left_y + left_h));
             path.close();
-            canvas.draw_path(&path, &paint);
+            canvas.draw_path(&path.detach(), &paint);
 
             if self.show_labels {
                 if let Some(label) = &dp.label {

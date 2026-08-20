@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Font, FontStyle, Point};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{Canvas, Color4f, Font, FontStyle, Point};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
@@ -215,14 +216,10 @@ impl GradientText {
 
         // Build linear gradient shader
         let positions: Option<&[f32]> = None;
-        let shader = skia_safe::shader::Shader::linear_gradient(
-            (start, end),
-            skia_safe::gradient_shader::GradientShaderColors::Colors(&skia_colors),
-            positions,
-            skia_safe::TileMode::Clamp,
-            None,
-            None,
-        );
+        let colors4f: Vec<Color4f> = skia_colors.iter().map(|c| Color4f::from(*c)).collect();
+        let stops = Colors::new(&colors4f, positions, skia_safe::TileMode::Clamp, None);
+        let grad = Gradient::new(stops, gradient::Interpolation::default());
+        let shader = gradient::shaders::linear_gradient((start, end), &grad, None);
 
         let fill_paint = match shader {
             Some(shader) => {

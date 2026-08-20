@@ -15,7 +15,7 @@ lottie-native = ["dep:thorvg", "dep:dashmap"]
 
 [dependencies]
 rustmotion-core.workspace = true
-skia-safe = "0.82"
+skia-safe = "0.99"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "0.8"

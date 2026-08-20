@@ -13,7 +13,7 @@ path = "src/lib.rs"
 rustmotion-core.workspace = true
 rustmotion-components = { workspace = true, features = ["lottie-native"] }
 rustmotion-html.workspace = true
-skia-safe = "0.82"
+skia-safe = "0.99"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 openh264 = "0.6"

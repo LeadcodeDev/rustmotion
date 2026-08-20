@@ -1,5 +1,5 @@
 use rustmotion_core::error::Result;
-use skia_safe::{Canvas, PaintStyle, Path};
+use skia_safe::{Canvas, PaintStyle, PathBuilder};
 
 use rustmotion_core::engine::renderer::{
     draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
@@ -30,7 +30,7 @@ impl Chart {
         let grid_levels = 4;
         for level in 1..=grid_levels {
             let r = radius * (level as f32 / grid_levels as f32);
-            let mut grid_path = Path::new();
+            let mut grid_path = PathBuilder::new();
             for i in 0..n_axes {
                 let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * angle_step;
                 let px = cx + r * angle.cos();
@@ -50,7 +50,7 @@ impl Chart {
             grid_paint.set_style(PaintStyle::Stroke);
             grid_paint.set_stroke_width(1.0);
             grid_paint.set_anti_alias(true);
-            canvas.draw_path(&grid_path, &grid_paint);
+            canvas.draw_path(&grid_path.detach(), &grid_paint);
         }
 
         // Draw axis lines
@@ -120,7 +120,7 @@ impl Chart {
 
             let color_str = rd.color.as_deref().unwrap_or_else(|| self.get_color(di));
 
-            let mut data_path = Path::new();
+            let mut data_path = PathBuilder::new();
             for (i, &val) in rd.values.iter().enumerate() {
                 let norm = (val.max(0.0) / global_max) as f32 * progress;
                 let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * angle_step;
@@ -140,14 +140,14 @@ impl Chart {
             fill_paint.set_style(PaintStyle::Fill);
             fill_paint.set_alpha_f(0.3);
             fill_paint.set_anti_alias(true);
-            canvas.draw_path(&data_path, &fill_paint);
+            canvas.draw_path(&data_path.snapshot(), &fill_paint);
 
             // Stroke
             let mut stroke_paint = paint_from_hex(color_str);
             stroke_paint.set_style(PaintStyle::Stroke);
             stroke_paint.set_stroke_width(2.0);
             stroke_paint.set_anti_alias(true);
-            canvas.draw_path(&data_path, &stroke_paint);
+            canvas.draw_path(&data_path.detach(), &stroke_paint);
         }
 
         Ok(())

@@ -112,7 +112,10 @@ fn draw_bg_gradient_shift(
     width: f32,
     height: f32,
 ) {
-    use skia_safe::{gradient_shader::GradientShaderColors, Point};
+    use skia_safe::{
+        gradient::{self, Colors, Gradient},
+        Point,
+    };
 
     if cfg.colors.len() < 2 {
         return;
@@ -143,27 +146,26 @@ fn draw_bg_gradient_shift(
             let half_diag = (width.powi(2) + height.powi(2)).sqrt() / 2.0;
             let start = Point::new(cx - rad.cos() * half_diag, cy - rad.sin() * half_diag);
             let end = Point::new(cx + rad.cos() * half_diag, cy + rad.sin() * half_diag);
-            skia_safe::shader::Shader::linear_gradient(
-                (start, end),
-                GradientShaderColors::ColorsInSpace(&colors, None),
+            let gradient_colors = Colors::new(
+                &colors,
                 Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
-                None,
-            )
+            );
+            let gradient = Gradient::new(gradient_colors, gradient::Interpolation::default());
+            gradient::shaders::linear_gradient((start, end), &gradient, None)
         }
         GradientType::Radial => {
             let center = Point::new(width / 2.0, height / 2.0);
             let radius = width.max(height) / 2.0;
-            skia_safe::shader::Shader::radial_gradient(
-                center,
-                radius,
-                GradientShaderColors::ColorsInSpace(&colors, None),
+            let gradient_colors = Colors::new(
+                &colors,
                 Some(&positions[..]),
                 skia_safe::TileMode::Clamp,
                 None,
-                None,
-            )
+            );
+            let gradient = Gradient::new(gradient_colors, gradient::Interpolation::default());
+            gradient::shaders::radial_gradient((center, radius), &gradient, None)
         }
     };
 

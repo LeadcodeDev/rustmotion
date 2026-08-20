@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, Rect};
+use skia_safe::{Canvas, PaintStyle, PathBuilder, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -96,7 +96,7 @@ impl Painter for Divider {
                     paint.set_path_effect(effect);
                 }
 
-                let mut path = Path::new();
+                let mut path = PathBuilder::new();
                 if is_horizontal {
                     let y = self.thickness / 2.0;
                     path.move_to((0.0, y));
@@ -106,7 +106,7 @@ impl Painter for Divider {
                     path.move_to((x, 0.0));
                     path.line_to((x, layout.height));
                 }
-                canvas.draw_path(&path, &paint);
+                canvas.draw_path(&path.detach(), &paint);
             }
         }
     }

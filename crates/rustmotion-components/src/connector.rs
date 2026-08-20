@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, PathMeasure, Point};
+use skia_safe::{Canvas, PaintStyle, Path, PathBuilder, PathMeasure, Point};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -93,7 +93,7 @@ rustmotion_core::impl_traits!(Connector {
 
 impl Connector {
     fn build_path(&self) -> Path {
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
         let (x1, y1) = (self.from.x, self.from.y);
         let (x2, y2) = (self.to.x, self.to.y);
 
@@ -124,7 +124,7 @@ impl Connector {
             }
         }
 
-        path
+        path.detach()
     }
 
     fn draw_arrowhead(
@@ -155,7 +155,7 @@ impl Connector {
         let angle = tangent.y.atan2(tangent.x);
         let half_angle = std::f32::consts::PI / 6.0;
 
-        let mut arrow_path = Path::new();
+        let mut arrow_path = PathBuilder::new();
         arrow_path.move_to(pos);
         arrow_path.line_to((
             pos.x - size * (angle - half_angle).cos(),
@@ -170,7 +170,7 @@ impl Connector {
         let mut arrow_paint = paint.clone();
         arrow_paint.set_path_effect(None);
         arrow_paint.set_stroke_cap(skia_safe::PaintCap::Round);
-        canvas.draw_path(&arrow_path, &arrow_paint);
+        canvas.draw_path(&arrow_path.detach(), &arrow_paint);
     }
 
     fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {

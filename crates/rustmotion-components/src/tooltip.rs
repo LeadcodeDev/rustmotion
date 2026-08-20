@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path, Rect};
+use skia_safe::{Canvas, PaintStyle, PathBuilder, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -133,7 +133,7 @@ impl Tooltip {
 
         // Arrow triangle
         if !matches!(self.arrow, TooltipArrow::None) {
-            let mut arrow_path = Path::new();
+            let mut arrow_path = PathBuilder::new();
             match self.arrow {
                 TooltipArrow::Bottom => {
                     let cx = body_x + body_w / 2.0;
@@ -169,7 +169,7 @@ impl Tooltip {
                 }
                 TooltipArrow::None => {}
             }
-            canvas.draw_path(&arrow_path, &bg_paint);
+            canvas.draw_path(&arrow_path.detach(), &bg_paint);
         }
 
         // Text centered in body

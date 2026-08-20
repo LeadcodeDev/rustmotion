@@ -17,9 +17,10 @@
 
 use std::cell::RefCell;
 
+use skia_safe::gradient::{self, Colors as GradientColors, Gradient};
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, Path, Point,
-    RRect, Rect, M44, V3,
+    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, PathBuilder,
+    Point, RRect, Rect, M44, V3,
 };
 
 use crate::css::style::{
@@ -572,18 +573,14 @@ fn paint_shimmer_band(
     let p0 = Point::new(cx + dx * (centre - band), cy + dy * (centre - band));
     let p1 = Point::new(cx + dx * (centre + band), cy + dy * (centre + band));
 
-    let Some(shader) = skia_safe::shader::Shader::linear_gradient(
-        (p0, p1),
-        skia_safe::gradient_shader::GradientShaderColors::Colors(&[
-            transparent,
-            highlight,
-            transparent,
-        ]),
-        None,
-        skia_safe::TileMode::Clamp,
-        None,
-        None,
-    ) else {
+    let colors4f = [
+        Color4f::from(transparent),
+        Color4f::from(highlight),
+        Color4f::from(transparent),
+    ];
+    let gradient_colors = GradientColors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+    let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+    let Some(shader) = gradient::shaders::linear_gradient((p0, p1), &grad, None) else {
         return;
     };
 
@@ -1195,14 +1192,10 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
             let bounds = rrect.bounds();
             let (p0, p1) = gradient_endpoints(*bounds, angle.unwrap_or(180.0));
             let (colors, positions) = gradient_stops(stops);
-            if let Some(shader) = skia_safe::gradient_shader::linear(
-                (p0, p1),
-                colors.as_slice(),
-                positions.as_slice(),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            ) {
+            let gradient_colors =
+                GradientColors::new(&colors, Some(&positions), skia_safe::TileMode::Clamp, None);
+            let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+            if let Some(shader) = gradient::shaders::linear_gradient((p0, p1), &grad, None) {
                 paint.set_shader(shader);
                 canvas.draw_rrect(rrect, &paint);
             }
@@ -1215,15 +1208,11 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
             );
             let radius = bounds.width().max(bounds.height()) / 2.0;
             let (colors, positions) = gradient_stops(stops);
-            if let Some(shader) = skia_safe::gradient_shader::radial(
-                center,
-                radius,
-                colors.as_slice(),
-                positions.as_slice(),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-            ) {
+            let gradient_colors =
+                GradientColors::new(&colors, Some(&positions), skia_safe::TileMode::Clamp, None);
+            let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+            if let Some(shader) = gradient::shaders::radial_gradient((center, radius), &grad, None)
+            {
                 paint.set_shader(shader);
                 canvas.draw_rrect(rrect, &paint);
             }
@@ -1236,15 +1225,14 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
                 bounds.top + bounds.height() / 2.0,
             );
             let (colors, positions) = gradient_stops(stops);
-            if let Some(shader) = skia_safe::gradient_shader::sweep(
-                center,
-                colors.as_slice(),
-                positions.as_slice(),
-                skia_safe::TileMode::Clamp,
-                None,
-                None,
-                None,
-            ) {
+            let gradient_colors =
+                GradientColors::new(&colors, Some(&positions), skia_safe::TileMode::Clamp, None);
+            let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+            // `None` angles on the deprecated API defaulted to a full 0..360
+            // sweep; the new signature makes that range mandatory.
+            if let Some(shader) =
+                gradient::shaders::sweep_gradient(center, (0.0, 360.0), &grad, None)
+            {
                 paint.set_shader(shader);
                 canvas.draw_rrect(rrect, &paint);
             }
@@ -1255,12 +1243,12 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
     }
 }
 
-fn gradient_stops(stops: &[crate::css::style::GradientStop]) -> (Vec<SColor>, Vec<f32>) {
+fn gradient_stops(stops: &[crate::css::style::GradientStop]) -> (Vec<Color4f>, Vec<f32>) {
     let mut colors = Vec::with_capacity(stops.len());
     let mut positions = Vec::with_capacity(stops.len());
     let n = stops.len().max(1);
     for (i, s) in stops.iter().enumerate() {
-        colors.push(parse_color(&s.color));
+        colors.push(Color4f::from(parse_color(&s.color)));
         let default_offset = i as f32 / (n.saturating_sub(1).max(1) as f32);
         positions.push(s.offset.unwrap_or(default_offset));
     }
@@ -1373,10 +1361,10 @@ fn paint_gradient_border(
     ];
     let inner = rrect_from_corners(inner_rect, inner_radius);
 
-    let colors: Vec<SColor> = gb
+    let colors: Vec<Color4f> = gb
         .colors
         .iter()
-        .map(|c| parse_color_string(c).unwrap_or_else(|| unresolved_color(c)))
+        .map(|c| Color4f::from(parse_color_string(c).unwrap_or_else(|| unresolved_color(c))))
         .collect();
     let n = colors.len();
     let positions: Vec<f32> = (0..n)
@@ -1385,14 +1373,10 @@ fn paint_gradient_border(
 
     let bounds = outer.bounds();
     let (p0, p1) = gradient_endpoints(*bounds, gb.angle);
-    let Some(shader) = skia_safe::gradient_shader::linear(
-        (p0, p1),
-        colors.as_slice(),
-        positions.as_slice(),
-        skia_safe::TileMode::Clamp,
-        None,
-        None,
-    ) else {
+    let gradient_colors =
+        GradientColors::new(&colors, Some(&positions), skia_safe::TileMode::Clamp, None);
+    let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
+    let Some(shader) = gradient::shaders::linear_gradient((p0, p1), &grad, None) else {
         return;
     };
 
@@ -1533,11 +1517,11 @@ fn paint_box_shadow(
             }
         }
         // Cheap approximation — TODO: proper inset shadow with subtraction path.
-        let mut path = Path::new();
-        path.add_rrect(outer, None);
-        path.add_rrect(inner, None);
+        let mut path = PathBuilder::new();
+        path.add_rrect(outer, None, None);
+        path.add_rrect(inner, None, None);
         path.set_fill_type(skia_safe::PathFillType::EvenOdd);
-        canvas.draw_path(&path, &clear);
+        canvas.draw_path(&path.detach(), &clear);
         canvas.restore();
     }
 }

@@ -1323,7 +1323,7 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
     // to intuit, and it skips constructing/querying the measure entirely
     // for the single most common degenerate input (a single-point path).
     if length <= MOTION_PATH_MIN_LENGTH {
-        let (x, y) = path.get_point(0).map_or((0.0, 0.0), |p| (p.x, p.y));
+        let (x, y) = path.points().first().map_or((0.0, 0.0), |p| (p.x, p.y));
         return MotionPathSample {
             dx: x,
             dy: y,
@@ -1352,7 +1352,7 @@ fn motion_path_sample(cfg: &MotionPathConfig, time: f64) -> MotionPathSample {
         // path's start rather than let a missing sample surface as a jump
         // to the component's untranslated origin or a NaN.
         None => {
-            let (x, y) = path.get_point(0).map_or((0.0, 0.0), |p| (p.x, p.y));
+            let (x, y) = path.points().first().map_or((0.0, 0.0), |p| (p.x, p.y));
             MotionPathSample {
                 dx: x,
                 dy: y,

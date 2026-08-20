@@ -8,7 +8,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, PaintStyle, Path};
+use skia_safe::{Canvas, PaintStyle, Path, PathBuilder};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{ease, AnimatedProperties};
@@ -123,11 +123,11 @@ impl SuccessCheck {
 
     /// The checkmark itself, in units of `size`.
     pub(crate) fn check_path(size: f32) -> Path {
-        let mut path = Path::new();
+        let mut path = PathBuilder::new();
         path.move_to((0.28 * size, 0.52 * size));
         path.line_to((0.44 * size, 0.69 * size));
         path.line_to((0.73 * size, 0.33 * size));
-        path
+        path.detach()
     }
 }
 

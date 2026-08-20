@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use skia_safe::{Canvas, Color, PaintStyle, Path, Point, Rect};
+use skia_safe::gradient::{self, Colors, Gradient};
+use skia_safe::{Canvas, Color, Color4f, PaintStyle, PathBuilder, Point, Rect};
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -116,8 +117,8 @@ impl Sparkline {
 
         let pad = self.stroke_width;
 
-        let mut line_path = Path::new();
-        let mut fill_path = Path::new();
+        let mut line_path = PathBuilder::new();
+        let mut fill_path = PathBuilder::new();
 
         for (i, &val) in self.data.iter().enumerate() {
             let x = pad + (i as f32 / (n - 1) as f32) * (w - pad * 2.0);
@@ -152,15 +153,12 @@ impl Sparkline {
             let top_color = Color::from_argb((self.fill_opacity * 255.0) as u8, r, g, b);
             let bottom_color = Color::from_argb(0, r, g, b);
 
-            let shader = skia_safe::shader::Shader::linear_gradient(
+            let colors4f = [Color4f::from(top_color), Color4f::from(bottom_color)];
+            let stops = Colors::new(&colors4f, None, skia_safe::TileMode::Clamp, None);
+            let grad = Gradient::new(stops, gradient::Interpolation::default());
+            let shader = gradient::shaders::linear_gradient(
                 (Point::new(0.0, 0.0), Point::new(0.0, h)),
-                skia_safe::gradient_shader::GradientShaderColors::Colors(&[
-                    top_color,
-                    bottom_color,
-                ]),
-                None,
-                skia_safe::TileMode::Clamp,
-                None,
+                &grad,
                 None,
             );
 
@@ -169,7 +167,7 @@ impl Sparkline {
                 fill_paint.set_style(PaintStyle::Fill);
                 fill_paint.set_anti_alias(true);
                 fill_paint.set_shader(shader);
-                canvas.draw_path(&fill_path, &fill_paint);
+                canvas.draw_path(&fill_path.detach(), &fill_paint);
             }
         }
 
@@ -180,7 +178,7 @@ impl Sparkline {
         line_paint.set_anti_alias(true);
         line_paint.set_stroke_cap(skia_safe::paint::Cap::Round);
         line_paint.set_stroke_join(skia_safe::paint::Join::Round);
-        canvas.draw_path(&line_path, &line_paint);
+        canvas.draw_path(&line_path.detach(), &line_paint);
 
         canvas.restore();
     }
