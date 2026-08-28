@@ -13,15 +13,15 @@ members = [
 # par dépendance interne — et une seule oubliée fait échouer la publication après
 # que les précédentes soient parties, ce qui ne se rattrape pas.
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 
 # Les dépendances internes portent aussi la version, donc elles se déclarent ici
 # pour la même raison. `path` sert au développement, `version` à ce que cargo
 # écrit dans le paquet publié : les deux doivent coexister, et rester d'accord.
 [workspace.dependencies]
-rustmotion-core = { path = "crates/rustmotion-core", version = "0.7.0" }
-rustmotion-components = { path = "crates/rustmotion-components", version = "0.7.0" }
-rustmotion-html = { path = "crates/rustmotion-html", version = "0.7.0" }
+rustmotion-core = { path = "crates/rustmotion-core", version = "0.7.1" }
+rustmotion-components = { path = "crates/rustmotion-components", version = "0.7.1" }
+rustmotion-html = { path = "crates/rustmotion-html", version = "0.7.1" }
 
 # Optimize dependencies even in dev builds. Our own crates stay at opt-level 0
 # (fast incremental + debuggable), but heavy compute in deps (image encoding,
