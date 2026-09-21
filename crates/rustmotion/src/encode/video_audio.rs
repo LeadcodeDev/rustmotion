@@ -199,12 +199,31 @@ fn ffmpeg_available() -> bool {
 ///   rate 4.0 → `atempo=2.0,atempo=2.0`
 ///   rate 0.1 → `atempo=0.5,atempo=0.2`  (0.5 * 0.2 = 0.1)
 ///
-/// Returns `None` if rate == 1.0 (no filter needed).
+/// Returns `None` if rate == 1.0 (no filter needed), or if `rate` cannot
+/// possibly be reached by any chain of `atempo` stages (`<= 0.0` or
+/// non-finite — see the guard below).
 pub fn build_atempo_filter(rate: f64) -> Option<String> {
     const EPSILON: f64 = 1e-9;
+    // `remaining` only ever converges toward `[0.5, 2.0]` by repeatedly
+    // multiplying or dividing by 2.0 starting from a *positive, finite*
+    // `rate`. At `rate == 0.0`, `remaining /= 0.5` stays `0.0` forever; at a
+    // negative or non-finite rate it diverges away from the loop's own exit
+    // test. Either way the `while` below never terminates and pushes a new
+    // `String` on every turn — the guard has to reject these before that
+    // loop is ever reached, not inside it.
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
     if (rate - 1.0).abs() < EPSILON {
         return None;
     }
+
+    // A ceiling on the chain length, independent of the guard above: a
+    // legitimate rate as extreme as 1e9 only needs ~30 stages, so this never
+    // fires for real input. It exists so that a future mistake in this
+    // arithmetic degrades into "no atempo filter" instead of reopening the
+    // same unbounded loop the guard above closes.
+    const MAX_STAGES: usize = 64;
 
     let mut parts: Vec<String> = Vec::new();
     let mut remaining = rate;
@@ -212,6 +231,9 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
     if rate > 1.0 {
         // Each stage multiplies by at most 2.0
         while remaining > 2.0 + EPSILON {
+            if parts.len() >= MAX_STAGES {
+                return None;
+            }
             parts.push("atempo=2.0".to_string());
             remaining /= 2.0;
         }
@@ -219,6 +241,9 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
     } else {
         // Each stage multiplies by at least 0.5
         while remaining < 0.5 - EPSILON {
+            if parts.len() >= MAX_STAGES {
+                return None;
+            }
             parts.push("atempo=0.5".to_string());
             remaining /= 0.5;
         }
