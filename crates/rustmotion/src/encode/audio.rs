@@ -64,12 +64,8 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
         })?;
 
     let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count() as u32)
-        .unwrap_or(2);
+    let header_sample_rate = track.codec_params.sample_rate;
+    let header_channels = track.codec_params.channels.map(|c| c.count() as u32);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
@@ -79,6 +75,7 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
         })?;
 
     let mut all_samples: Vec<f32> = Vec::new();
+    let mut decoded_spec: Option<(u32, u32)> = None;
 
     loop {
         let packet = match format.next_packet() {
@@ -107,9 +104,37 @@ pub(crate) fn decode_audio_file(path: &str) -> Result<(Vec<f32>, u32, u32)> {
         sample_buf.copy_interleaved_ref(decoded);
 
         all_samples.extend_from_slice(sample_buf.samples());
+
+        if decoded_spec.is_none() {
+            decoded_spec = Some((spec.rate, spec.channels.count() as u32));
+        }
     }
 
+    let (sample_rate, channels) = resolve_decoded_spec(decoded_spec, header_sample_rate, header_channels);
+
     Ok((all_samples, sample_rate, channels))
+}
+
+/// `decode_audio_file`'s `(sample_rate, channels)` return value: the actual
+/// spec of the first packet that decoded, when there was one — that's what
+/// `all_samples` was interleaved from — falling back to the container
+/// header's own declaration only when nothing ever decoded at all. Some
+/// demuxers leave the header fields absent or, for formats whose per-frame
+/// syntax can encode a channel count the container-level probe cannot see
+/// (e.g. an ADTS/AAC stream with an implicit `channel_configuration`),
+/// disagreeing with what the codec itself produces — trusting the header
+/// unconditionally there silently mis-sizes every downstream stereo/mono
+/// interpretation of `all_samples`. `44100`/`2` is the last-resort default,
+/// unchanged from before this function tracked a decoded spec at all.
+fn resolve_decoded_spec(
+    decoded_spec: Option<(u32, u32)>,
+    header_sample_rate: Option<u32>,
+    header_channels: Option<u32>,
+) -> (u32, u32) {
+    decoded_spec.unwrap_or((
+        header_sample_rate.unwrap_or(44100),
+        header_channels.unwrap_or(2),
+    ))
 }
 
 /// Duration, sample rate and channel count of a local audio file — the
@@ -478,6 +503,49 @@ fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── decode_audio_file must trust the decoded spec, not the header ────────
+    //
+    // Reproducing the exact divergence through a real file needs a decoder
+    // whose *decoded* output can genuinely disagree with what the container
+    // probed ahead of time. Tracing one concrete case where this happens in
+    // the wild — `symphonia-codec-aac`'s ADTS reader leaving `codec_params.channels`
+    // `None` when `channel_configuration == 0` — into `AacDecoder::try_new`
+    // (symphonia-codec-aac 0.5.5, `aac/mod.rs`) shows that without an
+    // `extra_data`/channel-layout fallback it returns a hard
+    // `unsupported_error` instead of ever reaching a decoded packet: this
+    // crate's enabled `symphonia` features (`mp3, wav, ogg, flac, aac`, no
+    // `isomp4`) never populate that fallback for a bare ADTS stream. So this
+    // exact repro surfaces as a loud decode failure, not silent corruption —
+    // a real fixture can't exercise the discard/trust distinction at all.
+    // `resolve_decoded_spec` is exactly that distinction pulled out as a
+    // pure decision, tested directly with the divergence a real file could
+    // produce for a different codec/container pairing.
+    #[test]
+    fn resolve_decoded_spec_prefers_the_decoded_packets_own_spec_over_the_header() {
+        let decoded = Some((48_000, 1));
+        let header_rate = Some(44_100);
+        let header_channels = Some(2);
+        assert_eq!(
+            resolve_decoded_spec(decoded, header_rate, header_channels),
+            (48_000, 1),
+            "a packet actually decoded — all_samples came from its spec, so the \
+             return value must match it, not the header's own guess"
+        );
+    }
+
+    #[test]
+    fn resolve_decoded_spec_falls_back_to_the_header_when_nothing_ever_decoded() {
+        assert_eq!(
+            resolve_decoded_spec(None, Some(22_050), Some(1)),
+            (22_050, 1)
+        );
+    }
+
+    #[test]
+    fn resolve_decoded_spec_falls_back_to_the_hardcoded_default_as_a_last_resort() {
+        assert_eq!(resolve_decoded_spec(None, None, None), (44_100, 2));
+    }
 
     /// Write a minimal, hand-rolled canonical PCM WAV file (16-bit, mono) —
     /// no ffmpeg and no extra crate needed, `symphonia`'s built-in WAV demuxer
