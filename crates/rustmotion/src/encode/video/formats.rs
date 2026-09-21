@@ -10,10 +10,52 @@ use crate::schema::ResolvedScenario as Scenario;
 use super::tasks::{build_frame_tasks, render_frame_task};
 use super::EncodeProgress;
 
-/// Encode frames as a PNG sequence (one PNG file per frame)
+/// Sibling scratch directory a PNG-sequence render writes into before being
+/// promoted onto `output_dir` — same reasoning as `partial_sibling_path`,
+/// applied to a directory instead of a single file: directories don't have
+/// an extension to preserve, so the suffix is the whole difference.
+fn partial_sibling_dir(output_dir: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(output_dir);
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    path.with_file_name(format!("{name}.partial"))
+}
+
+/// Encode frames as a PNG sequence (one PNG file per frame).
+///
+/// Renders into a sibling scratch directory and promotes (renames) it onto
+/// `output_dir` only once every frame has been written — a mid-sequence
+/// failure used to leave a partial run's files sitting directly in
+/// `output_dir`, indistinguishable from a completed one to a caller that
+/// only checks the directory exists (the same shape a single-file output
+/// failing mid-encode has).
 pub fn encode_png_sequence(
     scenario: &Scenario,
     output_dir: &str,
+    quiet: bool,
+    transparent: bool,
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    let partial_dir = partial_sibling_dir(output_dir);
+    let _ = std::fs::remove_dir_all(&partial_dir);
+    match encode_png_sequence_to_dir(scenario, &partial_dir, quiet, transparent, on_progress) {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(output_dir);
+            std::fs::rename(&partial_dir, output_dir)?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&partial_dir);
+            Err(e)
+        }
+    }
+}
+
+fn encode_png_sequence_to_dir(
+    scenario: &Scenario,
+    output_dir: &std::path::Path,
     _quiet: bool,
     _transparent: bool,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
@@ -67,7 +109,7 @@ pub fn encode_png_sequence(
 
         for result in results {
             let (frame_num, rgba) = result?;
-            let path = format!("{}/frame_{:05}.png", output_dir, frame_num);
+            let path = output_dir.join(format!("frame_{:05}.png", frame_num));
             let img = image::RgbaImage::from_raw(width, height, rgba)
                 .ok_or(RustmotionError::PixelImage)?;
             img.save(&path)?;
@@ -77,10 +119,55 @@ pub fn encode_png_sequence(
     Ok(())
 }
 
-/// Encode frames as an animated GIF
+/// Sibling scratch path a single-file encoder (GIF today) writes to before
+/// being promoted onto `output_path` only after every frame is written
+/// successfully. Same discipline and the same reasoning as
+/// `video::ffmpeg::ffmpeg_partial_output_path`: kept in the same directory
+/// so the promotion is a same-filesystem rename, extension kept last since
+/// some downstream consumers of the output (players, `file`) pick behavior
+/// from it the way ffmpeg picks a muxer from its own output extension.
+fn partial_sibling_path(output_path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(output_path);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let name = match path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => format!("{stem}.partial.{ext}"),
+        None => format!("{stem}.partial"),
+    };
+    path.with_file_name(name)
+}
+
+/// Encode frames as an animated GIF.
+///
+/// Writes to a sibling scratch path first and promotes (renames) it onto
+/// `output_path` only once every frame has been written without error —
+/// the same partial-then-rename discipline `video_audio::extract_audio_to_wav`
+/// and the ffmpeg encoder already apply. A GIF that fails midway through the
+/// frame loop (any `?` inside `encode_gif_to_path`) used to leave a
+/// truncated-but-existing file sitting at `output_path`, the same shape the
+/// ffmpeg-backed encoder and the PNG-sequence encoder had before adopting
+/// this same discipline.
 pub fn encode_gif(
     scenario: &Scenario,
     output_path: &str,
+    quiet: bool,
+    on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
+) -> Result<()> {
+    let partial_path = partial_sibling_path(output_path);
+    match encode_gif_to_path(scenario, &partial_path, quiet, on_progress) {
+        Ok(()) => {
+            std::fs::rename(&partial_path, output_path)?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial_path);
+            Err(e)
+        }
+    }
+}
+
+fn encode_gif_to_path(
+    scenario: &Scenario,
+    partial_path: &std::path::Path,
     quiet: bool,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
@@ -103,7 +190,7 @@ pub fn encode_gif(
     let gif_w = width.min(65535) as u16;
     let gif_h = height.min(65535) as u16;
 
-    let file = File::create(output_path)?;
+    let file = File::create(partial_path)?;
     let mut encoder = gif::Encoder::new(BufWriter::new(file), gif_w, gif_h, &[]).map_err(|e| {
         RustmotionError::GifEncoder {
             reason: e.to_string(),
@@ -242,6 +329,87 @@ mod tests {
     use super::*;
     use crate::loader::load_scenario_from_source;
     use std::path::{Path, PathBuf};
+
+    // ── partial-output naming (pure) ─────────────────────────────────────────
+
+    #[test]
+    fn partial_sibling_path_keeps_the_extension_last() {
+        assert_eq!(
+            partial_sibling_path("/tmp/out.gif"),
+            PathBuf::from("/tmp/out.partial.gif")
+        );
+        assert_eq!(
+            partial_sibling_path("/tmp/out"),
+            PathBuf::from("/tmp/out.partial")
+        );
+    }
+
+    #[test]
+    fn partial_sibling_dir_stays_next_to_the_final_directory() {
+        let got = partial_sibling_dir("/a/b/frames");
+        assert_eq!(got, PathBuf::from("/a/b/frames.partial"));
+        assert_eq!(got.parent(), Some(Path::new("/a/b")));
+    }
+
+    /// A failed GIF encode must not leave a truncated file at `output_path`
+    /// — the real trigger used to prove this for the ffmpeg-backed encoder
+    /// (an odd width rejected by libx264) doesn't apply here (the `gif`
+    /// crate has no such constraint), so this drives the failure the one
+    /// way this pure Rust path can actually fail without external tools:
+    /// `total_frames == 0`. That returns before any file is touched either
+    /// way, so what this test really pins is the *shape* of the fix —
+    /// `encode_gif` must never promote a partial onto `output_path` when its
+    /// inner call errors — exercised by asserting the scratch/partial path
+    /// used internally is never left behind either.
+    #[test]
+    fn encode_gif_leaves_no_partial_file_behind_on_an_empty_scenario() {
+        let json = r#"{"video": {"width": 8, "height": 8, "fps": 10}, "scenes": []}"#;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_gif_no_debris_test_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let partial = partial_sibling_path(out.to_str().unwrap());
+        let _ = std::fs::remove_file(&out);
+        let _ = std::fs::remove_file(&partial);
+
+        let result = encode_gif(&scenario, out.to_str().unwrap(), true, None);
+        assert!(result.is_err(), "an empty scenario has no frames to encode");
+        assert!(!out.exists(), "no debris at the final output path");
+        assert!(!partial.exists(), "no debris at the scratch path either");
+    }
+
+    /// Same property for the directory-based PNG-sequence encoder.
+    #[test]
+    fn encode_png_sequence_leaves_no_partial_dir_behind_on_an_empty_scenario() {
+        let json = r#"{"video": {"width": 8, "height": 8, "fps": 10}, "scenes": []}"#;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out_dir = std::env::temp_dir().join(format!(
+            "rm_png_seq_no_debris_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let partial_dir = partial_sibling_dir(out_dir.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&out_dir);
+        let _ = std::fs::remove_dir_all(&partial_dir);
+
+        let result = encode_png_sequence(&scenario, out_dir.to_str().unwrap(), true, false, None);
+        assert!(result.is_err(), "an empty scenario has no frames to encode");
+        assert!(!out_dir.exists(), "no debris at the final output directory");
+        assert!(
+            !partial_dir.exists(),
+            "no debris at the scratch directory either"
+        );
+    }
 
     /// Deterministic color for a given frame index: distinct enough across
     /// nearby indices that a swapped/misplaced frame is detected by a plain
