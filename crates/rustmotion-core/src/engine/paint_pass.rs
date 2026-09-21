@@ -356,17 +356,28 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
+    // Hoisted from step 8 below: the layer-bounds computation right after
+    // this needs it too, to decide whether descendant ink painted outside
+    // the border-box (legitimate under `overflow: visible`) must stay
+    // reachable by the opacity/filter layer opened next.
+    let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
+
     // 4. opacity / filter layer — one shared layer carries both the group
     // alpha and the CSS `filter` chain (applies to the node and its
-    // subtree). Bounded to the node's own box (padded by the filter chain's
-    // blur/drop-shadow bleed so those still bleed past the edge, unclipped):
-    // an unbounded `SaveLayerRec` sizes the layer against the current clip —
-    // usually the whole viewport — so every faded/filtered node allocates
-    // and composites a full-frame layer regardless of how small it is
-    // (measured on this repo's release binary, 1080x1920/60 frames, 30 small
-    // `opacity: 0.5` shapes, `--threads 1`: ~42-60s wall time unbounded vs.
-    // ~0.5s bounded — roughly two orders of magnitude, not a rounding
-    // error; cost scales with viewport area, not node size).
+    // subtree). Bounded to the node's own box, padded by: the filter
+    // chain's blur/drop-shadow bleed, this node's own outset box-shadow
+    // extent (painted inside this same layer at step 5, outside the
+    // border-box), and — when `overflow` leaves descendant ink free to
+    // paint past the border-box — the union of the whole subtree's layout
+    // boxes. An unbounded `SaveLayerRec` sizes the layer against the
+    // current clip — usually the whole viewport — so every faded/filtered
+    // node allocates and composites a full-frame layer regardless of how
+    // small it is (measured on this repo's release binary, 1080x1920/60
+    // frames, 30 small `opacity: 0.5` shapes, `--threads 1`: ~42-60s wall
+    // time unbounded vs. ~0.5s bounded — roughly two orders of magnitude,
+    // not a rounding error; cost scales with viewport area, not node
+    // size), so the bound stays tight to the content that can actually
+    // paint rather than falling back to the viewport.
     let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
     let content_filter = node
         .css
@@ -381,18 +392,30 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         if let Some(filter) = content_filter {
             paint.set_image_filter(filter);
         }
-        let bleed = node
+        let filter_bleed_px = node
             .css
             .filter
             .as_deref()
             .map(|list| filter_bleed(list, &length_ctx))
             .unwrap_or(0.0);
-        let bounds = Rect::from_xywh(
+        let shadow_bleed_px = node
+            .css
+            .box_shadow
+            .as_deref()
+            .map(|shadows| box_shadow_bleed(shadows, &length_ctx))
+            .unwrap_or(0.0);
+        let bleed = filter_bleed_px.max(shadow_bleed_px);
+        let mut bounds = Rect::from_xywh(
             box_layout.x - bleed,
             box_layout.y - bleed,
             box_layout.width + bleed * 2.0,
             box_layout.height + bleed * 2.0,
         );
+        if overflow == Overflow::Visible {
+            if let Some(descendants) = subtree_layout_bounds(node, ctx.layout) {
+                bounds = Rect::join2(bounds, descendants);
+            }
+        }
         let rec = SaveLayerRec::default().paint(&paint).bounds(&bounds);
         canvas.save_layer(&rec);
         true
@@ -448,8 +471,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
 
     // 8. clip overflow:hidden / clip — scoped to this node's own content and
     // its children only (see step 5-7's comment for why the box's own
-    // decorations must stay outside this clip).
-    let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
+    // decorations must stay outside this clip). `overflow` was hoisted
+    // above step 4.
     let opened_overflow_clip = if matches!(
         overflow,
         Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
@@ -630,6 +653,65 @@ fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f3
         bleed = bleed.max(b);
     }
     bleed
+}
+
+/// Conservative outward bleed (px) a node's own outset `box_shadow` list
+/// paints beyond its border-box — the same role `filter_bleed` plays for
+/// `filter`, and sized the same way (offset + spread pushes the shadow rect
+/// out, `1.5x` blur radius covers the Gaussian falloff). Inset shadows are
+/// clipped to the padding-box by `paint_box_shadow` and never bleed outward,
+/// so they are skipped here.
+fn box_shadow_bleed(shadows: &[BoxShadow], ctx: &LengthContext) -> f32 {
+    let mut bleed = 0.0f32;
+    for shadow in shadows {
+        if shadow.inset.unwrap_or(false) {
+            continue;
+        }
+        let offset = shadow
+            .offset_x
+            .resolve(ctx)
+            .abs()
+            .max(shadow.offset_y.resolve(ctx).abs());
+        let spread = shadow
+            .spread
+            .as_ref()
+            .map(|s| s.resolve(ctx).max(0.0))
+            .unwrap_or(0.0);
+        let blur_bleed = shadow
+            .blur
+            .as_ref()
+            .map(|b| b.resolve(ctx).max(0.0) * 1.5)
+            .unwrap_or(0.0);
+        bleed = bleed.max(offset + spread + blur_bleed);
+    }
+    bleed
+}
+
+/// Bounding box (viewport coordinates) of every descendant's own layout box,
+/// recursively — the same "leave the layer big enough to hold what can
+/// legitimately paint outside the border-box" contract as `filter_bleed`,
+/// applied to `overflow: visible` subtrees instead of a filter chain. Each
+/// descendant contributes only its plain layout rect (not its own
+/// filter/shadow bleed or transform): a tight bound for the common cases —
+/// absolutely-positioned children, `marquee`, a taller-than-parent flow —
+/// without walking the whole subtree's CSS.
+fn subtree_layout_bounds(node: &BoxNode, layout: &LayoutResult) -> Option<Rect> {
+    let mut bounds: Option<Rect> = None;
+    for child in &node.children {
+        if let Some(child_layout) = layout.get(child.id) {
+            let rect = Rect::from_xywh(
+                child_layout.x,
+                child_layout.y,
+                child_layout.width,
+                child_layout.height,
+            );
+            bounds = Some(bounds.map_or(rect, |b| Rect::join2(b, rect)));
+        }
+        if let Some(child_bounds) = subtree_layout_bounds(child, layout) {
+            bounds = Some(bounds.map_or(child_bounds, |b| Rect::join2(b, child_bounds)));
+        }
+    }
+    bounds
 }
 
 // ---- CSS filters ----
@@ -1255,11 +1337,16 @@ fn gradient_stops(stops: &[crate::css::style::GradientStop]) -> (Vec<Color4f>, V
     (colors, positions)
 }
 
+/// Gradient-line endpoints for a CSS `<angle>`: `0deg` points the line "to
+/// top" (first stop at the bottom, travelling up to the last stop), and the
+/// angle increases clockwise, so `90deg` is "to right" and `180deg` (the
+/// default) is "to bottom" (first stop at the top). Skia's
+/// `linear_gradient` places `colors[0]` at `p0`, so `p0` is always the end
+/// the angle points *away from*.
 fn gradient_endpoints(bounds: Rect, angle_deg: f32) -> (Point, Point) {
-    // CSS angle: 0deg = bottom→top, increasing clockwise.
     let cx = bounds.left + bounds.width() / 2.0;
     let cy = bounds.top + bounds.height() / 2.0;
-    let rad = (angle_deg - 180.0).to_radians();
+    let rad = angle_deg.to_radians();
     let (sin_a, cos_a) = (rad.sin(), -rad.cos());
     let len = (bounds.width().abs() * sin_a.abs() + bounds.height().abs() * cos_a.abs()) / 2.0;
     let p0 = Point::new(cx - sin_a * len, cy - cos_a * len);

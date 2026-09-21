@@ -86,8 +86,42 @@ fn clear_rect(composed: &mut [u8], canvas_w: u32, canvas_h: u32, frame: &gif::Fr
 /// `gif_cache` stores.
 type DecodedGif = (Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64);
 
+/// Artificial per-decode stall, settable only from this file's own tests
+/// (`DECODE_STALL_MS`) to open a deterministic race window around the
+/// cache-miss branch without timing-dependent sleeps sprinkled through the
+/// test itself. Zero by default, and compiled out entirely in a non-test
+/// build — no production cost.
+#[cfg(test)]
+static DECODE_STALL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn stall_decode_for_tests() {
+    let stall_ms = DECODE_STALL_MS.load(std::sync::atomic::Ordering::SeqCst);
+    if stall_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(stall_ms));
+    }
+}
+
+/// Hard ceiling on one composed GIF canvas frame's byte size
+/// (`width × height × 4`), independent of the render's own video dimensions.
+/// A GIF's logical-screen descriptor is two `u16` fields straight from the
+/// file header — up to 65535×65535, a 17.2 GiB single allocation — and
+/// nothing validated them before this cap existed.
+const MAX_GIF_CANVAS_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Hard ceiling on the number of animation frames one GIF decodes into.
+/// Real GIFs rarely exceed a few hundred; this keeps a maliciously (or just
+/// accidentally) long frame count from growing the decoded frame list
+/// without bound even when each individual frame is well under the canvas
+/// budget above.
+const MAX_GIF_FRAMES: usize = 600;
+
 /// Decode a GIF into full-canvas RGBA frames, their cumulative end times, and
-/// the total duration.
+/// the total duration. `max_canvas_w`/`max_canvas_h` are the render's own
+/// video dimensions: a GIF canvas larger than that can never be usefully
+/// drawn (it only ever gets scaled into the component's layout box, which is
+/// at most the video frame), so it is rejected the same way an
+/// over-budget canvas is.
 ///
 /// Every frame after the first is usually a *sub-rectangle* holding only the
 /// pixels that changed, so frames must be composed onto a persistent canvas
@@ -97,7 +131,7 @@ type DecodedGif = (Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64);
 /// why only the first frame ever appeared (issue #185).
 ///
 /// `None` means nothing can be drawn, and the reason has already been reported.
-fn decode_composed_frames(src: &str) -> Option<DecodedGif> {
+fn decode_composed_frames(src: &str, max_canvas_w: u32, max_canvas_h: u32) -> Option<DecodedGif> {
     let file = match std::fs::File::open(src) {
         Ok(f) => f,
         Err(e) => {
@@ -123,12 +157,37 @@ fn decode_composed_frames(src: &str) -> Option<DecodedGif> {
     let canvas_w = decoder.width() as u32;
     let canvas_h = decoder.height() as u32;
 
+    let canvas_bytes = canvas_w as u64 * canvas_h as u64 * 4;
+    if canvas_bytes > MAX_GIF_CANVAS_BYTES || canvas_w > max_canvas_w || canvas_h > max_canvas_h {
+        if crate::warn_once_for(&format!("gif-oversized:{src}")) {
+            eprintln!(
+                "rustmotion: gif '{src}' declares a {canvas_w}x{canvas_h} canvas ({canvas_bytes} \
+                 bytes/frame), over the {MAX_GIF_CANVAS_BYTES}-byte budget or larger than this \
+                 render's own {max_canvas_w}x{max_canvas_h} video — refusing to decode it."
+            );
+        }
+        return None;
+    }
+
+    #[cfg(test)]
+    stall_decode_for_tests();
+
     let mut frames: Vec<(Vec<u8>, u32, u32)> = Vec::new();
     let mut cumulative_times: Vec<f64> = Vec::new();
     let mut accumulated = 0.0;
     let mut composed = vec![0u8; canvas_w as usize * canvas_h as usize * 4];
 
     while let Ok(Some(frame)) = decoder.read_next_frame() {
+        if frames.len() >= MAX_GIF_FRAMES {
+            if crate::warn_once_for(&format!("gif-frame-cap:{src}")) {
+                eprintln!(
+                    "rustmotion: gif '{src}' has more than {MAX_GIF_FRAMES} frames — truncating \
+                     the decoded animation at the cap."
+                );
+            }
+            break;
+        }
+
         // `Previous` disposal restores what was there before this frame, so it
         // has to be captured before compositing.
         let restore = (frame.dispose == gif::DisposalMethod::Previous).then(|| composed.clone());
@@ -163,6 +222,25 @@ fn decode_composed_frames(src: &str) -> Option<DecodedGif> {
     Some((frames, cumulative_times, accumulated))
 }
 
+/// Cache lookup with the actual decode folded in, single-flighted through
+/// `DashMap::entry`: a vacant entry holds its shard's write lock for as long
+/// as the closure runs, so a second caller racing the same cache-cold `src`
+/// blocks on that lock instead of starting its own redundant decode. Decode
+/// failure (`decode_composed_frames` returning `None`) leaves the entry
+/// vacant — `or_try_insert_with` never calls `insert` on its `Err` path —
+/// so a broken source is retried rather than permanently cached as absent.
+fn cached_decode(src: &str, max_canvas_w: u32, max_canvas_h: u32) -> Option<Arc<DecodedGif>> {
+    gif_cache()
+        .entry(src.to_string())
+        .or_try_insert_with(|| {
+            decode_composed_frames(src, max_canvas_w, max_canvas_h)
+                .map(Arc::new)
+                .ok_or(())
+        })
+        .ok()
+        .map(|entry| entry.clone())
+}
+
 impl Painter for Gif {
     fn paint_content(
         &self,
@@ -171,17 +249,8 @@ impl Painter for Gif {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let gcache = gif_cache();
-
-        let cached = if let Some(cached) = gcache.get(&self.src) {
-            cached.clone()
-        } else {
-            let Some(decoded) = decode_composed_frames(&self.src) else {
-                return;
-            };
-            let cached = Arc::new(decoded);
-            gcache.insert(self.src.clone(), cached.clone());
-            cached
+        let Some(cached) = cached_decode(&self.src, ctx.video_width, ctx.video_height) else {
+            return;
         };
 
         let (ref frames, ref cumulative_times, total_duration) = *cached;
@@ -257,7 +326,8 @@ mod tests {
         write_two_frame_gif(&path);
 
         let (frames, times, total) =
-            decode_composed_frames(path.to_str().expect("utf-8 path")).expect("gif must decode");
+            decode_composed_frames(path.to_str().expect("utf-8 path"), 1920, 1080)
+                .expect("gif must decode");
         std::fs::remove_file(&path).ok();
 
         assert_eq!(frames.len(), 2, "both frames must be drawable");
@@ -287,7 +357,7 @@ mod tests {
     #[test]
     fn a_missing_file_reports_instead_of_returning_nothing() {
         let missing = std::env::temp_dir().join("rustmotion_gif_absent_xyz.gif");
-        assert!(decode_composed_frames(missing.to_str().expect("utf-8")).is_none());
+        assert!(decode_composed_frames(missing.to_str().expect("utf-8"), 1920, 1080).is_none());
         // The warn-once slot must have been claimed — silence is the bug.
         assert!(
             !crate::warn_once_for(&format!("gif-open:{}", missing.to_str().expect("utf-8"))),
@@ -301,5 +371,183 @@ mod tests {
         frame.left = 3;
         frame.top = 3;
         assert_eq!(frame_rect(4, 4, &frame), (3, 3, 1, 1));
+    }
+
+    /// Releases `DECODE_STALL_MS` back to zero even if the test body
+    /// panics mid-assertion, so a failing run never leaks a stall into
+    /// whatever other test in this binary decodes a GIF next.
+    struct StallGuard;
+
+    impl Drop for StallGuard {
+        fn drop(&mut self) {
+            DECODE_STALL_MS.store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// N callers racing a cache-cold `src` must decode it once, not N
+    /// times. A 120ms stall (`DECODE_STALL_MS`) right after the header is
+    /// read opens a race window wide enough that every thread reaches the
+    /// cache-miss branch before any of them can finish decoding and insert —
+    /// pre-fix, that means eight independent decodes, each producing its own
+    /// `Arc` allocation. Comparing pointers (not content — a deterministic
+    /// decode produces byte-identical content either way) is what proves
+    /// only one of the eight actually ran.
+    #[test]
+    fn concurrent_paints_of_the_same_uncached_gif_decode_exactly_once() {
+        let _guard = StallGuard;
+        DECODE_STALL_MS.store(120, std::sync::atomic::Ordering::SeqCst);
+
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_stampede_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_two_frame_gif(&path);
+        let src = path.to_str().expect("utf-8 path").to_string();
+
+        const THREADS: usize = 8;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let src = src.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cached_decode(&src, 4, 2)
+                })
+            })
+            .collect();
+
+        let results: Vec<Option<Arc<DecodedGif>>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        std::fs::remove_file(&path).ok();
+
+        let first = results[0].as_ref().expect("gif must decode");
+        for (i, result) in results.iter().enumerate() {
+            let result = result.as_ref().unwrap_or_else(|| {
+                panic!("thread {i} did not get a decoded result");
+            });
+            assert!(
+                Arc::ptr_eq(first, result),
+                "thread {i} observed a different Arc than thread 0 — the GIF was decoded \
+                 more than once for the same cache-cold source"
+            );
+        }
+    }
+
+    /// Writes a GIF whose logical-screen descriptor declares `w`×`h` but
+    /// whose only frame is 1×1 — the crafted-header shape a decompression
+    /// bomb takes: a file of a few hundred bytes that asks the decoder to commit to a
+    /// canvas orders of magnitude larger than anything it actually encodes.
+    fn write_oversized_header_gif(path: &std::path::Path, w: u16, h: u16) {
+        let palette: &[u8] = &[0, 0, 0, 255, 255, 255];
+        let mut file = std::fs::File::create(path).expect("create gif fixture");
+        let mut encoder = gif::Encoder::new(&mut file, w, h, palette).expect("gif encoder");
+        let frame = gif::Frame::from_indexed_pixels(1, 1, vec![0], None);
+        encoder.write_frame(&frame).expect("write frame");
+    }
+
+    /// A 6000×6000 canvas is 144 MiB per frame — comfortably over
+    /// `MAX_GIF_CANVAS_BYTES` (128 MiB) regardless of how large the render's
+    /// own video is, so passing generous `max_w`/`max_h` here isolates the
+    /// byte-budget check from the video-dimensions check exercised by the
+    /// next test. 144 MiB is deliberately far short of the 65535×65535
+    /// (~17 GiB) header the audit's own crafted file could declare — large
+    /// enough to prove the budget check fires, small enough that running
+    /// this test never risks the allocation it is asserting never happens.
+    #[test]
+    fn a_canvas_over_the_byte_budget_is_rejected_without_allocating_it() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_bomb_budget_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_oversized_header_gif(&path, 6000, 6000);
+
+        let result = decode_composed_frames(path.to_str().expect("utf-8"), 8192, 8192);
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            result.is_none(),
+            "a 144 MiB canvas must be refused, not decoded"
+        );
+        assert!(
+            !crate::warn_once_for(&format!("gif-oversized:{}", path.to_str().unwrap())),
+            "the rejection must have reported once"
+        );
+    }
+
+    /// The other half of the same guard: a canvas larger than the render's
+    /// own video dimensions can never be usefully drawn either. A
+    /// 3000×2000 canvas is only 24 MiB (well under the byte budget alone)
+    /// but bigger than the render's own 1920×1080 video, so this isolates
+    /// the video-dimensions check from the byte-budget one above.
+    #[test]
+    fn a_canvas_larger_than_the_video_is_rejected_even_under_the_byte_budget() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_bomb_dims_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_oversized_header_gif(&path, 3000, 2000);
+
+        let result = decode_composed_frames(path.to_str().expect("utf-8"), 1920, 1080);
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            result.is_none(),
+            "a canvas bigger than the video's own dimensions must be refused"
+        );
+    }
+
+    /// Writes `count` tiny (2×2) frames — cheap regardless of `count`, so
+    /// the frame-count cap can be tested without the per-frame size mattering.
+    fn write_many_frame_gif(path: &std::path::Path, count: u32) {
+        let palette: &[u8] = &[0, 0, 0, 255, 255, 255];
+        let mut file = std::fs::File::create(path).expect("create gif fixture");
+        let mut encoder = gif::Encoder::new(&mut file, 2, 2, palette).expect("gif encoder");
+        for _ in 0..count {
+            let mut frame = gif::Frame::from_indexed_pixels(2, 2, vec![0, 1, 1, 0], None);
+            frame.delay = 1;
+            encoder.write_frame(&frame).expect("write frame");
+        }
+    }
+
+    /// The decode loop had no frame-count limit at all — a
+    /// small canvas with a pathologically large frame count still grows the
+    /// decoded animation without bound. `MAX_GIF_FRAMES` truncates it
+    /// instead of rejecting the whole GIF: a real, merely-too-long animation
+    /// still plays (up to the cap), it just doesn't keep growing memory.
+    #[test]
+    fn frame_count_beyond_the_cap_is_truncated_not_unbounded() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_many_frames_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_many_frame_gif(&path, MAX_GIF_FRAMES as u32 + 50);
+
+        let (frames, times, _total) = decode_composed_frames(path.to_str().expect("utf-8"), 10, 10)
+            .expect("a small, merely-long gif must still decode");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(
+            frames.len(),
+            MAX_GIF_FRAMES,
+            "frame count must be truncated to the cap, not grow past it"
+        );
+        assert_eq!(times.len(), MAX_GIF_FRAMES);
     }
 }

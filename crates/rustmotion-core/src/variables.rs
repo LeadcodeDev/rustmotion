@@ -4,10 +4,48 @@ use crate::error::Result;
 use serde_json::Value;
 
 use crate::error::RustmotionError;
-use crate::schema::VariableDefinition;
+use crate::schema::{VariableDefinition, VariableType};
+
+/// Whether `value`'s JSON type matches `var_type` — a `number`-typed
+/// variable's default or override must actually be a JSON number, etc.
+fn value_matches_declared_type(value: &Value, var_type: &VariableType) -> bool {
+    match var_type {
+        VariableType::String => value.is_string(),
+        VariableType::Number => value.is_number(),
+        VariableType::Boolean => value.is_boolean(),
+        VariableType::Object => value.is_object(),
+        VariableType::Array => value.is_array(),
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn declared_type_name(var_type: &VariableType) -> &'static str {
+    match var_type {
+        VariableType::String => "string",
+        VariableType::Number => "number",
+        VariableType::Boolean => "boolean",
+        VariableType::Object => "object",
+        VariableType::Array => "array",
+    }
+}
 
 /// Build the final variable map: start from defaults, then apply overrides.
-/// Returns an error if an override references a variable not in the definitions.
+/// Returns an error if an override references a variable not in the
+/// definitions, or if a default/override's JSON type doesn't match the
+/// variable's declared `type` — the `type` field on `config` entries used to
+/// be decorative (schema/scenario.rs's own `VariableDefinition::var_type`
+/// was parsed and never read), so `{ "type": "number", "default": "oops" }`
+/// silently accepted a string. This is the sole enforcement point.
 fn merge_variables(
     definitions: &HashMap<String, VariableDefinition>,
     overrides: Option<&HashMap<String, Value>>,
@@ -17,17 +55,33 @@ fn merge_variables(
 
     // Start with defaults
     for (name, def) in definitions {
+        if !value_matches_declared_type(&def.default, &def.var_type) {
+            return Err(RustmotionError::Generic(format!(
+                "Variable '${name}' in '{path}' is declared as type \"{declared}\" but its \
+                 default value is a {actual}",
+                declared = declared_type_name(&def.var_type),
+                actual = json_type_name(&def.default),
+            )));
+        }
         merged.insert(name.clone(), def.default.clone());
     }
 
     // Apply overrides
     if let Some(ovr) = overrides {
         for (name, value) in ovr {
-            if !definitions.contains_key(name) {
-                return Err(RustmotionError::UndefinedVariable {
+            let def = definitions
+                .get(name)
+                .ok_or_else(|| RustmotionError::UndefinedVariable {
                     name: name.clone(),
                     path: path.to_string(),
-                });
+                })?;
+            if !value_matches_declared_type(value, &def.var_type) {
+                return Err(RustmotionError::Generic(format!(
+                    "Variable '${name}' in '{path}' is declared as type \"{declared}\" but the \
+                     override value is a {actual}",
+                    declared = declared_type_name(&def.var_type),
+                    actual = json_type_name(value),
+                )));
             }
             merged.insert(name.clone(), value.clone());
         }
@@ -430,6 +484,64 @@ mod tests {
 
         let result = merge_variables(&defs, Some(&overrides), "test.json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_variables_rejects_type_mismatched_override() {
+        let mut defs = HashMap::new();
+        defs.insert(
+            "count".to_string(),
+            VariableDefinition {
+                var_type: crate::schema::VariableType::Number,
+                default: json!(0),
+                description: None,
+            },
+        );
+        let mut overrides = HashMap::new();
+        overrides.insert("count".to_string(), json!("not a number"));
+
+        let result = merge_variables(&defs, Some(&overrides), "test.json");
+        assert!(
+            result.is_err(),
+            "a string override for a declared `number` variable must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_merge_variables_accepts_type_matched_override() {
+        let mut defs = HashMap::new();
+        defs.insert(
+            "count".to_string(),
+            VariableDefinition {
+                var_type: crate::schema::VariableType::Number,
+                default: json!(0),
+                description: None,
+            },
+        );
+        let mut overrides = HashMap::new();
+        overrides.insert("count".to_string(), json!(42));
+
+        let result = merge_variables(&defs, Some(&overrides), "test.json").unwrap();
+        assert_eq!(result["count"], json!(42));
+    }
+
+    #[test]
+    fn test_merge_variables_rejects_type_mismatched_default() {
+        let mut defs = HashMap::new();
+        defs.insert(
+            "flag".to_string(),
+            VariableDefinition {
+                var_type: crate::schema::VariableType::Boolean,
+                default: json!("yes"),
+                description: None,
+            },
+        );
+
+        let result = merge_variables(&defs, None, "test.json");
+        assert!(
+            result.is_err(),
+            "a string default for a declared `boolean` variable must be rejected"
+        );
     }
 
     #[test]

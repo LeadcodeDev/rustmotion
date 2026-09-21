@@ -6,6 +6,8 @@ A CLI tool that renders motion design videos from JSON scenarios. No browser, no
 [![docs.rs](https://docs.rs/rustmotion/badge.svg)](https://docs.rs/rustmotion)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+MIT-licensed: no licence key, no telemetry, no per-render billing. See [Non-goals](docs/non-goals.md) for this and everything else rustmotion deliberately doesn't do (no embeddable Player/browser/React, no vendor-cloud deploy target, ...).
+
 ## Install
 
 ```bash
@@ -87,19 +89,117 @@ Once installed, Claude Code automatically loads the skills when you work in that
 
 ## CLI Reference
 
+### `rustmotion validate`
+
+Schema + geometry checks, with no render. This is the gate every generated scenario is expected to pass before use.
+
+| Flag | Description | Default |
+|---|---|---|
+| `-f, --file <FILE>` | Path to the JSON scenario file | (required) |
+| `--report <FILE>` | Write a machine-readable JSON report of all violations | |
+| `--fix` | Auto-fix safe violations in place (`auto_scroll: true`, drop `white-space` back to wrap, `text-autofit: true`) — refuses templated scenarios (`include`/`for-each`/`use`) | `false` |
+| `--strict-anim` | Sample animated frames and reapply renderer transforms to detect per-frame viewport overflow (slower) | `false` |
+| `--lenient` | Treat geometry violations as warnings instead of errors | `false` |
+| `--props <FILE>` | Load variable overrides from a JSON object file | |
+| `--var <KEY=VALUE>` | Set a single variable override (repeatable); `--var` wins over `--props` | |
+
 ### `rustmotion render`
 
 | Flag | Description | Default |
 |---|---|---|
-| `input` | Path to the JSON scenario file | (required) |
+| `-f, --file <FILE>` | Path to the JSON scenario file (or `--json <STRING>` for inline input) | (required) |
 | `-o, --output` | Output file path | `output.mp4` |
 | `--frame <N>` | Render a single frame to PNG (0-indexed) | |
+| `--frames <START-END>` | Render only frames `START..=END` as a standalone segment with its own windowed audio slice, for joining later with `rustmotion concat`. Mutually exclusive with `--frame`/`--watch`; only mp4/webm/mov are implemented for a range | |
 | `--codec <CODEC>` | Video codec: `h264`, `h265`, `vp9`, `prores` | `h264` |
 | `--crf <0-51>` | Constant Rate Factor (lower = better quality) | `23` |
 | `--format <FMT>` | Output format: `mp4`, `webm`, `mov`, `gif`, `png-seq` | auto from extension |
 | `--transparent` | Transparent background (PNG sequence, WebM, ProRes 4444) | `false` |
+| `--hardware-acceleration` | Probe `ffmpeg -encoders` and use this machine's hardware encoder (VideoToolbox/NVENC/QSV/AMF) when available; explicit message and software fallback otherwise | `false` |
+| `-w, --watch` | Watch the input file and re-render on change (not compatible with `--props`/`--var`) | `false` |
+| `--no-validate` | Skip the implicit validate pass (schema + geometry + variables) before rendering | `false` |
+| `--lenient` | Treat geometry violations as warnings during the implicit validate pass | `false` |
+| `--strict-anim` | Sample animated frames for per-frame viewport overflow during the implicit validate pass | `false` |
+| `--props <FILE>` | Load variable overrides from a JSON object file | |
+| `--var <KEY=VALUE>` | Set a single variable override (repeatable); `--var` wins over `--props` | |
 | `--output-format json` | Machine-readable JSON output for CI pipelines | |
 | `-q, --quiet` | Suppress all output except errors | |
+| `--threads <N>` | Number of parallel rendering threads (global flag) | all cores |
+
+### `rustmotion concat`
+
+Joins segment files — e.g. several `render --frames a-b` outputs from the same scenario — via ffmpeg's concat demuxer (`-c copy`, no re-encoding). Requires ffmpeg on PATH.
+
+```bash
+rustmotion concat seg1.mp4 seg2.mp4 -o out.mp4
+```
+
+### `rustmotion still`
+
+Exports a single frame as a still image (PNG/JPEG/WebP).
+
+| Flag | Description | Default |
+|---|---|---|
+| `-f, --file <FILE>` | Path to the JSON scenario file | (required) |
+| `-o, --output` | Output file path | `still.png` |
+| `--time <SECONDS>` | Time to capture | `0.0` |
+| `--format <FMT>` | Image format: `png`, `jpeg`, `webp` | from extension |
+| `--quality <1-100>` | JPEG quality | `90` |
+| `--props` / `--var` | Variable overrides, same as `render` | |
+
+### `rustmotion captions`
+
+Generates word-level caption timings from audio (via a local `whisper.cpp` binary) or by importing subtitles.
+
+```bash
+rustmotion captions voice.mp3 -o words.json
+rustmotion captions --from-srt subs.srt -o words.json
+```
+
+| Flag | Description | Default |
+|---|---|---|
+| `audio` | Audio file to transcribe (mutually exclusive with `--from-srt`/`--from-vtt`) | |
+| `-o, --output` | Output JSON file (stdout if omitted) | |
+| `--model` | Whisper model name (`tiny`, `base`, `small`, `medium`, `large-v3`) or a path to a `.bin` | `base` |
+| `--lang` | Spoken language code (auto-detected if omitted) | |
+| `--from-srt` / `--from-vtt` | Import cues from a subtitle file instead of transcribing | |
+
+### `rustmotion batch`
+
+Renders one video per line of a JSONL data file, substituting each line's fields as variable overrides.
+
+| Flag | Description | Default |
+|---|---|---|
+| `-f, --file <FILE>` | Path to the scenario template (JSON or HTML dialect) | (required) |
+| `--data <FILE>` | JSONL file, one object of variable overrides per line | (required) |
+| `--output-dir <DIR>` | Directory to write output files into | (required) |
+| `--name-template` | Output filename template (`{field}`, `{index}`) | `"{index}.mp4"` |
+| `--codec` / `--crf` / `--format` / `--transparent` | Same as `render` | |
+| `--jobs <N>` | Videos to render in parallel (the render itself already uses all cores via rayon) | `1` |
+
+### `rustmotion schema`
+
+Prints the JSON Schema for scenario files (editor autocompletion, LLM prompts).
+
+```bash
+rustmotion schema -o schema.json
+```
+
+### `rustmotion info`
+
+Shows information about a scenario (duration, scene count, dimensions, ...).
+
+```bash
+rustmotion info scenario.json
+```
+
+### `rustmotion skills`
+
+Manages the built-in Claude Code skills — `install [--global]`, `uninstall [--global]`, `list`, `show <name>`. See [Claude Code Skills](#claude-code-skills).
+
+### `rustmotion completions`
+
+Generates or installs shell completions — `install`, `uninstall`, `generate <shell>`. See [Shell Completions](#shell-completions).
 
 ---
 
@@ -123,7 +223,6 @@ Once installed, Claude Code automatically loads the skills when you work in that
     "height": 1920,
     "fps": 30,
     "background": "#0f172a",
-    "codec": "h264",
     "crf": 23
   }
 }
@@ -135,7 +234,7 @@ Once installed, Claude Code automatically loads the skills when you work in that
 | `height` | `u32` | (required) | Video height in pixels (must be even) |
 | `fps` | `u32` | `30` | Frames per second |
 | `background` | `string` | `"#000000"` | Default background color (hex) |
-| `codec` | `string` | `"h264"` | Video codec: `h264`, `h265`, `vp9`, `prores` |
+| `codec` | `string` | | Accepted by the schema (`h264`, `h265`, `vp9`, `prores`) but not yet read by the encoder — set the codec with `render --codec`/`batch --codec` instead |
 | `crf` | `u8` | `23` | Constant Rate Factor (0-51, lower = better quality) |
 
 ### Audio Tracks
@@ -2025,42 +2124,42 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
 - **JSON Schema:** schemars (auto-generated from Rust types)
 - **Parallelism:** rayon (multi-threaded frame rendering)
 
-## Architecture
+rustmotion ships 60 components, each implementing the `Painter` trait, through a CSS-inspired **box_tree → layout_pass → paint_pass** pipeline:
 
-rustmotion uses a Flutter-inspired **measure → layout → paint** pipeline built on Skia:
-
-```
-src/
-├── components/              # 51 components (each implements Widget trait)
-│   ├── chart/               # Chart sub-modules (bar, line, pie, radar, etc.)
-│   └── *.rs                 # One file per component
-├── engine/
-│   ├── render/              # Render pipeline (component, scene, background, transforms)
-│   ├── codeblock/           # Codeblock rendering (highlight, chrome, reveal, diff)
-│   ├── animator.rs          # Animation resolver, easing, spring solver
-│   └── renderer.rs          # Skia drawing primitives
-├── schema/                  # Data models
-│   ├── scenario.rs          # Scenario, View, Scene, VideoConfig
-│   ├── style.rs             # LayerStyle, FontWeight, layout types
-│   ├── background.rs        # Animated backgrounds
-│   ├── animation.rs         # EasingType, presets
-│   └── video.rs             # AnimationEffect, shapes, fills
-├── layout/                  # Flex/grid layout engines
-├── traits/                  # Widget, Styled, Animatable, Timed, Container
-└── macros.rs                # impl_traits! macro
-```
-
-Every component implements the `Widget` trait:
+1. **box_tree** — builds a tree of `BoxNode { css: CssStyle, children, intrinsic }` from the resolved JSON components
+2. **layout_pass** — runs [taffy](https://github.com/DioxusLabs/taffy) to compute each node's `BoxLayout { x, y, width, height }`; leaves that carry an `IntrinsicMeasure` (text, images, codeblocks, ...) are measured through a `measure_fn`
+3. **paint_pass** — walks the tree top-down, applies transform/opacity, paints decorations (background, border, shadow), and delegates content painting to the component's `Painter` implementation
 
 ```rust
-trait Widget {
-    fn paint(&self, canvas: &Canvas, ctx: &PaintContext) -> Result<()>;
-    fn measure(&self, constraints: &Constraints) -> (f32, f32);
-    fn layout(&self, constraints: &Constraints) -> LayoutNode;
+pub trait Painter {
+    fn paint_content(&self, canvas: &Canvas, layout: &BoxLayout, props: &AnimatedProperties, ctx: &PaintCtx);
+    fn intrinsic_size(&self, available: AvailableSize, ctx: &MeasureCtx) -> Option<(f32, f32)> { None }
 }
 ```
 
-`PaintContext` provides timing, layout dimensions, parent info, and resolved animated properties in a single struct.
+`PaintCtx` carries `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
+
+### Workspace layout
+
+```
+crates/
+├── rustmotion-core/src/
+│   ├── css/            # CssStyle, units, cascade, taffy bridge, animation resolution
+│   ├── engine/          # box_tree, layout_pass, paint_pass, animator, transitions, Skia primitives
+│   ├── schema/          # Scenario, Scene, VideoConfig, style, background, animation, codeblock models
+│   └── traits/          # Painter, Animatable, Timed, Styled
+├── rustmotion-components/src/
+│   ├── lib.rs            # `Component` enum (60 variants) + dispatch (as_painter, as_animatable, ...)
+│   ├── box_builder.rs    # JSON components → BuiltScene (box tree + stagger delays)
+│   ├── chart/            # bar/line/pie/radar/scatter/radial/funnel/waterfall sub-modules
+│   └── *.rs              # one file per component (Painter implementation)
+└── rustmotion/src/
+    ├── cli/              # the `rustmotion` binary (clap subcommands)
+    ├── encode/            # video/audio encoders and muxing
+    └── loader.rs          # JSON/HTML → ResolvedScenario
+```
+
+The `rustmotion` crate is where the binary lives — a crate with only a `[lib]` target installs nothing executable via `cargo install`.
 
 ## License
 

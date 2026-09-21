@@ -199,12 +199,31 @@ fn ffmpeg_available() -> bool {
 ///   rate 4.0 → `atempo=2.0,atempo=2.0`
 ///   rate 0.1 → `atempo=0.5,atempo=0.2`  (0.5 * 0.2 = 0.1)
 ///
-/// Returns `None` if rate == 1.0 (no filter needed).
+/// Returns `None` if rate == 1.0 (no filter needed), or if `rate` cannot
+/// possibly be reached by any chain of `atempo` stages (`<= 0.0` or
+/// non-finite — see the guard below).
 pub fn build_atempo_filter(rate: f64) -> Option<String> {
     const EPSILON: f64 = 1e-9;
+    // `remaining` only ever converges toward `[0.5, 2.0]` by repeatedly
+    // multiplying or dividing by 2.0 starting from a *positive, finite*
+    // `rate`. At `rate == 0.0`, `remaining /= 0.5` stays `0.0` forever; at a
+    // negative or non-finite rate it diverges away from the loop's own exit
+    // test. Either way the `while` below never terminates and pushes a new
+    // `String` on every turn — the guard has to reject these before that
+    // loop is ever reached, not inside it.
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
     if (rate - 1.0).abs() < EPSILON {
         return None;
     }
+
+    // A ceiling on the chain length, independent of the guard above: a
+    // legitimate rate as extreme as 1e9 only needs ~30 stages, so this never
+    // fires for real input. It exists so that a future mistake in this
+    // arithmetic degrades into "no atempo filter" instead of reopening the
+    // same unbounded loop the guard above closes.
+    const MAX_STAGES: usize = 64;
 
     let mut parts: Vec<String> = Vec::new();
     let mut remaining = rate;
@@ -212,6 +231,9 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
     if rate > 1.0 {
         // Each stage multiplies by at most 2.0
         while remaining > 2.0 + EPSILON {
+            if parts.len() >= MAX_STAGES {
+                return None;
+            }
             parts.push("atempo=2.0".to_string());
             remaining /= 2.0;
         }
@@ -219,6 +241,9 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
     } else {
         // Each stage multiplies by at least 0.5
         while remaining < 0.5 - EPSILON {
+            if parts.len() >= MAX_STAGES {
+                return None;
+            }
             parts.push("atempo=0.5".to_string());
             remaining /= 0.5;
         }
@@ -229,6 +254,32 @@ pub fn build_atempo_filter(rate: f64) -> Option<String> {
 }
 
 // ─── Cache-keyed temp WAV path ────────────────────────────────────────────────
+
+/// Base directory the extracted-audio WAV cache lives under.
+///
+/// `std::env::temp_dir()` is shared and, on most Unix systems, world-writable
+/// — combined with `wav_cache_path`'s hash being deterministic (which it has
+/// to be, for the cache to ever hit twice), a different local user could
+/// compute the exact cache path ahead of time and plant content there before
+/// this process ever ran. `dirs::cache_dir()` is per-user (`~/Library/Caches`
+/// on macOS, `~/.cache` on Linux), so the same determinism that makes
+/// caching useful stops doubling as a cross-user attack surface. Falls back
+/// to `temp_dir()` only on a platform with no notion of a user cache
+/// directory at all — still better than failing outright, and consistent
+/// with every other fallback in this codebase preferring a degraded mode
+/// over an unusable one.
+fn wav_cache_base_dir() -> PathBuf {
+    let base = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("rustmotion");
+    let _ = std::fs::create_dir_all(&base);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    }
+    base
+}
 
 fn wav_cache_path(src: &str, trim_start: f64, trim_end: Option<f64>, rate: f64) -> PathBuf {
     let mut hasher = DefaultHasher::new();
@@ -255,7 +306,21 @@ fn wav_cache_path(src: &str, trim_start: f64, trim_end: Option<f64>, rate: f64) 
     }
 
     let hash = hasher.finish();
-    std::env::temp_dir().join(format!("rustmotion_vidaud_{:016x}.wav", hash))
+    wav_cache_base_dir().join(format!("rustmotion_vidaud_{:016x}.wav", hash))
+}
+
+/// Whether `path` is safe to reuse as a cache hit: a genuine regular file,
+/// not a symlink. `wav_cache_path` now resolves under a per-user directory
+/// (see `wav_cache_base_dir`), which already rules out a *different* user
+/// planting one; this additionally refuses to follow a symlink planted by
+/// anything running as the *same* user (a compromised sibling process, or a
+/// leftover from before that directory existed) into wherever it points.
+/// `symlink_metadata` — unlike `Path::exists`/`std::fs::metadata` — reports
+/// on the directory entry itself rather than whatever it resolves to.
+fn cached_wav_is_trustworthy(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
 }
 
 /// Scratch path ffmpeg writes to before a successful extraction is promoted
@@ -294,8 +359,9 @@ fn extract_audio_to_wav(
 ) -> Option<PathBuf> {
     let wav_path = wav_cache_path(src, trim_start, trim_end, rate);
 
-    // Reuse cached extraction.
-    if wav_path.exists() {
+    // Reuse cached extraction — but only a genuine regular file placed here
+    // by a previous extraction; see `cached_wav_is_trustworthy`.
+    if cached_wav_is_trustworthy(&wav_path) {
         return Some(wav_path);
     }
 
@@ -462,6 +528,87 @@ pub fn collect_video_audio_tracks(scenario: &ResolvedScenario) -> Vec<AudioTrack
 mod tests {
     use super::*;
     use crate::loader::load_scenario_from_source;
+
+    // ── Cache directory: per-user, not the shared world-writable temp dir ────
+
+    #[test]
+    fn wav_cache_path_does_not_sit_directly_inside_the_bare_shared_temp_dir() {
+        let cached = wav_cache_path("foo.mp4", 0.0, None, 1.0);
+        let shared_temp = std::env::temp_dir();
+        assert_ne!(
+            cached.parent(),
+            Some(shared_temp.as_path()),
+            "the cached WAV must live under a dedicated subdirectory, not directly inside the \
+             shared temp dir a same-machine, different-user attacker can also write to: got {}",
+            cached.display()
+        );
+    }
+
+    // ── Cache entries must be verified, not merely `exists()` ────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_cache_path_is_never_trusted_as_a_cache_hit() {
+        let target = std::env::temp_dir().join(format!(
+            "rm_vidaud_symlink_target_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&target, b"not a wav, planted by someone else").unwrap();
+
+        let link = std::env::temp_dir().join(format!(
+            "rm_vidaud_symlink_link_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink fixture");
+
+        assert!(
+            !cached_wav_is_trustworthy(&link),
+            "a symlink sitting at the cache path must never be treated as a valid cache hit, \
+             regardless of what it points to"
+        );
+
+        let mut real_file = link.with_file_name(format!(
+            "rm_vidaud_real_file_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        real_file.set_extension("wav");
+        std::fs::write(&real_file, b"RIFF....").unwrap();
+        assert!(
+            cached_wav_is_trustworthy(&real_file),
+            "a genuine regular file must still be trusted"
+        );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&real_file);
+    }
+
+    #[test]
+    fn a_missing_path_is_not_trustworthy() {
+        let path = std::env::temp_dir().join(format!(
+            "rm_vidaud_never_created_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        assert!(!cached_wav_is_trustworthy(&path));
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

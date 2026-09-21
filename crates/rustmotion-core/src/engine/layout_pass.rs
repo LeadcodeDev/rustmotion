@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use taffy::prelude as tf;
 use taffy::TaffyTree;
 
-use crate::css::taffy_bridge::{to_taffy_style, ConversionContext};
+use crate::css::taffy_bridge::{content_box_inset, to_taffy_style, ConversionContext};
+use crate::css::units::LengthContext;
 use crate::engine::box_tree::{BoxNode, IntrinsicMeasure, NodeId};
 
 /// Resolved geometry for a single node, in absolute viewport coordinates.
@@ -69,10 +70,20 @@ impl LayoutResult {
 
 /// Per-node user data stored in the taffy tree to keep the link between
 /// taffy nodes and our `BoxNode` ids + intrinsic measurers.
+///
+/// `inset_width`/`inset_height` are this node's own resolved padding+border
+/// (RM-27): taffy's `compute_leaf_layout` already subtracts them from
+/// `available_space` before calling the measure function, but forwards
+/// `known_dimensions` — the outer border-box size — untouched, handing an
+/// `IntrinsicMeasure` implementor two arguments in different coordinate
+/// spaces. The measure closure below subtracts the same inset from `known`
+/// so both arguments describe the content box.
 struct NodeData {
     #[allow(dead_code)]
     box_id: NodeId,
     intrinsic: Option<std::sync::Arc<dyn IntrinsicMeasure>>,
+    inset_width: f32,
+    inset_height: f32,
 }
 
 /// Run taffy on a [`BoxNode`] tree and return the resolved layouts.
@@ -85,7 +96,7 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
     let mut node_map: HashMap<NodeId, tf::NodeId> = HashMap::new();
 
     // Build the taffy tree top-down.
-    let root_tf = build(&mut tree, &mut node_map, root, ctx);
+    let root_tf = build(&mut tree, &mut node_map, root, ctx, ctx.length.font_size);
 
     let viewport_size = tf::Size {
         width: tf::AvailableSpace::Definite(viewport.0),
@@ -101,8 +112,12 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
             let Some(intr) = ctx.intrinsic.as_ref() else {
                 return tf::Size::ZERO;
             };
+            let content_known = (
+                known.width.map(|w| (w - ctx.inset_width).max(0.0)),
+                known.height.map(|h| (h - ctx.inset_height).max(0.0)),
+            );
             let (w, h) = intr.measure(
-                (known.width, known.height),
+                content_known,
                 (available.width.into(), available.height.into()),
             );
             tf::Size {
@@ -119,33 +134,58 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
     LayoutResult { layouts }
 }
 
+/// Build one taffy node and, recursively, its subtree.
+///
+/// `inherited_font_size` is the already-resolved (px) font-size of `node`'s
+/// parent (RM-26): CSS resolves `em` on every layout property against the
+/// element's *own* computed font-size, and font-size itself inherits down
+/// the tree unless overridden. `to_taffy_style` and [`content_box_inset`]
+/// only ever see the single `ConversionContext` handed to them, so their
+/// `em` resolution is only as correct as the per-node context built here —
+/// a call site building one shared `ConversionContext` for the whole tree
+/// (as every production caller of `to_taffy_style` still does directly)
+/// resolves every node's `em` against that one context's `font_size`
+/// instead.
 fn build(
     tree: &mut TaffyTree<NodeData>,
     map: &mut HashMap<NodeId, tf::NodeId>,
     node: &BoxNode,
     ctx: &ConversionContext,
+    inherited_font_size: f32,
 ) -> tf::NodeId {
-    let style = to_taffy_style(&node.css, ctx);
+    let parent_font_ctx = LengthContext {
+        font_size: inherited_font_size,
+        ..ctx.length
+    };
+    let own_font_size = node
+        .css
+        .font_size_px_ctx(&parent_font_ctx, inherited_font_size);
+    let node_ctx = ConversionContext {
+        length: LengthContext {
+            font_size: own_font_size,
+            ..ctx.length
+        },
+    };
+
+    let style = to_taffy_style(&node.css, &node_ctx);
+    let (inset_width, inset_height) = content_box_inset(&node.css, &node_ctx);
     let data = NodeData {
         box_id: node.id,
         intrinsic: node.intrinsic.clone(),
+        inset_width,
+        inset_height,
     };
-    let tf_id = if node.intrinsic.is_some() {
-        // Leaf with intrinsic measurement.
-        tree.new_leaf_with_context(style, data)
-            .expect("taffy new_leaf")
-    } else if node.children.is_empty() {
+    let tf_id = if node.intrinsic.is_some() || node.children.is_empty() {
         tree.new_leaf_with_context(style, data)
             .expect("taffy new_leaf")
     } else {
         let mut child_ids = Vec::with_capacity(node.children.len());
         for c in &node.children {
-            child_ids.push(build(tree, map, c, ctx));
+            child_ids.push(build(tree, map, c, ctx, own_font_size));
         }
         let id = tree
             .new_with_children(style, &child_ids)
             .expect("taffy new_with_children");
-        // We still want context on internal nodes (for box_id mapping).
         tree.set_node_context(id, Some(data)).ok();
         id
     };

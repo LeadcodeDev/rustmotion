@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use dashmap::DashMap;
 
@@ -33,6 +34,40 @@ static GIF_CACHE: OnceLock<GifCacheMap> = OnceLock::new();
 
 pub fn gif_cache() -> &'static GifCacheMap {
     GIF_CACHE.get_or_init(|| Arc::new(DashMap::new()))
+}
+
+// ─── Shared HTTP agent ──────────────────────────────────────────────────────
+
+/// The [`ureq::Agent`] every outbound HTTP call in this crate must go
+/// through — the icon fetch below, and the remote `include` fetch in the
+/// `rustmotion` crate (`crates/rustmotion/src/include.rs`), which imports
+/// [`http_agent`] rather than building its own.
+///
+/// `ureq::get(...)`, the free function used before this fix, always resolves
+/// to an *unconfigured* default agent. In ureq 3.x every field of
+/// `Timeouts` defaults to `None` except `await_100` (`config.rs`'s `impl
+/// Default for Timeouts`), so a host that accepts the TCP connection and
+/// then never answers — or trickles one byte a minute — hangs the calling
+/// thread forever; ureq's 10 MB body cap bounds bytes, not time. On the icon
+/// path that thread can be a render worker with nobody at the keyboard to
+/// notice (RM-41).
+///
+/// `Config::builder()` starts from `Config::default()`, which already
+/// resolves a proxy from `HTTPS_PROXY`/`https_proxy`/`HTTP_PROXY`/
+/// `http_proxy`/`ALL_PROXY` via `Proxy::try_from_env()` — the same audit
+/// separately found every network call here ignoring a configured egress
+/// proxy, and routing through the builder rather than hand-building a
+/// `Config` fixes that as a side effect, not a separate change.
+static HTTP_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+
+pub fn http_agent() -> &'static ureq::Agent {
+    HTTP_AGENT.get_or_init(|| {
+        let config = ureq::config::Config::builder()
+            .timeout_global(Some(Duration::from_secs(20)))
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .build();
+        ureq::Agent::new_with_config(config)
+    })
 }
 
 // ─── Icon fetching ──────────────────────────────────────────────────────────
@@ -138,7 +173,8 @@ pub fn fetch_icon_svg_in(
         "https://api.iconify.design/{}/{}.svg?color=%23{}&width={}&height={}",
         prefix, name, hex_color, width, height
     );
-    let response = ureq::get(&url)
+    let response = http_agent()
+        .get(&url)
         .call()
         .map_err(|e| RustmotionError::IconFetch {
             icon: icon.to_string(),
@@ -215,9 +251,43 @@ pub fn ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Rejects a `src` that names a network URL rather than a local file path.
+///
+/// `extract_video_frame` below hands `src` to `ffmpeg -i` verbatim; ffmpeg's
+/// own demuxer understands its full built-in protocol set (`http://`,
+/// `rtmp://`, `concat:`, …), which turns an unfiltered `src` into an SSRF
+/// primitive — a scenario author can point it at
+/// `http://169.254.169.254/...` (the cloud metadata endpoint) or an internal
+/// service, and read the exit status as a port-scan oracle (RM-42). Remote
+/// video was never a designed feature here — this module's own `is_remote`
+/// doc, a few functions below, and `rustmotion info`'s identical assumption
+/// both already treat every `src` as a local path — so this closes an
+/// accidental reach rather than opening an allowlist for one.
+fn reject_remote_video_src(src: &str) -> Result<()> {
+    let Some(scheme_end) = src.find("://") else {
+        return Ok(());
+    };
+    let scheme = &src[..scheme_end];
+    let looks_like_scheme = !scheme.is_empty()
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if looks_like_scheme {
+        return Err(RustmotionError::Generic(format!(
+            "video src '{src}' names a '{scheme}://' URL — rustmotion does not fetch video \
+             over the network, only local file paths are accepted (RM-42)"
+        )));
+    }
+    Ok(())
+}
+
 pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
+    reject_remote_video_src(src)?;
     let output = std::process::Command::new("ffmpeg")
         .args([
+            "-protocol_whitelist",
+            "file",
             "-ss",
             &format!("{:.3}", time),
             "-i",

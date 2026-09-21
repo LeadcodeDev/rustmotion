@@ -156,6 +156,23 @@ use crate::variables::substitute;
 /// `include::MAX_INCLUDE_DEPTH`'s role for the sibling mechanism.
 const MAX_EXPANSION_DEPTH: u32 = 64;
 
+/// Ceiling on the total number of nodes a single document's `for-each`
+/// expansion may produce, across every level of nesting combined (RM-43).
+/// [`MAX_EXPANSION_DEPTH`] bounds how deep directives may nest, not how many
+/// nodes they produce — and nesting one `for-each` inside another's
+/// `template` is explicitly supported (`use_template_can_contain_a_nested_
+/// for_each` below), so the node count a legal, non-cyclic document can
+/// declare is the *product* of every level's array length, not their sum.
+/// Four nested levels of 50 elements is 6.25M nodes from a file under 1 KB.
+/// This is checked incrementally as each `for-each` directive is about to
+/// produce its items (see [`consume_node_budget`]), so a runaway product is
+/// rejected partway through, well before the full tree is ever materialized.
+const MAX_EXPANSION_NODES: u64 = 2_000_000;
+
+/// Cheap first line of defence ahead of [`MAX_EXPANSION_NODES`]: a single
+/// `for-each` directive's own array, before any nesting is even considered.
+const MAX_FOR_EACH_ITEMS: usize = 100_000;
+
 /// One entry of the top-level `components` map: a named, parameterised
 /// subtree. `params` reuses the exact shape of the scenario-level `config`
 /// block, except a param's `default` is optional — omitting it makes the
@@ -230,6 +247,7 @@ fn is_use(v: &Value) -> bool {
 /// not just which file.
 pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
     let defs = extract_component_definitions(value, file_label)?;
+    let mut budget = MAX_EXPANSION_NODES;
 
     let Value::Object(root) = value else {
         return Ok(());
@@ -241,7 +259,15 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
         for (i, mut scene) in scenes.into_iter().enumerate() {
             let scene_path = format!("scenes[{i}]");
             let mut stack = Vec::new();
-            walk_children(&mut scene, &defs, file_label, &scene_path, &mut stack, 0)?;
+            walk_children(
+                &mut scene,
+                &defs,
+                file_label,
+                &scene_path,
+                &mut stack,
+                0,
+                &mut budget,
+            )?;
             out.push(scene);
         }
         root.insert("scenes".to_string(), Value::Array(out));
@@ -256,7 +282,15 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
                     for (si, mut scene) in scenes.into_iter().enumerate() {
                         let scene_path = format!("composition[{vi}].scenes[{si}]");
                         let mut stack = Vec::new();
-                        walk_children(&mut scene, &defs, file_label, &scene_path, &mut stack, 0)?;
+                        walk_children(
+                            &mut scene,
+                            &defs,
+                            file_label,
+                            &scene_path,
+                            &mut stack,
+                            0,
+                            &mut budget,
+                        )?;
                         out.push(scene);
                     }
                     vmap.insert("scenes".to_string(), Value::Array(out));
@@ -269,6 +303,25 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
 
     warn_unresolved_after_expansion(value, file_label);
     Ok(())
+}
+
+/// Subtracts `n` from the shared expansion-node budget, or fails naming the
+/// limit and where it was hit (RM-43). See [`MAX_EXPANSION_NODES`] for why
+/// this is checked once per `for-each` directive's item count rather than
+/// once per final node: it is the only point in the recursion where the
+/// multiplicative blow-up can be caught before the work that would produce
+/// it actually runs.
+fn consume_node_budget(budget: &mut u64, n: u64, file_label: &str, location: &str) -> Result<()> {
+    match budget.checked_sub(n) {
+        Some(remaining) => {
+            *budget = remaining;
+            Ok(())
+        }
+        None => Err(RustmotionError::Generic(format!(
+            "expansion node budget ({MAX_EXPANSION_NODES}) exceeded at '{file_label}: {location}' \
+             — for-each/use nesting multiplies past the limit"
+        ))),
+    }
 }
 
 /// Report `$name`s that survived both variable substitution and directive
@@ -339,6 +392,7 @@ fn walk_children(
     location: &str,
     stack: &mut Vec<String>,
     depth: u32,
+    budget: &mut u64,
 ) -> Result<()> {
     match value {
         Value::Object(map) => {
@@ -348,7 +402,7 @@ fn walk_children(
                     for (i, entry) in arr.into_iter().enumerate() {
                         let entry_loc = format!("{location}.children[{i}]");
                         expanded.extend(resolve_entry(
-                            entry, defs, file_label, &entry_loc, stack, depth,
+                            entry, defs, file_label, &entry_loc, stack, depth, budget,
                         )?);
                     }
                     map.insert("children".to_string(), Value::Array(expanded));
@@ -356,14 +410,14 @@ fn walk_children(
             }
             for (k, v) in map.iter_mut() {
                 if k == "children" {
-                    continue; // already fully expanded above
+                    continue;
                 }
-                walk_children(v, defs, file_label, location, stack, depth)?;
+                walk_children(v, defs, file_label, location, stack, depth, budget)?;
             }
         }
         Value::Array(arr) => {
             for v in arr.iter_mut() {
-                walk_children(v, defs, file_label, location, stack, depth)?;
+                walk_children(v, defs, file_label, location, stack, depth, budget)?;
             }
         }
         _ => {}
@@ -392,6 +446,7 @@ fn resolve_entry(
     location: &str,
     stack: &mut Vec<String>,
     depth: u32,
+    budget: &mut u64,
 ) -> Result<Vec<Value>> {
     if depth > MAX_EXPANSION_DEPTH {
         return Err(RustmotionError::ExpansionDepthExceeded {
@@ -411,13 +466,14 @@ fn resolve_entry(
                 &frag_loc,
                 stack,
                 depth + 1,
+                budget,
             )?);
         }
         return Ok(out);
     }
 
     if is_for_each(&entry) {
-        let produced = expand_for_each_directive(entry, file_label, location)?;
+        let produced = expand_for_each_directive(entry, file_label, location, budget)?;
         let mut out = Vec::with_capacity(produced.len());
         for (i, node) in produced.into_iter().enumerate() {
             let iter_loc = format!("{location}[{i}]");
@@ -428,6 +484,7 @@ fn resolve_entry(
                 &iter_loc,
                 stack,
                 depth + 1,
+                budget,
             )?);
         }
         return Ok(out);
@@ -444,17 +501,22 @@ fn resolve_entry(
             });
         }
         stack.push(name);
-        let result = resolve_entry(node, defs, file_label, location, stack, depth + 1);
+        let result = resolve_entry(node, defs, file_label, location, stack, depth + 1, budget);
         stack.pop();
         return result;
     }
 
     let mut node = entry;
-    walk_children(&mut node, defs, file_label, location, stack, depth)?;
+    walk_children(&mut node, defs, file_label, location, stack, depth, budget)?;
     Ok(vec![node])
 }
 
-fn expand_for_each_directive(entry: Value, file_label: &str, location: &str) -> Result<Vec<Value>> {
+fn expand_for_each_directive(
+    entry: Value,
+    file_label: &str,
+    location: &str,
+    budget: &mut u64,
+) -> Result<Vec<Value>> {
     let directive: ForEachDirective =
         serde_json::from_value(entry).map_err(|e| RustmotionError::ForEachDirectiveInvalid {
             path: format!("{file_label}: {location}"),
@@ -470,6 +532,15 @@ fn expand_for_each_directive(entry: Value, file_label: &str, location: &str) -> 
             })
         }
     };
+
+    if items.len() > MAX_FOR_EACH_ITEMS {
+        return Err(RustmotionError::Generic(format!(
+            "for-each at '{file_label}: {location}' has {} items, exceeding the per-directive \
+             cap of {MAX_FOR_EACH_ITEMS}",
+            items.len()
+        )));
+    }
+    consume_node_budget(budget, items.len() as u64, file_label, location)?;
 
     let mut out = Vec::with_capacity(items.len());
     for (idx, element) in items.into_iter().enumerate() {

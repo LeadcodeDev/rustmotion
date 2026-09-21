@@ -636,7 +636,7 @@ fn build_child<'a>(
         time_remap,
         &css,
     );
-    let intrinsic = component_intrinsic(&child.component);
+    let intrinsic = component_intrinsic(&child.component, &css);
 
     let principal = BoxNode {
         id,
@@ -1131,9 +1131,22 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
 /// Build an [`IntrinsicMeasure`] for components whose box size depends on
 /// their content (text, codeblock, terminal, etc.). Returns `None` for
 /// components with explicit dimensions or pure containers.
+///
+/// `cascaded_css` is this node's own `CssStyle` after `cascade::inherit_from`
+/// has already merged it against the parent, plus every subsequent overlay
+/// (timeline states, animation) — the exact same value `LegacyPaintDispatcher`
+/// receives at paint time. `Component::with_cascaded_style` folds it into
+/// whichever component variants read inherited typography off their own
+/// style before this function's match ever sees them, so the reserved box
+/// always matches what those components' painters (which fold the same
+/// cascade in at paint time) actually draw.
 fn component_intrinsic(
     component: &Component,
+    cascaded_css: &CssStyle,
 ) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
+    let cascaded_component = component.with_cascaded_style(cascaded_css);
+    let component = cascaded_component.as_ref().unwrap_or(component);
+
     use Component::*;
     match component {
         Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
@@ -1495,7 +1508,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.width = Some(CSize::Length(CLP::Px(c.width)));
             }
             if css.height.is_none() {
-                let font_size = c.style.font_size_px_or(16.0);
+                let font_size = c
+                    .style
+                    .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
                 let line_height = font_size * 1.3;
                 let n = c.items.len() as f32;
                 let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
@@ -1640,7 +1655,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // box is fit exactly to the unwrapped text width, the painter's
             // own `wrap_text(text, font, Some(text_area_w))` never has a
             // reason to wrap, so painted output matches this box exactly.
-            let font_size = t.style.font_size_px_or(16.0);
+            let font_size = t
+                .style
+                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
             let family = t.style.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0; // callout.rs's own `let padding = 12.0;`
@@ -1660,7 +1677,10 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // Same shape as Callout above; padding value borrowed from
             // callout.rs since tooltip.rs's own paint() centers text in the
             // body with no defined constant of its own.
-            let font_size = t.style.font_size_px_or(t.font_size);
+            let font_size = t.style.font_size_px_ctx(
+                &crate::intrinsic::measure_time_font_size_ctx(0.0),
+                t.font_size,
+            );
             let family = t.style.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0;
@@ -1685,7 +1705,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // formula (h_pad = font_size*1.2 per side, `gap` before/after/
             // between every pill) using the same public fields and the same
             // `measure_text_with_fallback` call it makes internally.
-            let font_size = p.style.font_size_px_or(14.0);
+            let font_size = p
+                .style
+                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 14.0);
             let family = p.style.font_family_or("Inter");
             let h_pad = font_size * 1.2;
             let n = p.items.len() as f32;
@@ -1713,7 +1735,10 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // height ratio both of those same real usages share:
             // `font_size: 24` paired with `style.height: 48`, i.e.
             // `2 × font_size`.
-            let font_size = m.style.font_size_px_or(m.font_size);
+            let font_size = m.style.font_size_px_ctx(
+                &crate::intrinsic::measure_time_font_size_ctx(0.0),
+                m.font_size,
+            );
             apply_default_size(css, 800.0, font_size * 2.0);
         }
         Stepper(s) => {
@@ -2125,7 +2150,7 @@ pub fn component_kind(c: &Component) -> &'static str {
         Particle(_) => "particle",
         PillNav(_) => "pill_nav",
         Progress(_) => "progress",
-        QrCode(_) => "qrcode",
+        QrCode(_) => "qr_code",
         NumberWheel(_) => "number_wheel",
         SuccessCheck(_) => "success_check",
         Pointer(_) => "pointer",
@@ -2147,7 +2172,11 @@ pub fn component_kind(c: &Component) -> &'static str {
         Flex(_) => "flex",
         Grid(_) => "grid",
         Card(_) => "card",
-        Container(_) => "container",
+        // The schema tag is `div` (`#[serde(rename = "div", alias =
+        // "container")]` on the enum in `lib.rs`) — `container` only
+        // survives as a deserialize alias, so naming it that way here told
+        // an author to look for a tag their scenario cannot contain.
+        Container(_) => "div",
         AudioSpectrum(_) => "audio_spectrum",
         Waveform(_) => "waveform",
     }

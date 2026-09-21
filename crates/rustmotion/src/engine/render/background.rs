@@ -86,17 +86,17 @@ pub(super) fn draw_world_bg_with_parallax(
         }
         _ => {
             // Grid-based backgrounds: modulo offset for seamless tiling.
-            let spacing = tile_spacing(&bg.preset);
-            let offset_x = -(cam_x % spacing);
-            let offset_y = -(cam_y % spacing);
+            let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+            let offset_x = -(cam_x % spacing_x);
+            let offset_y = -(cam_y % spacing_y);
             canvas.save();
             canvas.translate((offset_x, offset_y));
             draw_animated_background(
                 canvas,
                 bg,
                 time,
-                width + spacing * 2.0,
-                height + spacing * 2.0,
+                width + spacing_x * 2.0,
+                height + spacing_y * 2.0,
             );
             canvas.restore();
         }
@@ -566,7 +566,55 @@ fn draw_bg_pixel_grid(
     }
 }
 
+/// Re-emit a scenario-supplied heropattern colour as a canonical
+/// `#rrggbbaa` before it is spliced into generated SVG source.
+///
+/// `cfg.color` is free-form user input landing inside a double-quoted
+/// `fill="{{color}}"` attribute of hand-built SVG text; routing it through
+/// `color4f_from_hex` first guarantees the only characters that can ever
+/// reach the SVG are hex digits and `#`, so a colour string can never close
+/// the attribute and inject markup, whatever it contains.
+/// `color4f_from_hex` is infallible: unresolvable input resolves to the
+/// same opaque-magenta sentinel every other unresolved colour in this
+/// engine does, rather than passing the raw string through.
+fn canonical_hero_color(color: &str) -> String {
+    let c = color4f_from_hex(color);
+    format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        (c.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// `usvg::Options` for parsing a generated heropattern tile.
+///
+/// Neutralises the default `image_href_resolver`'s string resolver, which
+/// reads arbitrary files from disk for any `<image href="...">` it
+/// encounters (usvg-0.44.0's `ImageHrefResolver::default_string_resolver`).
+/// A heropattern tile never legitimately references an external image, so
+/// an `<image>` element reaching this parser can only be an injection —
+/// `canonical_hero_color` closes the splice that could put one there in the
+/// first place; this is the defence-in-depth half, for any other way one
+/// could arrive.
+fn heropattern_svg_options() -> usvg::Options<'static> {
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            ..usvg::ImageHrefResolver::default()
+        },
+        ..usvg::Options::default()
+    }
+}
+
 /// Tiled heropattern background.
+///
+/// The tile is rasterized once at `cfg.scale`, using `heropattern_raster_size`
+/// and a matching `resvg` render transform, then tiled 1:1 by the shader.
+/// It used to be rasterized at 1x and magnified by the shader's own matrix
+/// instead, which turned the vector source into hard nearest-neighbour
+/// blocks above `scale: 1` and aliased it below `scale: 1`.
 fn draw_bg_heropattern(
     canvas: &Canvas,
     cfg: &HeropatternConfig,
@@ -584,7 +632,6 @@ fn draw_bg_heropattern(
         return;
     }
 
-    // Build the SVG source with color/opacity substituted
     let svg_content = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">{}</svg>"#,
         def.width,
@@ -592,24 +639,31 @@ fn draw_bg_heropattern(
         def.width,
         def.height,
         def.svg_paths
-            .replace("{{color}}", &cfg.color)
+            .replace("{{color}}", &canonical_hero_color(&cfg.color))
             .replace("{{opacity}}", &cfg.opacity.to_string()),
     );
 
-    // Render one tile via usvg/resvg
-    let opt = usvg::Options::default();
+    let opt = heropattern_svg_options();
     let Ok(tree) = usvg::Tree::from_data(svg_content.as_bytes(), &opt) else {
+        eprintln!(
+            "warning: heropattern '{}' (colour '{}') failed to parse as SVG — background not rendered",
+            cfg.pattern, cfg.color
+        );
         return;
     };
 
-    let pw = def.width.ceil() as u32;
-    let ph = def.height.ceil() as u32;
+    let (pw, ph) = heropattern_raster_size(def.width, def.height, cfg.scale);
     let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
         return;
     };
-    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    let render_scale_x = pw as f32 / def.width;
+    let render_scale_y = ph as f32 / def.height;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(render_scale_x, render_scale_y),
+        &mut pixmap.as_mut(),
+    );
 
-    // Convert to Skia image
     let info = ImageInfo::new(
         (pw as i32, ph as i32),
         ColorType::RGBA8888,
@@ -625,16 +679,10 @@ fn draw_bg_heropattern(
         return;
     };
 
-    // Build a tiled shader from the tile image
-    let matrix = if cfg.scale != 1.0 {
-        Some(skia_safe::Matrix::scale((cfg.scale, cfg.scale)))
-    } else {
-        None
-    };
     let Some(shader) = tile_image.to_shader(
         (skia_safe::TileMode::Repeat, skia_safe::TileMode::Repeat),
-        skia_safe::SamplingOptions::default(),
-        matrix.as_ref(),
+        skia_safe::SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::None),
+        None,
     ) else {
         return;
     };
@@ -653,6 +701,21 @@ fn draw_bg_heropattern(
         ),
         &paint,
     );
+}
+
+/// Pixel size to rasterize one heropattern tile at, so the vector source is
+/// re-rendered crisp at `scale` instead of rasterized at the pattern's
+/// native `(width, height)` and then magnified. Clamped to `MAX_TILE_PX`
+/// per axis: `HeropatternConfig::scale` has no upper bound in the schema, so
+/// an unclamped scale could ask for an arbitrarily large pixmap allocation.
+/// A clamped tile still tiles seamlessly with itself — it just renders
+/// smaller than an extreme `scale` asked for, which is the trade the "sane
+/// maximum" this is named for is making.
+fn heropattern_raster_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
+    const MAX_TILE_PX: f32 = 4096.0;
+    let pw = (width * scale).ceil().clamp(1.0, MAX_TILE_PX) as u32;
+    let ph = (height * scale).ceil().clamp(1.0, MAX_TILE_PX) as u32;
+    (pw, ph)
 }
 
 /// Interpolate two AnimatedBackground structs. `t` goes from 0.0 (fully `a`) to 1.0 (fully `b`).
@@ -788,29 +851,67 @@ pub(super) fn interpolate_animated_bg(
     }
 }
 
-/// Tile period (px) a preset's own draw loop repeats on — the amount by
-/// which a scroll offset can be wrapped without changing the rendered
-/// pattern. Shared by `compute_scroll_offset` (below) and
-/// `draw_world_bg_with_parallax`'s camera-pan modulo so the two never
-/// diverge on what "one period" means for a given preset.
-fn tile_spacing(preset: &BackgroundPreset) -> f32 {
+/// Per-axis tile period (px) a preset's own draw loop repeats on — the
+/// amount by which a scroll offset can be wrapped, independently per axis,
+/// without changing the rendered pattern. Shared by `compute_scroll_offset`
+/// (below) and `draw_world_bg_with_parallax`'s camera-pan modulo so the two
+/// never diverge on what "one period" means for a given preset.
+///
+/// Every preset but `Heropattern` tiles on a square cell, so both axes share
+/// one scalar. Heropattern is the one exception: most of the 87 bundled SVGs
+/// are not square (e.g. `aztec` is 32×64), so wrapping the vertical offset
+/// on the horizontal period desyncs the two axes and the pattern snaps at
+/// every wrap.
+fn tile_spacing(preset: &BackgroundPreset) -> (f32, f32) {
     match preset {
-        BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
-        BackgroundPreset::GridLines(cfg) => cfg.cell.max(4.0),
-        // The lattice repeats on `spacing`, so the world-view camera can wrap
-        // on it and the tiling stays seamless as the camera pans.
-        BackgroundPreset::PixelGrid(cfg) => cfg.spacing.max(cfg.size.max(1.0)),
-        BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
-        BackgroundPreset::Heropattern(cfg) => {
-            let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
-            def.map(|d| d.width * cfg.scale).unwrap_or(60.0).max(20.0)
+        BackgroundPreset::GridDots(cfg) => {
+            let s = cfg.spacing.max(20.0);
+            (s, s)
         }
-        _ => 60.0_f32.max(20.0),
+        BackgroundPreset::GridLines(cfg) => {
+            let s = cfg.cell.max(4.0);
+            (s, s)
+        }
+        BackgroundPreset::PixelGrid(cfg) => {
+            let s = cfg.spacing.max(cfg.size.max(1.0));
+            (s, s)
+        }
+        BackgroundPreset::ConcentricCircles(cfg) => {
+            let s = cfg.spacing.max(20.0);
+            (s, s)
+        }
+        BackgroundPreset::Heropattern(cfg) => {
+            match crate::engine::heropatterns::find_pattern(&cfg.pattern) {
+                Some(d) => (
+                    period_floor(d.width * cfg.scale, 20.0),
+                    period_floor(d.height * cfg.scale, 20.0),
+                ),
+                None => (60.0, 60.0),
+            }
+        }
+        _ => (60.0, 60.0),
+    }
+}
+
+/// Raise `period` to the smallest multiple of itself that is at least
+/// `floor`, instead of clamping it outright to `floor`. A plain clamp would
+/// no longer be a multiple of the pattern's own period, breaking the
+/// periodicity `compute_scroll_offset`'s wrap depends on for any pattern
+/// narrower/shorter than `floor` (e.g. `bamboo`, 16px wide). Non-positive
+/// `period` has no well-defined multiple; `floor` is the fallback.
+fn period_floor(period: f32, floor: f32) -> f32 {
+    if period <= 0.0 {
+        floor
+    } else if period >= floor {
+        period
+    } else {
+        period * (floor / period).ceil()
     }
 }
 
 /// Compute the scroll offset for tiled backgrounds based on direction +
-/// speed, wrapped into `(-spacing, spacing)` so it never grows unbounded.
+/// speed, wrapped into `(-spacing, spacing)` per axis so it never grows
+/// unbounded.
 ///
 /// Bug this fixes: the offset used to grow linearly with `time` forever.
 /// The tiled draw loops (`draw_bg_grid_dots`, `draw_bg_heropattern`) only
@@ -818,16 +919,16 @@ fn tile_spacing(preset: &BackgroundPreset) -> f32 {
 /// canvas translated by an unbounded offset, the pattern slides off-frame
 /// and leaves a growing blank band once the offset exceeds that one-tile
 /// margin (see paint.md finding #5). Since every tiled pattern is exactly
-/// periodic on `spacing`, translating by any offset congruent mod `spacing`
-/// produces byte-identical pixels — Rust's `%` already returns a value with
-/// `|result| < spacing` and the same sign as the input, which is exactly
-/// the symmetric `(-spacing, spacing)` margin the (now-symmetric, see
-/// `draw_bg_grid_dots`) draw loops need. `t=0` (or `speed=0`) stays an exact
-/// `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
+/// periodic on its own `tile_spacing`, translating by any offset congruent
+/// mod that period produces byte-identical pixels — Rust's `%` already
+/// returns a value with `|result| < spacing` and the same sign as the
+/// input, which is exactly the symmetric `(-spacing, spacing)` margin the
+/// (now-symmetric, see `draw_bg_grid_dots`) draw loops need. `t=0` (or
+/// `speed=0`) stays an exact `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
 pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
     let (raw_x, raw_y) = raw_scroll_offset(bg, time);
-    let spacing = tile_spacing(&bg.preset);
-    (raw_x % spacing, raw_y % spacing)
+    let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+    (raw_x % spacing_x, raw_y % spacing_y)
 }
 
 /// The unwrapped scroll offset — how far the pattern *would* have travelled
@@ -1248,7 +1349,7 @@ mod pixel_grid_tests {
         let mut c = cfg();
         c.size = 40.0;
         c.spacing = 8.0;
-        assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), 40.0);
+        assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), (40.0, 40.0));
     }
 
     /// `twinkle` has to reach both ends. A cell that only dips to 10 % still
@@ -1418,5 +1519,189 @@ mod grid_lines_tests {
         // 0 would be an infinite loop's worth of lines; the painter clamps.
         let buf = render(base(0.0));
         assert_eq!(buf.len(), (W * H * 4) as usize, "it still produced a frame");
+    }
+}
+
+#[cfg(test)]
+mod heropattern_period_tests {
+    //! `tile_spacing` used to return the Heropattern's *width* as the
+    //! period on both axes. 41 of the 87 bundled SVGs are not square (e.g.
+    //! `aztec` is 32x64 — see `crates/rustmotion-core/src/engine/heropatterns.rs`),
+    //! so wrapping the vertical offset on the horizontal period snaps the
+    //! pattern mid-tile on every wrap.
+
+    use super::*;
+    use crate::schema::HeropatternConfig;
+
+    fn hero_bg(pattern: &str, direction: ScrollDirection, speed: f32) -> AnimatedBackground {
+        AnimatedBackground {
+            preset: BackgroundPreset::Heropattern(HeropatternConfig {
+                pattern: pattern.to_string(),
+                color: "#FFFFFF".to_string(),
+                opacity: 0.1,
+                scale: 1.0,
+            }),
+            x: 0.0,
+            y: 0.0,
+            speed,
+            direction: Some(direction),
+        }
+    }
+
+    #[test]
+    fn tile_spacing_is_per_axis_for_a_non_square_pattern() {
+        let bg = hero_bg("aztec", ScrollDirection::Down, 60.0);
+        let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+        assert_eq!(spacing_x, 32.0, "x period must be the pattern's own width");
+        assert_eq!(
+            spacing_y, 64.0,
+            "y period must be the pattern's own height, not its width"
+        );
+    }
+
+    #[test]
+    fn vertical_scroll_does_not_wrap_at_half_the_tile_height() {
+        let bg = hero_bg("aztec", ScrollDirection::Down, 60.0);
+        // 48px of vertical travel sits strictly between one width-period
+        // (32px — where the pre-fix code would wrap) and the pattern's
+        // actual 64px height: the correct wrap leaves it untouched, the bug
+        // wraps it down to 48 % 32 = 16.
+        let t = 48.0 / 60.0;
+        let (_dx, dy) = compute_scroll_offset(&bg, t);
+        assert!(
+            (dy - 48.0).abs() < 1e-2,
+            "48px of vertical travel is under one tile height (64px) and must not wrap yet, got dy={dy}"
+        );
+    }
+
+    #[test]
+    fn narrow_pattern_wraps_on_a_whole_multiple_of_its_own_period() {
+        let bg = hero_bg("bamboo", ScrollDirection::Right, 60.0);
+        let (spacing_x, _spacing_y) = tile_spacing(&bg.preset);
+        assert_eq!(
+            spacing_x % 16.0,
+            0.0,
+            "the clamped period must stay a whole multiple of the pattern's own 16px width, got {spacing_x}"
+        );
+        assert!(spacing_x >= 20.0);
+    }
+}
+
+#[cfg(test)]
+mod heropattern_raster_tests {
+    //! The heropattern tile used to be rasterized at 1x (the
+    //! pattern's native width/height) and then magnified by the shader's
+    //! own matrix with nearest-neighbour sampling — blocky above `scale: 1`,
+    //! aliased below it. `heropattern_raster_size` must honour `scale`
+    //! directly in the raster resolution instead.
+
+    use super::*;
+
+    #[test]
+    fn raster_size_scales_with_cfg_scale_not_pinned_to_1x() {
+        let (pw, ph) = heropattern_raster_size(32.0, 64.0, 4.0);
+        assert_eq!(
+            (pw, ph),
+            (128, 256),
+            "the pixmap must be sized for the scaled tile, not the pattern's native 32x64"
+        );
+    }
+
+    #[test]
+    fn raster_size_matches_the_pattern_exactly_at_scale_1() {
+        assert_eq!(heropattern_raster_size(32.0, 64.0, 1.0), (32, 64));
+    }
+
+    #[test]
+    fn raster_size_is_clamped_for_an_unbounded_scale() {
+        let (pw, ph) = heropattern_raster_size(32.0, 64.0, 100_000.0);
+        assert!(
+            pw <= 4096 && ph <= 4096,
+            "an extreme scale must not attempt an unbounded pixmap allocation, got {pw}x{ph}"
+        );
+    }
+
+    #[test]
+    fn draw_bg_heropattern_does_not_panic_at_an_extreme_scale() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((64, 64)).expect("surface");
+        let cfg = HeropatternConfig {
+            pattern: "aztec".to_string(),
+            color: "#FFFFFF".to_string(),
+            opacity: 0.1,
+            scale: 100_000.0,
+        };
+        draw_bg_heropattern(surface.canvas(), &cfg, 0.0, 64.0, 64.0);
+    }
+}
+
+#[cfg(test)]
+mod heropattern_svg_injection_tests {
+    //! A scenario-supplied heropattern colour used to be spliced unescaped
+    //! into hand-built SVG source inside a double-quoted `fill="..."`
+    //! attribute, then parsed by usvg with its default (file-reading)
+    //! `image_href_resolver`. A colour containing a `"` could close the
+    //! attribute and inject arbitrary markup, including an `<image
+    //! href="...">` the default resolver would read straight off disk.
+
+    use super::*;
+
+    #[test]
+    fn a_colour_containing_a_double_quote_cannot_inject_markup() {
+        let payload = r#""/><image href="/etc/passwd"/><rect fill=""#;
+        let sanitized = canonical_hero_color(payload);
+        assert!(!sanitized.contains('"'), "got: {sanitized}");
+        assert!(!sanitized.contains('<'), "got: {sanitized}");
+        assert!(!sanitized.contains('&'), "got: {sanitized}");
+        assert_eq!(
+            sanitized.len(),
+            9,
+            "expected '#' + 8 hex digits, got: {sanitized}"
+        );
+        assert!(sanitized
+            .strip_prefix('#')
+            .unwrap()
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn a_valid_colour_round_trips_case_normalised() {
+        assert_eq!(canonical_hero_color("#1e3a8a55"), "#1E3A8A55");
+    }
+
+    #[test]
+    fn the_svg_options_never_read_a_file_from_disk() {
+        let scratch_path = std::env::temp_dir().join(format!(
+            "rustmotion-heropattern-injection-probe-{}.svg",
+            std::process::id()
+        ));
+        std::fs::write(
+            &scratch_path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )
+        .expect("scratch SVG written");
+
+        let opt = heropattern_svg_options();
+        let resolved =
+            (opt.image_href_resolver.resolve_string)(scratch_path.to_str().unwrap(), &opt);
+
+        let _ = std::fs::remove_file(&scratch_path);
+
+        assert!(
+            resolved.is_none(),
+            "the string resolver must be neutralised, not read a real SVG file from disk"
+        );
+    }
+
+    #[test]
+    fn draw_bg_heropattern_survives_an_injection_attempt_without_panicking() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32)).expect("surface");
+        let cfg = HeropatternConfig {
+            pattern: "aztec".to_string(),
+            color: r#""/><image href="/etc/passwd"/><rect fill=""#.to_string(),
+            opacity: 1.0,
+            scale: 1.0,
+        };
+        draw_bg_heropattern(surface.canvas(), &cfg, 0.0, 32.0, 32.0);
     }
 }

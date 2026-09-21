@@ -2,7 +2,9 @@ use markup5ever_rcdom::{Handle, NodeData};
 use serde_json::{Map, Value};
 
 use crate::style::{coerce_value, parse_anim_attr, parse_inline_style};
-use crate::{element_attrs, tag_name, HtmlError};
+use crate::{check_known_attrs, element_attrs, tag_name, HtmlError};
+
+const KNOWN_NATIVE_ATTRS: &[&str] = &["style", "anim"];
 
 enum TagKind {
     Container,
@@ -35,20 +37,48 @@ fn tag_kind(tag: &str) -> TagKind {
     }
 }
 
-/// Concatenated text of an element and all its descendants.
-pub(crate) fn inner_text(handle: &Handle) -> String {
+/// Concatenated text of an element and all its descendants. Nested inline
+/// formatting tags (`strong`/`em`/`label`/…) flatten in, matching real HTML;
+/// `<script>`/`<title>`/`<noscript>`/`<template>`/`<head>` are skipped
+/// (never visually render either); `<style>` and any element with real,
+/// non-flattenable content (`<img>`, `<svg>`, `<video>`, `<rm-*>`, a nested
+/// container) are refused rather than having their source painted or their
+/// content silently vanish — see [`HtmlError::TextContentUnsupportedChild`].
+pub(crate) fn inner_text(handle: &Handle) -> Result<String, HtmlError> {
     let mut out = String::new();
-    collect_text(handle, &mut out);
-    out.trim().to_string()
+    collect_text(handle, &mut out)?;
+    Ok(out.trim().to_string())
 }
 
-fn collect_text(handle: &Handle, out: &mut String) {
+fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
     if let NodeData::Text { contents } = &handle.data {
         out.push_str(&contents.borrow());
+        return Ok(());
+    }
+    if matches!(handle.data, NodeData::Element { .. }) {
+        if let Some(tag) = tag_name(handle) {
+            if tag == "style" {
+                return Err(HtmlError::StyleElementUnsupported);
+            }
+            match tag_kind(&tag) {
+                TagKind::Ignored => return Ok(()),
+                TagKind::UnsupportedNative(suggestion) => {
+                    return Err(HtmlError::UnsupportedNativeElement {
+                        tag,
+                        suggestion: suggestion.to_string(),
+                    })
+                }
+                TagKind::Container | TagKind::Custom(_) => {
+                    return Err(HtmlError::TextContentUnsupportedChild { tag })
+                }
+                TagKind::Text => {}
+            }
+        }
     }
     for child in handle.children.borrow().iter() {
-        collect_text(child, out);
+        collect_text(child, out)?;
     }
+    Ok(())
 }
 
 /// Pull `style="..."` and `anim="..."` from an element's attributes into one
@@ -56,11 +86,10 @@ fn collect_text(handle: &Handle, out: &mut String) {
 /// [`crate::style::parse_anim_attr`]) lands in `style.animation` — inline CSS
 /// cannot express animation arrays, so `anim` is the only writer of that key.
 fn style_object(attrs: &[(String, String)]) -> Result<Option<Value>, HtmlError> {
-    let mut map = attrs
-        .iter()
-        .find(|(k, _)| k == "style")
-        .map(|(_, raw)| parse_inline_style(raw))
-        .unwrap_or_default();
+    let mut map = match attrs.iter().find(|(k, _)| k == "style") {
+        Some((_, raw)) => parse_inline_style(raw)?,
+        None => Map::new(),
+    };
     if let Some((_, anim)) = attrs.iter().find(|(k, _)| k == "anim") {
         map.insert("animation".into(), parse_anim_attr(anim)?);
     }
@@ -90,15 +119,17 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             suggestion: suggestion.to_string(),
         }),
         TagKind::Text => {
+            check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("text"));
-            obj.insert("content".into(), Value::from(inner_text(handle)));
+            obj.insert("content".into(), Value::from(inner_text(handle)?));
             if let Some(style) = style_object(&attrs)? {
                 obj.insert("style".into(), style);
             }
             Ok(Some(Value::Object(obj)))
         }
         TagKind::Container => {
+            check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("div"));
             if let Some(style) = style_object(&attrs)? {

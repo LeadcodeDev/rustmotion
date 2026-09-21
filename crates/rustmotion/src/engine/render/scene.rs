@@ -11,30 +11,10 @@ use rustmotion_core::css::style::{
     JustifyContent as CssJustifyContent,
 };
 use rustmotion_core::css::taffy_bridge::ConversionContext;
-use rustmotion_core::css::units::{LengthContext, LengthPercentage};
+use rustmotion_core::css::units::LengthPercentage;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::paint_pass::PlaneCamera;
 use rustmotion_core::engine::renderer::color4f_from_hex;
-
-/// Build the `ConversionContext` that resolves `vw`/`vh`/`%` units for a
-/// layout pass, anchored to the *real* output viewport instead of
-/// `ConversionContext::default()`'s hardcoded 1920×1080 (round 4 audit,
-/// lot LAYOUT, constat 1). On a 1080×1920 vertical video — a resolution
-/// this project documents as a common target — `width: "50vw"` used to
-/// resolve as 50% of a phantom 1920px-wide viewport (960px) instead of 50%
-/// of the real 1080px one (540px), a 78% error, and `vh` was off by the
-/// same margin in the other axis. `font-size`/`root-font-size` stay at the
-/// CSS initial `16px`: nothing upstream of this call resolves and threads a
-/// root font-size through yet.
-fn viewport_conversion_context(viewport_w: f32, viewport_h: f32) -> ConversionContext {
-    ConversionContext {
-        length: LengthContext {
-            viewport_width: viewport_w,
-            viewport_height: viewport_h,
-            ..LengthContext::default()
-        },
-    }
-}
 
 /// The single choke-point that turns "a frame of this scene" into the time
 /// value every render path in this file feeds into the background draw, the
@@ -554,7 +534,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let layout = run_layout(
         &built.root,
         (viewport_w, viewport_h),
-        &viewport_conversion_context(viewport_w, viewport_h),
+        &ConversionContext::for_viewport(viewport_w, viewport_h),
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
@@ -573,6 +553,13 @@ fn render_with_new_pipeline_iter<'a, I>(
 /// Paint a decorative leaf (e.g. Particle) over the full viewport without
 /// going through taffy. Resolves animations and dispatches to
 /// `Painter::paint_content` directly with a viewport-sized `BoxLayout`.
+///
+/// Visibility and effects go through the same `PaintWindow::contains` and
+/// `effective_effects` the ordinary `paint_tree` dispatch uses (see
+/// `box_builder::effective_effects`'s doc comment), rather than re-deriving
+/// both by hand — a component whose `timeline`/`style.transition` state or
+/// exact `end_at` boundary only worked in one of the two dispatch paths used
+/// to be invisible to tests written against either one alone.
 fn paint_decorative_fullscreen(
     canvas: &Canvas,
     child: &ChildComponent,
@@ -580,34 +567,22 @@ fn paint_decorative_fullscreen(
     viewport_h: f32,
     ctx: &RenderContext,
 ) {
+    use rustmotion_components::box_builder::effective_effects;
     use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
+    use rustmotion_core::engine::box_tree::PaintWindow;
     use rustmotion_core::engine::layout_pass::BoxLayout;
     use rustmotion_core::traits::PaintCtx;
 
     let time = ctx.time.seconds();
     if let Some(timed) = child.component.as_timed() {
-        let (start_at, end_at) = timed.timing();
-        if let Some(s) = start_at {
-            if time < s {
-                return;
-            }
-        }
-        if let Some(e) = end_at {
-            if time > e {
-                return;
-            }
+        let (start, end) = timed.timing();
+        if !(PaintWindow { start, end }).contains(time) {
+            return;
         }
     }
 
-    let props = match child.component.as_animatable() {
-        Some(a) => {
-            let effects = a.animation_effects();
-            if effects.is_empty() {
-                AnimatedProperties::default()
-            } else {
-                resolve_props_for_effects(effects, time, ctx.scene_duration)
-            }
-        }
+    let props = match effective_effects(&child.component, 0.0) {
+        Some(effects) => resolve_props_for_effects(&effects, time, ctx.scene_duration),
         None => AnimatedProperties::default(),
     };
     if props.opacity <= 0.0 {
@@ -789,7 +764,11 @@ pub fn render_scene_hits(
         fps: config.fps,
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
-    let layout = run_layout(&built.root, (vw, vh), &viewport_conversion_context(vw, vh));
+    let layout = run_layout(
+        &built.root,
+        (vw, vh),
+        &ConversionContext::for_viewport(vw, vh),
+    );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,

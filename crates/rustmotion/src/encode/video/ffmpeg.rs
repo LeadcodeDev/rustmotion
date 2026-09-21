@@ -290,6 +290,38 @@ fn ffmpeg_args(
     args
 }
 
+/// Name of the scratch directory a single audio-bearing render call writes
+/// its materialised PCM into. `pid` repeats across the machine's uptime and
+/// `seq` is a small monotonic counter starting at zero, so together they are
+/// a key an outside process could realistically pre-compute and occupy
+/// ahead of time; folding in a nanosecond timestamp neither of those two
+/// alone carries closes that gap without needing a random-number
+/// dependency this crate doesn't already have.
+fn audio_tmp_dir_name(pid: u32, seq: u32, nanos: u128) -> String {
+    format!("rustmotion_audio_{pid}_{seq}_{nanos:x}")
+}
+
+/// Scratch path ffmpeg actually writes to; promoted (renamed) onto the
+/// caller's real `output_path` only after a clean exit with no `pipe_error`.
+/// Kept as a sibling of `output_path` (same directory, same filesystem, so
+/// the promotion is a plain rename) and keeps `output_path`'s own extension
+/// as the *final* extension — mirrors `video_audio::partial_wav_path`'s doc:
+/// ffmpeg picks its output muxer from the last extension, so a bare
+/// `.partial` suffix appended after it makes ffmpeg refuse to start with
+/// "Unable to choose an output format" instead of the encode failure this
+/// path exists to isolate.
+fn ffmpeg_partial_output_path(output_path: &std::path::Path) -> std::path::PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let name = match output_path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => format!("{stem}.partial.{ext}"),
+        None => format!("{stem}.partial"),
+    };
+    output_path.with_file_name(name)
+}
+
 /// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency).
 ///
 /// Software-only. Kept with its original signature so existing callers
@@ -440,22 +472,32 @@ fn encode_with_ffmpeg_hw_impl(
     // encodes can run concurrently *within* one process (parallel test
     // threads today; `--frames` segments rendered concurrently by a future
     // distributed worker tomorrow — the exact shape this feature exists to
-    // enable). Two calls sharing a PID-only path would each `create_dir_all`
+    // enable). Two calls sharing a PID-only path would each try to create
     // the same directory, then whichever finishes first would
     // `remove_dir_all` it out from under the other mid-write, surfacing as
     // a bare `NotFound` on `std::fs::write` below. A monotonic counter on
     // top of PID makes every call's directory distinct regardless of
-    // timing.
+    // timing; a nanosecond timestamp on top of *that* keeps the full key
+    // from being small enough for something outside this process to
+    // pre-compute and occupy ahead of time — pid space and a
+    // monotonic-from-zero counter both are. `create_dir` below (not
+    // `_all`) is what actually refuses to proceed if something is already
+    // sitting at the computed path, symlink included; the timestamp only
+    // raises the cost of ever landing on that path in the first place.
     static AUDIO_TMP_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
     let audio_tmp_dir = if !merged_audio.is_empty() {
         let seq = AUDIO_TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        Some(std::env::temp_dir().join(format!("rustmotion_audio_{}_{seq}", std::process::id())))
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        Some(std::env::temp_dir().join(audio_tmp_dir_name(std::process::id(), seq, nanos)))
     } else {
         None
     };
     let pcm_data = if !merged_audio.is_empty() {
         if let Some(ref tmp_dir) = audio_tmp_dir {
-            std::fs::create_dir_all(tmp_dir)?;
+            std::fs::create_dir(tmp_dir)?;
         }
         super::super::audio::mix_audio_tracks_segment(
             &merged_audio,
@@ -531,6 +573,14 @@ fn encode_with_ffmpeg_hw_impl(
         }
     };
 
+    let partial_output_path = ffmpeg_partial_output_path(std::path::Path::new(output_path));
+    let partial_output_str =
+        partial_output_path
+            .to_str()
+            .ok_or_else(|| RustmotionError::NonUtf8Path {
+                path: partial_output_path.to_string_lossy().into_owned(),
+            })?;
+
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(ffmpeg_args(
         width,
@@ -541,7 +591,7 @@ fn encode_with_ffmpeg_hw_impl(
         transparent,
         hw_encoder.as_deref(),
         audio_input.as_deref(),
-        output_path,
+        partial_output_str,
     ));
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::null());
@@ -623,7 +673,18 @@ fn encode_with_ffmpeg_hw_impl(
         cb(EncodeProgress::Muxing);
     }
 
-    let status = child.wait().map_err(|e| RustmotionError::FfmpegWait {
+    // A `pipe_error` means the render already failed and `partial_output_path`
+    // will be discarded either way, so there is nothing left for ffmpeg to
+    // usefully finish — killing it here instead of waiting for it to
+    // gracefully encode and finalize a file nobody will ever read avoids
+    // burning time on a result already known to be thrown away.
+    let status = if pipe_error.is_some() {
+        let _ = child.kill();
+        child.wait()
+    } else {
+        child.wait()
+    }
+    .map_err(|e| RustmotionError::FfmpegWait {
         reason: e.to_string(),
     })?;
 
@@ -659,6 +720,7 @@ fn encode_with_ffmpeg_hw_impl(
 
     if let Some(e) = pipe_error {
         tee_stderr();
+        let _ = std::fs::remove_file(&partial_output_path);
         // A broken pipe means ffmpeg is already gone — its own error says why,
         // ours only says we could not keep writing. Carry both.
         return Err(match e {
@@ -672,10 +734,16 @@ fn encode_with_ffmpeg_hw_impl(
 
     if !status.success() {
         tee_stderr();
+        let _ = std::fs::remove_file(&partial_output_path);
         return Err(RustmotionError::FfmpegFailed {
             stderr: stderr_summary,
         });
     }
+
+    // Only now, with a clean exit and no pipe error, does `output_path` ever
+    // see this render's bytes — promote-on-success, the same discipline
+    // `video_audio::extract_audio_to_wav` already applies to its cached WAVs.
+    std::fs::rename(&partial_output_path, output_path)?;
 
     Ok(())
 }
@@ -789,7 +857,100 @@ pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ffmpeg_args, parse_encoder_names, select_hardware_encoder, HardwareSelection};
+    use super::{
+        audio_tmp_dir_name, ffmpeg_args, ffmpeg_partial_output_path, parse_encoder_names,
+        select_hardware_encoder, HardwareSelection,
+    };
+
+    // ── audio scratch directory naming: not fully predictable from outside ──
+
+    #[test]
+    fn audio_tmp_dir_name_differs_across_calls_that_share_pid_and_seq() {
+        // A pid+seq pair is small enough to pre-seed exhaustively from
+        // outside the process; folding in a nanosecond timestamp neither of
+        // those two alone carries means a name computed ahead of time from
+        // pid+seq no longer identifies the exact directory this process
+        // will actually create.
+        let a = audio_tmp_dir_name(1234, 0, 111);
+        let b = audio_tmp_dir_name(1234, 0, 222);
+        assert_ne!(
+            a, b,
+            "same pid+seq, different nanos, must differ: {a} vs {b}"
+        );
+    }
+
+    #[test]
+    fn audio_tmp_dir_name_is_stable_for_identical_inputs() {
+        assert_eq!(audio_tmp_dir_name(1, 2, 3), audio_tmp_dir_name(1, 2, 3));
+    }
+
+    /// Characterizes the exact property this fix depends on: swapping
+    /// `create_dir_all` for `create_dir` at the audio scratch directory's
+    /// creation site turns "adopt whatever is already there" into "refuse
+    /// outright" the moment something — attacker-planted symlink included —
+    /// already occupies that path.
+    #[test]
+    fn create_dir_refuses_an_already_occupied_path_that_create_dir_all_would_have_adopted() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_audit_ws_c_preexisting_dir_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).expect("set up a pre-existing directory at the target path");
+
+        assert!(
+            std::fs::create_dir_all(&path).is_ok(),
+            "create_dir_all silently succeeding on a pre-existing directory is exactly the \
+             behavior that let a hostile pre-planted directory (or symlink) be adopted"
+        );
+        assert!(
+            std::fs::create_dir(&path).is_err(),
+            "create_dir must refuse the same pre-existing path instead of adopting it"
+        );
+
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    // ── partial-output-path naming (pure) ────────────────────────────────────
+
+    #[test]
+    fn partial_path_keeps_the_original_extension_as_its_last_extension() {
+        let cases = [
+            ("/tmp/out.mp4", "/tmp/out.partial.mp4"),
+            ("/tmp/out.mov", "/tmp/out.partial.mov"),
+            ("/tmp/out.webm", "/tmp/out.partial.webm"),
+            ("out.mp4", "out.partial.mp4"),
+        ];
+        for (input, expected) in cases {
+            let got = ffmpeg_partial_output_path(std::path::Path::new(input));
+            assert_eq!(
+                got,
+                std::path::PathBuf::from(expected),
+                "input={input}: ffmpeg picks its muxer from the last extension, so it must \
+                 survive unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_path_is_a_sibling_of_the_final_output_not_a_different_directory() {
+        let got = ffmpeg_partial_output_path(std::path::Path::new("/a/b/c/out.mp4"));
+        assert_eq!(
+            got.parent(),
+            Some(std::path::Path::new("/a/b/c")),
+            "the rename onto output_path must stay on the same filesystem"
+        );
+    }
+
+    #[test]
+    fn partial_path_falls_back_gracefully_with_no_extension() {
+        let got = ffmpeg_partial_output_path(std::path::Path::new("/tmp/out"));
+        assert_eq!(got, std::path::PathBuf::from("/tmp/out.partial"));
+    }
 
     /// Every option that describes the *output* has to sit after the last `-i`.
     /// Put one before it and ffmpeg attaches it to the following input instead,

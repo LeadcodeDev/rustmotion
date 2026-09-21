@@ -434,6 +434,45 @@ pub const DEFAULT_SPRING_REST_THRESHOLD: f64 = 0.005;
 /// rather than an unbounded loop.
 pub const MAX_SPRING_SEARCH_SECONDS: f64 = 30.0;
 
+thread_local! {
+    /// Cache for [`spring_settle_time_cached`], keyed on the exact bit
+    /// pattern of its four inputs. One `SpringConfig` is sampled once per
+    /// animated property per node per frame, always with the same
+    /// (floored) `damping`/`stiffness`/`mass`/`threshold` — the scan result
+    /// is frame-invariant, so a thread-local map turns the whole render
+    /// into one real scan per distinct spring plus O(1) lookups instead of
+    /// one scan per sample.
+    static SPRING_SETTLE_TIME_CACHE: std::cell::RefCell<std::collections::HashMap<(u64, u64, u64, u64), f64>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Memoized [`spring_settle_time`]: identical inputs always produce the
+/// identical scan result, so a cache hit skips the coarse-then-bisect
+/// search entirely. `max_t` is not part of the key because both call sites
+/// below always pass [`MAX_SPRING_SEARCH_SECONDS`].
+fn spring_settle_time_cached(damping: f64, stiffness: f64, mass: f64, threshold: f64) -> f64 {
+    let key = (
+        damping.to_bits(),
+        stiffness.to_bits(),
+        mass.to_bits(),
+        threshold.to_bits(),
+    );
+    SPRING_SETTLE_TIME_CACHE.with(|cache| {
+        if let Some(&cached) = cache.borrow().get(&key) {
+            return cached;
+        }
+        let settled = spring_settle_time(
+            damping,
+            stiffness,
+            mass,
+            threshold,
+            MAX_SPRING_SEARCH_SECONDS,
+        );
+        cache.borrow_mut().insert(key, settled);
+        settled
+    })
+}
+
 /// Solve spring animation at time t (seconds).
 /// Returns a value between 0.0 and 1.0 representing progress.
 ///
@@ -467,13 +506,7 @@ pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
     match config.duration {
         Some(duration) if duration > 0.0 => {
             let threshold = spring_rest_threshold(config);
-            let natural_rest = spring_settle_time(
-                damping,
-                stiffness,
-                mass,
-                threshold,
-                MAX_SPRING_SEARCH_SECONDS,
-            );
+            let natural_rest = spring_settle_time_cached(damping, stiffness, mass, threshold);
             if natural_rest < 1e-9 {
                 // Degenerate: the spring starts at distance 1.0 from its
                 // target, so in practice `natural_rest` is never this
@@ -500,8 +533,7 @@ fn spring_value_raw(t: f64, damping: f64, stiffness: f64, mass: f64) -> f64 {
         // Underdamped
         let omega_d = omega * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega * t).exp();
-        1.0 - decay
-            * ((zeta * omega * t / omega_d).sin() * (zeta * omega / omega_d) + (omega_d * t).cos())
+        1.0 - decay * ((omega_d * t).sin() * (zeta * omega / omega_d) + (omega_d * t).cos())
     } else if (zeta - 1.0).abs() < 1e-6 {
         // Critically damped
         let decay = (-omega * t).exp();
@@ -624,13 +656,7 @@ pub fn spring_rest_time(config: &SpringConfig) -> f64 {
             let stiffness = config.stiffness.max(1e-6);
             let mass = config.mass.max(1e-6);
             let threshold = spring_rest_threshold(config);
-            spring_settle_time(
-                damping,
-                stiffness,
-                mass,
-                threshold,
-                MAX_SPRING_SEARCH_SECONDS,
-            )
+            spring_settle_time_cached(damping, stiffness, mass, threshold)
         }
     }
 }
@@ -2838,19 +2864,22 @@ mod spring_duration_tests {
         //
         // damping=6, stiffness=120, mass=1 (the same "underdamped" preset
         // this file already uses for elastic_in / kf_anim_spring_underdamped)
-        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.043467 — 4.35%
-        // past the target, an order of magnitude outside any reasonable
-        // rest_threshold (default 0.5%). An author asking this spring to
-        // "finish at 0.8s" got a value nowhere near rest.
+        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.027616 — 2.76%
+        // past the target, well outside any reasonable rest_threshold
+        // (default 0.5%). An author asking this spring to "finish at 0.8s"
+        // got a value nowhere near rest. Reference recomputed for RM-09
+        // (issue #220): the solver's underdamped branch fed the wrong
+        // argument to its sine term, so this captured value moved when that
+        // was corrected.
         let v = spring_value_raw(0.8, 6.0, 120.0, 1.0);
         assert!(
-            (v - 1.043467).abs() < 1e-5,
-            "captured red-phase reference value drifted: got {v}, expected ~1.043467"
+            (v - 1.027616).abs() < 1e-5,
+            "captured red-phase reference value drifted: got {v}, expected ~1.027616"
         );
         assert!(
-            (v - 1.0).abs() > 0.04,
+            (v - 1.0).abs() > 0.02,
             "red-phase claim: at t=duration the unscaled spring must still be far from rest \
-             (got diff {:.6}, expected > 0.04)",
+             (got diff {:.6}, expected > 0.02)",
             (v - 1.0).abs()
         );
     }
@@ -2867,7 +2896,7 @@ mod spring_duration_tests {
         let threshold = DEFAULT_SPRING_REST_THRESHOLD;
 
         // Green phase: the same (damping, stiffness, mass) that the
-        // red-phase test above showed is 4.35% off at t=0.8s without a
+        // red-phase test above showed is 2.76% off at t=0.8s without a
         // `duration` must now be within `threshold` of rest at t=0.8s.
         let v_at_duration = spring_value(0.8, &config);
         assert!(

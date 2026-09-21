@@ -119,9 +119,16 @@ pub fn redo(shared: &Shared, slot: &SharedHistory) {
     step(shared, slot, false)
 }
 
+/// Shared body of [`undo`]/[`redo`]. Lock discipline: the model lock and the
+/// slot lock are never held together (model → path, then slot → stacks +
+/// disk, then model → report).
+///
+/// Drains the pending-write queue for `path` before touching the file: any
+/// edit still waiting out its debounce window would otherwise fire later and
+/// replay over the state this step is about to write, silently reverting the
+/// undo/redo and destroying the redo entry that could have recovered it
+/// (`record_edit` clears redo on every write).
 fn step(shared: &Shared, slot: &SharedHistory, is_undo: bool) {
-    // Lock discipline: the model lock and the slot lock are never held
-    // together (model → path, then slot → stacks + disk, then model → report).
     let path = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
         m.path.clone()
@@ -129,8 +136,8 @@ fn step(shared: &Shared, slot: &SharedHistory, is_undo: bool) {
     let Some(path) = path else {
         return;
     };
+    let _ = super::optimistic::take_pending(&super::optimistic::pending_write_slot(), &path);
 
-    // Ok(true) = a state was written; Ok(false) = nothing to undo/redo.
     let outcome: Result<bool, String> = {
         let mut st = slot.lock().unwrap_or_else(|e| e.into_inner());
         st.ensure_path(&path);

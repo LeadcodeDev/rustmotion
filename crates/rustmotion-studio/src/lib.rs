@@ -1,8 +1,8 @@
 mod app;
 mod components;
-mod editor;
+pub mod editor;
 mod library;
-mod scenario;
+pub mod scenario;
 
 pub use app::{run_preview, run_preview_with_error};
 

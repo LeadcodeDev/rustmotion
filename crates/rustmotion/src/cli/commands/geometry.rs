@@ -53,7 +53,7 @@
 use std::collections::HashSet;
 
 use rustmotion::components::box_builder::{
-    build_scene_from_refs, effective_effects, BuildAnimationCtx,
+    build_scene_from_refs, component_kind, effective_effects, BuildAnimationCtx,
 };
 use rustmotion::components::intrinsic::{
     CaptionIntrinsic, CodeblockIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic,
@@ -177,7 +177,11 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
 
             let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
-            let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+            let layouts = run_layout(
+                &built.root,
+                viewport_f,
+                &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
+            );
 
             let camera = scene
                 .camera
@@ -296,22 +300,14 @@ fn walk(
                 check_unwrappable_text(
                     &child.component,
                     &child_path,
-                    &raw_bbox,
+                    layout,
                     viewport,
                     vi,
                     si,
                     out,
                 );
             }
-            check_auto_scroll(
-                &child.component,
-                &child_path,
-                &raw_bbox,
-                viewport,
-                vi,
-                si,
-                out,
-            );
+            check_auto_scroll(&child.component, &child_path, layout, viewport, vi, si, out);
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
@@ -469,6 +465,16 @@ fn container_clips(c: &Component) -> bool {
 /// path, out of scope for this fix. Animated transform-producing presets are
 /// folded separately in `walk_anim`; this only handles what a component
 /// declares directly in `style.transform`.
+///
+/// RM-15: `font_size` is the NODE's own resolved font-size
+/// (`css.font_size_px_or(16.0)`), not a hardcoded 16px — an `em` length in
+/// `transform` must scale with the element it's declared on, exactly like
+/// `paint_pass.rs`'s `length_ctx` does for the same field. Percentage
+/// lengths inside `transform` resolve per axis (`ctx_x`/`ctx_y`, mirroring
+/// `paint_pass.rs`'s `length_ctx_x`/`length_ctx_y`) rather than against a
+/// single `bbox.w.max(bbox.h)` shared by both axes — see
+/// `apply_transform_chain`'s doc comment for why a shared context there was
+/// wrong for every non-square box.
 fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)) -> BBox {
     let transform = match css.transform.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -478,8 +484,16 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
         viewport_width: viewport.0,
         viewport_height: viewport.1,
         parent_size: bbox.w.max(bbox.h),
-        font_size: 16.0,
+        font_size: css.font_size_px_or(16.0),
         root_font_size: 16.0,
+    };
+    let ctx_x = LengthContext {
+        parent_size: bbox.w,
+        ..ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: bbox.h,
+        ..ctx
     };
     let (pivot_x, pivot_y) = resolve_transform_origin_2d(css.transform_origin.as_ref(), bbox, &ctx);
     let corners = [
@@ -494,7 +508,7 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
     let mut min_y = f32::INFINITY;
     let mut max_y = f32::NEG_INFINITY;
     for (cx, cy) in corners {
-        let (tx, ty) = apply_transform_chain(transform, cx - pivot_x, cy - pivot_y, &ctx);
+        let (tx, ty) = apply_transform_chain(transform, cx - pivot_x, cy - pivot_y, &ctx_x, &ctx_y);
         let (wx, wy) = (pivot_x + tx, pivot_y + ty);
         min_x = min_x.min(wx);
         max_x = max_x.max(wx);
@@ -580,15 +594,32 @@ fn resolve_transform_origin_2d(
 /// clockwise on a y-down canvas, i.e. `x' = x·cosθ − y·sinθ`,
 /// `y' = x·sinθ + y·cosθ`); `Skew`/`SkewX`/`SkewY` match `Canvas::skew`
 /// (`x' = x + y·tan(skew_x)`, `y' = y + x·tan(skew_y)`).
-fn apply_transform_chain(list: &[TransformFn], x: f32, y: f32, ctx: &LengthContext) -> (f32, f32) {
+///
+/// RM-15: `ctx_x`/`ctx_y` are separate contexts differing only in
+/// `parent_size` (the box's own width / height respectively), used for
+/// `Translate`/`TranslateX`/`TranslateY`/`Translate3d`'s percentage
+/// resolution — CSS resolves a translate's x-component percentage against
+/// the box's own WIDTH and the y-component against its own HEIGHT, never a
+/// single value shared by both axes (that's only correct for square boxes).
+/// `Scale`/`Rotate`/`Skew` take unitless factors/degrees and never consult
+/// either context.
+fn apply_transform_chain(
+    list: &[TransformFn],
+    x: f32,
+    y: f32,
+    ctx_x: &LengthContext,
+    ctx_y: &LengthContext,
+) -> (f32, f32) {
     let (mut x, mut y) = (x, y);
     for f in list.iter().rev() {
         let (nx, ny) = match f {
-            TransformFn::Translate { x: tx, y: ty } => (x + tx.resolve(ctx), y + ty.resolve(ctx)),
-            TransformFn::TranslateX { x: tx } => (x + tx.resolve(ctx), y),
-            TransformFn::TranslateY { y: ty } => (x, y + ty.resolve(ctx)),
+            TransformFn::Translate { x: tx, y: ty } => {
+                (x + tx.resolve(ctx_x), y + ty.resolve(ctx_y))
+            }
+            TransformFn::TranslateX { x: tx } => (x + tx.resolve(ctx_x), y),
+            TransformFn::TranslateY { y: ty } => (x, y + ty.resolve(ctx_y)),
             TransformFn::Translate3d { x: tx, y: ty, .. } => {
-                (x + tx.resolve(ctx), y + ty.resolve(ctx))
+                (x + tx.resolve(ctx_x), y + ty.resolve(ctx_y))
             }
             TransformFn::Scale { x: sx, y: sy } => (x * sx, y * sy),
             TransformFn::ScaleX { x: sx } => (x * sx, y),
@@ -752,10 +783,32 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
     }
 }
 
+/// RM-31: natural (unwrapped) width vs the node's own CONTENT box, not its
+/// border box. `LegacyPaintDispatcher::dispatch` hands every non-codeblock
+/// painter (`Text`/`GradientText`/`Caption` included) a synthetic
+/// `BoxLayout` built from `layout.content_box()`, translated to the
+/// content-box origin — so the painter wraps and draws inside the content
+/// box, not the raw taffy layout box this walker reads. Comparing against
+/// the border box (as this used to) under-reports by exactly
+/// `padding.left + padding.right + border.left + border.right`, mirroring
+/// the same fix `check_content_overflows_box` already applies for the
+/// wrapped case.
+///
+/// Measured via the same cosmic-text–backed intrinsic the layout engine
+/// uses. Width is bounded by the node's own resolved content-box width
+/// (not `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
+/// see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic` arms
+/// and `CssStyle::text_autofit`'s doc comment. For a non-autofit node this
+/// changes nothing: `TextIntrinsic::measure` only reads the width
+/// constraint at all when `text_autofit` is on (see its early return), and
+/// `nowrap` already forces a single unwrapped line here regardless of what
+/// width is offered — so `natural_w` below is "natural" in the non-autofit
+/// case exactly as before, and "shrunk to fit, if that's enough" when the
+/// author declared it.
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
-    bbox: &BBox,
+    layout: &BoxLayout,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -767,22 +820,12 @@ fn check_unwrappable_text(
     if !nowrap {
         return;
     }
-    // Measure via the same cosmic-text–backed intrinsic the layout engine
-    // uses. Width is bounded by the node's own resolved `bbox.w` (not
-    // `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
-    // see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic`
-    // arms and `CssStyle::text_autofit`'s doc comment. For a non-autofit
-    // node this changes nothing: `TextIntrinsic::measure` only reads the
-    // width constraint at all when `text_autofit` is on (see its early
-    // return), and `nowrap` already forces a single unwrapped line here
-    // regardless of what width is offered — so `natural_w` below is
-    // "natural" in the non-autofit case exactly as before, and "shrunk to
-    // fit, if that's enough" when the author declared it.
+    let (cx, cy, cw, ch) = layout.content_box();
     let (natural_w, _) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::Definite(bbox.w), AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
     );
-    if natural_w > bbox.w + 0.5 {
+    if natural_w > cw + 0.5 {
         let kind = component_kind(component);
         out.push(GeometryViolation {
             view_index: vi,
@@ -791,11 +834,16 @@ fn check_unwrappable_text(
             component: kind.to_string(),
             axis: Axis::X,
             kind: ViolationKind::UnwrappableTextOverflow,
-            bbox: *bbox,
+            bbox: BBox {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            },
             viewport,
             hint: format!(
                 "{kind} natural width is {natural_w:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
-                bbox.w
+                cw
             ),
         });
     }
@@ -817,14 +865,24 @@ fn check_unwrappable_text(
 /// (`codeblock`/`terminal` are deliberately excluded: their `auto_scroll`
 /// escape hatch makes a smaller-than-natural box intentional).
 ///
-/// Complementary to `check_unwrappable_text`, not overlapping with it:
-/// that one covers `white-space: nowrap`/`pre` (single unwrapped line, width
-/// only, measured at natural/unconstrained width). This one covers the
-/// default wrapping case — measured at the width the box actually *has*
-/// (`content_box().2`, unconstrained height) so it also catches a single
-/// unbreakable word/token/URL that's wider than the box even though wrap is
-/// on (wrapping can't break within a word), plus the width axis stays
-/// consistent with what will actually be painted.
+/// Complementary to `check_unwrappable_text`, not overlapping with it on the
+/// WIDTH axis: that one covers `white-space: nowrap`/`pre` (single unwrapped
+/// line, measured at natural/unconstrained width). This function covers the
+/// default wrapping case's width — measured at the width the box actually
+/// *has* (`content_box().2`, unconstrained height) so it also catches a
+/// single unbreakable word/token/URL that's wider than the box even though
+/// wrap is on (wrapping can't break within a word), plus the width axis
+/// stays consistent with what will actually be painted.
+///
+/// RM-32: the HEIGHT axis is this function's job regardless of `nowrap` — a
+/// nowrap node used to return here before measuring height at all, so a
+/// single unwrapped line taller than its box validated clean. Re-measuring
+/// nowrap's WIDTH at a constrained space would wrap text that actually
+/// paints as one (too-wide) line, which is exactly why `check_unwrappable_
+/// text` owns that axis instead — but a single line's height is exactly one
+/// `line_height`, independent of any width constraint, so it's measured at
+/// `(MaxContent, Definite(ch))` and reported on `Axis::Y` only, leaving
+/// `Axis::X` to `check_unwrappable_text`.
 fn check_content_overflows_box(
     component: &Component,
     path: &str,
@@ -837,16 +895,41 @@ fn check_content_overflows_box(
     let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
         return;
     };
-    // nowrap/pre is check_unwrappable_text's territory: re-measuring it
-    // here at a constrained width would wrap text that will actually
-    // paint as one (too-wide) line, producing a height number that
-    // doesn't correspond to anything that gets painted.
-    if nowrap {
-        return;
-    }
 
     let (cx, cy, cw, ch) = layout.content_box();
     if cw <= 0.0 || ch <= 0.0 {
+        return;
+    }
+
+    if nowrap {
+        let (_, natural_h) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::Definite(ch)),
+        );
+        let eps = 0.5;
+        if natural_h <= ch + eps {
+            return;
+        }
+        let kind = component_kind(component);
+        out.push(GeometryViolation {
+            view_index: vi,
+            scene_index: si,
+            path: path.to_string(),
+            component: kind.to_string(),
+            axis: Axis::Y,
+            kind: ViolationKind::ContentOverflowsBox,
+            bbox: BBox {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            },
+            viewport,
+            hint: format!(
+                "{kind} line is {natural_h:.0}px tall but its box is only {:.0}px tall — increase style.height (or the parent's), or reduce style.font-size",
+                ch
+            ),
+        });
         return;
     }
 
@@ -926,10 +1009,20 @@ fn check_content_overflows_box(
 /// `(None, None)`/`MaxContent` yields each component's natural (unbounded)
 /// size, exactly like `check_unwrappable_text`/`check_content_overflows_box`
 /// already do for the text-family intrinsics.
+///
+/// RM-33: the codeblock and terminal arms compare against different boxes,
+/// on purpose. `LegacyPaintDispatcher::is_self_padding` matches only
+/// `Component::Codeblock` — a codeblock is handed the raw (border) layout
+/// box and paints its own padding inside it (`compute_code_dimensions`
+/// already bakes `style.padding_px()` into `natural_h`, so comparing against
+/// the border box is the byte-for-byte-correct pairing). Every other
+/// painter, terminal included, is handed `layout.content_box()` instead —
+/// so the terminal arm compares against that, not the border box, or it
+/// under-reports by exactly the node's own padding.
 fn check_auto_scroll(
     component: &Component,
     path: &str,
-    bbox: &BBox,
+    layout: &BoxLayout,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -940,6 +1033,7 @@ fn check_auto_scroll(
         Component::Codeblock(cb) if !cb.auto_scroll => {
             let (_, natural_h) =
                 CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
+            let bbox = bbox_of(layout);
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -948,7 +1042,7 @@ fn check_auto_scroll(
                     component: "codeblock".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: *bbox,
+                    bbox,
                     viewport,
                     hint: format!(
                         "codeblock content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or shorten code",
@@ -960,7 +1054,8 @@ fn check_auto_scroll(
         Component::Terminal(t) if !t.auto_scroll => {
             let (_, natural_h) =
                 TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
-            if natural_h > bbox.h + 0.5 {
+            let (cx, cy, cw, ch) = layout.content_box();
+            if natural_h > ch + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
                     scene_index: si,
@@ -968,11 +1063,16 @@ fn check_auto_scroll(
                     component: "terminal".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: *bbox,
+                    bbox: BBox {
+                        x: cx,
+                        y: cy,
+                        w: cw,
+                        h: ch,
+                    },
                     viewport,
                     hint: format!(
                         "terminal content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or remove lines",
-                        natural_h, bbox.h
+                        natural_h, ch
                     ),
                 });
             }
@@ -1155,71 +1255,6 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
     }
 }
 
-fn component_kind(c: &Component) -> &'static str {
-    match c {
-        Component::Text(_) => "text",
-        Component::Shape(_) => "shape",
-        Component::Image(_) => "image",
-        Component::Icon(_) => "icon",
-        Component::Svg(_) => "svg",
-        Component::Video(_) => "video",
-        Component::Gif(_) => "gif",
-        Component::Counter(_) => "counter",
-        Component::Cursor(_) => "cursor",
-        Component::Pointer(_) => "pointer",
-        Component::NumberWheel(_) => "number_wheel",
-        Component::SuccessCheck(_) => "success_check",
-        Component::Caption(_) => "caption",
-        Component::Codeblock(_) => "codeblock",
-        Component::Avatar(_) => "avatar",
-        Component::AvatarGroup(_) => "avatar_group",
-        Component::Arrow(_) => "arrow",
-        Component::Connector(_) => "connector",
-        Component::Badge(_) => "badge",
-        Component::Callout(_) => "callout",
-        Component::Chart(_) => "chart",
-        Component::Comparison(_) => "comparison",
-        Component::Countdown(_) => "countdown",
-        Component::Divider(_) => "divider",
-        Component::DotMap(_) => "dot_map",
-        Component::Gauge(_) => "gauge",
-        Component::GradientText(_) => "gradient_text",
-        Component::Heatmap(_) => "heatmap",
-        Component::Kbd(_) => "kbd",
-        Component::Line(_) => "line",
-        Component::List(_) => "list",
-        Component::Lottie(_) => "lottie",
-        Component::Marquee(_) => "marquee",
-        Component::Mockup(_) => "mockup",
-        Component::Notification(_) => "notification",
-        Component::Particle(_) => "particle",
-        Component::PillNav(_) => "pill_nav",
-        Component::Progress(_) => "progress",
-        Component::QrCode(_) => "qrcode",
-        Component::Rating(_) => "rating",
-        Component::Skeleton(_) => "skeleton",
-        Component::Slider(_) => "slider",
-        Component::Sparkline(_) => "sparkline",
-        Component::Stat(_) => "stat",
-        Component::Stepper(_) => "stepper",
-        Component::Switch(_) => "switch",
-        Component::RichText(_) => "rich_text",
-        Component::Table(_) => "table",
-        Component::TagCloud(_) => "tag_cloud",
-        Component::Terminal(_) => "terminal",
-        Component::Timeline(_) => "timeline",
-        Component::Tooltip(_) => "tooltip",
-        Component::Treemap(_) => "treemap",
-        Component::Positioned(_) => "positioned",
-        Component::Flex(_) => "flex",
-        Component::Grid(_) => "grid",
-        Component::Card(_) => "card",
-        Component::Container(_) => "container",
-        Component::AudioSpectrum(_) => "audio_spectrum",
-        Component::Waveform(_) => "waveform",
-    }
-}
-
 // ─── Animated overflow sampling (--strict-anim) ─────────────────────────────
 
 /// Samples per second of scene duration. ~8/s (125ms resolution) is dense
@@ -1344,7 +1379,11 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                     fps,
                 });
                 let built = build_scene_from_refs(children.iter(), viewport_f, root_css, anim);
-                let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+                let layouts = run_layout(
+                    &built.root,
+                    viewport_f,
+                    &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
+                );
 
                 walk_anim(
                     &children,
