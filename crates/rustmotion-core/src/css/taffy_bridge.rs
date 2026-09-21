@@ -20,6 +20,28 @@ pub struct ConversionContext {
     pub length: LengthContext,
 }
 
+impl ConversionContext {
+    /// Anchor `vw`/`vh` resolution to a real output viewport.
+    ///
+    /// [`ConversionContext::default()`] carries a 1920×1080 viewport, which is
+    /// only ever correct by coincidence. Any caller that knows the video's real
+    /// dimensions must build its context here instead: on a 1080×1920 vertical
+    /// render, the default resolves `50vw` to 960px where the truth is 540px,
+    /// and misses `vh` by the same margin in the other axis.
+    ///
+    /// `font-size` / `root-font-size` stay at the CSS initial 16px: nothing
+    /// upstream resolves and threads a root font-size through yet.
+    pub fn for_viewport(viewport_width: f32, viewport_height: f32) -> Self {
+        Self {
+            length: LengthContext {
+                viewport_width,
+                viewport_height,
+                ..LengthContext::default()
+            },
+        }
+    }
+}
+
 /// Convert a [`CssStyle`] into a [`taffy::Style`]. Properties not relevant to
 /// layout are ignored. Unsupported / unset properties fall back to taffy
 /// defaults (which match CSS initial values).
