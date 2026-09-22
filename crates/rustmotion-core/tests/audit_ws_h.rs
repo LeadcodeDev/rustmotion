@@ -25,15 +25,23 @@ fn shared_http_agent_has_finite_global_and_connect_timeouts() {
 
 #[test]
 fn extract_video_frame_rejects_a_remote_src_before_it_ever_reaches_ffmpeg() {
-    let result = extract_video_frame(
+    // Asserting `is_err()` alone would also pass for the wrong reason: on a
+    // machine with no route to this address, ffmpeg itself fails to connect
+    // and returns a non-zero exit status. The fix under test is that the
+    // src is refused *before* any subprocess runs at all — so the assertion
+    // has to be on the specific rejection message, which only the fix
+    // produces; an ffmpeg spawn/exit failure would carry a different one.
+    let err = extract_video_frame(
         "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         0.0,
         16,
         16,
-    );
+    )
+    .expect_err("a scheme-prefixed src must be rejected outright, not handed to ffmpeg");
+    let msg = err.to_string();
     assert!(
-        result.is_err(),
-        "a scheme-prefixed src must be rejected outright, not hand ffmpeg a URL to dereference"
+        msg.contains("does not fetch video over the network"),
+        "expected the scheme-rejection error, not an ffmpeg spawn/exit failure: {msg}"
     );
 }
 
@@ -42,7 +50,8 @@ fn extract_video_frame_does_not_reject_a_plain_local_path() {
     let result = extract_video_frame("/no/such/file/on/disk.mp4", 0.0, 16, 16);
     let err = result.expect_err("a missing local file is still an error");
     assert!(
-        !err.to_string().contains("does not fetch video"),
+        !err.to_string()
+            .contains("does not fetch video over the network"),
         "a plain local path must fail on ffmpeg/the missing file, not on the scheme check: {err}"
     );
 }
