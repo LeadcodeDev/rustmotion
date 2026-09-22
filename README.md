@@ -221,7 +221,6 @@ Generates or installs shell completions — `install`, `uninstall`, `generate <s
     "height": 1920,
     "fps": 30,
     "background": "#0f172a",
-    "codec": "h264",
     "crf": 23
   }
 }
@@ -233,7 +232,7 @@ Generates or installs shell completions — `install`, `uninstall`, `generate <s
 | `height` | `u32` | (required) | Video height in pixels (must be even) |
 | `fps` | `u32` | `30` | Frames per second |
 | `background` | `string` | `"#000000"` | Default background color (hex) |
-| `codec` | `string` | `"h264"` | Video codec: `h264`, `h265`, `vp9`, `prores` |
+| `codec` | `string` | | Accepted by the schema (`h264`, `h265`, `vp9`, `prores`) but not yet read by the encoder — set the codec with `render --codec`/`batch --codec` instead |
 | `crf` | `u8` | `23` | Constant Rate Factor (0-51, lower = better quality) |
 
 ### Audio Tracks
