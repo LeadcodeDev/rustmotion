@@ -147,6 +147,23 @@ pub struct HitPct {
     pub pointer: Option<String>,
 }
 
+#[allow(clippy::result_unit_err)]
+pub fn frame_hits_deep(
+    scenario: &ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+    scene_prefix: &str,
+) -> Result<Vec<HitPct>, ()> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(RENDER_STACK)
+            .spawn_scoped(scope, || frame_hits(scenario, tasks, frame, scene_prefix))
+            .expect("spawn hit-map thread")
+            .join()
+            .map_err(|_| ())
+    })
+}
+
 pub fn frame_hits(
     scenario: &ResolvedScenario,
     tasks: &[rustmotion::encode::video::FrameTask],
@@ -202,6 +219,29 @@ pub fn scene_prefix(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hit_map_survives_a_dispatch_sized_stack() {
+        let path = std::path::PathBuf::from("../../examples/mega-showcase.json");
+        if !path.exists() {
+            return;
+        }
+        let scenario = rustmotion::loader::load_input(&path).expect("load");
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+
+        let outcome = std::thread::Builder::new()
+            .stack_size(544 * 1024)
+            .spawn(move || frame_hits_deep(&scenario, &tasks, 0, "/scenes/0").map(|h| h.len()))
+            .expect("spawn")
+            .join();
+
+        assert!(
+            matches!(outcome, Ok(Ok(_))),
+            "frame_hits_deep must own its stack: gpui's background executor runs on \
+             libdispatch workers with 544 KiB, and untagged serde recursion through \
+             deserialize_children needs megabytes"
+        );
+    }
+
     use super::*;
 
     const SCENARIO: &str = r##"{ "video": { "width": 1280, "height": 720, "background": "#101418" }, "scenes": [ { "duration": 1.0 } ] }"##;

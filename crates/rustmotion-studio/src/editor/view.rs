@@ -15,7 +15,7 @@ use crate::scenario::{
 use super::annotations::AnnotationsPanel;
 use super::diff_panel::{DiffPanel, DiffSide};
 use super::export::{export_slot, ExportStatus, ExportWatcher};
-use super::frames::{baseline_arcs, frame_hits, scene_prefix};
+use super::frames::{baseline_arcs, frame_hits_deep, scene_prefix};
 use super::inspector::InspectorPanel;
 use super::playback::{self, apply_playback_action, playback_action, TransportBar};
 use super::prefetch::{scale_factor, FrameKey};
@@ -216,19 +216,32 @@ impl EditorView {
         }
         self.hits_key = Some(key);
 
-        let hits = match side {
-            DiffSide::B => {
-                let (scenario, tasks, raw) = {
-                    let m = self.shared.lock().unwrap_or_else(|e| e.into_inner());
-                    (m.scenario.clone(), m.tasks.clone(), m.raw.clone())
-                };
-                let cur = current.min((tasks.len() as u32).saturating_sub(1));
-                let prefix = scene_prefix(&raw, &tasks, cur);
-                frame_hits(&scenario, &tasks, cur, &prefix)
-            }
-            DiffSide::A => Vec::new(),
+        if side == DiffSide::A {
+            self.hits_cache.clear();
+            return;
+        }
+
+        let (scenario, tasks, raw) = {
+            let m = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            (m.scenario.clone(), m.tasks.clone(), m.raw.clone())
         };
-        self.hits_cache = hits;
+        let cur = current.min((tasks.len() as u32).saturating_sub(1));
+
+        cx.spawn(async move |this, cx| {
+            let hits = cx
+                .background_spawn(async move {
+                    let prefix = scene_prefix(&raw, &tasks, cur);
+                    frame_hits_deep(&scenario, &tasks, cur, &prefix).unwrap_or_default()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.hits_key == Some(key) {
+                    this.hits_cache = hits;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn sync_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
