@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use taffy::prelude as tf;
 use taffy::TaffyTree;
 
-use crate::css::taffy_bridge::{to_taffy_style, ConversionContext};
+use crate::css::taffy_bridge::{content_box_inset, to_taffy_style, ConversionContext};
 use crate::css::units::LengthContext;
 use crate::engine::box_tree::{BoxNode, IntrinsicMeasure, NodeId};
 
@@ -70,10 +70,20 @@ impl LayoutResult {
 
 /// Per-node user data stored in the taffy tree to keep the link between
 /// taffy nodes and our `BoxNode` ids + intrinsic measurers.
+///
+/// `inset_width`/`inset_height` are this node's own resolved padding+border
+///: taffy's `compute_leaf_layout` already subtracts them from
+/// `available_space` before calling the measure function, but forwards
+/// `known_dimensions` — the outer border-box size — untouched, handing an
+/// `IntrinsicMeasure` implementor two arguments in different coordinate
+/// spaces. The measure closure below subtracts the same inset from `known`
+/// so both arguments describe the content box.
 struct NodeData {
     #[allow(dead_code)]
     box_id: NodeId,
     intrinsic: Option<std::sync::Arc<dyn IntrinsicMeasure>>,
+    inset_width: f32,
+    inset_height: f32,
 }
 
 /// Run taffy on a [`BoxNode`] tree and return the resolved layouts.
@@ -102,8 +112,12 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
             let Some(intr) = ctx.intrinsic.as_ref() else {
                 return tf::Size::ZERO;
             };
+            let content_known = (
+                known.width.map(|w| (w - ctx.inset_width).max(0.0)),
+                known.height.map(|h| (h - ctx.inset_height).max(0.0)),
+            );
             let (w, h) = intr.measure(
-                (known.width, known.height),
+                content_known,
                 (available.width.into(), available.height.into()),
             );
             tf::Size {
@@ -125,12 +139,13 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
 /// `inherited_font_size` is the already-resolved (px) font-size of `node`'s
 /// parent: CSS resolves `em` on every layout property against the
 /// element's *own* computed font-size, and font-size itself inherits down
-/// the tree unless overridden. `to_taffy_style` only ever sees the single
-/// `ConversionContext` handed to it, so its `em` resolution is only as
-/// correct as the per-node context built here — a call site building one
-/// shared `ConversionContext` for the whole tree (as every production
-/// caller of `to_taffy_style` still does directly) resolves every node's
-/// `em` against that one context's `font_size` instead.
+/// the tree unless overridden. `to_taffy_style` and [`content_box_inset`]
+/// only ever see the single `ConversionContext` handed to them, so their
+/// `em` resolution is only as correct as the per-node context built here —
+/// a call site building one shared `ConversionContext` for the whole tree
+/// (as every production caller of `to_taffy_style` still does directly)
+/// resolves every node's `em` against that one context's `font_size`
+/// instead.
 fn build(
     tree: &mut TaffyTree<NodeData>,
     map: &mut HashMap<NodeId, tf::NodeId>,
@@ -153,9 +168,12 @@ fn build(
     };
 
     let style = to_taffy_style(&node.css, &node_ctx);
+    let (inset_width, inset_height) = content_box_inset(&node.css, &node_ctx);
     let data = NodeData {
         box_id: node.id,
         intrinsic: node.intrinsic.clone(),
+        inset_width,
+        inset_height,
     };
     let tf_id = if node.intrinsic.is_some() || node.children.is_empty() {
         tree.new_leaf_with_context(style, data)
