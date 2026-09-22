@@ -4,8 +4,8 @@ use image::{Frame, ImageBuffer, Rgba};
 use smallvec::smallvec;
 
 use gpui_kit::{
-    div, img, AnyElement, App, ImageSource, IntoElement, ObjectFit, RenderImage, Styled,
-    StyledImage, Window,
+    div, img, AnyElement, App, ImageSource, IntoElement, ObjectFit, ParentElement, RenderImage,
+    Styled, StyledImage, Window,
 };
 
 use rustmotion::encode::video::FrameTask;
@@ -66,7 +66,13 @@ pub fn frame_surface(frame: Option<Arc<RenderImage>>) -> AnyElement {
             .size_full()
             .object_fit(ObjectFit::Contain)
             .into_any_element(),
-        None => div().size_full().into_any_element(),
+        None => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(gpui_component::spinner::Spinner::new())
+            .into_any_element(),
     }
 }
 

@@ -59,10 +59,6 @@ pub fn run_preview_root(
     start_in_editor: bool,
     watch: bool,
 ) -> Result<()> {
-    for view in &scenario.views {
-        engine::prefetch_icons(&view.scenes);
-        engine::preextract_video_frames(&view.scenes, scenario.video.fps);
-    }
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
@@ -74,6 +70,8 @@ pub fn run_preview_root(
     )));
     let library: SharedLibrary =
         Arc::new(Mutex::new(LibraryState::new(workspace, start_in_editor)));
+
+    spawn_asset_prefetch(shared.clone());
 
     if watch {
         let tx = spawn_watcher(shared.clone());
@@ -90,15 +88,32 @@ pub fn run_preview_root(
     };
     let theme_pref = crate::theme::persist::load_theme_pref();
 
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        cx.spawn(async move |cx| {
-            window::open(shared, library, view, theme_pref, cx);
-        })
-        .detach();
-    });
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets::new(""))
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            cx.spawn(async move |cx| {
+                window::open(shared, library, view, theme_pref, cx);
+            })
+            .detach();
+        });
 
     Ok(())
+}
+
+pub fn spawn_asset_prefetch(shared: Shared) {
+    std::thread::spawn(move || {
+        let (scenario, fps) = {
+            let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+            (m.scenario.clone(), m.scenario.video.fps)
+        };
+        for view in &scenario.views {
+            engine::prefetch_icons(&view.scenes);
+            engine::preextract_video_frames(&view.scenes, fps);
+        }
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        m.generation = m.generation.wrapping_add(1);
+    });
 }
 
 fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {

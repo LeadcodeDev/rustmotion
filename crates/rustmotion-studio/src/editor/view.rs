@@ -52,11 +52,6 @@ pub struct EditorView {
 impl EditorView {
     pub fn new(state: Entity<StudioState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let shared = state.read(cx).shared.clone();
-        let total_frames = shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total_frames;
-
         let editor = cx.new(|_| EditorState {
             current: 0,
             playing: false,
@@ -74,7 +69,7 @@ impl EditorView {
         let inspector =
             cx.new(|cx| InspectorPanel::new(shared.clone(), editor.clone(), window, cx));
         let export_watcher = cx.new(|cx| ExportWatcher::new(window, cx));
-        let scrubber = playback::new_scrubber(total_frames, cx);
+        let scrubber = playback::new_scrubber(cx);
 
         cx.bind_keys([
             KeyBinding::new("space", playback::TogglePlay, Some("Editor")),
@@ -96,13 +91,19 @@ impl EditorView {
             let snapshot = this.editor.read(cx);
             publish_prefetch_target(&this.shared, snapshot);
             this.sync_frame(window, cx);
+            cx.notify();
         }));
         subscriptions.push(cx.subscribe(&scrubber, |this, _scrubber, event, cx| {
             if let gpui_component::slider::SliderEvent::Change(
                 gpui_component::slider::SliderValue::Single(v),
             ) = event
             {
-                let frame = v.round().max(0.0) as u32;
+                let total = this
+                    .shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .total_frames;
+                let frame = playback::fraction_to_frame(*v, total);
                 this.editor.update(cx, |state, cx| {
                     if state.current != frame {
                         state.current = frame;
@@ -301,6 +302,8 @@ impl EditorView {
                         cx.notify();
                     });
                 }
+                cx.notify();
+                window.refresh();
             });
         })
         .detach();
@@ -434,6 +437,7 @@ impl Render for EditorView {
             .child(
                 div()
                     .relative()
+                    .h_full()
                     .aspect_ratio(vw.max(1) as f32 / vh.max(1) as f32)
                     .max_w_full()
                     .max_h_full()

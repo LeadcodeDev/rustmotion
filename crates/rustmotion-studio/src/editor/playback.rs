@@ -184,9 +184,21 @@ pub fn spawn_hot_reload<V: 'static>(
     .detach();
 }
 
-pub fn new_scrubber(total_frames: u32, cx: &mut App) -> Entity<SliderState> {
-    let max = total_frames.saturating_sub(1).max(1) as f32;
-    cx.new(|_| SliderState::new().min(0.).max(max).step(1.))
+pub fn frame_to_fraction(frame: u32, total_frames: u32) -> f32 {
+    let max = total_frames.saturating_sub(1);
+    if max == 0 {
+        return 0.0;
+    }
+    (frame.min(max) as f32 / max as f32).clamp(0.0, 1.0)
+}
+
+pub fn fraction_to_frame(fraction: f32, total_frames: u32) -> u32 {
+    let max = total_frames.saturating_sub(1);
+    (fraction.clamp(0.0, 1.0) * max as f32).round() as u32
+}
+
+pub fn new_scrubber(cx: &mut App) -> Entity<SliderState> {
+    cx.new(|_| SliderState::new().min(0.).max(1.).step(0.0001))
 }
 
 pub struct TransportBar {
@@ -226,7 +238,11 @@ impl RenderOnce for TransportBar {
         let preview_scale = state.preview_scale;
 
         scrubber.update(cx, |slider, cx| {
-            slider.set_value(SliderValue::Single(cur as f32), window, cx);
+            slider.set_value(
+                SliderValue::Single(frame_to_fraction(cur, total)),
+                window,
+                cx,
+            );
         });
 
         let play_editor = editor.clone();
@@ -374,6 +390,36 @@ fn preview_scale_selector(editor: Entity<EditorState>, current_pct: u16) -> impl
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scrubber_fraction_spans_the_whole_timeline() {
+        assert_eq!(frame_to_fraction(0, 4340), 0.0);
+        assert_eq!(frame_to_fraction(4339, 4340), 1.0);
+        let midpoint = frame_to_fraction(2169, 4340);
+        assert!((midpoint - 0.5).abs() < 0.001, "got {midpoint}");
+    }
+
+    #[test]
+    fn scrubber_fraction_round_trips_to_the_same_frame() {
+        for frame in [0u32, 1, 23, 2169, 4339] {
+            let back = fraction_to_frame(frame_to_fraction(frame, 4340), 4340);
+            assert_eq!(back, frame, "frame {frame} did not survive the round trip");
+        }
+    }
+
+    #[test]
+    fn scrubber_fraction_is_zero_when_the_scenario_has_one_frame() {
+        assert_eq!(frame_to_fraction(0, 1), 0.0);
+        assert_eq!(frame_to_fraction(5, 1), 0.0);
+        assert_eq!(fraction_to_frame(1.0, 1), 0);
+    }
+
+    #[test]
+    fn scrubber_fraction_clamps_out_of_range_input() {
+        assert_eq!(fraction_to_frame(-0.5, 100), 0);
+        assert_eq!(fraction_to_frame(1.5, 100), 99);
+        assert_eq!(frame_to_fraction(999, 100), 1.0);
+    }
+
     use super::*;
 
     fn mods(shift: bool, control: bool, alt: bool, platform: bool) -> Modifiers {
