@@ -191,7 +191,7 @@ fn change_entry(
         .on_click(move |_, _, cx| {
             if let Some(frame) = frame_for_change(&shared, &click_target) {
                 editor.update(cx, |state, cx| {
-                    state.current = frame;
+                    crate::editor::playback::seek_from_user(state, frame);
                     cx.notify();
                 });
             }

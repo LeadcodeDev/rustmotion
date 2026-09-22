@@ -14,7 +14,6 @@ use crate::scenario::Shared;
 
 use super::diff_panel::DiffSide;
 use super::prefetch::{set_preview_scale_pct, PREVIEW_SCALE_CHOICES};
-use super::surface::request_next_frame_if_playing;
 
 gpui_kit::actions!(
     editor_playback,
@@ -56,7 +55,6 @@ pub fn apply_playback_action(
     action: PlaybackAction,
     shared: &Shared,
     editor: &Entity<EditorState>,
-    window: &mut Window,
     cx: &mut App,
 ) {
     let total_frames = || {
@@ -95,8 +93,13 @@ pub fn apply_playback_action(
             });
         }
     }
-    let playing = editor.read(cx).playing;
-    request_next_frame_if_playing(playing, window);
+}
+
+pub fn seek_from_user(state: &mut EditorState, frame: u32) -> bool {
+    let moved = state.current != frame || state.playing;
+    state.current = frame;
+    state.playing = false;
+    moved
 }
 
 pub struct PlayheadStep {
@@ -429,6 +432,51 @@ fn preview_scale_selector(editor: Entity<EditorState>, current_pct: u16) -> impl
 
 #[cfg(test)]
 mod tests {
+    fn playing_at(frame: u32) -> EditorState {
+        EditorState {
+            current: frame,
+            playing: true,
+            muted: false,
+            rev: 0,
+            selected: None,
+            show_annotations: false,
+            show_hits: true,
+            diff_active: false,
+            diff_side: crate::editor::diff_panel::DiffSide::B,
+            preview_scale: 50,
+            frame: None,
+        }
+    }
+
+    #[test]
+    fn scrubbing_stops_playback_so_restarting_stays_explicit() {
+        let mut state = playing_at(120);
+        seek_from_user(&mut state, 900);
+        assert_eq!(state.current, 900);
+        assert!(
+            !state.playing,
+            "the playhead must stay where it was dropped until the user presses play"
+        );
+    }
+
+    #[test]
+    fn dropping_the_cursor_on_the_current_frame_still_stops_playback() {
+        let mut state = playing_at(120);
+        let moved = seek_from_user(&mut state, 120);
+        assert!(!state.playing);
+        assert!(
+            moved,
+            "the frame did not change but the transport did, so the view must repaint"
+        );
+    }
+
+    #[test]
+    fn seeking_while_already_paused_reports_no_change_when_the_frame_matches() {
+        let mut state = playing_at(120);
+        state.playing = false;
+        assert!(!seek_from_user(&mut state, 120));
+    }
+
     #[test]
     fn a_scrub_during_playback_is_honoured_not_overwritten() {
         let step = advance_playhead(900, Some(120), Some(121), 4340);

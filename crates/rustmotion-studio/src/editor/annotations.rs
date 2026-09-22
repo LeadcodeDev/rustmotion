@@ -245,7 +245,7 @@ fn annotation_card(
                         .xsmall()
                         .on_click(move |_, _, cx| {
                             goto_editor.update(cx, |state, cx| {
-                                state.current = frame as u32;
+                                crate::editor::playback::seek_from_user(state, frame as u32);
                                 cx.notify();
                             });
                         }),

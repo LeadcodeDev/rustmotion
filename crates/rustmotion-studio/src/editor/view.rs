@@ -118,8 +118,7 @@ impl EditorView {
                     .total_frames;
                 let frame = playback::fraction_to_frame(*v, total);
                 this.editor.update(cx, |state, cx| {
-                    if state.current != frame {
-                        state.current = frame;
+                    if playback::seek_from_user(state, frame) {
                         cx.notify();
                     }
                 });
@@ -359,15 +358,9 @@ impl EditorView {
         .detach();
     }
 
-    fn dispatch_playback(
-        &mut self,
-        key: &str,
-        mods: Modifiers,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn dispatch_playback(&mut self, key: &str, mods: Modifiers, cx: &mut Context<Self>) {
         if let Some(action) = playback_action(key, mods) {
-            apply_playback_action(action, &self.shared, &self.editor, window, cx);
+            apply_playback_action(action, &self.shared, &self.editor, cx);
         }
     }
 }
@@ -535,46 +528,46 @@ impl Render for EditorView {
             .flex_col()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .on_action(cx.listener(|this, _: &playback::TogglePlay, window, cx| {
-                this.dispatch_playback("space", Modifiers::none(), window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &playback::StepBackward, window, cx| {
-                this.dispatch_playback("left", Modifiers::none(), window, cx);
+            .on_action(cx.listener(|this, _: &playback::TogglePlay, _window, cx| {
+                this.dispatch_playback("space", Modifiers::none(), cx);
             }))
             .on_action(
-                cx.listener(|this, _: &playback::StepBackwardBig, window, cx| {
+                cx.listener(|this, _: &playback::StepBackward, _window, cx| {
+                    this.dispatch_playback("left", Modifiers::none(), cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &playback::StepBackwardBig, _window, cx| {
                     this.dispatch_playback(
                         "left",
                         Modifiers {
                             shift: true,
                             ..Modifiers::none()
                         },
-                        window,
                         cx,
                     );
                 }),
             )
-            .on_action(cx.listener(|this, _: &playback::StepForward, window, cx| {
-                this.dispatch_playback("right", Modifiers::none(), window, cx);
+            .on_action(cx.listener(|this, _: &playback::StepForward, _window, cx| {
+                this.dispatch_playback("right", Modifiers::none(), cx);
             }))
             .on_action(
-                cx.listener(|this, _: &playback::StepForwardBig, window, cx| {
+                cx.listener(|this, _: &playback::StepForwardBig, _window, cx| {
                     this.dispatch_playback(
                         "right",
                         Modifiers {
                             shift: true,
                             ..Modifiers::none()
                         },
-                        window,
                         cx,
                     );
                 }),
             )
-            .on_action(cx.listener(|this, _: &playback::SeekToStart, window, cx| {
-                this.dispatch_playback("home", Modifiers::none(), window, cx);
+            .on_action(cx.listener(|this, _: &playback::SeekToStart, _window, cx| {
+                this.dispatch_playback("home", Modifiers::none(), cx);
             }))
-            .on_action(cx.listener(|this, _: &playback::SeekToEnd, window, cx| {
-                this.dispatch_playback("end", Modifiers::none(), window, cx);
+            .on_action(cx.listener(|this, _: &playback::SeekToEnd, _window, cx| {
+                this.dispatch_playback("end", Modifiers::none(), cx);
             }))
             .on_action(cx.listener(|this, _: &Undo, _window, cx| {
                 undo(&this.shared, &history_slot());
