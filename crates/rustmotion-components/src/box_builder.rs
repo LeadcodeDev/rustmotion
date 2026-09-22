@@ -1135,18 +1135,21 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
 /// `cascaded_css` is this node's own `CssStyle` after `cascade::inherit_from`
 /// has already merged it against the parent, plus every subsequent overlay
 /// (timeline states, animation) — the exact same value `LegacyPaintDispatcher`
-/// receives at paint time. `Text` uses it so the reserved box always matches
-/// what `Text::paint_content` (which reads the same cascade through
-/// `with_cascaded_style`) actually draws.
+/// receives at paint time. `Component::with_cascaded_style` folds it into
+/// whichever component variants read inherited typography off their own
+/// style before this function's match ever sees them, so the reserved box
+/// always matches what those components' painters (which fold the same
+/// cascade in at paint time) actually draw.
 fn component_intrinsic(
     component: &Component,
     cascaded_css: &CssStyle,
 ) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
+    let cascaded_component = component.with_cascaded_style(cascaded_css);
+    let component = cascaded_component.as_ref().unwrap_or(component);
+
     use Component::*;
     match component {
-        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(
-            &t.with_cascaded_style(cascaded_css),
-        ))),
+        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
         GradientText(t) => Some(Arc::new(
             crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
         )),
@@ -2147,7 +2150,7 @@ pub fn component_kind(c: &Component) -> &'static str {
         Particle(_) => "particle",
         PillNav(_) => "pill_nav",
         Progress(_) => "progress",
-        QrCode(_) => "qrcode",
+        QrCode(_) => "qr_code",
         NumberWheel(_) => "number_wheel",
         SuccessCheck(_) => "success_check",
         Pointer(_) => "pointer",
@@ -2169,7 +2172,11 @@ pub fn component_kind(c: &Component) -> &'static str {
         Flex(_) => "flex",
         Grid(_) => "grid",
         Card(_) => "card",
-        Container(_) => "container",
+        // The schema tag is `div` (`#[serde(rename = "div", alias =
+        // "container")]` on the enum in `lib.rs`) — `container` only
+        // survives as a deserialize alias, so naming it that way here told
+        // an author to look for a tag their scenario cannot contain.
+        Container(_) => "div",
         AudioSpectrum(_) => "audio_spectrum",
         Waveform(_) => "waveform",
     }
