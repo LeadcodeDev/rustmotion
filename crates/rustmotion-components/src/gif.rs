@@ -455,9 +455,9 @@ mod tests {
     /// own video is, so passing generous `max_w`/`max_h` here isolates the
     /// byte-budget check from the video-dimensions check exercised by the
     /// next test. 144 MiB is deliberately far short of the 65535×65535
-    /// (~17 GiB) header the audit's own crafted file could declare — large
-    /// enough to prove the budget check fires, small enough that running
-    /// this test never risks the allocation it is asserting never happens.
+    /// (~17 GiB) header a real crafted file could declare — large enough to
+    /// prove the budget check fires, small enough that running this test
+    /// never risks the allocation it is asserting never happens.
     #[test]
     fn a_canvas_over_the_byte_budget_is_rejected_without_allocating_it() {
         let path = std::env::temp_dir().join(format!(
