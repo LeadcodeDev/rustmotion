@@ -115,3 +115,42 @@ fn a_render_ffmpeg_rejects_leaves_no_debris_at_the_output_path() {
         out.path().display()
     );
 }
+
+// ─── build_atempo_filter(rate) must not loop forever ───────────────────────
+//
+// `remaining /= 0.5` never reaches the loop's `>= 0.5` exit test starting
+// from `0.0`, and diverges away from it starting from any negative rate —
+// either way the pre-fix loop pushed a fresh `String` forever. Calling the
+// unguarded function directly on the test thread would hang the whole
+// suite, so each candidate rate runs on its own thread with a bounded
+// `recv_timeout`: a present guard returns well inside the timeout, a
+// missing one times out and fails the assertion instead of the process.
+#[test]
+fn atempo_guard_rejects_non_positive_and_non_finite_rates_without_hanging() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    for rate in [
+        0.0_f64,
+        -1.0,
+        -0.25,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rustmotion::encode::video_audio::build_atempo_filter(rate));
+        });
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(result) => assert_eq!(
+                result, None,
+                "rate={rate} must return None instead of building an atempo chain"
+            ),
+            Err(_) => panic!(
+                "rate={rate} did not return within 2s — the guard against the infinite loop \
+                 in build_atempo_filter is missing or broken"
+            ),
+        }
+    }
+}
