@@ -95,3 +95,95 @@ fn inert_attributes_stay_inert_on_container_and_text() {
     let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div class="wrapper" id="hero" data-testid="x"><p class="lead" data-x="1">Hi</p></div></scene></rustmotion>"##;
     html_to_scenario_value(html).expect("class/id/data-* must remain inert, not flagged");
 }
+
+// ---------------------------------------------------------------------------
+// CSS shorthand values transpile to strings the core length parser
+// cannot read, silently resolving to 0px.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn padding_two_value_shorthand_expands_to_edges_object() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="padding: 24px 48px"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("2-value padding must transpile");
+    let padding = &v["scenes"][0]["children"][0]["style"]["padding"];
+    assert_eq!(padding["top"], json!(24));
+    assert_eq!(padding["bottom"], json!(24));
+    assert_eq!(padding["right"], json!(48));
+    assert_eq!(padding["left"], json!(48));
+}
+
+#[test]
+fn margin_four_value_shorthand_expands_to_edges_object() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="margin: 4px 8px 12px 16px"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("4-value margin must transpile");
+    let margin = &v["scenes"][0]["children"][0]["style"]["margin"];
+    assert_eq!(margin["top"], json!(4));
+    assert_eq!(margin["right"], json!(8));
+    assert_eq!(margin["bottom"], json!(12));
+    assert_eq!(margin["left"], json!(16));
+}
+
+#[test]
+fn border_radius_four_value_shorthand_expands_to_corners_object() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="border-radius: 2px 4px 6px 8px"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("4-value border-radius must transpile");
+    let radius = &v["scenes"][0]["children"][0]["style"]["border-radius"];
+    assert_eq!(radius["top-left"], json!(2));
+    assert_eq!(radius["top-right"], json!(4));
+    assert_eq!(radius["bottom-right"], json!(6));
+    assert_eq!(radius["bottom-left"], json!(8));
+}
+
+#[test]
+fn grid_template_columns_repeat_expands_to_flat_track_list() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="grid-template-columns: repeat(3, 1fr)"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("repeat() must transpile");
+    let tracks = v["scenes"][0]["children"][0]["style"]["grid-template-columns"]
+        .as_array()
+        .expect("array of tracks");
+    assert_eq!(tracks, &vec![json!("1fr"), json!("1fr"), json!("1fr")]);
+}
+
+#[test]
+fn grid_template_columns_minmax_expands_to_min_max_object() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="grid-template-columns: minmax(100px, 1fr) auto"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("minmax() must transpile");
+    let tracks = v["scenes"][0]["children"][0]["style"]["grid-template-columns"]
+        .as_array()
+        .expect("array of tracks");
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0]["min"], json!(100));
+    assert_eq!(tracks[0]["max"], json!("1fr"));
+    assert_eq!(tracks[1], json!("auto"));
+}
+
+#[test]
+fn unhandled_multi_token_style_value_is_refused_not_an_opaque_string() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="gap: 8px 16px"></div></scene></rustmotion>"##;
+    let err = html_to_scenario_value(html)
+        .expect_err("an unsupported multi-token style value must be refused, not silently zeroed");
+    match err {
+        HtmlError::UnsupportedStyleShorthand { prop, value } => {
+            assert_eq!(prop, "gap");
+            assert_eq!(value, "8px 16px");
+        }
+        other => panic!("expected UnsupportedStyleShorthand, got: {other:?}"),
+    }
+}
+
+#[test]
+fn single_token_padding_still_transpiles_to_a_plain_value() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="padding: 32px"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("uniform padding must still transpile");
+    assert_eq!(v["scenes"][0]["children"][0]["style"]["padding"], json!(32));
+}
+
+#[test]
+fn rgba_color_functional_notation_is_not_treated_as_multi_token() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div style="background: rgba(0, 0, 0, 0.5)"></div></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("rgba(...) must not be flagged as multi-token");
+    assert_eq!(
+        v["scenes"][0]["children"][0]["style"]["background"],
+        json!("rgba(0, 0, 0, 0.5)")
+    );
+}
