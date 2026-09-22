@@ -2,7 +2,9 @@ use markup5ever_rcdom::{Handle, NodeData};
 use serde_json::{Map, Value};
 
 use crate::style::{coerce_value, parse_anim_attr, parse_inline_style};
-use crate::{element_attrs, tag_name, HtmlError};
+use crate::{check_known_attrs, element_attrs, tag_name, HtmlError};
+
+const KNOWN_NATIVE_ATTRS: &[&str] = &["style", "anim"];
 
 enum TagKind {
     Container,
@@ -90,6 +92,7 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             suggestion: suggestion.to_string(),
         }),
         TagKind::Text => {
+            check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("text"));
             obj.insert("content".into(), Value::from(inner_text(handle)));
@@ -99,6 +102,7 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             Ok(Some(Value::Object(obj)))
         }
         TagKind::Container => {
+            check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("div"));
             if let Some(style) = style_object(&attrs)? {
