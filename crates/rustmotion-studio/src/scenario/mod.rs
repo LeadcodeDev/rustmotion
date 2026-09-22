@@ -17,7 +17,10 @@ pub use edit::{
 };
 pub use history::{history_slot, record_edit, redo, set_saving, undo, SharedHistory};
 pub use model::{empty_scenario, Shared, StudioModel};
-pub use optimistic::{apply_optimistic, is_self_write, note_self_write, self_write_slot, Mutation};
+pub use optimistic::{
+    apply_optimistic, is_self_write, note_self_write, pending_write_slot, queue_mutation,
+    resolve_flush, self_write_slot, take_pending, Mutation, PendingWrites,
+};
 pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
 
 /// Which top-level view is shown (library home vs. the editor).
