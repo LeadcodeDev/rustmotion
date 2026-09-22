@@ -1495,7 +1495,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.width = Some(CSize::Length(CLP::Px(c.width)));
             }
             if css.height.is_none() {
-                let font_size = c.style.font_size_px_or(16.0);
+                let font_size = c
+                    .style
+                    .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
                 let line_height = font_size * 1.3;
                 let n = c.items.len() as f32;
                 let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
@@ -1640,7 +1642,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // box is fit exactly to the unwrapped text width, the painter's
             // own `wrap_text(text, font, Some(text_area_w))` never has a
             // reason to wrap, so painted output matches this box exactly.
-            let font_size = t.style.font_size_px_or(16.0);
+            let font_size = t
+                .style
+                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
             let family = t.style.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0; // callout.rs's own `let padding = 12.0;`
@@ -1660,7 +1664,10 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // Same shape as Callout above; padding value borrowed from
             // callout.rs since tooltip.rs's own paint() centers text in the
             // body with no defined constant of its own.
-            let font_size = t.style.font_size_px_or(t.font_size);
+            let font_size = t.style.font_size_px_ctx(
+                &crate::intrinsic::measure_time_font_size_ctx(0.0),
+                t.font_size,
+            );
             let family = t.style.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0;
@@ -1685,7 +1692,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // formula (h_pad = font_size*1.2 per side, `gap` before/after/
             // between every pill) using the same public fields and the same
             // `measure_text_with_fallback` call it makes internally.
-            let font_size = p.style.font_size_px_or(14.0);
+            let font_size = p
+                .style
+                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 14.0);
             let family = p.style.font_family_or("Inter");
             let h_pad = font_size * 1.2;
             let n = p.items.len() as f32;
@@ -1713,7 +1722,10 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // height ratio both of those same real usages share:
             // `font_size: 24` paired with `style.height: 48`, i.e.
             // `2 × font_size`.
-            let font_size = m.style.font_size_px_or(m.font_size);
+            let font_size = m.style.font_size_px_ctx(
+                &crate::intrinsic::measure_time_font_size_ctx(0.0),
+                m.font_size,
+            );
             apply_default_size(css, 800.0, font_size * 2.0);
         }
         Stepper(s) => {
