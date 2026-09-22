@@ -566,6 +566,48 @@ fn draw_bg_pixel_grid(
     }
 }
 
+/// Re-emit a scenario-supplied heropattern colour as a canonical
+/// `#rrggbbaa` before it is spliced into generated SVG source.
+///
+/// `cfg.color` is free-form user input landing inside a double-quoted
+/// `fill="{{color}}"` attribute of hand-built SVG text; routing it through
+/// `color4f_from_hex` first guarantees the only characters that can ever
+/// reach the SVG are hex digits and `#`, so a colour string can never close
+/// the attribute and inject markup, whatever it contains.
+/// `color4f_from_hex` is infallible: unresolvable input resolves to the
+/// same opaque-magenta sentinel every other unresolved colour in this
+/// engine does, rather than passing the raw string through.
+fn canonical_hero_color(color: &str) -> String {
+    let c = color4f_from_hex(color);
+    format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        (c.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+/// `usvg::Options` for parsing a generated heropattern tile.
+///
+/// Neutralises the default `image_href_resolver`'s string resolver, which
+/// reads arbitrary files from disk for any `<image href="...">` it
+/// encounters (usvg-0.44.0's `ImageHrefResolver::default_string_resolver`).
+/// A heropattern tile never legitimately references an external image, so
+/// an `<image>` element reaching this parser can only be an injection —
+/// `canonical_hero_color` closes the splice that could put one there in the
+/// first place; this is the defence-in-depth half, for any other way one
+/// could arrive.
+fn heropattern_svg_options() -> usvg::Options<'static> {
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            ..usvg::ImageHrefResolver::default()
+        },
+        ..usvg::Options::default()
+    }
+}
+
 /// Tiled heropattern background.
 ///
 /// The tile is rasterized once at `cfg.scale`, using `heropattern_raster_size`
@@ -597,12 +639,16 @@ fn draw_bg_heropattern(
         def.width,
         def.height,
         def.svg_paths
-            .replace("{{color}}", &cfg.color)
+            .replace("{{color}}", &canonical_hero_color(&cfg.color))
             .replace("{{opacity}}", &cfg.opacity.to_string()),
     );
 
-    let opt = usvg::Options::default();
+    let opt = heropattern_svg_options();
     let Ok(tree) = usvg::Tree::from_data(svg_content.as_bytes(), &opt) else {
+        eprintln!(
+            "warning: heropattern '{}' (colour '{}') failed to parse as SVG — background not rendered",
+            cfg.pattern, cfg.color
+        );
         return;
     };
 
@@ -1585,5 +1631,77 @@ mod heropattern_raster_tests {
             scale: 100_000.0,
         };
         draw_bg_heropattern(surface.canvas(), &cfg, 0.0, 64.0, 64.0);
+    }
+}
+
+#[cfg(test)]
+mod heropattern_svg_injection_tests {
+    //! A scenario-supplied heropattern colour used to be spliced unescaped
+    //! into hand-built SVG source inside a double-quoted `fill="..."`
+    //! attribute, then parsed by usvg with its default (file-reading)
+    //! `image_href_resolver`. A colour containing a `"` could close the
+    //! attribute and inject arbitrary markup, including an `<image
+    //! href="...">` the default resolver would read straight off disk.
+
+    use super::*;
+
+    #[test]
+    fn a_colour_containing_a_double_quote_cannot_inject_markup() {
+        let payload = r#""/><image href="/etc/passwd"/><rect fill=""#;
+        let sanitized = canonical_hero_color(payload);
+        assert!(!sanitized.contains('"'), "got: {sanitized}");
+        assert!(!sanitized.contains('<'), "got: {sanitized}");
+        assert!(!sanitized.contains('&'), "got: {sanitized}");
+        assert_eq!(
+            sanitized.len(),
+            9,
+            "expected '#' + 8 hex digits, got: {sanitized}"
+        );
+        assert!(sanitized
+            .strip_prefix('#')
+            .unwrap()
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn a_valid_colour_round_trips_case_normalised() {
+        assert_eq!(canonical_hero_color("#1e3a8a55"), "#1E3A8A55");
+    }
+
+    #[test]
+    fn the_svg_options_never_read_a_file_from_disk() {
+        let scratch_path = std::env::temp_dir().join(format!(
+            "rustmotion-heropattern-injection-probe-{}.svg",
+            std::process::id()
+        ));
+        std::fs::write(
+            &scratch_path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )
+        .expect("scratch SVG written");
+
+        let opt = heropattern_svg_options();
+        let resolved =
+            (opt.image_href_resolver.resolve_string)(scratch_path.to_str().unwrap(), &opt);
+
+        let _ = std::fs::remove_file(&scratch_path);
+
+        assert!(
+            resolved.is_none(),
+            "the string resolver must be neutralised, not read a real SVG file from disk"
+        );
+    }
+
+    #[test]
+    fn draw_bg_heropattern_survives_an_injection_attempt_without_panicking() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32)).expect("surface");
+        let cfg = HeropatternConfig {
+            pattern: "aztec".to_string(),
+            color: r#""/><image href="/etc/passwd"/><rect fill=""#.to_string(),
+            opacity: 1.0,
+            scale: 1.0,
+        };
+        draw_bg_heropattern(surface.canvas(), &cfg, 0.0, 32.0, 32.0);
     }
 }
