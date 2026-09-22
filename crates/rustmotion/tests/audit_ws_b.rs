@@ -354,3 +354,54 @@ fn fix_leaves_relative_asset_paths_untouched() {
         "the actual violation --fix targeted must still be fixed: {fixed}"
     );
 }
+
+// ─── unwrappable_text_overflow must measure the CONTENT box ────────
+
+/// A nowrap text's own painter draws inside its CONTENT box
+/// (`LegacyPaintDispatcher` hands it `layout.content_box()`, not the raw
+/// layout box, for every component except `codeblock`) — so the geometry
+/// check must compare the natural line width against the content box too.
+/// Content box width here is 2000 - 1900 = 100px (950px of padding on each
+/// side); the border box is 2000px. Any real natural width for this
+/// string/font-size sits comfortably in between, so the violation fires if
+/// and only if the content box is used.
+#[test]
+fn unwrappable_text_overflow_is_measured_against_the_content_box() {
+    let scenario = ScratchFile::new("rm31-scenario");
+    let report = ScratchFile::new("rm31-report");
+    let json = r##"{
+        "video": { "width": 2400, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "text",
+                "content": "Hello World Example",
+                "position": "absolute",
+                "x": 50, "y": 50,
+                "style": {
+                    "width": "2000px", "height": "300px",
+                    "padding": { "top": "20px", "right": "950px", "bottom": "20px", "left": "950px" },
+                    "white-space": "nowrap",
+                    "font-size": "48px",
+                    "color": "#ffffff"
+                }
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "the 100px content box (2000px border box minus 1900px of padding) is too narrow \
+         for this nowrap line; report={report_json}"
+    );
+    let violation = find_kind(&report_json, "unwrappable_text_overflow")
+        .expect("expected an unwrappable_text_overflow violation");
+    let width = violation["bbox"]["w"].as_f64().expect("bbox.w is a number");
+    assert!(
+        (width - 100.0).abs() < 1.0,
+        "violation bbox should be the 100px CONTENT box, not the 2000px border box: {report_json}"
+    );
+}
