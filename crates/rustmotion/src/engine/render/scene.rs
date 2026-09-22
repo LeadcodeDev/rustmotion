@@ -553,6 +553,13 @@ fn render_with_new_pipeline_iter<'a, I>(
 /// Paint a decorative leaf (e.g. Particle) over the full viewport without
 /// going through taffy. Resolves animations and dispatches to
 /// `Painter::paint_content` directly with a viewport-sized `BoxLayout`.
+///
+/// Visibility and effects go through the same `PaintWindow::contains` and
+/// `effective_effects` the ordinary `paint_tree` dispatch uses (see
+/// `box_builder::effective_effects`'s doc comment), rather than re-deriving
+/// both by hand — a component whose `timeline`/`style.transition` state or
+/// exact `end_at` boundary only worked in one of the two dispatch paths used
+/// to be invisible to tests written against either one alone.
 fn paint_decorative_fullscreen(
     canvas: &Canvas,
     child: &ChildComponent,
@@ -560,34 +567,22 @@ fn paint_decorative_fullscreen(
     viewport_h: f32,
     ctx: &RenderContext,
 ) {
+    use rustmotion_components::box_builder::effective_effects;
     use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
+    use rustmotion_core::engine::box_tree::PaintWindow;
     use rustmotion_core::engine::layout_pass::BoxLayout;
     use rustmotion_core::traits::PaintCtx;
 
     let time = ctx.time.seconds();
     if let Some(timed) = child.component.as_timed() {
-        let (start_at, end_at) = timed.timing();
-        if let Some(s) = start_at {
-            if time < s {
-                return;
-            }
-        }
-        if let Some(e) = end_at {
-            if time > e {
-                return;
-            }
+        let (start, end) = timed.timing();
+        if !(PaintWindow { start, end }).contains(time) {
+            return;
         }
     }
 
-    let props = match child.component.as_animatable() {
-        Some(a) => {
-            let effects = a.animation_effects();
-            if effects.is_empty() {
-                AnimatedProperties::default()
-            } else {
-                resolve_props_for_effects(effects, time, ctx.scene_duration)
-            }
-        }
+    let props = match effective_effects(&child.component, 0.0) {
+        Some(effects) => resolve_props_for_effects(&effects, time, ctx.scene_duration),
         None => AnimatedProperties::default(),
     };
     if props.opacity <= 0.0 {

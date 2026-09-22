@@ -1543,7 +1543,7 @@ mod heropattern_period_tests {
 
 #[cfg(test)]
 mod heropattern_raster_tests {
-    //! the heropattern tile used to be rasterized at 1x (the
+    //! The heropattern tile used to be rasterized at 1x (the
     //! pattern's native width/height) and then magnified by the shader's
     //! own matrix with nearest-neighbour sampling — blocky above `scale: 1`,
     //! aliased below it. `heropattern_raster_size` must honour `scale`
