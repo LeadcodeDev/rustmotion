@@ -539,7 +539,7 @@ mod component_smoke {
 
     /// Counts non-transparent pixels in an RGBA buffer (alpha > 0).
     fn nonzero_pixels(buf: &[u8]) -> usize {
-        buf.chunks_exact(4).filter(|p| p[3] > 0).count()
+        buf.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count()
     }
 
     #[test]
@@ -605,7 +605,8 @@ mod component_smoke {
         let late = render_new_at(&scene, 400, 300, 0.95, 1.0);
         // Total red intensity (sum of red channel) — alpha-attenuated pixels
         // contribute less to this sum even when premul keeps the count up.
-        let red_sum: fn(&[u8]) -> u64 = |buf| buf.chunks_exact(4).map(|p| p[0] as u64).sum();
+        let red_sum: fn(&[u8]) -> u64 =
+            |buf| buf.as_chunks::<4>().0.iter().map(|p| p[0] as u64).sum();
         let early_red = red_sum(&early);
         let late_red = red_sum(&late);
         assert!(
@@ -638,7 +639,7 @@ mod component_smoke {
     }
 
     fn red_sum(buf: &[u8]) -> u64 {
-        buf.chunks_exact(4).map(|p| p[0] as u64).sum()
+        buf.as_chunks::<4>().0.iter().map(|p| p[0] as u64).sum()
     }
 
     #[test]
@@ -718,7 +719,9 @@ mod component_smoke {
             }
         }));
         let count_mid = |buf: &[u8]| {
-            buf.chunks_exact(4)
+            buf.as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > 20 && p[0] < 220)
                 .count()
         };
@@ -744,7 +747,9 @@ mod component_smoke {
         }));
         let buf = render_new_at(&inverted, 400, 300, 0.5, 1.0);
         let flipped = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] < 50 && p[1] > 150)
             .count();
         assert!(
@@ -873,7 +878,8 @@ mod component_smoke {
             bleed: false,
         };
         let scene = vec![child];
-        let blue_sum = |buf: &[u8]| -> u64 { buf.chunks_exact(4).map(|p| p[2] as u64).sum() };
+        let blue_sum =
+            |buf: &[u8]| -> u64 { buf.as_chunks::<4>().0.iter().map(|p| p[2] as u64).sum() };
         let before = render_new_at(&scene, 400, 300, 0.5, 4.0);
         let mid = render_new_at(&scene, 400, 300, 1.5, 4.0);
         let after = render_new_at(&scene, 400, 300, 2.5, 4.0);
@@ -936,7 +942,7 @@ mod component_smoke {
     fn red_centroid_x(buf: &[u8], width: u32) -> Option<f64> {
         let mut sum_wx = 0.0_f64;
         let mut sum_w = 0.0_f64;
-        for (i, p) in buf.chunks_exact(4).enumerate() {
+        for (i, p) in buf.as_chunks::<4>().0.iter().enumerate() {
             let x = (i as u32 % width) as f64;
             let w = p[0] as f64;
             sum_wx += w * x;
@@ -1665,7 +1671,7 @@ mod svg_draw_on_tests {
 
     /// Count non-transparent pixels in RGBA buffer.
     fn lit(buf: &[u8]) -> usize {
-        buf.chunks_exact(4).filter(|p| p[3] > 0).count()
+        buf.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count()
     }
 
     /// Count non-transparent pixels in horizontal band [y0, y1) of a 100-wide canvas.
@@ -1831,7 +1837,9 @@ mod svg_draw_on_tests {
         );
         // resvg fills the rect red. Count red-dominant pixels.
         let red_pixels = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[0] > p[2] && p[0] > p[1])
             .count();
         assert!(
@@ -2232,7 +2240,9 @@ mod audio_tests {
         let lit_at = |frame: usize| {
             crate::encode::video::render_frame_task(&scenario.video, &scenario, &tasks[frame])
                 .expect("render")
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > 40)
                 .count()
         };
@@ -2556,7 +2566,14 @@ mod audio_tests {
                 }
             }))
         };
-        let red_sum = |pixels: &[u8]| pixels.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
+        let red_sum = |pixels: &[u8]| {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0] as u64)
+                .sum::<u64>()
+        };
 
         let loud = paint_scene(make_child(), 200, 200, 0.0, 30);
         let quiet = paint_scene(make_child(), 200, 200, 0.5, 30);
@@ -2658,7 +2675,13 @@ mod motion_blur_trail {
 
     /// Find the maximum red channel value across all pixels.
     fn max_red(pixels: &[u8]) -> u8 {
-        pixels.chunks_exact(4).map(|p| p[0]).max().unwrap_or(0)
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .max()
+            .unwrap_or(0)
     }
 
     /// Make a red Shape with slide_in_left + motion_blur, positioned at the center.
@@ -3385,7 +3408,7 @@ mod world_view_regressions {
     fn avg_luma(buf: &[u8]) -> f64 {
         let mut sum = 0u64;
         let mut n = 0u64;
-        for px in buf.chunks_exact(4) {
+        for px in buf.as_chunks::<4>().0.iter() {
             sum += px[0] as u64 + px[1] as u64 + px[2] as u64;
             n += 3;
         }

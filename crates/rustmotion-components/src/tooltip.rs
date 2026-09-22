@@ -280,7 +280,9 @@ mod tests {
         // Text is near-white (#E2E8F0 default) on a dark #1E293B body —
         // probe for near-white ink specifically.
         let text_ink = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[0] > 180 && p[1] > 180 && p[2] > 180)
             .count();
         assert!(

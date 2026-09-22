@@ -42,7 +42,9 @@ fn text_ink_pixels(buf: &[u8]) -> usize {
     // Background is #2b303b ~ (43, 48, 59). Count pixels that deviate from
     // that by a wide margin in any channel — syntect's theme colors are all
     // much brighter than the near-black background.
-    buf.chunks_exact(4)
+    buf.as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             let (r, g, b, a) = (p[0] as i32, p[1] as i32, p[2] as i32, p[3] as i32);
             a > 200 && ((r - 43).abs() > 40 || (g - 48).abs() > 40 || (b - 59).abs() > 40)
