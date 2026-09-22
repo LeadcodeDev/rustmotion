@@ -86,6 +86,22 @@ fn clear_rect(composed: &mut [u8], canvas_w: u32, canvas_h: u32, frame: &gif::Fr
 /// `gif_cache` stores.
 type DecodedGif = (Vec<(Vec<u8>, u32, u32)>, Vec<f64>, f64);
 
+/// Artificial per-decode stall, settable only from this file's own tests
+/// (`DECODE_STALL_MS`) to open a deterministic race window around the
+/// cache-miss branch without timing-dependent sleeps sprinkled through the
+/// test itself. Zero by default, and compiled out entirely in a non-test
+/// build — no production cost.
+#[cfg(test)]
+static DECODE_STALL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn stall_decode_for_tests() {
+    let stall_ms = DECODE_STALL_MS.load(std::sync::atomic::Ordering::SeqCst);
+    if stall_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(stall_ms));
+    }
+}
+
 /// Decode a GIF into full-canvas RGBA frames, their cumulative end times, and
 /// the total duration.
 ///
@@ -122,6 +138,9 @@ fn decode_composed_frames(src: &str) -> Option<DecodedGif> {
 
     let canvas_w = decoder.width() as u32;
     let canvas_h = decoder.height() as u32;
+
+    #[cfg(test)]
+    stall_decode_for_tests();
 
     let mut frames: Vec<(Vec<u8>, u32, u32)> = Vec::new();
     let mut cumulative_times: Vec<f64> = Vec::new();
@@ -163,6 +182,21 @@ fn decode_composed_frames(src: &str) -> Option<DecodedGif> {
     Some((frames, cumulative_times, accumulated))
 }
 
+/// Cache lookup with the actual decode folded in, single-flighted through
+/// `DashMap::entry`: a vacant entry holds its shard's write lock for as long
+/// as the closure runs, so a second caller racing the same cache-cold `src`
+/// blocks on that lock instead of starting its own redundant decode. Decode
+/// failure (`decode_composed_frames` returning `None`) leaves the entry
+/// vacant — `or_try_insert_with` never calls `insert` on its `Err` path —
+/// so a broken source is retried rather than permanently cached as absent.
+fn cached_decode(src: &str) -> Option<Arc<DecodedGif>> {
+    gif_cache()
+        .entry(src.to_string())
+        .or_try_insert_with(|| decode_composed_frames(src).map(Arc::new).ok_or(()))
+        .ok()
+        .map(|entry| entry.clone())
+}
+
 impl Painter for Gif {
     fn paint_content(
         &self,
@@ -171,17 +205,8 @@ impl Painter for Gif {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let gcache = gif_cache();
-
-        let cached = if let Some(cached) = gcache.get(&self.src) {
-            cached.clone()
-        } else {
-            let Some(decoded) = decode_composed_frames(&self.src) else {
-                return;
-            };
-            let cached = Arc::new(decoded);
-            gcache.insert(self.src.clone(), cached.clone());
-            cached
+        let Some(cached) = cached_decode(&self.src) else {
+            return;
         };
 
         let (ref frames, ref cumulative_times, total_duration) = *cached;
@@ -301,5 +326,70 @@ mod tests {
         frame.left = 3;
         frame.top = 3;
         assert_eq!(frame_rect(4, 4, &frame), (3, 3, 1, 1));
+    }
+
+    /// Releases `DECODE_STALL_MS` back to zero even if the test body
+    /// panics mid-assertion, so a failing run never leaks a stall into
+    /// whatever other test in this binary decodes a GIF next.
+    struct StallGuard;
+
+    impl Drop for StallGuard {
+        fn drop(&mut self) {
+            DECODE_STALL_MS.store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// N callers racing a cache-cold `src` must decode it once, not N
+    /// times. A 120ms stall (`DECODE_STALL_MS`) right after the header is
+    /// read opens a race window wide enough that every thread reaches the
+    /// cache-miss branch before any of them can finish decoding and insert —
+    /// pre-fix, that means eight independent decodes, each producing its own
+    /// `Arc` allocation. Comparing pointers (not content — a deterministic
+    /// decode produces byte-identical content either way) is what proves
+    /// only one of the eight actually ran.
+    #[test]
+    fn concurrent_paints_of_the_same_uncached_gif_decode_exactly_once() {
+        let _guard = StallGuard;
+        DECODE_STALL_MS.store(120, std::sync::atomic::Ordering::SeqCst);
+
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_stampede_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_two_frame_gif(&path);
+        let src = path.to_str().expect("utf-8 path").to_string();
+
+        const THREADS: usize = 8;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let src = src.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cached_decode(&src)
+                })
+            })
+            .collect();
+
+        let results: Vec<Option<Arc<DecodedGif>>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        std::fs::remove_file(&path).ok();
+
+        let first = results[0].as_ref().expect("gif must decode");
+        for (i, result) in results.iter().enumerate() {
+            let result = result.as_ref().unwrap_or_else(|| {
+                panic!("thread {i} did not get a decoded result");
+            });
+            assert!(
+                Arc::ptr_eq(first, result),
+                "thread {i} observed a different Arc than thread 0 — the GIF was decoded \
+                 more than once for the same cache-cold source"
+            );
+        }
     }
 }
