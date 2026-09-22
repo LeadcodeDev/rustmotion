@@ -1,23 +1,3 @@
-//! Regression tests for the studio's file-write pipeline and a few other
-//! previously-untestable decision points: a debounced write that must rebase
-//! onto the current disk instead of replaying a stale in-memory snapshot,
-//! coalesced edits inside one debounce window that must all survive (not
-//! just the last), undo/redo cancelling a still-pending write before it can
-//! clobber the just-restored state, a render-thread panic that must surface
-//! as an error instead of a cached empty JPEG, and the preview audio mixer
-//! only re-running when the audio itself changed.
-//!
-//! `rustmotion-studio` has no `[dev-dependencies]` and cannot gain one in
-//! this change, so every test below drives the crate's existing public
-//! surface (`scenario::*`, `editor::audio`, `editor::frames`) against real
-//! temp files with plain synchronous `#[test]`s — no Dioxus runtime, no
-//! async executor. That public surface is itself the fix for the crate
-//! having no integration tests: the defects lived in a debounce timer and
-//! Dioxus event handlers that cannot be driven from a test, so each one was
-//! reduced to a pure decision over plain data (`resolve_flush`, the
-//! pending-write queue, `audio_fingerprint`) and the handler calls that
-//! instead of deciding inline.
-
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -48,8 +28,6 @@ fn read(path: &std::path::Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-// ── A debounced flush rebases onto the current disk, never a stale snapshot ──
-
 #[test]
 fn debounced_flush_rebases_onto_disk_and_survives_a_concurrent_external_edit() {
     let path = temp_path("stale_snapshot", "json");
@@ -68,8 +46,6 @@ fn debounced_flush_rebases_onto_disk_and_survives_a_concurrent_external_edit() {
         },
     );
 
-    // An agent (or another editor) writes the file while the debounce window
-    // is still open.
     let external_edit = r#"{"scenes":[{"duration":1.0,"children":[{"type":"text","content":"AGENT EDIT","style":{}}]}]}"#;
     write(&path, external_edit);
 
@@ -93,8 +69,6 @@ fn debounced_flush_rebases_onto_disk_and_survives_a_concurrent_external_edit() {
     );
     let _ = fs::remove_file(&path);
 }
-
-// ── Every coalesced HTML mutation in a burst survives, not just the last ────
 
 #[test]
 fn coalesced_html_edits_in_one_debounce_window_all_survive_the_flush() {
@@ -139,8 +113,6 @@ fn coalesced_html_edits_in_one_debounce_window_all_survive_the_flush() {
     let _ = fs::remove_file(&path);
 }
 
-// ── Undo/redo cancel the pending write queue before touching the file ──────
-
 #[test]
 fn undo_cancels_the_pending_write_queue_before_touching_the_file() {
     let path = temp_path("undo_cancels_pending", "json");
@@ -151,7 +123,6 @@ fn undo_cancels_the_pending_write_queue_before_touching_the_file() {
     let hist: SharedHistory = Arc::new(Mutex::new(Default::default()));
     record_edit(&hist, &path, state_a.to_string());
 
-    // An edit is still waiting out its debounce window when undo fires.
     let slot = pending_write_slot();
     queue_mutation(
         &slot,
@@ -182,8 +153,6 @@ fn undo_cancels_the_pending_write_queue_before_touching_the_file() {
 
     let _ = fs::remove_file(&path);
 }
-
-// ── The write pipeline is reachable end to end without a Dioxus runtime ────
 
 #[test]
 fn the_write_pipeline_round_trips_an_edit_through_a_real_file() {
@@ -226,8 +195,6 @@ fn the_write_pipeline_round_trips_an_edit_through_a_real_file() {
     let _ = fs::remove_file(&path);
 }
 
-// ── A render-thread panic surfaces as an error, never a cached empty JPEG ──
-
 #[test]
 fn a_render_thread_panic_is_reported_as_an_error_not_an_empty_jpeg() {
     let big = rustmotion::loader::load_scenario_from_source(
@@ -241,8 +208,6 @@ fn a_render_thread_panic_is_reported_as_an_error_not_an_empty_jpeg() {
         "need frames spanning both scenes to reach scene_idx 1"
     );
 
-    // Deliberately mismatched: `tasks` reference a second scene this smaller
-    // scenario does not have, which panics inside the render thread.
     let small = rustmotion::loader::load_scenario_from_source(
         None,
         Some(r##"{ "video": { "width": 64, "height": 64 }, "scenes": [ { "duration": 0.1 } ] }"##),
@@ -268,8 +233,6 @@ fn a_normal_render_returns_nonempty_jpeg_bytes() {
     let jpeg = render_frame_deep(&scenario, &tasks, 0, 1.0).expect("a normal render succeeds");
     assert!(!jpeg.is_empty());
 }
-
-// ── The preview audio mixer only re-runs when the audio actually changed ───
 
 #[test]
 fn audio_fingerprint_ignores_unrelated_edits_and_reacts_to_real_audio_changes() {

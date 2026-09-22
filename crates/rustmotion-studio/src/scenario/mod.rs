@@ -1,6 +1,3 @@
-//! Scenario data layer: the live studio model, JSON-pointer style edits, and
-//! the top-level view enum shared across features.
-
 mod baseline;
 mod diff;
 mod edit;
@@ -23,14 +20,12 @@ pub use optimistic::{
 };
 pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
 
-/// Which top-level view is shown (library home vs. the editor).
 #[derive(Clone, Copy, PartialEq)]
 pub enum View {
     Library,
     Editor,
 }
 
-/// The active UI theme. `System` follows the OS `prefers-color-scheme`.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Theme {
     Dark,
@@ -39,8 +34,6 @@ pub enum Theme {
 }
 
 impl Theme {
-    /// CSS class applied to the themed root; the stylesheet keys palette
-    /// variables off it.
     pub fn class(self) -> &'static str {
         match self {
             Theme::Dark => "rm-dark",
@@ -49,7 +42,6 @@ impl Theme {
         }
     }
 
-    /// Cycle Dark → Light → System → Dark.
     pub fn next(self) -> Theme {
         match self {
             Theme::Dark => Theme::Light,

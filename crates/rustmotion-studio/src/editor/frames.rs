@@ -5,32 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rustmotion::encode::video::FrameTask;
 use rustmotion::schema::ResolvedScenario;
 
-/// Stack for any thread that renders a frame.
-///
-/// The depth cost is **deserialisation**, not painting: `prepare_scene` calls
-/// `deserialize_children` on every frame, and `ChildComponent` → `Component` →
-/// `Container`/`Card` recurses once per level of nesting. Because those enums
-/// are untagged, serde buffers each level through `ContentDeserializer`, so a
-/// level is expensive in stack as well as deep — and a debug build's frames are
-/// several times fatter than a release build's.
-///
-/// Measured: a scenario nested ~28 levels — which a UI composed from small
-/// helper functions reaches without trying — needs between 2 and 4 MiB in debug.
-/// Rust's default for a spawned thread is 2 MiB, so the prefetch workers
-/// overflowed and aborted the process; the same file rendered fine from the CLI,
-/// which happens to run on the 8 MiB main thread. The two webview asset handlers
-/// get whatever stack the platform hands their callback, which is no better.
-///
-/// Address space is cheap and committed lazily; take a wide margin.
 pub const RENDER_STACK: usize = 32 * 1024 * 1024;
 
-/// [`render_frame`] on a thread with [`RENDER_STACK`], for callers that are not
-/// on the main thread. Scoped, so the scenario and tasks are borrowed rather
-/// than cloned. `Err` means the render thread panicked (a Skia panic, a
-/// dimension mismatch, a JPEG encode failure): the caller must not treat that
-/// as a successful empty frame.
-// The panic payload carries no information callers act on; they only branch
-// on success vs. failure (retry-budget ledger, cache, HTTP status).
 #[allow(clippy::result_unit_err)]
 pub fn render_frame_deep(
     scenario: &ResolvedScenario,
@@ -48,9 +24,6 @@ pub fn render_frame_deep(
     })
 }
 
-/// Render one frame and encode it to JPEG bytes (preview-only; the final video
-/// render path does not use this). JPEG keeps the encode cost low enough for
-/// the webview transport to keep up with playback.
 pub fn render_frame(
     scenario: &ResolvedScenario,
     tasks: &[rustmotion::encode::video::FrameTask],
@@ -67,7 +40,6 @@ pub fn render_frame(
     let w = (scenario.video.width as f32 * scale) as u32;
     let h = (scenario.video.height as f32 * scale) as u32;
     let rgba_img = image::RgbaImage::from_raw(w, h, rgba).expect("rgba matches dimensions");
-    // JPEG has no alpha; drop it (preview frames are opaque).
     let rgb = image::DynamicImage::ImageRgba8(rgba_img).to_rgb8();
     let mut jpeg = Vec::new();
     image::DynamicImage::ImageRgb8(rgb)
@@ -79,10 +51,6 @@ pub fn render_frame(
     jpeg
 }
 
-/// Cached baseline scenario for the diff mode's A-side render, keyed by
-/// (path, source hash) so it is rebuilt only when the baseline itself changes
-/// (Set baseline) — never per frame. Arc snapshots so callers render OUTSIDE
-/// this cache's lock.
 struct BaselineCache {
     path: PathBuf,
     source_hash: u64,
@@ -95,19 +63,12 @@ fn baseline_cache() -> &'static Mutex<Option<BaselineCache>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-/// Stable hash of a baseline source string (also used as the side-A cache
-/// generation in the prefetch frame cache).
 pub(crate) fn source_hash(source: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut h);
     h.finish()
 }
 
-/// Arc snapshot of the BASELINE scenario built from its source string: JSON is
-/// loaded directly, HTML is re-transpiled — both entirely from the string,
-/// never from the (already edited) file on disk. Cached by (path, source
-/// hash); returns `(source_hash, scenario, tasks)` so the caller renders
-/// without holding any lock.
 pub fn baseline_arcs(
     path: &Path,
     source: &str,
@@ -140,7 +101,6 @@ pub fn baseline_arcs(
     Ok((hash, cache.scenario.clone(), cache.tasks.clone()))
 }
 
-/// A clickable element box in percentage-of-frame coords, with its kind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HitPct {
     pub node_id: u32,
@@ -149,13 +109,9 @@ pub struct HitPct {
     pub y: f32,
     pub w: f32,
     pub h: f32,
-    /// Full JSON Pointer into the source scenario, e.g. "/scenes/0/children/2".
     pub pointer: Option<String>,
 }
 
-/// Compute the current frame's clickable element boxes in percentage coords
-/// (render only — no JPEG encode, so this is cheap per frame). `scene_prefix`
-/// is the JSON-Pointer prefix of the current scene (see [`scene_prefix`]).
 pub fn frame_hits(
     scenario: &ResolvedScenario,
     tasks: &[rustmotion::encode::video::FrameTask],
@@ -183,8 +139,6 @@ pub fn frame_hits(
         .collect()
 }
 
-/// JSON-Pointer prefix to the scene of the given frame, derived from the raw
-/// scenario JSON (handles both top-level `scenes` and `composition`).
 pub fn scene_prefix(
     raw: &serde_json::Value,
     tasks: &[rustmotion::encode::video::FrameTask],
@@ -224,13 +178,9 @@ mod tests {
         assert!(!tasks.is_empty());
         let jpeg = render_frame(&scenario, &tasks, 0, 1.0);
         assert!(jpeg.len() > 2);
-        // JPEG SOI marker.
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8], "must be a JPEG");
     }
 
-    /// TEMP diagnostic (not part of CI): replicate the prefetch worker pool on
-    /// the dynamic-glass example and print RSS growth. Run with
-    /// `RM_STRESS_SCALE=0.5 cargo test -p rustmotion-studio --release stress_rss -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn stress_rss_worker_pool() {
