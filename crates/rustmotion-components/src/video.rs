@@ -46,6 +46,52 @@ rustmotion_core::impl_traits!(Video {
     Styled => style,
 });
 
+/// The rectangle an `img_w`×`img_h` source draws into to honour `fit` inside
+/// a `target_w`×`target_h` box — the same three CSS `object-fit` semantics
+/// `image.rs`'s painter already implements for the `image` component.
+fn fit_rect(fit: &ImageFit, img_w: f32, img_h: f32, target_w: f32, target_h: f32) -> Rect {
+    match fit {
+        ImageFit::Fill => Rect::from_xywh(0.0, 0.0, target_w, target_h),
+        ImageFit::Contain => {
+            let scale = (target_w / img_w).min(target_h / img_h);
+            let w = img_w * scale;
+            let h = img_h * scale;
+            Rect::from_xywh((target_w - w) / 2.0, (target_h - h) / 2.0, w, h)
+        }
+        ImageFit::Cover => {
+            let scale = (target_w / img_w).max(target_h / img_h);
+            let w = img_w * scale;
+            let h = img_h * scale;
+            Rect::from_xywh((target_w - w) / 2.0, (target_h - h) / 2.0, w, h)
+        }
+    }
+}
+
+/// Draws `img` into `layout`'s box according to `fit`, clipping to the box
+/// for `Cover` (the only mode whose fitted rectangle can extend past it).
+fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &BoxLayout) {
+    let dst = fit_rect(
+        fit,
+        img.width() as f32,
+        img.height() as f32,
+        layout.width,
+        layout.height,
+    );
+    let paint = Paint::default();
+    if matches!(fit, ImageFit::Cover) {
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, 0.0, layout.width, layout.height),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
+        canvas.draw_image_rect(img, None, dst, &paint);
+        canvas.restore();
+    } else {
+        canvas.draw_image_rect(img, None, dst, &paint);
+    }
+}
+
 impl Painter for Video {
     fn paint_content(
         &self,
@@ -74,9 +120,7 @@ impl Painter for Video {
                 let row_bytes = fw as usize * 4;
                 let data = skia_safe::Data::new_copy(rgba);
                 if let Some(img) = skia_safe::images::raster_from_data(&img_info, data, row_bytes) {
-                    let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-                    let paint = Paint::default();
-                    canvas.draw_image_rect(img, None, dst, &paint);
+                    draw_fitted(canvas, img, &self.fit, layout);
                 }
                 return;
             }
@@ -105,9 +149,7 @@ impl Painter for Video {
         };
         let skia_data = skia_safe::Data::new_copy(&frame_data);
         if let Some(img) = skia_safe::Image::from_encoded(skia_data) {
-            let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-            let paint = Paint::default();
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_fitted(canvas, img, &self.fit, layout);
         }
     }
 }
