@@ -19,7 +19,8 @@ use super::frames::render_frame_rgba_deep;
 use super::prefetch::{ensure_prefetcher, publish_target, PrefetchTarget};
 
 pub fn frame_from_rgba(width: u32, height: u32, mut rgba: Vec<u8>) -> Arc<RenderImage> {
-    for pixel in rgba.chunks_exact_mut(4) {
+    let (pixels, _) = rgba.as_chunks_mut::<4>();
+    for pixel in pixels {
         pixel.swap(0, 2);
         pixel[3] = 255;
     }
