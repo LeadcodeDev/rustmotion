@@ -11,30 +11,10 @@ use rustmotion_core::css::style::{
     JustifyContent as CssJustifyContent,
 };
 use rustmotion_core::css::taffy_bridge::ConversionContext;
-use rustmotion_core::css::units::{LengthContext, LengthPercentage};
+use rustmotion_core::css::units::LengthPercentage;
 use rustmotion_core::engine::animator::safe_div;
 use rustmotion_core::engine::paint_pass::PlaneCamera;
 use rustmotion_core::engine::renderer::color4f_from_hex;
-
-/// Build the `ConversionContext` that resolves `vw`/`vh`/`%` units for a
-/// layout pass, anchored to the *real* output viewport instead of
-/// `ConversionContext::default()`'s hardcoded 1920×1080 (round 4 audit,
-/// lot LAYOUT, constat 1). On a 1080×1920 vertical video — a resolution
-/// this project documents as a common target — `width: "50vw"` used to
-/// resolve as 50% of a phantom 1920px-wide viewport (960px) instead of 50%
-/// of the real 1080px one (540px), a 78% error, and `vh` was off by the
-/// same margin in the other axis. `font-size`/`root-font-size` stay at the
-/// CSS initial `16px`: nothing upstream of this call resolves and threads a
-/// root font-size through yet.
-fn viewport_conversion_context(viewport_w: f32, viewport_h: f32) -> ConversionContext {
-    ConversionContext {
-        length: LengthContext {
-            viewport_width: viewport_w,
-            viewport_height: viewport_h,
-            ..LengthContext::default()
-        },
-    }
-}
 
 /// The single choke-point that turns "a frame of this scene" into the time
 /// value every render path in this file feeds into the background draw, the
@@ -554,7 +534,7 @@ fn render_with_new_pipeline_iter<'a, I>(
     let layout = run_layout(
         &built.root,
         (viewport_w, viewport_h),
-        &viewport_conversion_context(viewport_w, viewport_h),
+        &ConversionContext::for_viewport(viewport_w, viewport_h),
     );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
@@ -789,7 +769,11 @@ pub fn render_scene_hits(
         fps: config.fps,
     });
     let built = build_scene_from_refs(children.iter(), (vw, vh), root_css, anim);
-    let layout = run_layout(&built.root, (vw, vh), &viewport_conversion_context(vw, vh));
+    let layout = run_layout(
+        &built.root,
+        (vw, vh),
+        &ConversionContext::for_viewport(vw, vh),
+    );
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time,

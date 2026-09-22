@@ -86,17 +86,17 @@ pub(super) fn draw_world_bg_with_parallax(
         }
         _ => {
             // Grid-based backgrounds: modulo offset for seamless tiling.
-            let spacing = tile_spacing(&bg.preset);
-            let offset_x = -(cam_x % spacing);
-            let offset_y = -(cam_y % spacing);
+            let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+            let offset_x = -(cam_x % spacing_x);
+            let offset_y = -(cam_y % spacing_y);
             canvas.save();
             canvas.translate((offset_x, offset_y));
             draw_animated_background(
                 canvas,
                 bg,
                 time,
-                width + spacing * 2.0,
-                height + spacing * 2.0,
+                width + spacing_x * 2.0,
+                height + spacing_y * 2.0,
             );
             canvas.restore();
         }
@@ -788,29 +788,67 @@ pub(super) fn interpolate_animated_bg(
     }
 }
 
-/// Tile period (px) a preset's own draw loop repeats on — the amount by
-/// which a scroll offset can be wrapped without changing the rendered
-/// pattern. Shared by `compute_scroll_offset` (below) and
-/// `draw_world_bg_with_parallax`'s camera-pan modulo so the two never
-/// diverge on what "one period" means for a given preset.
-fn tile_spacing(preset: &BackgroundPreset) -> f32 {
+/// Per-axis tile period (px) a preset's own draw loop repeats on — the
+/// amount by which a scroll offset can be wrapped, independently per axis,
+/// without changing the rendered pattern. Shared by `compute_scroll_offset`
+/// (below) and `draw_world_bg_with_parallax`'s camera-pan modulo so the two
+/// never diverge on what "one period" means for a given preset.
+///
+/// Every preset but `Heropattern` tiles on a square cell, so both axes share
+/// one scalar. Heropattern is the one exception: most of the 87 bundled SVGs
+/// are not square (e.g. `aztec` is 32×64), so wrapping the vertical offset
+/// on the horizontal period desyncs the two axes and the pattern snaps at
+/// every wrap.
+fn tile_spacing(preset: &BackgroundPreset) -> (f32, f32) {
     match preset {
-        BackgroundPreset::GridDots(cfg) => cfg.spacing.max(20.0),
-        BackgroundPreset::GridLines(cfg) => cfg.cell.max(4.0),
-        // The lattice repeats on `spacing`, so the world-view camera can wrap
-        // on it and the tiling stays seamless as the camera pans.
-        BackgroundPreset::PixelGrid(cfg) => cfg.spacing.max(cfg.size.max(1.0)),
-        BackgroundPreset::ConcentricCircles(cfg) => cfg.spacing.max(20.0),
-        BackgroundPreset::Heropattern(cfg) => {
-            let def = crate::engine::heropatterns::find_pattern(&cfg.pattern);
-            def.map(|d| d.width * cfg.scale).unwrap_or(60.0).max(20.0)
+        BackgroundPreset::GridDots(cfg) => {
+            let s = cfg.spacing.max(20.0);
+            (s, s)
         }
-        _ => 60.0_f32.max(20.0),
+        BackgroundPreset::GridLines(cfg) => {
+            let s = cfg.cell.max(4.0);
+            (s, s)
+        }
+        BackgroundPreset::PixelGrid(cfg) => {
+            let s = cfg.spacing.max(cfg.size.max(1.0));
+            (s, s)
+        }
+        BackgroundPreset::ConcentricCircles(cfg) => {
+            let s = cfg.spacing.max(20.0);
+            (s, s)
+        }
+        BackgroundPreset::Heropattern(cfg) => {
+            match crate::engine::heropatterns::find_pattern(&cfg.pattern) {
+                Some(d) => (
+                    period_floor(d.width * cfg.scale, 20.0),
+                    period_floor(d.height * cfg.scale, 20.0),
+                ),
+                None => (60.0, 60.0),
+            }
+        }
+        _ => (60.0, 60.0),
+    }
+}
+
+/// Raise `period` to the smallest multiple of itself that is at least
+/// `floor`, instead of clamping it outright to `floor`. A plain clamp would
+/// no longer be a multiple of the pattern's own period, breaking the
+/// periodicity `compute_scroll_offset`'s wrap depends on for any pattern
+/// narrower/shorter than `floor` (e.g. `bamboo`, 16px wide). Non-positive
+/// `period` has no well-defined multiple; `floor` is the fallback.
+fn period_floor(period: f32, floor: f32) -> f32 {
+    if period <= 0.0 {
+        floor
+    } else if period >= floor {
+        period
+    } else {
+        period * (floor / period).ceil()
     }
 }
 
 /// Compute the scroll offset for tiled backgrounds based on direction +
-/// speed, wrapped into `(-spacing, spacing)` so it never grows unbounded.
+/// speed, wrapped into `(-spacing, spacing)` per axis so it never grows
+/// unbounded.
 ///
 /// Bug this fixes: the offset used to grow linearly with `time` forever.
 /// The tiled draw loops (`draw_bg_grid_dots`, `draw_bg_heropattern`) only
@@ -818,16 +856,16 @@ fn tile_spacing(preset: &BackgroundPreset) -> f32 {
 /// canvas translated by an unbounded offset, the pattern slides off-frame
 /// and leaves a growing blank band once the offset exceeds that one-tile
 /// margin (see paint.md finding #5). Since every tiled pattern is exactly
-/// periodic on `spacing`, translating by any offset congruent mod `spacing`
-/// produces byte-identical pixels — Rust's `%` already returns a value with
-/// `|result| < spacing` and the same sign as the input, which is exactly
-/// the symmetric `(-spacing, spacing)` margin the (now-symmetric, see
-/// `draw_bg_grid_dots`) draw loops need. `t=0` (or `speed=0`) stays an exact
-/// `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
+/// periodic on its own `tile_spacing`, translating by any offset congruent
+/// mod that period produces byte-identical pixels — Rust's `%` already
+/// returns a value with `|result| < spacing` and the same sign as the
+/// input, which is exactly the symmetric `(-spacing, spacing)` margin the
+/// (now-symmetric, see `draw_bg_grid_dots`) draw loops need. `t=0` (or
+/// `speed=0`) stays an exact `(0.0, 0.0)` no-op — `0.0 % spacing == 0.0`.
 pub(super) fn compute_scroll_offset(bg: &AnimatedBackground, time: f32) -> (f32, f32) {
     let (raw_x, raw_y) = raw_scroll_offset(bg, time);
-    let spacing = tile_spacing(&bg.preset);
-    (raw_x % spacing, raw_y % spacing)
+    let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+    (raw_x % spacing_x, raw_y % spacing_y)
 }
 
 /// The unwrapped scroll offset — how far the pattern *would* have travelled
@@ -1248,7 +1286,7 @@ mod pixel_grid_tests {
         let mut c = cfg();
         c.size = 40.0;
         c.spacing = 8.0;
-        assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), 40.0);
+        assert_eq!(tile_spacing(&BackgroundPreset::PixelGrid(c)), (40.0, 40.0));
     }
 
     /// `twinkle` has to reach both ends. A cell that only dips to 10 % still
@@ -1418,5 +1456,70 @@ mod grid_lines_tests {
         // 0 would be an infinite loop's worth of lines; the painter clamps.
         let buf = render(base(0.0));
         assert_eq!(buf.len(), (W * H * 4) as usize, "it still produced a frame");
+    }
+}
+
+#[cfg(test)]
+mod heropattern_period_tests {
+    //! `tile_spacing` used to return the Heropattern's *width* as the
+    //! period on both axes. 41 of the 87 bundled SVGs are not square (e.g.
+    //! `aztec` is 32x64 — see `crates/rustmotion-core/src/engine/heropatterns.rs`),
+    //! so wrapping the vertical offset on the horizontal period snaps the
+    //! pattern mid-tile on every wrap.
+
+    use super::*;
+    use crate::schema::HeropatternConfig;
+
+    fn hero_bg(pattern: &str, direction: ScrollDirection, speed: f32) -> AnimatedBackground {
+        AnimatedBackground {
+            preset: BackgroundPreset::Heropattern(HeropatternConfig {
+                pattern: pattern.to_string(),
+                color: "#FFFFFF".to_string(),
+                opacity: 0.1,
+                scale: 1.0,
+            }),
+            x: 0.0,
+            y: 0.0,
+            speed,
+            direction: Some(direction),
+        }
+    }
+
+    #[test]
+    fn tile_spacing_is_per_axis_for_a_non_square_pattern() {
+        let bg = hero_bg("aztec", ScrollDirection::Down, 60.0);
+        let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+        assert_eq!(spacing_x, 32.0, "x period must be the pattern's own width");
+        assert_eq!(
+            spacing_y, 64.0,
+            "y period must be the pattern's own height, not its width"
+        );
+    }
+
+    #[test]
+    fn vertical_scroll_does_not_wrap_at_half_the_tile_height() {
+        let bg = hero_bg("aztec", ScrollDirection::Down, 60.0);
+        // 48px of vertical travel sits strictly between one width-period
+        // (32px — where the pre-fix code would wrap) and the pattern's
+        // actual 64px height: the correct wrap leaves it untouched, the bug
+        // wraps it down to 48 % 32 = 16.
+        let t = 48.0 / 60.0;
+        let (_dx, dy) = compute_scroll_offset(&bg, t);
+        assert!(
+            (dy - 48.0).abs() < 1e-2,
+            "48px of vertical travel is under one tile height (64px) and must not wrap yet, got dy={dy}"
+        );
+    }
+
+    #[test]
+    fn narrow_pattern_wraps_on_a_whole_multiple_of_its_own_period() {
+        let bg = hero_bg("bamboo", ScrollDirection::Right, 60.0);
+        let (spacing_x, _spacing_y) = tile_spacing(&bg.preset);
+        assert_eq!(
+            spacing_x % 16.0,
+            0.0,
+            "the clamped period must stay a whole multiple of the pattern's own 16px width, got {spacing_x}"
+        );
+        assert!(spacing_x >= 20.0);
     }
 }
