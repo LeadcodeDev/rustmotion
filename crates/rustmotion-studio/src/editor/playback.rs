@@ -92,15 +92,18 @@ pub fn use_playback_clock(shared: Shared, mut current: Signal<u32>, playing: Sig
 }
 
 /// Bump `rev` whenever the watcher swaps in a reloaded model, so the `<img>`
-/// refetches the (now changed) current frame — and re-mix the preview audio for
-/// whatever scenario is now loaded. The mix has to follow the model: opening
-/// another file, or editing this one's tracks, otherwise keeps playing the
-/// previous scenario's sound.
+/// refetches the (now changed) current frame — and re-mix the preview audio
+/// when the audio itself changed. Every optimistic edit (a slider drag is
+/// ~4/s) bumps `generation`, but re-mixing decodes and resamples every track
+/// from scratch, so gating on [`audio::audio_fingerprint`](super::audio::audio_fingerprint)
+/// rather than on `generation` keeps a font-size or color edit from spawning
+/// a fresh mixer thread it has no use for.
 pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
     use_future(move || {
         let shared = shared.clone();
         async move {
             let mut last_gen: Option<u64> = None;
+            let mut last_audio_fp: Option<u64> = None;
             loop {
                 let (g, scenario, total) = {
                     let m = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -112,7 +115,12 @@ pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
                     }
                     last_gen = Some(g);
                     let fps = scenario.video.fps.max(1);
-                    super::audio::prepare(scenario, total as f64 / fps as f64);
+                    let total_duration = total as f64 / fps as f64;
+                    let fp = super::audio::audio_fingerprint(&scenario.audio, total_duration);
+                    if last_audio_fp != Some(fp) {
+                        last_audio_fp = Some(fp);
+                        super::audio::prepare(scenario, total_duration);
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }

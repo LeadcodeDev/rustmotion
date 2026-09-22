@@ -1,26 +1,28 @@
-//! Regression tests for the studio's file-write pipeline — a debounced write
-//! that must rebase onto the current disk instead of replaying a stale
-//! in-memory snapshot, coalesced edits inside one debounce window that must
-//! all survive (not just the last), and undo/redo cancelling a still-pending
-//! write before it can clobber the just-restored state — plus a render-thread
-//! panic that must surface as an error instead of being cached as an empty
-//! JPEG.
+//! Regression tests for the studio's file-write pipeline and a few other
+//! previously-untestable decision points: a debounced write that must rebase
+//! onto the current disk instead of replaying a stale in-memory snapshot,
+//! coalesced edits inside one debounce window that must all survive (not
+//! just the last), undo/redo cancelling a still-pending write before it can
+//! clobber the just-restored state, a render-thread panic that must surface
+//! as an error instead of a cached empty JPEG, and the preview audio mixer
+//! only re-running when the audio itself changed.
 //!
 //! `rustmotion-studio` has no `[dev-dependencies]` and cannot gain one in
 //! this change, so every test below drives the crate's existing public
-//! surface (`scenario::*`, `editor::frames`) against real temp files with
-//! plain synchronous `#[test]`s — no Dioxus runtime, no async executor. That
-//! public surface is itself the fix for the crate having no integration
-//! tests: the defects lived in a debounce timer and Dioxus event handlers
-//! that cannot be driven from a test, so each one was reduced to a pure
-//! decision over plain data (`resolve_flush`, the pending-write queue,
-//! `render_frame_deep` returning `Result`) and the handler calls that instead
-//! of deciding inline.
+//! surface (`scenario::*`, `editor::audio`, `editor::frames`) against real
+//! temp files with plain synchronous `#[test]`s — no Dioxus runtime, no
+//! async executor. That public surface is itself the fix for the crate
+//! having no integration tests: the defects lived in a debounce timer and
+//! Dioxus event handlers that cannot be driven from a test, so each one was
+//! reduced to a pure decision over plain data (`resolve_flush`, the
+//! pending-write queue, `audio_fingerprint`) and the handler calls that
+//! instead of deciding inline.
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use rustmotion_studio::editor::audio::audio_fingerprint;
 use rustmotion_studio::editor::frames::render_frame_deep;
 use rustmotion_studio::scenario::{
     apply_optimistic, empty_scenario, pending_write_slot, queue_mutation, record_edit,
@@ -265,4 +267,43 @@ fn a_normal_render_returns_nonempty_jpeg_bytes() {
     let tasks = rustmotion::encode::build_frame_tasks(&scenario);
     let jpeg = render_frame_deep(&scenario, &tasks, 0, 1.0).expect("a normal render succeeds");
     assert!(!jpeg.is_empty());
+}
+
+// ── The preview audio mixer only re-runs when the audio actually changed ───
+
+#[test]
+fn audio_fingerprint_ignores_unrelated_edits_and_reacts_to_real_audio_changes() {
+    let scenario_a = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "audio": [ { "src": "a.mp3" } ], "scenes": [ { "duration": 1.0 } ] }"##),
+    )
+    .unwrap();
+    let scenario_b_same_audio = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "audio": [ { "src": "a.mp3" } ], "scenes": [ { "duration": 1.0, "children": [ { "type": "text", "content": "Hi" } ] } ] }"##),
+    )
+    .unwrap();
+    let scenario_c_different_audio = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "audio": [ { "src": "a.mp3", "volume": 0.5 } ], "scenes": [ { "duration": 1.0 } ] }"##),
+    )
+    .unwrap();
+
+    let fp_a = audio_fingerprint(&scenario_a.audio, 1.0);
+    let fp_b = audio_fingerprint(&scenario_b_same_audio.audio, 1.0);
+    let fp_c = audio_fingerprint(&scenario_c_different_audio.audio, 1.0);
+
+    assert_eq!(
+        fp_a, fp_b,
+        "an edit unrelated to audio (layout, text) must not change the fingerprint"
+    );
+    assert_ne!(
+        fp_a, fp_c,
+        "a real audio change (volume) must change the fingerprint"
+    );
+    assert_ne!(
+        audio_fingerprint(&scenario_a.audio, 1.0),
+        audio_fingerprint(&scenario_a.audio, 2.0),
+        "a total-duration change (silence padding) must also change the fingerprint"
+    );
 }
