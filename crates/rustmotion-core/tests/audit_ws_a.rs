@@ -2,8 +2,8 @@
 //! tracked in issue #220.
 
 use rustmotion_core::css::style::{
-    Background, BoxShadow, Color as CssColor, CssStyle, Display, FlexDirection, Position,
-    Size as CSize,
+    Background, BackgroundLayer, BoxShadow, Color as CssColor, CssStyle, Display, FlexDirection,
+    GradientStop, Position, Size as CSize,
 };
 use rustmotion_core::css::taffy_bridge::ConversionContext;
 use rustmotion_core::css::units::{Length, LengthPercentage as CLP};
@@ -190,4 +190,55 @@ fn underdamped_spring_matches_the_analytic_closed_form() {
             "t={t}: expected {expected} (analytic reference), got {actual}"
         );
     }
+}
+
+// ---- linear-gradient(180deg, ...) must put the first stop at the top ----
+
+fn gradient_card(w: f32, h: f32, angle: f32) -> BoxNode {
+    let css = CssStyle {
+        width: Some(CSize::Length(CLP::Px(w))),
+        height: Some(CSize::Length(CLP::Px(h))),
+        background: Some(Background::Single(BackgroundLayer::LinearGradient {
+            angle: Some(angle),
+            stops: vec![
+                GradientStop {
+                    color: CssColor::String("#ffffff".into()),
+                    offset: Some(0.0),
+                },
+                GradientStop {
+                    color: CssColor::String("#000000".into()),
+                    offset: Some(1.0),
+                },
+            ],
+        })),
+        ..Default::default()
+    };
+    BoxNode {
+        id: 0,
+        kind: BoxKind::Container,
+        css,
+        children: vec![],
+        intrinsic: None,
+        source_path: None,
+        window: None,
+    }
+}
+
+#[test]
+fn linear_gradient_180deg_puts_the_first_stop_at_the_top() {
+    // CSS: `angle: 180` ("to bottom") points the gradient line downward, so
+    // the first stop lands at the top and the last stop at the bottom.
+    let mut root = gradient_card(100.0, 100.0, 180.0);
+    let buf = render_pixels(&mut root, 100, 100);
+
+    let top = probe(&buf, 100, 50, 2);
+    let bottom = probe(&buf, 100, 50, 97);
+    assert!(
+        top.0 > 200 && top.1 > 200 && top.2 > 200,
+        "angle: 180 must put the white first stop at the top, got {top:?}"
+    );
+    assert!(
+        bottom.0 < 50 && bottom.1 < 50 && bottom.2 < 50,
+        "angle: 180 must put the black last stop at the bottom, got {bottom:?}"
+    );
 }

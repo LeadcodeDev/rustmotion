@@ -1337,11 +1337,16 @@ fn gradient_stops(stops: &[crate::css::style::GradientStop]) -> (Vec<Color4f>, V
     (colors, positions)
 }
 
+/// Gradient-line endpoints for a CSS `<angle>`: `0deg` points the line "to
+/// top" (first stop at the bottom, travelling up to the last stop), and the
+/// angle increases clockwise, so `90deg` is "to right" and `180deg` (the
+/// default) is "to bottom" (first stop at the top). Skia's
+/// `linear_gradient` places `colors[0]` at `p0`, so `p0` is always the end
+/// the angle points *away from*.
 fn gradient_endpoints(bounds: Rect, angle_deg: f32) -> (Point, Point) {
-    // CSS angle: 0deg = bottom→top, increasing clockwise.
     let cx = bounds.left + bounds.width() / 2.0;
     let cy = bounds.top + bounds.height() / 2.0;
-    let rad = (angle_deg - 180.0).to_radians();
+    let rad = angle_deg.to_radians();
     let (sin_a, cos_a) = (rad.sin(), -rad.cos());
     let len = (bounds.width().abs() * sin_a.abs() + bounds.height().abs() * cos_a.abs()) / 2.0;
     let p0 = Point::new(cx - sin_a * len, cy - cos_a * len);
