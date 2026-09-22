@@ -8,20 +8,6 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::commands::validation::{self, ValidationSource};
 
-/// Every process-global decode cache a `--watch` iteration must forget
-/// before re-rendering, so an edited asset is never served from a stale
-/// entry keyed only on its path. `ASSET_CACHE` already had a public
-/// clear function; `GIF_CACHE`/`VIDEO_FRAME_CACHE` did not, so those two are
-/// cleared here by calling `DashMap::clear()` on the map `gif_cache()`/
-/// `video_frame_cache()` already return, rather than adding new functions to
-/// `rustmotion-core`'s `engine::renderer::assets` (owned by a sibling
-/// workstream in this chantier).
-fn clear_all_media_caches() {
-    engine::clear_asset_cache();
-    engine::gif_cache().clear();
-    engine::video_frame_cache().clear();
-}
-
 /// Load + validate a scenario for watch mode. On validation failure prints the
 /// report and returns the typed error so the caller can decide how to handle it.
 ///
@@ -387,7 +373,7 @@ pub fn cmd_watch(
                     Err(e) => eprintln!("Render error: {}", e),
                 }
             } else {
-                clear_all_media_caches();
+                engine::clear_asset_cache();
                 if let Err(e) = cmd_render(
                     scenario,
                     output,
@@ -444,8 +430,6 @@ pub fn cmd_watch(
 
         match load_for_watch(input, no_validate, lenient, strict_anim, strict_attrs) {
             Ok(scenario) => {
-                clear_all_media_caches();
-
                 // Reset error backoff on a successful load
                 if consecutive_err_count > 0 && suppressed {
                     eprintln!("Recovered from previous errors.");
@@ -468,6 +452,7 @@ pub fn cmd_watch(
                     let use_prev = if prev_config_hash == Some(config_hash) {
                         prev_segments.as_deref()
                     } else {
+                        engine::clear_asset_cache();
                         None
                     };
 
@@ -543,6 +528,7 @@ pub fn cmd_watch(
                         Err(e) => eprintln!("Render error: {}", e),
                     }
                 } else {
+                    engine::clear_asset_cache();
                     if let Err(e) = cmd_render(
                         scenario,
                         output,
@@ -609,59 +595,4 @@ fn render_single_frame(
         .ok_or(RustmotionError::PixelImage)?;
     img.save(output)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rustmotion_core::engine::renderer::{asset_cache, gif_cache, video_frame_cache};
-
-    fn unique_marker(label: &str) -> String {
-        format!(
-            "rustmotion-audit-ws-d-rm25-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock before UNIX epoch")
-                .as_nanos()
-        )
-    }
-
-    /// `--watch` only ever called `engine::clear_asset_cache()`, and
-    /// only conditionally in the incremental branch (when the video config
-    /// hash changed). `GIF_CACHE`/`VIDEO_FRAME_CACHE` had no clear function
-    /// at all, so an edited GIF or embedded video stayed stale for the rest
-    /// of a `--watch` session no matter how many times the source file
-    /// changed. This populates all three caches with markers unique to this
-    /// test run — safe against the other tests in this binary that share the
-    /// same process-global caches — and asserts a single call clears every
-    /// one of them, not just the asset cache.
-    #[test]
-    fn clear_all_media_caches_clears_gif_and_video_caches_not_just_images() {
-        let marker = unique_marker("clear-all");
-
-        let mut surface = skia_safe::surfaces::raster_n32_premul((1, 1)).expect("raster surface");
-        asset_cache().insert(marker.clone(), surface.image_snapshot());
-        gif_cache().insert(
-            marker.clone(),
-            std::sync::Arc::new((Vec::new(), Vec::new(), 0.0)),
-        );
-        video_frame_cache().insert(marker.clone(), std::sync::Arc::new(Vec::new()));
-
-        assert!(asset_cache().contains_key(&marker));
-        assert!(gif_cache().contains_key(&marker));
-        assert!(video_frame_cache().contains_key(&marker));
-
-        clear_all_media_caches();
-
-        assert!(!asset_cache().contains_key(&marker));
-        assert!(
-            !gif_cache().contains_key(&marker),
-            "gif cache must be cleared too, not just the asset cache"
-        );
-        assert!(
-            !video_frame_cache().contains_key(&marker),
-            "video frame cache must be cleared too, not just the asset cache"
-        );
-    }
 }
