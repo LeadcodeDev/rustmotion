@@ -6,6 +6,8 @@ A CLI tool that renders motion design videos from JSON scenarios. No browser, no
 [![docs.rs](https://docs.rs/rustmotion/badge.svg)](https://docs.rs/rustmotion)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+MIT-licensed: no licence key, no telemetry, no per-render billing. See [Non-goals](docs/non-goals.md) for this and everything else rustmotion deliberately doesn't do (no embeddable Player/browser/React, no vendor-cloud deploy target, ...).
+
 ## Install
 
 ```bash
