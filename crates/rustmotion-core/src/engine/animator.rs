@@ -434,6 +434,45 @@ pub const DEFAULT_SPRING_REST_THRESHOLD: f64 = 0.005;
 /// rather than an unbounded loop.
 pub const MAX_SPRING_SEARCH_SECONDS: f64 = 30.0;
 
+thread_local! {
+    /// Cache for [`spring_settle_time_cached`], keyed on the exact bit
+    /// pattern of its four inputs. One `SpringConfig` is sampled once per
+    /// animated property per node per frame, always with the same
+    /// (floored) `damping`/`stiffness`/`mass`/`threshold` — the scan result
+    /// is frame-invariant, so a thread-local map turns the whole render
+    /// into one real scan per distinct spring plus O(1) lookups instead of
+    /// one scan per sample.
+    static SPRING_SETTLE_TIME_CACHE: std::cell::RefCell<std::collections::HashMap<(u64, u64, u64, u64), f64>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Memoized [`spring_settle_time`]: identical inputs always produce the
+/// identical scan result, so a cache hit skips the coarse-then-bisect
+/// search entirely. `max_t` is not part of the key because both call sites
+/// below always pass [`MAX_SPRING_SEARCH_SECONDS`].
+fn spring_settle_time_cached(damping: f64, stiffness: f64, mass: f64, threshold: f64) -> f64 {
+    let key = (
+        damping.to_bits(),
+        stiffness.to_bits(),
+        mass.to_bits(),
+        threshold.to_bits(),
+    );
+    SPRING_SETTLE_TIME_CACHE.with(|cache| {
+        if let Some(&cached) = cache.borrow().get(&key) {
+            return cached;
+        }
+        let settled = spring_settle_time(
+            damping,
+            stiffness,
+            mass,
+            threshold,
+            MAX_SPRING_SEARCH_SECONDS,
+        );
+        cache.borrow_mut().insert(key, settled);
+        settled
+    })
+}
+
 /// Solve spring animation at time t (seconds).
 /// Returns a value between 0.0 and 1.0 representing progress.
 ///
@@ -467,13 +506,7 @@ pub fn spring_value(t: f64, config: &SpringConfig) -> f64 {
     match config.duration {
         Some(duration) if duration > 0.0 => {
             let threshold = spring_rest_threshold(config);
-            let natural_rest = spring_settle_time(
-                damping,
-                stiffness,
-                mass,
-                threshold,
-                MAX_SPRING_SEARCH_SECONDS,
-            );
+            let natural_rest = spring_settle_time_cached(damping, stiffness, mass, threshold);
             if natural_rest < 1e-9 {
                 // Degenerate: the spring starts at distance 1.0 from its
                 // target, so in practice `natural_rest` is never this
@@ -623,13 +656,7 @@ pub fn spring_rest_time(config: &SpringConfig) -> f64 {
             let stiffness = config.stiffness.max(1e-6);
             let mass = config.mass.max(1e-6);
             let threshold = spring_rest_threshold(config);
-            spring_settle_time(
-                damping,
-                stiffness,
-                mass,
-                threshold,
-                MAX_SPRING_SEARCH_SECONDS,
-            )
+            spring_settle_time_cached(damping, stiffness, mass, threshold)
         }
     }
 }
