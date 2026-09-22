@@ -219,6 +219,22 @@ crates/
 > sous-commande `studio` — `rustmotion-studio` dépend de `rustmotion`, donc la
 > dépendance inverse serait un cycle. Le studio s'ouvre par son propre binaire.
 
+### `rustmotion-studio` : aucun commentaire
+
+Le code du studio ne porte **aucun commentaire** — ni `//`, ni `///`, ni `//!`.
+La règle ne vaut que pour cette crate : les quatre autres sont publiées, et
+vider leurs doc comments viderait leurs pages docs.rs.
+
+Quand un commentaire semble nécessaire, c'est le signal qu'il faut **renommer
+la liaison ou extraire une fonction nommée** : l'explication va dans un
+identifiant, où elle ne peut pas diverger du code. Le raisonnement qui n'a
+vraiment nulle part d'autre où vivre va dans le **message de commit**, la
+description de PR ou l'issue.
+
+> Piège vérifié : clap dérive le texte de `--help` depuis les doc comments.
+> Utiliser `#[arg(help = "…")]` plutôt que de perdre l'aide. Même vigilance
+> avec `schemars`, qui lit les doc comments dans les `description` du schéma.
+
 ### Ajouter un nouveau composant
 
 1. Créer `crates/rustmotion-components/src/mon_composant.rs` avec struct serde + `impl Painter` (`paint_content`)
