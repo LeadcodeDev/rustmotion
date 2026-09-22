@@ -281,3 +281,43 @@ fn without_loop_video_playback_still_clamps_not_wraps() {
         "no loop_video: must clamp to the window's end (nearest: yellow), not wrap"
     );
 }
+
+// ─── cached-frame draw path mistagged straight alpha as premultiplied ──────
+
+/// ffmpeg's `-pix_fmt rgba` output — what fills the video-frame cache — is
+/// straight (unpremultiplied) alpha. Tagging that buffer `AlphaType::Premul`
+/// makes Skia treat the RGB channels as already scaled by alpha instead of
+/// scaling them itself, which brightens (here: doubles) every
+/// semi-transparent pixel's channels once composited.
+///
+/// A straight-alpha (200, 100, 50, 128) pixel, composited over black:
+/// correctly tagged `Unpremul`, Skia premultiplies it to
+/// (200×128/255, 100×128/255, 50×128/255) ≈ (100, 50, 25) before compositing
+/// over black, landing there almost exactly (the `(1 - alpha) * 0` background
+/// term vanishes either way). Mistagged `Premul`, Skia uses the raw channel
+/// values directly as if already scaled — (200, 100, 50) — composited over
+/// black with no further scaling, landing at roughly double the correct
+/// result.
+#[test]
+fn cached_frame_straight_alpha_composites_correctly_not_doubled() {
+    let src = unique_src("alpha");
+    let cache_key = format!("{src}:10x10");
+    let straight = [200u8, 100, 50, 128];
+    video_frame_cache().insert(
+        cache_key,
+        Arc::new(vec![(0.0, solid_rgba(straight, 2, 2), 2, 2)]),
+    );
+
+    let v = video(&src, ImageFit::Fill, None, None, None);
+    let ctx = ctx_at(0.0);
+    let pixels = paint_and_read(&v, &ctx, 10, 10, false);
+    let composited = px(&pixels, 10, 5, 5);
+
+    let close = |actual: u8, expected: u8| (actual as i16 - expected as i16).abs() <= 4;
+    assert!(
+        close(composited[0], 100) && close(composited[1], 50) && close(composited[2], 25),
+        "straight-alpha (200,100,50,128) over black must composite to roughly (100,50,25), \
+         got {composited:?} — a value near (200,100,50) means the buffer is still mistagged \
+         as premultiplied and its channels are being used unscaled"
+    );
+}

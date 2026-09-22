@@ -50,7 +50,7 @@ pub fn gif_cache() -> &'static GifCacheMap {
 /// then never answers — or trickles one byte a minute — hangs the calling
 /// thread forever; ureq's 10 MB body cap bounds bytes, not time. On the icon
 /// path that thread can be a render worker with nobody at the keyboard to
-/// notice.
+/// notice (RM-41).
 ///
 /// `Config::builder()` starts from `Config::default()`, which already
 /// resolves a proxy from `HTTPS_PROXY`/`https_proxy`/`HTTP_PROXY`/
@@ -258,7 +258,7 @@ pub fn ffmpeg_available() -> bool {
 /// `rtmp://`, `concat:`, …), which turns an unfiltered `src` into an SSRF
 /// primitive — a scenario author can point it at
 /// `http://169.254.169.254/...` (the cloud metadata endpoint) or an internal
-/// service, and read the exit status as a port-scan oracle. Remote
+/// service, and read the exit status as a port-scan oracle (RM-42). Remote
 /// video was never a designed feature here — this module's own `is_remote`
 /// doc, a few functions below, and `rustmotion info`'s identical assumption
 /// both already treat every `src` as a local path — so this closes an
@@ -276,7 +276,7 @@ fn reject_remote_video_src(src: &str) -> Result<()> {
     if looks_like_scheme {
         return Err(RustmotionError::Generic(format!(
             "video src '{src}' names a '{scheme}://' URL — rustmotion does not fetch video \
-             over the network, only local file paths are accepted"
+             over the network, only local file paths are accepted (RM-42)"
         )));
     }
     Ok(())

@@ -134,7 +134,9 @@ fn paint_card_with_child(card_json: serde_json::Value) -> PaintedScene {
 
 fn count_dominant(pixels: &[u8], dominant: usize, muted: &[usize]) -> usize {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[dominant] > 180 && muted.iter().all(|&m| p[m] < 80))
         .count()
 }
@@ -213,7 +215,7 @@ fn text_own_color_wins_over_cascaded_card_color_at_paint_time() {
 }
 
 fn any_ink_above_black_below_y(pixels: &[u8], width: i32, y_threshold: i32) -> bool {
-    pixels.chunks_exact(4).enumerate().any(|(i, p)| {
+    pixels.as_chunks::<4>().0.iter().enumerate().any(|(i, p)| {
         let y = i as i32 / width;
         y > y_threshold && (p[0] > 20 || p[1] > 20 || p[2] > 20)
     })

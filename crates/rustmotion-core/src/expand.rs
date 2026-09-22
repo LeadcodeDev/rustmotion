@@ -157,7 +157,7 @@ use crate::variables::substitute;
 const MAX_EXPANSION_DEPTH: u32 = 64;
 
 /// Ceiling on the total number of nodes a single document's `for-each`
-/// expansion may produce, across every level of nesting combined.
+/// expansion may produce, across every level of nesting combined (RM-43).
 /// [`MAX_EXPANSION_DEPTH`] bounds how deep directives may nest, not how many
 /// nodes they produce — and nesting one `for-each` inside another's
 /// `template` is explicitly supported (`use_template_can_contain_a_nested_
@@ -306,7 +306,7 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
 }
 
 /// Subtracts `n` from the shared expansion-node budget, or fails naming the
-/// limit and where it was hit. See [`MAX_EXPANSION_NODES`] for why
+/// limit and where it was hit (RM-43). See [`MAX_EXPANSION_NODES`] for why
 /// this is checked once per `for-each` directive's item count rather than
 /// once per final node: it is the only point in the recursion where the
 /// multiplicative blow-up can be caught before the work that would produce

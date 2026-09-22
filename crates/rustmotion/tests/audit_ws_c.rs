@@ -154,3 +154,144 @@ fn atempo_guard_rejects_non_positive_and_non_finite_rates_without_hanging() {
         }
     }
 }
+
+// ─── A transition's declared easing must actually reshape its progress ────
+//
+// `transition_progress`/`view_transition_progress` hand a raw *linear*
+// fraction to `apply_transition`, which composites pixels at exactly the
+// fraction it's given — it has no notion of the scenario's declared
+// `transition.easing` on its own. Before this fix, that raw linear fraction
+// reached `apply_transition` unmodified for every transition type except
+// `camera_pan` (which threads easing through a different function,
+// `camera_pan_transition`, that already applies it internally), so
+// `"easing": "ease_in"`/`"ease_out"` on a `fade`, wipe, iris, or a
+// between-view transition was silently a no-op.
+//
+// A `fade` between a solid-black and a solid-white full-canvas frame turns
+// this into an exact, predictable pixel value: at the frame whose *linear*
+// position in the transition is precisely 0.5, an eased blend must land at
+// `255 * ease(0.5)`, not at the unequal, easing-blind `255 * 0.5 = 128`.
+// `ease_in_cubic(0.5) = 0.125` and `ease_out_cubic(0.5) = 0.875` are both far
+// enough from `0.5` that no rendering noise/antialiasing could produce a
+// false pass.
+
+fn center_pixel_red(rgba: &[u8], width: u32, height: u32) -> u8 {
+    let idx = ((height / 2 * width + width / 2) * 4) as usize;
+    rgba[idx]
+}
+
+#[test]
+fn a_fade_transitions_easing_reshapes_its_progress_not_just_camera_pan() {
+    let width = 64u32;
+    let height = 64u32;
+    let fps = 11u32;
+
+    for (easing, expected_u8) in [("ease_in", 32u8), ("ease_out", 224u8)] {
+        let json = format!(
+            r##"{{"video": {{"width": {width}, "height": {height}, "fps": {fps}}},
+            "scenes": [
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#000000",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}},
+                {{"duration": 1.0,
+                  "transition": {{"type": "fade", "duration": 1.0, "easing": "{easing}"}},
+                  "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#ffffff",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}}
+            ]}}"##
+        );
+        let scenario =
+            rustmotion::loader::load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let tasks = rustmotion::encode::video::build_frame_tasks(&scenario);
+        let target = tasks
+            .iter()
+            .find(|t| {
+                matches!(
+                    t,
+                    rustmotion::encode::video::FrameTask::SlideTransition {
+                        frame_in_transition: 5,
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("{easing}: expected a mid-transition frame at index 5"));
+
+        let rgba = rustmotion::encode::video::render_frame_task(&scenario.video, &scenario, target)
+            .unwrap_or_else(|e| panic!("{easing}: render failed: {e}"));
+        let red = center_pixel_red(&rgba, width, height);
+
+        assert!(
+            (red as i32 - expected_u8 as i32).abs() <= 4,
+            "{easing}: at the transition's linear midpoint, the eased blend must land near \
+             {expected_u8}, got {red}"
+        );
+        assert!(
+            (red as i32 - 128).abs() > 20,
+            "{easing}: {red} is too close to 128 — the raw, unequal linear-progress blend an \
+             easing-blind composite would produce"
+        );
+    }
+}
+
+#[test]
+fn a_between_view_fade_transitions_easing_reshapes_its_progress() {
+    let width = 64u32;
+    let height = 64u32;
+    let fps = 11u32;
+
+    let json = format!(
+        r##"{{"video": {{"width": {width}, "height": {height}, "fps": {fps}}},
+        "composition": [
+            {{"type": "slide", "scenes": [
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#000000",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}}
+            ]}},
+            {{"type": "slide",
+              "transition": {{"type": "fade", "duration": 1.0, "easing": "ease_in"}},
+              "scenes": [
+                {{"duration": 1.0, "children": [
+                    {{"type": "shape", "shape": "rect", "fill": "#ffffff",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": {{"width": {width}, "height": {height}}}}}
+                ]}}
+            ]}}
+        ]}}"##
+    );
+    let scenario = rustmotion::loader::load_scenario_from_source(None, Some(&json)).expect("load");
+
+    let tasks = rustmotion::encode::video::build_frame_tasks(&scenario);
+    let target = tasks
+        .iter()
+        .find(|t| {
+            matches!(
+                t,
+                rustmotion::encode::video::FrameTask::ViewTransition {
+                    frame_in_transition: 5,
+                    ..
+                }
+            )
+        })
+        .expect("expected a mid-view-transition frame at index 5");
+
+    let rgba = rustmotion::encode::video::render_frame_task(&scenario.video, &scenario, target)
+        .expect("render");
+    let red = center_pixel_red(&rgba, width, height);
+
+    assert!(
+        (red as i32 - 32).abs() <= 4,
+        "ease_in at the view transition's linear midpoint must land near 32, got {red}"
+    );
+    assert!(
+        (red as i32 - 128).abs() > 20,
+        "{red} is too close to 128 — the raw, unequal linear-progress blend an easing-blind \
+         composite would produce"
+    );
+}

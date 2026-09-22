@@ -1,3 +1,4 @@
+use crate::engine::animator::ease;
 use crate::engine::transition::{apply_transition, camera_pan_transition, TransitionOptions};
 use crate::error::{Result, RustmotionError};
 use crate::schema::{
@@ -296,6 +297,7 @@ pub fn render_frame_task_scaled(
             // Rationale: the transition is the "entry" of scene_b; its post-effects
             // (e.g. vignette) should appear on the blended frames to avoid a
             // jarring pop when the transition ends and Normal frames begin.
+            let progress = eased_transition_progress(progress, easing);
             let mut composited = apply_transition(
                 &frame_a,
                 &frame_b,
@@ -360,7 +362,7 @@ pub fn render_frame_task_scaled(
             transition_type,
             options,
             transition_duration,
-            easing: _,
+            easing,
         } => {
             let scenario_time = *global_frame as f64 / config.fps as f64;
             let scaled_w = (config.width as f32 * scale_factor) as u32;
@@ -372,6 +374,7 @@ pub fn render_frame_task_scaled(
             // does not.
             let progress =
                 view_transition_progress(*frame_in_transition, *transition_duration, fps);
+            let progress = eased_transition_progress(progress, easing);
 
             let view_a = &scenario.views[*view_a_idx];
             let view_b = &scenario.views[*view_b_idx];
@@ -425,6 +428,18 @@ pub fn render_frame_task_scaled(
 fn transition_progress(frame_in_transition: u32, transition_duration: f64, fps: u32) -> f64 {
     let transition_frames = (transition_duration * fps as f64).round() as u32;
     frame_in_transition as f64 / transition_frames.saturating_sub(1).max(1) as f64
+}
+
+/// Reshapes a transition's raw linear `progress` by its declared
+/// `transition.easing` before it reaches `apply_transition`, which composites
+/// pixels at exactly the fraction it's handed and has no notion of easing on
+/// its own. Every transition arm that calls `apply_transition` needs this —
+/// `SlideTransition`'s `CameraPan` case is the one exception, since it never
+/// reaches `apply_transition` at all: it hands its own `easing` straight into
+/// `camera_pan_transition`, which applies it internally, so routing it
+/// through here first would ease that progress twice.
+fn eased_transition_progress(progress: f64, easing: &EasingType) -> f64 {
+    ease(progress, easing)
 }
 
 /// Frame index within a *view* transition → progress in the OPEN interval

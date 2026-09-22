@@ -1,9 +1,9 @@
 //! Regression tests for the workstream H (untrusted scenario ingestion)
-//! audit findings that live in `rustmotion-core`.
+//! audit findings that live in `rustmotion-core`: RM-41, RM-42, RM-43.
 
 use rustmotion_core::engine::renderer::{extract_video_frame, http_agent};
 
-// ---- no timeout on any HTTP call — a bare `ureq::get` always uses
+// ---- RM-41: no timeout on any HTTP call — a bare `ureq::get` always uses
 // the default, untimed agent, so a stalled host hangs a render forever ----
 
 #[test]
@@ -20,7 +20,7 @@ fn shared_http_agent_has_finite_global_and_connect_timeouts() {
     );
 }
 
-// ---- a scenario's `video.src` reaches `ffmpeg -i` verbatim, with no
+// ---- RM-42: a scenario's `video.src` reaches `ffmpeg -i` verbatim, with no
 // protocol allowlist — a remote-looking src turns into an SSRF primitive ----
 
 #[test]
@@ -56,7 +56,7 @@ fn extract_video_frame_does_not_reject_a_plain_local_path() {
     );
 }
 
-// ---- `for-each` expansion has a depth ceiling but no node budget —
+// ---- RM-43: `for-each` expansion has a depth ceiling but no node budget —
 // nesting is multiplicative, so a handful of small arrays nested a few
 // levels deep can declare a product in the millions ----
 

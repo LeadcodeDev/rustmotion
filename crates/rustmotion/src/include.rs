@@ -12,7 +12,7 @@ use crate::schema::{
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
 
-/// Response-size cap for a remote `include` fetch. Scenario JSON is
+/// Response-size cap for a remote `include` fetch (RM-46). Scenario JSON is
 /// not expected to be large; this is deliberately far below ureq's own 10 MB
 /// default for `read_to_vec`/`read_to_string`.
 const MAX_REMOTE_INCLUDE_BYTES: u64 = 4 * 1024 * 1024;
@@ -25,7 +25,7 @@ const MAX_REMOTE_INCLUDE_BYTES: u64 = 4 * 1024 * 1024;
 const ALLOW_REMOTE_INCLUDE_FLAG: &str = "--allow-remote-include";
 
 /// Whether a [`resolve_includes_with_policy`] pass may perform outbound
-/// network requests for `include: "https://..."` directives ( remote
+/// network requests for `include: "https://..."` directives (RM-46: remote
 /// fetching is deliberate design, but it previously had no allowlist and no
 /// opt-out — any scenario, including one merely being `validate`d, could
 /// make this process issue arbitrary GETs). Defaults to [`Self::Deny`].
@@ -50,7 +50,7 @@ pub enum IncludeSource {
 /// [`resolve_includes_with_policy`] to opt in. This is exactly
 /// `resolve_includes_with_policy(scenario, source, RemoteIncludePolicy::Deny)`,
 /// kept as its own entry point so every existing caller stays secure by
-/// default without having to be rewritten to pass a policy.
+/// default without having to be rewritten to pass a policy (RM-46).
 pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<ResolvedScenario> {
     resolve_includes_with_policy(scenario, source, RemoteIncludePolicy::Deny)
 }
@@ -188,7 +188,7 @@ fn fetch_and_resolve(
         if remote_policy != RemoteIncludePolicy::Allow {
             return Err(RustmotionError::Generic(format!(
                 "include '{}' is a remote URL, but remote includes are disabled by default \
- — pass {ALLOW_REMOTE_INCLUDE_FLAG} to opt in",
+                 (RM-46) — pass {ALLOW_REMOTE_INCLUDE_FLAG} to opt in",
                 directive.include
             )));
         }
@@ -302,7 +302,7 @@ impl VerifiedRemoteUrl {
 
 /// Resolves `url`'s host and rejects it if any resolved address is not
 /// publicly routable: loopback, link-local (169.254.169.254, the cloud
-/// metadata endpoint, included), or an RFC1918/ULA private range.
+/// metadata endpoint, included), or an RFC1918/ULA private range (RM-46).
 ///
 /// This check runs once, ahead of the request `fetch_remote` makes moments
 /// later; a DNS answer that changes between this resolution and that
