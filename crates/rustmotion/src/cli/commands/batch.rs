@@ -71,11 +71,14 @@ pub(crate) fn resolve_name_template(
             out.push_str(&replacement);
             cursor = start + end + 1; // skip past '}'
         } else {
-            out.push(bytes[cursor] as char);
-            cursor += 1;
+            let ch = template[cursor..].chars().next().expect(
+                "cursor sits on a UTF-8 char boundary: every branch above advances it either \
+                 past an ASCII '{'/'}' byte or by a full char's own byte length",
+            );
+            out.push(ch);
+            cursor += ch.len_utf8();
         }
     }
-    let _ = bytes;
     Ok(out)
 }
 
@@ -490,6 +493,32 @@ mod name_template_tests {
         assert_eq!(
             resolve_name_template("static.mp4", &data, 0).unwrap(),
             "static.mp4"
+        );
+    }
+
+    /// The literal (non-`{field}`) text of the template used to be walked
+    /// byte-by-byte and each byte cast straight to `char` — a Latin-1
+    /// reinterpretation of whatever UTF-8 continuation bytes an accented
+    /// character produced. `é` is `0xC3 0xA9` in UTF-8; cast individually
+    /// that becomes `Ã©`, exactly the corruption this asserts is gone.
+    #[test]
+    fn accented_literal_text_round_trips() {
+        let data = row(&[("id", json!("abc"))]);
+        assert_eq!(
+            resolve_name_template("résumé-{id}.mp4", &data, 0).unwrap(),
+            "résumé-abc.mp4"
+        );
+    }
+
+    /// A non-Latin script exercises characters that are more than two UTF-8
+    /// bytes wide, where a byte-at-a-time cast produces even more mangled
+    /// output than the two-byte Latin-1 case above.
+    #[test]
+    fn cjk_literal_text_round_trips() {
+        let data = row(&[("id", json!("1"))]);
+        assert_eq!(
+            resolve_name_template("动画-{id}.mp4", &data, 0).unwrap(),
+            "动画-1.mp4"
         );
     }
 }
