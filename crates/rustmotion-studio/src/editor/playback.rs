@@ -1,282 +1,395 @@
 use std::time::Duration;
 
-use dioxus::prelude::*;
-use dioxus_icons::lucide::{Pause, Play, Volume2, VolumeX};
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::slider::{Slider, SliderState, SliderValue};
+use gpui_component::{h_flex, ActiveTheme, IconName, Sizable as _};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    div, px, App, AppContext as _, Context, Entity, InteractiveElement, IntoElement, Modifiers,
+    ParentElement, RenderOnce, SharedString, Styled, Window,
+};
 
-use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::components::select::{Select, SelectOption};
+use crate::app::state::EditorState;
 use crate::scenario::Shared;
 
+use super::diff_panel::DiffSide;
 use super::prefetch::{set_preview_scale_pct, PREVIEW_SCALE_CHOICES};
+use super::surface::request_next_frame_if_playing;
 
-/// What a playback keyboard shortcut does (see [`playback_action`]).
+gpui_kit::actions!(
+    editor_playback,
+    [
+        TogglePlay,
+        StepBackward,
+        StepBackwardBig,
+        StepForward,
+        StepForwardBig,
+        SeekToStart,
+        SeekToEnd,
+    ]
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackAction {
     TogglePlay,
-    /// Step the playhead by N frames (pausing first).
     Step(i64),
     SeekStart,
     SeekEnd,
 }
 
-/// Map a key press to a playback action: Space → toggle, arrows → ±1 frame
-/// (±10 with Shift), Home/End → first/last frame. `None` for anything else or
-/// when command modifiers are held (those belong to other shortcuts).
-pub fn playback_action(key: &Key, mods: Modifiers) -> Option<PlaybackAction> {
-    if mods.meta() || mods.ctrl() || mods.alt() {
+pub fn playback_action(key: &str, mods: Modifiers) -> Option<PlaybackAction> {
+    if mods.control || mods.platform || mods.alt {
         return None;
     }
-    let step = if mods.shift() { 10 } else { 1 };
+    let step = if mods.shift { 10 } else { 1 };
     match key {
-        Key::Character(c) if c == " " && !mods.shift() => Some(PlaybackAction::TogglePlay),
-        Key::ArrowLeft => Some(PlaybackAction::Step(-step)),
-        Key::ArrowRight => Some(PlaybackAction::Step(step)),
-        Key::Home => Some(PlaybackAction::SeekStart),
-        Key::End => Some(PlaybackAction::SeekEnd),
+        "space" if !mods.shift => Some(PlaybackAction::TogglePlay),
+        "left" => Some(PlaybackAction::Step(-step)),
+        "right" => Some(PlaybackAction::Step(step)),
+        "home" => Some(PlaybackAction::SeekStart),
+        "end" => Some(PlaybackAction::SeekEnd),
         _ => None,
     }
 }
 
-/// Advance the playhead while `playing` is true, and keep the sound with it.
-///
-/// When the scenario has audio the playhead follows the *audio* clock rather
-/// than its own timer: a timer ticking at 1/fps drifts against the sound card
-/// over a long scenario, and by the end the picture no longer matches what you
-/// hear. With no track (or no output device) it falls back to the timer.
-pub fn use_playback_clock(shared: Shared, mut current: Signal<u32>, playing: Signal<bool>) {
-    use_future(move || {
-        let shared = shared.clone();
-        async move {
-            // Whether the sound for this playback run has been started. Reset on
-            // pause and on loop, so a mix that finishes preparing mid-playback
-            // still gets picked up.
-            let mut audio_armed = false;
-            loop {
-                let fps = shared
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .scenario
-                    .video
-                    .fps
-                    .max(1);
-                tokio::time::sleep(Duration::from_secs_f64(1.0 / fps as f64)).await;
-                if !playing() {
-                    if audio_armed {
-                        super::audio::stop();
-                        audio_armed = false;
-                    }
-                    continue;
-                }
-                let total = shared
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .total_frames
-                    .max(1);
-                if super::audio::has_audio() && !audio_armed {
-                    super::audio::play_from_frame(current(), fps);
-                    audio_armed = true;
-                }
-                let from = current();
-                let next = match super::audio::position_frame(fps) {
-                    Some(f) if f < total => f,
-                    _ => (from + 1) % total,
-                };
-                // Wrapping past the last frame restarts the track with the picture.
-                if next < from {
-                    audio_armed = false;
-                }
-                current.set(next);
-            }
+pub fn apply_playback_action(
+    action: PlaybackAction,
+    shared: &Shared,
+    editor: &Entity<EditorState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let total_frames = || {
+        shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_frames
+    };
+    match action {
+        PlaybackAction::TogglePlay => {
+            editor.update(cx, |state, cx| {
+                state.playing = !state.playing;
+                cx.notify();
+            });
         }
-    });
-}
-
-/// Bump `rev` whenever the watcher swaps in a reloaded model, so the `<img>`
-/// refetches the (now changed) current frame — and re-mix the preview audio
-/// when the audio itself changed. Every optimistic edit (a slider drag is
-/// ~4/s) bumps `generation`, but re-mixing decodes and resamples every track
-/// from scratch, so gating on [`audio::audio_fingerprint`](super::audio::audio_fingerprint)
-/// rather than on `generation` keeps a font-size or color edit from spawning
-/// a fresh mixer thread it has no use for.
-pub fn use_hot_reload(shared: Shared, mut rev: Signal<u64>) {
-    use_future(move || {
-        let shared = shared.clone();
-        async move {
-            let mut last_gen: Option<u64> = None;
-            let mut last_audio_fp: Option<u64> = None;
-            loop {
-                let (g, scenario, total) = {
-                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-                    (m.generation, m.scenario.clone(), m.total_frames)
-                };
-                if last_gen != Some(g) {
-                    if last_gen.is_some() {
-                        rev.set(rev() + 1);
-                    }
-                    last_gen = Some(g);
-                    let fps = scenario.video.fps.max(1);
-                    let total_duration = total as f64 / fps as f64;
-                    let fp = super::audio::audio_fingerprint(&scenario.audio, total_duration);
-                    if last_audio_fp != Some(fp) {
-                        last_audio_fp = Some(fp);
-                        super::audio::prepare(scenario, total_duration);
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
+        PlaybackAction::Step(delta) => {
+            let max = total_frames().saturating_sub(1);
+            editor.update(cx, |state, cx| {
+                state.playing = false;
+                let next = (state.current as i64 + delta).clamp(0, max as i64) as u32;
+                state.current = next;
+                cx.notify();
+            });
         }
-    });
-}
-
-/// The bottom transport bar: play/pause, step, scrub, and a frame counter.
-/// In diff mode an A|B segmented control flips the canvas between the baseline
-/// (A) and the current state (B) at the same frame — the classic motion-review
-/// gesture.
-#[component]
-pub fn PlaybackBar(
-    current: Signal<u32>,
-    playing: Signal<bool>,
-    total: u32,
-    fps: u32,
-    mut muted: Signal<bool>,
-    diff_active: Signal<bool>,
-    mut diff_side: Signal<super::diff_panel::DiffSide>,
-    mut preview_scale: Signal<u16>,
-) -> Element {
-    use super::diff_panel::DiffSide;
-
-    let max = total.saturating_sub(1);
-    let cur = current().min(max);
-    let is_playing = playing();
-    let is_muted = muted();
-    let side = diff_side();
-
-    rsx! {
-        div {
-            style: "display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--rm-border); background:var(--rm-surface-2);",
-            // Focused transport controls behave natively (arrows on the range
-            // slider step the frame, Space re-activates the focused button —
-            // both ARE playback actions); stopping propagation prevents the
-            // root shortcut handler from double-applying them.
-            onkeydown: move |evt: KeyboardEvent| evt.stop_propagation(),
-            Button {
-                variant: ButtonVariant::Secondary,
-                size: ButtonSize::IconSm,
-                title: if is_playing { "Pause (Space)" } else { "Play (Space)" },
-                onclick: move |_| playing.set(!playing()),
-                if is_playing {
-                    Pause { size: 15 }
-                } else {
-                    Play { size: 15 }
-                }
-            }
-            Button {
-                variant: ButtonVariant::Secondary,
-                size: ButtonSize::IconSm,
-                title: if is_muted { "Unmute" } else { "Mute" },
-                onclick: move |_| {
-                    let next = !muted();
-                    muted.set(next);
-                    super::audio::set_muted(next);
-                },
-                if is_muted {
-                    VolumeX { size: 15 }
-                } else {
-                    Volume2 { size: 15 }
-                }
-            }
-            if diff_active() {
-                div { class: "rm-seg", style: "width:auto; flex:none;",
-                    Button {
-                        variant: if side == DiffSide::A { ButtonVariant::Primary } else { ButtonVariant::Ghost },
-                        size: ButtonSize::Sm,
-                        title: "Baseline",
-                        onclick: move |_| diff_side.set(DiffSide::A),
-                        "A"
-                    }
-                    Button {
-                        variant: if side == DiffSide::B { ButtonVariant::Primary } else { ButtonVariant::Ghost },
-                        size: ButtonSize::Sm,
-                        title: "Current",
-                        onclick: move |_| diff_side.set(DiffSide::B),
-                        "B"
-                    }
-                }
-            }
-            Button {
-                variant: ButtonVariant::Ghost,
-                size: ButtonSize::IconSm,
-                onclick: move |_| current.set(cur.saturating_sub(1)),
-                "‹"
-            }
-            Button {
-                variant: ButtonVariant::Ghost,
-                size: ButtonSize::IconSm,
-                onclick: move |_| current.set((cur + 1).min(max)),
-                "›"
-            }
-            input {
-                r#type: "range",
-                min: "0",
-                max: "{max}",
-                value: "{cur}",
-                style: "flex:1;",
-                oninput: move |e| {
-                    if let Ok(v) = e.value().parse::<u32>() {
-                        current.set(v);
-                        if playing() {
-                            super::audio::play_from_frame(v, fps);
-                        }
-                    }
-                },
-            }
-            // Preview quality: render scale of the preview frames only (the
-            // export always renders at 100%). Lower = smoother playback on
-            // heavy scenarios (glass, camera, parallax).
-            div {
-                title: "Preview quality (export is always 100%)",
-                style: "width:96px; flex:none;",
-                Select::<u16> {
-                    default_value: Some(preview_scale()),
-                    on_value_change: move |v: Option<u16>| {
-                        if let Some(pct) = v {
-                            // Atomic first: the render threads and the asset
-                            // handler must see the new scale before the signal
-                            // change triggers the <img> refetch.
-                            set_preview_scale_pct(pct);
-                            preview_scale.set(pct);
-                        }
-                    },
-                    for (i, pct) in PREVIEW_SCALE_CHOICES.iter().enumerate() {
-                        SelectOption::<u16> {
-                            key: "{pct}",
-                            index: i,
-                            value: *pct,
-                            text_value: "{pct}%",
-                            "{pct}%"
-                        }
-                    }
-                }
-            }
-            div { style: "min-width:120px; text-align:right; color:var(--rm-text-muted);",
-                "{cur} / {max}"
-            }
+        PlaybackAction::SeekStart => {
+            editor.update(cx, |state, cx| {
+                state.current = 0;
+                cx.notify();
+            });
+        }
+        PlaybackAction::SeekEnd => {
+            let max = total_frames().saturating_sub(1);
+            editor.update(cx, |state, cx| {
+                state.current = max;
+                cx.notify();
+            });
         }
     }
+    let playing = editor.read(cx).playing;
+    request_next_frame_if_playing(playing, window);
+}
+
+pub fn spawn_playback_clock<V: 'static>(
+    shared: Shared,
+    editor: Entity<EditorState>,
+    cx: &mut Context<V>,
+) {
+    cx.spawn(async move |_this, cx| {
+        let mut audio_armed = false;
+        loop {
+            let fps = {
+                let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                m.scenario.video.fps.max(1)
+            };
+            cx.background_executor()
+                .timer(Duration::from_secs_f64(1.0 / fps as f64))
+                .await;
+            let playing = editor.read_with(cx, |state, _| state.playing);
+            if !playing {
+                if audio_armed {
+                    super::audio::stop();
+                    audio_armed = false;
+                }
+                continue;
+            }
+            let total = {
+                let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                m.total_frames.max(1)
+            };
+            let current = editor.read_with(cx, |state, _| state.current);
+            if super::audio::has_audio() && !audio_armed {
+                super::audio::play_from_frame(current, fps);
+                audio_armed = true;
+            }
+            let next = match super::audio::position_frame(fps) {
+                Some(f) if f < total => f,
+                _ => (current + 1) % total,
+            };
+            if next < current {
+                audio_armed = false;
+            }
+            editor.update(cx, |state, cx| {
+                state.current = next;
+                cx.notify();
+            });
+        }
+    })
+    .detach();
+}
+
+pub fn spawn_hot_reload<V: 'static>(
+    shared: Shared,
+    editor: Entity<EditorState>,
+    cx: &mut Context<V>,
+) {
+    cx.spawn(async move |_this, cx| {
+        let mut last_gen: Option<u64> = None;
+        let mut last_audio_fp: Option<u64> = None;
+        loop {
+            let (g, scenario, total) = {
+                let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+                (m.generation, m.scenario.clone(), m.total_frames)
+            };
+            if last_gen != Some(g) {
+                if last_gen.is_some() {
+                    editor.update(cx, |state, cx| {
+                        state.rev = state.rev.wrapping_add(1);
+                        cx.notify();
+                    });
+                }
+                last_gen = Some(g);
+                let fps = scenario.video.fps.max(1);
+                let total_duration = total as f64 / fps as f64;
+                let fp = super::audio::audio_fingerprint(&scenario.audio, total_duration);
+                if last_audio_fp != Some(fp) {
+                    last_audio_fp = Some(fp);
+                    super::audio::prepare(scenario, total_duration);
+                }
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+        }
+    })
+    .detach();
+}
+
+pub fn new_scrubber(total_frames: u32, cx: &mut App) -> Entity<SliderState> {
+    let max = total_frames.saturating_sub(1).max(1) as f32;
+    cx.new(|_| SliderState::new().min(0.).max(max).step(1.))
+}
+
+pub struct TransportBar {
+    shared: Shared,
+    editor: Entity<EditorState>,
+    scrubber: Entity<SliderState>,
+}
+
+impl TransportBar {
+    pub fn new(shared: Shared, editor: Entity<EditorState>, scrubber: Entity<SliderState>) -> Self {
+        Self {
+            shared,
+            editor,
+            scrubber,
+        }
+    }
+}
+
+impl RenderOnce for TransportBar {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let TransportBar {
+            shared,
+            editor,
+            scrubber,
+        } = self;
+        let state = editor.read(cx);
+        let total = shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_frames;
+        let max = total.saturating_sub(1);
+        let cur = state.current.min(max);
+        let is_playing = state.playing;
+        let is_muted = state.muted;
+        let diff_active = state.diff_active;
+        let diff_side = state.diff_side;
+        let preview_scale = state.preview_scale;
+
+        scrubber.update(cx, |slider, cx| {
+            slider.set_value(SliderValue::Single(cur as f32), window, cx);
+        });
+
+        let play_editor = editor.clone();
+        let mute_editor = editor.clone();
+        let side_a_editor = editor.clone();
+        let side_b_editor = editor.clone();
+        let step_back_editor = editor.clone();
+        let step_fwd_editor = editor.clone();
+
+        h_flex()
+            .id("transport-bar")
+            .items_center()
+            .gap_3()
+            .px_5()
+            .py_3()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("transport-play")
+                    .icon(if is_playing {
+                        IconName::Pause
+                    } else {
+                        IconName::Play
+                    })
+                    .tooltip(if is_playing {
+                        "Pause (Space)"
+                    } else {
+                        "Play (Space)"
+                    })
+                    .ghost()
+                    .small()
+                    .on_click(move |_, _, cx| {
+                        play_editor.update(cx, |state, cx| {
+                            state.playing = !state.playing;
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("transport-mute")
+                    .label(if is_muted { "Unmute" } else { "Mute" })
+                    .tooltip(if is_muted { "Unmute" } else { "Mute" })
+                    .ghost()
+                    .small()
+                    .on_click(move |_, _, cx| {
+                        mute_editor.update(cx, |state, cx| {
+                            state.muted = !state.muted;
+                            super::audio::set_muted(state.muted);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .when(diff_active, |el| {
+                el.child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("transport-side-a")
+                                .label("A")
+                                .tooltip("Baseline")
+                                .when(diff_side == DiffSide::A, |b| b.primary())
+                                .when(diff_side != DiffSide::A, |b| b.ghost())
+                                .small()
+                                .on_click(move |_, _, cx| {
+                                    side_a_editor.update(cx, |state, cx| {
+                                        state.diff_side = DiffSide::A;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("transport-side-b")
+                                .label("B")
+                                .tooltip("Current")
+                                .when(diff_side == DiffSide::B, |b| b.primary())
+                                .when(diff_side != DiffSide::B, |b| b.ghost())
+                                .small()
+                                .on_click(move |_, _, cx| {
+                                    side_b_editor.update(cx, |state, cx| {
+                                        state.diff_side = DiffSide::B;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                )
+            })
+            .child(
+                Button::new("transport-step-back")
+                    .icon(IconName::ChevronLeft)
+                    .ghost()
+                    .small()
+                    .on_click(move |_, _, cx| {
+                        step_back_editor.update(cx, |state, cx| {
+                            state.current = state.current.saturating_sub(1);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("transport-step-forward")
+                    .icon(IconName::ChevronRight)
+                    .ghost()
+                    .small()
+                    .on_click(move |_, _, cx| {
+                        step_fwd_editor.update(cx, |state, cx| {
+                            state.current = (state.current + 1).min(max);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(div().flex_1().child(Slider::new(&scrubber)))
+            .child(preview_scale_selector(editor.clone(), preview_scale))
+            .child(
+                div()
+                    .min_w(px(96.))
+                    .text_right()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{cur} / {max}")),
+            )
+    }
+}
+
+fn preview_scale_selector(editor: Entity<EditorState>, current_pct: u16) -> impl IntoElement {
+    h_flex()
+        .id("preview-scale")
+        .gap_1()
+        .children(PREVIEW_SCALE_CHOICES.iter().map(|&pct| {
+            let active = pct == current_pct;
+            let editor = editor.clone();
+            Button::new(SharedString::from(format!("preview-scale-{pct}")))
+                .label(format!("{pct}%"))
+                .tooltip("Preview quality (export is always 100%)")
+                .when(active, |b| b.primary())
+                .when(!active, |b| b.ghost())
+                .xsmall()
+                .on_click(move |_, _, cx| {
+                    set_preview_scale_pct(pct);
+                    editor.update(cx, |state, cx| {
+                        state.preview_scale = pct;
+                        cx.notify();
+                    });
+                })
+        }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ch(s: &str) -> Key {
-        Key::Character(s.to_string())
+    fn mods(shift: bool, control: bool, alt: bool, platform: bool) -> Modifiers {
+        Modifiers {
+            shift,
+            control,
+            alt,
+            platform,
+            function: false,
+        }
     }
 
     #[test]
     fn space_toggles_play() {
         assert_eq!(
-            playback_action(&ch(" "), Modifiers::empty()),
+            playback_action("space", Modifiers::none()),
             Some(PlaybackAction::TogglePlay)
         );
     }
@@ -284,19 +397,19 @@ mod tests {
     #[test]
     fn arrows_step_one_or_ten() {
         assert_eq!(
-            playback_action(&Key::ArrowLeft, Modifiers::empty()),
+            playback_action("left", Modifiers::none()),
             Some(PlaybackAction::Step(-1))
         );
         assert_eq!(
-            playback_action(&Key::ArrowRight, Modifiers::empty()),
+            playback_action("right", Modifiers::none()),
             Some(PlaybackAction::Step(1))
         );
         assert_eq!(
-            playback_action(&Key::ArrowRight, Modifiers::SHIFT),
+            playback_action("right", mods(true, false, false, false)),
             Some(PlaybackAction::Step(10))
         );
         assert_eq!(
-            playback_action(&Key::ArrowLeft, Modifiers::SHIFT),
+            playback_action("left", mods(true, false, false, false)),
             Some(PlaybackAction::Step(-10))
         );
     }
@@ -304,21 +417,30 @@ mod tests {
     #[test]
     fn home_end_seek() {
         assert_eq!(
-            playback_action(&Key::Home, Modifiers::empty()),
+            playback_action("home", Modifiers::none()),
             Some(PlaybackAction::SeekStart)
         );
         assert_eq!(
-            playback_action(&Key::End, Modifiers::empty()),
+            playback_action("end", Modifiers::none()),
             Some(PlaybackAction::SeekEnd)
         );
     }
 
     #[test]
     fn unhandled_or_modified_keys_are_none() {
-        assert_eq!(playback_action(&ch("z"), Modifiers::empty()), None);
-        assert_eq!(playback_action(&ch(" "), Modifiers::META), None);
-        assert_eq!(playback_action(&ch(" "), Modifiers::SHIFT), None);
-        assert_eq!(playback_action(&Key::ArrowRight, Modifiers::CONTROL), None);
-        assert_eq!(playback_action(&Key::Enter, Modifiers::empty()), None);
+        assert_eq!(playback_action("z", Modifiers::none()), None);
+        assert_eq!(
+            playback_action("space", mods(false, false, false, true)),
+            None
+        );
+        assert_eq!(
+            playback_action("space", mods(true, false, false, false)),
+            None
+        );
+        assert_eq!(
+            playback_action("right", mods(false, true, false, false)),
+            None
+        );
+        assert_eq!(playback_action("enter", Modifiers::none()), None);
     }
 }

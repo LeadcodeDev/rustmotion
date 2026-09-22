@@ -4,19 +4,26 @@ use gpui_kit::*;
 
 use crate::app::overlays;
 use crate::app::state::StudioState;
+use crate::editor::view::EditorView;
 use crate::library::Library;
 use crate::scenario::View;
 
 pub struct StudioRoot {
     state: Entity<StudioState>,
     library: Entity<Library>,
+    editor: Entity<EditorView>,
 }
 
 impl StudioRoot {
     pub fn new(state: Entity<StudioState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let library = cx.new(|cx| Library::new(state.clone(), window, cx));
+        let editor = cx.new(|cx| EditorView::new(state.clone(), window, cx));
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        Self { state, library }
+        Self {
+            state,
+            library,
+            editor,
+        }
     }
 }
 
@@ -26,12 +33,7 @@ impl Render for StudioRoot {
 
         let screen = match view {
             View::Library => self.library.clone().into_any_element(),
-            View::Editor => v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .child("Editor — screen not yet ported to gpui-kit")
-                .into_any_element(),
+            View::Editor => self.editor.clone().into_any_element(),
         };
 
         v_flex()

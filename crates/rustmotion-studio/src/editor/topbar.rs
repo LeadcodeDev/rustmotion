@@ -1,292 +1,67 @@
-use std::time::Duration;
-
-use dioxus::prelude::*;
-use dioxus_icons::lucide::{
-    Camera, ChevronLeft, Download, Eye, GitCompareArrows, MessageSquare, Monitor, Moon, Play,
-    Redo2, Sun, Undo2,
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::{
+    h_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, StyledExt as _,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    div, px, App, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, Styled,
+    Window,
 };
 
-use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::scenario::{
-    baseline_slot, diff_scenarios, get_baseline, history_slot, redo, set_baseline, undo, Shared,
-    SharedHistory, Theme, View,
-};
+use crate::app::state::{EditorState, StudioState};
+use crate::scenario::{baseline_slot, history_slot, redo, set_baseline, undo, Shared, View};
 
-use super::diff_panel::DiffSide;
-use super::export::{export_label, export_slot, start_export, use_export_poll, ExportStatus};
+use super::export::{export_label, ExportStatus};
 
-/// Snapshot of the history slot for the topbar UI (polled, set-on-change).
-#[derive(Clone, PartialEq, Default)]
-struct HistoryUi {
-    can_undo: bool,
-    can_redo: bool,
-    saving: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryUi {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub saving: bool,
 }
 
-/// Poll the history slot into a signal (~150 ms), same pattern as the export
-/// poll. Undo/redo availability only counts when the slot belongs to the
-/// currently open file.
-fn use_history_poll(shared: Shared, slot: SharedHistory, mut sig: Signal<HistoryUi>) {
-    use_future(move || {
-        let shared = shared.clone();
-        let slot = slot.clone();
-        async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let path = {
-                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-                    m.path.clone()
-                };
-                let ui = {
-                    let st = slot.lock().unwrap_or_else(|e| e.into_inner());
-                    let matches = path.is_some() && st.path == path;
-                    HistoryUi {
-                        can_undo: matches && st.history.can_undo(),
-                        can_redo: matches && st.history.can_redo(),
-                        saving: st.saving,
-                    }
-                };
-                if ui != sig() {
-                    sig.set(ui);
-                }
-            }
-        }
-    });
-}
-
-/// Poll whether the current scenario differs from its baseline (~300 ms) —
-/// drives the Diff toggle's enabled state.
-fn use_diff_poll(shared: Shared, mut sig: Signal<bool>) {
-    use_future(move || {
-        let shared = shared.clone();
-        async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                let (path, raw) = {
-                    let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-                    (m.path.clone(), m.raw.clone())
-                };
-                let changed = path
-                    .and_then(|p| get_baseline(&baseline_slot(), &p))
-                    .map(|b| !diff_scenarios(&b.raw, &raw).is_empty())
-                    .unwrap_or(false);
-                if changed != sig() {
-                    sig.set(changed);
-                }
-            }
-        }
-    });
-}
-
-/// The editor's top bar (open-slide style): a back-to-library control on the
-/// left, the centered document title, and the action cluster on the right
-/// (theme swap, Set baseline, Diff toggle, Inspect overlay toggle, Comments
-/// panel toggle, Export, and Present). `write_error` is `Some` when the last
-/// inspector write failed; shown as a discrete warning indicator using the
-/// `--rm-error` token. The export state (slot + polling) lives here too — the
-/// topbar is its only consumer.
-#[component]
-pub fn TopBar(
-    view: Signal<View>,
+pub struct TopBar {
+    shared: Shared,
+    studio: Entity<StudioState>,
+    editor: Entity<EditorState>,
     title: String,
-    playing: Signal<bool>,
-    current: Signal<u32>,
-    show_annotations: Signal<bool>,
-    show_hits: Signal<bool>,
+    history_ui: HistoryUi,
+    diff_available: bool,
     comment_count: usize,
     write_error: Option<String>,
     audio_error: Option<String>,
-    diff_active: Signal<bool>,
-    diff_side: Signal<DiffSide>,
-) -> Element {
-    let shared = use_context::<Shared>();
-    let mut theme = use_context::<Signal<Theme>>();
-    let inspecting = show_hits();
-    let commenting = show_annotations();
-    let current_theme = theme();
+    export_status: ExportStatus,
+}
 
-    // Export state: the cross-thread slot the encode thread writes, and the
-    // polled signal that drives the button label / status text.
-    let export = use_hook(export_slot);
-    let mut export_status = use_signal(|| ExportStatus::Idle);
-    use_export_poll(export.clone(), export_status);
-    let status = export_status();
-    let exporting = status.is_running();
-
-    // Undo/redo + pending-write ("Saving…") state, polled from the history slot.
-    let history = use_hook(history_slot);
-    let history_ui = use_signal(HistoryUi::default);
-    use_history_poll(shared.clone(), history.clone(), history_ui);
-    let hist = history_ui();
-
-    // Diff availability (scenario differs from baseline).
-    let diff_available = use_signal(|| false);
-    use_diff_poll(shared.clone(), diff_available);
-    let diffing = diff_active();
-    let can_diff = diff_available();
-
-    rsx! {
-        div {
-            style: "position:relative; display:flex; align-items:center; justify-content:space-between; height:40px; padding:0 12px; border-bottom:1px solid var(--rm-border); background:var(--rm-surface-2); flex:none;",
-            // A focused topbar button owns its keys (Space activates IT, not
-            // play/pause) — same isolation pattern as the inspector panel.
-            onkeydown: move |evt: KeyboardEvent| evt.stop_propagation(),
-            div { style: "display:flex; align-items:center; gap:8px; z-index:1;",
-                Button {
-                    variant: ButtonVariant::Outline,
-                    size: ButtonSize::Sm,
-                    onclick: move |_| view.set(View::Library),
-                    ChevronLeft { size: 16 }
-                    "Library"
-                }
-            }
-
-            // ── Center: document title (absolutely centered) ─────────
-            div { style: "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:var(--rm-text-strong); font-weight:500; max-width:40%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
-                "{title}"
-            }
-
-            // ── Right: indicators + actions ──────────────────────────
-            div { style: "display:flex; align-items:center; gap:6px; z-index:1;",
-                if hist.saving {
-                    span { style: "color:var(--rm-text-muted); font-size:11px; white-space:nowrap;",
-                        "Saving…"
-                    }
-                }
-                if let Some(ref msg) = write_error {
-                    span {
-                        title: "{msg}",
-                        style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis;",
-                        "Changes not saved: {msg}"
-                    }
-                }
-                if let Some(ref msg) = audio_error {
-                    span {
-                        title: "{msg}",
-                        style: "color:var(--rm-error); font-size:11px; white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis;",
-                        "Audio not analysed: {msg}"
-                    }
-                }
-                Button {
-                    variant: ButtonVariant::Ghost,
-                    size: ButtonSize::IconSm,
-                    title: "Undo (Cmd+Z)",
-                    disabled: !hist.can_undo,
-                    onclick: {
-                        let shared = shared.clone();
-                        let history = history.clone();
-                        move |_| undo(&shared, &history)
-                    },
-                    Undo2 { size: 15, stroke: if hist.can_undo { "var(--rm-text)" } else { "var(--rm-text-muted)" } }
-                }
-                Button {
-                    variant: ButtonVariant::Ghost,
-                    size: ButtonSize::IconSm,
-                    title: "Redo (Shift+Cmd+Z)",
-                    disabled: !hist.can_redo,
-                    onclick: {
-                        let shared = shared.clone();
-                        let history = history.clone();
-                        move |_| redo(&shared, &history)
-                    },
-                    Redo2 { size: 15, stroke: if hist.can_redo { "var(--rm-text)" } else { "var(--rm-text-muted)" } }
-                }
-                Button {
-                    variant: ButtonVariant::Outline,
-                    size: ButtonSize::IconSm,
-                    title: "Theme: {current_theme.label()}",
-                    onclick: move |_| theme.set(theme().next()),
-                    match current_theme {
-                        Theme::Dark => rsx! { Moon { size: 15 } },
-                        Theme::Light => rsx! { Sun { size: 15 } },
-                        Theme::System => rsx! { Monitor { size: 15 } },
-                    }
-                }
-                Button {
-                    variant: ButtonVariant::Outline,
-                    size: ButtonSize::IconSm,
-                    title: "Set baseline (snapshot the current state for diff review)",
-                    onclick: {
-                        let shared = shared.clone();
-                        move |_| set_baseline_now(&shared)
-                    },
-                    Camera { size: 15 }
-                }
-                Button {
-                    variant: if diffing { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                    size: ButtonSize::Sm,
-                    // Stays enabled while active so it can always be switched off.
-                    disabled: !can_diff && !diffing,
-                    title: if can_diff || diffing { "Compare against the baseline" } else { "No changes since baseline" },
-                    onclick: move |_| {
-                        let next = !diff_active();
-                        diff_active.set(next);
-                        if next {
-                            diff_side.set(DiffSide::B);
-                        }
-                    },
-                    GitCompareArrows { size: 15 }
-                    "Diff"
-                }
-                Button {
-                    variant: if inspecting { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                    size: ButtonSize::Sm,
-                    onclick: move |_| show_hits.set(!show_hits()),
-                    Eye { size: 15 }
-                    "Inspect"
-                }
-                Button {
-                    variant: if commenting { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                    size: ButtonSize::Sm,
-                    onclick: move |_| show_annotations.set(!show_annotations()),
-                    MessageSquare { size: 15 }
-                    "Comments"
-                    if comment_count > 0 {
-                        span { style: "background:var(--rm-border-2); color:var(--rm-text); border-radius:999px; padding:0 6px; font-size:11px; line-height:18px;",
-                            "{comment_count}"
-                        }
-                    }
-                }
-                Button {
-                    variant: ButtonVariant::Secondary,
-                    size: ButtonSize::Sm,
-                    disabled: exporting,
-                    onclick: {
-                        let shared = shared.clone();
-                        let export = export.clone();
-                        move |_| {
-                            if !exporting {
-                                start_export(&shared, &export);
-                                // Instant feedback; the poll refines it within 150 ms.
-                                export_status.set(ExportStatus::Running {
-                                    phase: "Rendering",
-                                    done: 0,
-                                    total: 0,
-                                });
-                            }
-                        }
-                    },
-                    Download { size: 14 }
-                    "{export_label(&status)}"
-                }
-                Button {
-                    variant: ButtonVariant::Primary,
-                    size: ButtonSize::Sm,
-                    onclick: move |_| {
-                        current.set(0);
-                        playing.set(true);
-                    },
-                    Play { size: 14 }
-                    "Present"
-                }
-            }
+impl TopBar {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        shared: Shared,
+        studio: Entity<StudioState>,
+        editor: Entity<EditorState>,
+        title: String,
+        history_ui: HistoryUi,
+        diff_available: bool,
+        comment_count: usize,
+        write_error: Option<String>,
+        audio_error: Option<String>,
+        export_status: ExportStatus,
+    ) -> Self {
+        Self {
+            shared,
+            studio,
+            editor,
+            title,
+            history_ui,
+            diff_available,
+            comment_count,
+            write_error,
+            audio_error,
+            export_status,
         }
     }
 }
 
-/// Re-snapshot the baseline from the current state: source text re-read from
-/// disk, raw taken from the live model (so it matches what future models will
-/// hold). Read failures surface through `write_error`.
 fn set_baseline_now(shared: &Shared) {
     let (path, raw) = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -302,5 +77,255 @@ fn set_baseline_now(shared: &Shared) {
             m.write_error = Some(format!("baseline: {e}"));
             m.generation = m.generation.wrapping_add(1);
         }
+    }
+}
+
+impl RenderOnce for TopBar {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let TopBar {
+            shared,
+            studio,
+            editor,
+            title,
+            history_ui,
+            diff_available,
+            comment_count,
+            write_error,
+            audio_error,
+            export_status,
+        } = self;
+
+        let theme_pref = studio.read(cx).theme_pref;
+        let diff_active = editor.read(cx).diff_active;
+        let show_hits = editor.read(cx).show_hits;
+        let show_annotations = editor.read(cx).show_annotations;
+        let exporting = export_status.is_running();
+
+        let library_studio = studio.clone();
+        let undo_shared = shared.clone();
+        let redo_shared = shared.clone();
+        let baseline_shared = shared.clone();
+        let diff_editor = editor.clone();
+        let inspect_editor = editor.clone();
+        let comments_editor = editor.clone();
+        let export_shared = shared.clone();
+        let present_editor = editor.clone();
+
+        h_flex()
+            .id("topbar")
+            .relative()
+            .flex_none()
+            .h(px(40.))
+            .w_full()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary)
+            .child(
+                h_flex().items_center().gap_2().child(
+                    Button::new("topbar-library")
+                        .icon(IconName::ChevronLeft)
+                        .label("Library")
+                        .ghost()
+                        .small()
+                        .on_click(move |_, _, cx| {
+                            library_studio.update(cx, |state, cx| {
+                                state.view = View::Library;
+                                cx.notify();
+                            });
+                        }),
+                ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .font_semibold()
+                            .text_color(cx.theme().foreground)
+                            .child(title),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .when(history_ui.saving, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Saving…"),
+                        )
+                    })
+                    .when_some(write_error, |el, msg| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .max_w(px(200.))
+                                .truncate()
+                                .text_color(cx.theme().danger)
+                                .child(format!("Changes not saved: {msg}")),
+                        )
+                    })
+                    .when_some(audio_error, |el, msg| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .max_w(px(220.))
+                                .truncate()
+                                .text_color(cx.theme().danger)
+                                .child(format!("Audio not analysed: {msg}")),
+                        )
+                    })
+                    .child(
+                        Button::new("topbar-undo")
+                            .icon(IconName::Undo2)
+                            .tooltip("Undo (Cmd+Z)")
+                            .ghost()
+                            .xsmall()
+                            .disabled(!history_ui.can_undo)
+                            .on_click(move |_, _, _cx| {
+                                undo(&undo_shared, &history_slot());
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-redo")
+                            .icon(IconName::Redo2)
+                            .tooltip("Redo (Shift+Cmd+Z)")
+                            .ghost()
+                            .xsmall()
+                            .disabled(!history_ui.can_redo)
+                            .on_click(move |_, _, _cx| {
+                                redo(&redo_shared, &history_slot());
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-theme")
+                            .when_some(theme_pref_icon(theme_pref), |b, icon| b.icon(icon))
+                            .label(theme_pref.label())
+                            .tooltip(format!("Theme: {}", theme_pref.label()))
+                            .ghost()
+                            .xsmall()
+                            .on_click(move |_, window, cx| {
+                                let next = studio.read(cx).theme_pref.next();
+                                crate::theme::set(&studio, next, window, cx);
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-baseline")
+                            .icon(IconName::Frame)
+                            .label("Baseline")
+                            .tooltip("Set baseline (snapshot the current state for diff review)")
+                            .ghost()
+                            .xsmall()
+                            .on_click(move |_, _, _cx| {
+                                set_baseline_now(&baseline_shared);
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-diff")
+                            .label("Diff")
+                            .tooltip(if diff_available || diff_active {
+                                "Compare against the baseline"
+                            } else {
+                                "No changes since baseline"
+                            })
+                            .when(diff_active, |b| b.primary())
+                            .when(!diff_active, |b| b.secondary())
+                            .small()
+                            .disabled(!diff_available && !diff_active)
+                            .on_click(move |_, _, cx| {
+                                diff_editor.update(cx, |state, cx| {
+                                    let next = !state.diff_active;
+                                    state.diff_active = next;
+                                    if next {
+                                        state.diff_side = super::diff_panel::DiffSide::B;
+                                    }
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-inspect")
+                            .icon(if show_hits {
+                                IconName::Eye
+                            } else {
+                                IconName::EyeOff
+                            })
+                            .label("Inspect")
+                            .when(show_hits, |b| b.primary())
+                            .when(!show_hits, |b| b.secondary())
+                            .small()
+                            .on_click(move |_, _, cx| {
+                                inspect_editor.update(cx, |state, cx| {
+                                    state.show_hits = !state.show_hits;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-comments")
+                            .icon(IconName::Inbox)
+                            .label(if comment_count > 0 {
+                                format!("Comments ({comment_count})")
+                            } else {
+                                "Comments".to_string()
+                            })
+                            .when(show_annotations, |b| b.primary())
+                            .when(!show_annotations, |b| b.secondary())
+                            .small()
+                            .on_click(move |_, _, cx| {
+                                comments_editor.update(cx, |state, cx| {
+                                    state.show_annotations = !state.show_annotations;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-export")
+                            .label(export_label(&export_status))
+                            .secondary()
+                            .small()
+                            .disabled(exporting)
+                            .on_click(move |_, _, _cx| {
+                                if !exporting {
+                                    super::export::start_export(
+                                        &export_shared,
+                                        &super::export::export_slot(),
+                                    );
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("topbar-present")
+                            .icon(IconName::Play)
+                            .label("Present")
+                            .primary()
+                            .small()
+                            .on_click(move |_, _, cx| {
+                                present_editor.update(cx, |state, cx| {
+                                    state.current = 0;
+                                    state.playing = true;
+                                    cx.notify();
+                                });
+                            }),
+                    ),
+            )
+    }
+}
+
+fn theme_pref_icon(pref: crate::app::state::ThemePref) -> Option<IconName> {
+    use crate::app::state::ThemePref;
+    match pref {
+        ThemePref::Dark => Some(IconName::Moon),
+        ThemePref::Light => Some(IconName::Sun),
+        ThemePref::System => None,
     }
 }

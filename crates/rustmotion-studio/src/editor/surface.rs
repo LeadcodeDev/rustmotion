@@ -16,7 +16,7 @@ use crate::scenario::Shared;
 
 use super::diff_panel::DiffSide;
 use super::frames::render_frame_rgba_deep;
-use super::prefetch::{ensure_prefetcher, publish_target, PrefetchTarget};
+use super::prefetch::{ensure_prefetcher, frame_cache, publish_target, FrameKey, PrefetchTarget};
 
 pub fn frame_from_rgba(width: u32, height: u32, mut rgba: Vec<u8>) -> Arc<RenderImage> {
     let (pixels, _) = rgba.as_chunks_mut::<4>();
@@ -68,6 +68,21 @@ pub fn frame_surface(frame: Option<Arc<RenderImage>>) -> AnyElement {
             .into_any_element(),
         None => div().size_full().into_any_element(),
     }
+}
+
+pub fn frame_from_jpeg(bytes: &[u8]) -> Option<Arc<RenderImage>> {
+    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(frame_from_rgba(width, height, rgba.into_raw()))
+}
+
+pub fn prefetched_frame(key: &FrameKey) -> Option<Arc<RenderImage>> {
+    let bytes = frame_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(key)?;
+    frame_from_jpeg(&bytes)
 }
 
 fn prefetch_target_for(shared: &Shared, editor: &EditorState) -> PrefetchTarget {
