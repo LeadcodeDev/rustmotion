@@ -58,11 +58,10 @@ fn collect_text(handle: &Handle, out: &mut String) {
 /// [`crate::style::parse_anim_attr`]) lands in `style.animation` — inline CSS
 /// cannot express animation arrays, so `anim` is the only writer of that key.
 fn style_object(attrs: &[(String, String)]) -> Result<Option<Value>, HtmlError> {
-    let mut map = attrs
-        .iter()
-        .find(|(k, _)| k == "style")
-        .map(|(_, raw)| parse_inline_style(raw))
-        .unwrap_or_default();
+    let mut map = match attrs.iter().find(|(k, _)| k == "style") {
+        Some((_, raw)) => parse_inline_style(raw)?,
+        None => Map::new(),
+    };
     if let Some((_, anim)) = attrs.iter().find(|(k, _)| k == "anim") {
         map.insert("animation".into(), parse_anim_attr(anim)?);
     }
