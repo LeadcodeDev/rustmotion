@@ -108,6 +108,25 @@ fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     None
 }
 
+/// The JSON `--fix` writes back, sourced independently of
+/// `LoadedScenario::raw`.
+///
+/// `loaded.raw` is captured *after* `rustmotion::assets::rebase_relative_paths`
+/// runs (`validation.rs`), which rewrites every `src`/`track` naming an
+/// existing file next to the scenario into a canonicalised ABSOLUTE path —
+/// serialising it back would silently replace `"assets/logo.png"` with
+/// this machine's own absolute path, which resolves nowhere else. By the
+/// time `refuse_fix` has let a file reach this function, it carries no
+/// `config`/`$var`/`include`/`for-each`/`use`, so variable substitution and
+/// directive expansion are no-ops on it too — parsing `raw_source` (the
+/// exact bytes still on disk) fresh yields the identical tree
+/// `apply_fixes`/`navigate`'s path indices were computed against, minus the
+/// rebase.
+fn fixable_source(raw_source: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(raw_source)
+        .map_err(|e| RustmotionError::Generic(format!("re-parse source for --fix: {}", e)))
+}
+
 pub fn cmd_validate(
     input: &PathBuf,
     report: Option<&Path>,
@@ -142,7 +161,7 @@ pub fn cmd_validate(
         if let Some(refusal) = refuse_fix(input, &raw_source) {
             return Err(RustmotionError::Generic(refusal.explain(input)));
         }
-        let mut json_value = loaded.raw.clone();
+        let mut json_value = fixable_source(&raw_source)?;
         applied_fixes = apply_fixes(&mut json_value, &report_out.geom_violations);
         if applied_fixes > 0 {
             let pretty = serde_json::to_string_pretty(&json_value)
