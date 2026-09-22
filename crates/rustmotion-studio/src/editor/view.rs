@@ -27,6 +27,18 @@ use super::topbar::{HistoryUi, TopBar};
 
 gpui_kit::actions!(editor_shell, [Undo, Redo]);
 
+#[must_use = "the returned frame still owns a GPU texture and must reach cx.drop_image"]
+fn reset_for_new_document(
+    state: &mut EditorState,
+) -> Option<std::sync::Arc<gpui_kit::RenderImage>> {
+    state.current = 0;
+    state.playing = false;
+    state.selected = None;
+    state.diff_active = false;
+    state.diff_side = DiffSide::B;
+    state.frame.take()
+}
+
 type RenderKey = (u32, u64, DiffSide, u16);
 type HitsKey = (u32, u64, DiffSide);
 
@@ -46,6 +58,7 @@ pub struct EditorView {
     hits_key: Option<HitsKey>,
     rendering_frame: bool,
     last_frame_key: Option<RenderKey>,
+    open_document: Option<std::path::PathBuf>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -132,6 +145,7 @@ impl EditorView {
             hits_key: None,
             rendering_frame: false,
             last_frame_key: None,
+            open_document: None,
             _subscriptions: subscriptions,
         };
         view.spawn_topbar_polls(cx);
@@ -244,6 +258,29 @@ impl EditorView {
         .detach();
     }
 
+    fn sync_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = {
+            let m = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            m.path.clone()
+        };
+        if self.open_document == path {
+            return;
+        }
+        self.open_document = path;
+
+        self.hits_cache.clear();
+        self.hits_key = None;
+        self.hovered_hit = None;
+        self.last_frame_key = None;
+
+        self.editor.update(cx, |state, cx| {
+            if let Some(stale) = reset_for_new_document(state) {
+                cx.drop_image(stale, Some(window));
+            }
+            cx.notify();
+        });
+    }
+
     fn sync_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (current, rev, side, scale_pct) = {
             let e = self.editor.read(cx);
@@ -354,6 +391,7 @@ impl Render for EditorView {
                 .into_any_element();
         }
 
+        self.sync_document(window, cx);
         request_next_frame_if_playing(self.editor.read(cx).playing, window);
         self.refresh_hits(cx);
 
@@ -566,5 +604,75 @@ impl Render for EditorView {
             .children(annotations_panel)
             .child(self.export_watcher.clone())
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor_state_mid_session() -> EditorState {
+        EditorState {
+            current: 412,
+            playing: true,
+            muted: false,
+            rev: 9,
+            selected: Some(crate::app::state::Selection {
+                node_id: 7,
+                pointer: "/scenes/2/children/3".into(),
+                kind: "text".into(),
+            }),
+            show_annotations: true,
+            show_hits: true,
+            diff_active: true,
+            diff_side: DiffSide::A,
+            preview_scale: 50,
+            frame: None,
+        }
+    }
+
+    #[test]
+    fn opening_another_document_drops_the_selection_pointing_into_the_old_one() {
+        let mut state = editor_state_mid_session();
+        let _ = reset_for_new_document(&mut state);
+        assert!(
+            state.selected.is_none(),
+            "a pointer like /scenes/2/children/3 resolves in the new document too, \
+             and would silently edit a different element"
+        );
+    }
+
+    #[test]
+    fn opening_another_document_rewinds_the_playhead_and_stops_playback() {
+        let mut state = editor_state_mid_session();
+        let _ = reset_for_new_document(&mut state);
+        assert_eq!(
+            state.current, 0,
+            "frame 412 may not exist in the new document"
+        );
+        assert!(!state.playing);
+    }
+
+    #[test]
+    fn opening_another_document_leaves_diff_mode() {
+        let mut state = editor_state_mid_session();
+        let _ = reset_for_new_document(&mut state);
+        assert!(
+            !state.diff_active,
+            "the baseline belonged to the old document"
+        );
+        assert_eq!(state.diff_side, DiffSide::B);
+    }
+
+    #[test]
+    fn opening_another_document_keeps_the_session_preferences() {
+        let mut state = editor_state_mid_session();
+        let _ = reset_for_new_document(&mut state);
+        assert_eq!(
+            state.preview_scale, 50,
+            "preview quality is a session choice, not a document one"
+        );
+        assert!(state.show_hits);
+        assert!(state.show_annotations);
     }
 }
