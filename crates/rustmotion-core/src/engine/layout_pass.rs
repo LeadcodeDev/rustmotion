@@ -6,6 +6,7 @@ use taffy::prelude as tf;
 use taffy::TaffyTree;
 
 use crate::css::taffy_bridge::{to_taffy_style, ConversionContext};
+use crate::css::units::LengthContext;
 use crate::engine::box_tree::{BoxNode, IntrinsicMeasure, NodeId};
 
 /// Resolved geometry for a single node, in absolute viewport coordinates.
@@ -85,7 +86,7 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
     let mut node_map: HashMap<NodeId, tf::NodeId> = HashMap::new();
 
     // Build the taffy tree top-down.
-    let root_tf = build(&mut tree, &mut node_map, root, ctx);
+    let root_tf = build(&mut tree, &mut node_map, root, ctx, ctx.length.font_size);
 
     let viewport_size = tf::Size {
         width: tf::AvailableSpace::Definite(viewport.0),
@@ -119,33 +120,54 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
     LayoutResult { layouts }
 }
 
+/// Build one taffy node and, recursively, its subtree.
+///
+/// `inherited_font_size` is the already-resolved (px) font-size of `node`'s
+/// parent: CSS resolves `em` on every layout property against the
+/// element's *own* computed font-size, and font-size itself inherits down
+/// the tree unless overridden. `to_taffy_style` only ever sees the single
+/// `ConversionContext` handed to it, so its `em` resolution is only as
+/// correct as the per-node context built here — a call site building one
+/// shared `ConversionContext` for the whole tree (as every production
+/// caller of `to_taffy_style` still does directly) resolves every node's
+/// `em` against that one context's `font_size` instead.
 fn build(
     tree: &mut TaffyTree<NodeData>,
     map: &mut HashMap<NodeId, tf::NodeId>,
     node: &BoxNode,
     ctx: &ConversionContext,
+    inherited_font_size: f32,
 ) -> tf::NodeId {
-    let style = to_taffy_style(&node.css, ctx);
+    let parent_font_ctx = LengthContext {
+        font_size: inherited_font_size,
+        ..ctx.length
+    };
+    let own_font_size = node
+        .css
+        .font_size_px_ctx(&parent_font_ctx, inherited_font_size);
+    let node_ctx = ConversionContext {
+        length: LengthContext {
+            font_size: own_font_size,
+            ..ctx.length
+        },
+    };
+
+    let style = to_taffy_style(&node.css, &node_ctx);
     let data = NodeData {
         box_id: node.id,
         intrinsic: node.intrinsic.clone(),
     };
-    let tf_id = if node.intrinsic.is_some() {
-        // Leaf with intrinsic measurement.
-        tree.new_leaf_with_context(style, data)
-            .expect("taffy new_leaf")
-    } else if node.children.is_empty() {
+    let tf_id = if node.intrinsic.is_some() || node.children.is_empty() {
         tree.new_leaf_with_context(style, data)
             .expect("taffy new_leaf")
     } else {
         let mut child_ids = Vec::with_capacity(node.children.len());
         for c in &node.children {
-            child_ids.push(build(tree, map, c, ctx));
+            child_ids.push(build(tree, map, c, ctx, own_font_size));
         }
         let id = tree
             .new_with_children(style, &child_ids)
             .expect("taffy new_with_children");
-        // We still want context on internal nodes (for box_id mapping).
         tree.set_node_context(id, Some(data)).ok();
         id
     };
