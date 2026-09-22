@@ -1,6 +1,6 @@
 mod app;
 mod components;
-mod editor;
+pub mod editor;
 mod library;
 pub mod scenario;
 

@@ -361,6 +361,10 @@ pub fn StudioApp(view: Signal<View>) -> Element {
 /// into the cache for the next request. `gen_b` is `Some(model generation)`
 /// when serving side B (drives stale-generation eviction); side A passes the
 /// baseline hash inside `key.generation` and `None` here.
+///
+/// `render_frame_deep` already isolates a render panic inside its own scoped
+/// thread and reports it as `Err`; the `catch_unwind` here only guards the
+/// (rarer) case of the OS failing to spawn that thread.
 fn serve_or_render(
     key: FrameKey,
     idx: u32,
@@ -385,15 +389,19 @@ fn serve_or_render(
     {
         return Err(());
     }
-    let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let outer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         render_frame_deep(scenario, tasks, idx, scale_factor(key.scale_pct))
-    }))
-    .map_err(|_| {
-        fail_ledger()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .record_failure(key);
-    })?;
+    }));
+    let rendered = match outer {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            fail_ledger()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .record_failure(key);
+            return Err(());
+        }
+    };
     let (gen_b, gen_a) = match key.side {
         DiffSide::B => (gen_b, None),
         DiffSide::A => (None, Some(key.generation)),

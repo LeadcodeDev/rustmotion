@@ -1,23 +1,27 @@
-//! Regression tests for the studio's file-write pipeline: a debounced write
+//! Regression tests for the studio's file-write pipeline — a debounced write
 //! that must rebase onto the current disk instead of replaying a stale
 //! in-memory snapshot, coalesced edits inside one debounce window that must
 //! all survive (not just the last), and undo/redo cancelling a still-pending
-//! write before it can clobber the just-restored state.
+//! write before it can clobber the just-restored state — plus a render-thread
+//! panic that must surface as an error instead of being cached as an empty
+//! JPEG.
 //!
 //! `rustmotion-studio` has no `[dev-dependencies]` and cannot gain one in
 //! this change, so every test below drives the crate's existing public
-//! surface (`scenario::*`) against real temp files with plain synchronous
-//! `#[test]`s — no Dioxus runtime, no async executor. That public surface is
-//! itself the fix for the crate having no integration tests: the defects
-//! lived in a debounce timer and Dioxus event handlers that cannot be driven
-//! from a test, so each one was reduced to a pure decision over plain data
-//! (`resolve_flush`, the pending-write queue) and the handler calls that
-//! instead of deciding inline.
+//! surface (`scenario::*`, `editor::frames`) against real temp files with
+//! plain synchronous `#[test]`s — no Dioxus runtime, no async executor. That
+//! public surface is itself the fix for the crate having no integration
+//! tests: the defects lived in a debounce timer and Dioxus event handlers
+//! that cannot be driven from a test, so each one was reduced to a pure
+//! decision over plain data (`resolve_flush`, the pending-write queue,
+//! `render_frame_deep` returning `Result`) and the handler calls that instead
+//! of deciding inline.
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use rustmotion_studio::editor::frames::render_frame_deep;
 use rustmotion_studio::scenario::{
     apply_optimistic, empty_scenario, pending_write_slot, queue_mutation, record_edit,
     resolve_flush, take_pending, undo, Mutation, Shared, SharedHistory, StudioModel,
@@ -218,4 +222,47 @@ fn the_write_pipeline_round_trips_an_edit_through_a_real_file() {
         "disk ends up with the same edit the in-memory model already has"
     );
     let _ = fs::remove_file(&path);
+}
+
+// ── A render-thread panic surfaces as an error, never a cached empty JPEG ──
+
+#[test]
+fn a_render_thread_panic_is_reported_as_an_error_not_an_empty_jpeg() {
+    let big = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "scenes": [ { "duration": 0.1 }, { "duration": 0.1 } ] }"##),
+    )
+    .unwrap();
+    let tasks = rustmotion::encode::build_frame_tasks(&big);
+    assert!(
+        tasks.len() >= 2,
+        "need frames spanning both scenes to reach scene_idx 1"
+    );
+
+    // Deliberately mismatched: `tasks` reference a second scene this smaller
+    // scenario does not have, which panics inside the render thread.
+    let small = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "scenes": [ { "duration": 0.1 } ] }"##),
+    )
+    .unwrap();
+
+    let last_frame = (tasks.len() - 1) as u32;
+    let result = render_frame_deep(&small, &tasks, last_frame, 1.0);
+    assert!(
+        result.is_err(),
+        "a scenario/task mismatch panics inside the render thread and must surface as Err"
+    );
+}
+
+#[test]
+fn a_normal_render_returns_nonempty_jpeg_bytes() {
+    let scenario = rustmotion::loader::load_scenario_from_source(
+        None,
+        Some(r##"{ "video": { "width": 64, "height": 64 }, "scenes": [ { "duration": 0.1 } ] }"##),
+    )
+    .unwrap();
+    let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+    let jpeg = render_frame_deep(&scenario, &tasks, 0, 1.0).expect("a normal render succeeds");
+    assert!(!jpeg.is_empty());
 }
