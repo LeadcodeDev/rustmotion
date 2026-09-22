@@ -290,6 +290,27 @@ fn ffmpeg_args(
     args
 }
 
+/// Scratch path ffmpeg actually writes to; promoted (renamed) onto the
+/// caller's real `output_path` only after a clean exit with no `pipe_error`.
+/// Kept as a sibling of `output_path` (same directory, same filesystem, so
+/// the promotion is a plain rename) and keeps `output_path`'s own extension
+/// as the *final* extension — mirrors `video_audio::partial_wav_path`'s doc:
+/// ffmpeg picks its output muxer from the last extension, so a bare
+/// `.partial` suffix appended after it makes ffmpeg refuse to start with
+/// "Unable to choose an output format" instead of the encode failure this
+/// path exists to isolate.
+fn ffmpeg_partial_output_path(output_path: &std::path::Path) -> std::path::PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let name = match output_path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => format!("{stem}.partial.{ext}"),
+        None => format!("{stem}.partial"),
+    };
+    output_path.with_file_name(name)
+}
+
 /// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency).
 ///
 /// Software-only. Kept with its original signature so existing callers
@@ -531,6 +552,14 @@ fn encode_with_ffmpeg_hw_impl(
         }
     };
 
+    let partial_output_path = ffmpeg_partial_output_path(std::path::Path::new(output_path));
+    let partial_output_str =
+        partial_output_path
+            .to_str()
+            .ok_or_else(|| RustmotionError::NonUtf8Path {
+                path: partial_output_path.to_string_lossy().into_owned(),
+            })?;
+
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(ffmpeg_args(
         width,
@@ -541,7 +570,7 @@ fn encode_with_ffmpeg_hw_impl(
         transparent,
         hw_encoder.as_deref(),
         audio_input.as_deref(),
-        output_path,
+        partial_output_str,
     ));
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::null());
@@ -623,7 +652,18 @@ fn encode_with_ffmpeg_hw_impl(
         cb(EncodeProgress::Muxing);
     }
 
-    let status = child.wait().map_err(|e| RustmotionError::FfmpegWait {
+    // A `pipe_error` means the render already failed and `partial_output_path`
+    // will be discarded either way, so there is nothing left for ffmpeg to
+    // usefully finish — killing it here instead of waiting for it to
+    // gracefully encode and finalize a file nobody will ever read avoids
+    // burning time on a result already known to be thrown away.
+    let status = if pipe_error.is_some() {
+        let _ = child.kill();
+        child.wait()
+    } else {
+        child.wait()
+    }
+    .map_err(|e| RustmotionError::FfmpegWait {
         reason: e.to_string(),
     })?;
 
@@ -659,6 +699,7 @@ fn encode_with_ffmpeg_hw_impl(
 
     if let Some(e) = pipe_error {
         tee_stderr();
+        let _ = std::fs::remove_file(&partial_output_path);
         // A broken pipe means ffmpeg is already gone — its own error says why,
         // ours only says we could not keep writing. Carry both.
         return Err(match e {
@@ -672,10 +713,16 @@ fn encode_with_ffmpeg_hw_impl(
 
     if !status.success() {
         tee_stderr();
+        let _ = std::fs::remove_file(&partial_output_path);
         return Err(RustmotionError::FfmpegFailed {
             stderr: stderr_summary,
         });
     }
+
+    // Only now, with a clean exit and no pipe error, does `output_path` ever
+    // see this render's bytes — promote-on-success, the same discipline
+    // `video_audio::extract_audio_to_wav` already applies to its cached WAVs.
+    std::fs::rename(&partial_output_path, output_path)?;
 
     Ok(())
 }
@@ -789,7 +836,47 @@ pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ffmpeg_args, parse_encoder_names, select_hardware_encoder, HardwareSelection};
+    use super::{
+        ffmpeg_args, ffmpeg_partial_output_path, parse_encoder_names, select_hardware_encoder,
+        HardwareSelection,
+    };
+
+    // ── partial-output-path naming (pure) ────────────────────────────────────
+
+    #[test]
+    fn partial_path_keeps_the_original_extension_as_its_last_extension() {
+        let cases = [
+            ("/tmp/out.mp4", "/tmp/out.partial.mp4"),
+            ("/tmp/out.mov", "/tmp/out.partial.mov"),
+            ("/tmp/out.webm", "/tmp/out.partial.webm"),
+            ("out.mp4", "out.partial.mp4"),
+        ];
+        for (input, expected) in cases {
+            let got = ffmpeg_partial_output_path(std::path::Path::new(input));
+            assert_eq!(
+                got,
+                std::path::PathBuf::from(expected),
+                "input={input}: ffmpeg picks its muxer from the last extension, so it must \
+                 survive unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_path_is_a_sibling_of_the_final_output_not_a_different_directory() {
+        let got = ffmpeg_partial_output_path(std::path::Path::new("/a/b/c/out.mp4"));
+        assert_eq!(
+            got.parent(),
+            Some(std::path::Path::new("/a/b/c")),
+            "the rename onto output_path must stay on the same filesystem"
+        );
+    }
+
+    #[test]
+    fn partial_path_falls_back_gracefully_with_no_extension() {
+        let got = ffmpeg_partial_output_path(std::path::Path::new("/tmp/out"));
+        assert_eq!(got, std::path::PathBuf::from("/tmp/out.partial"));
+    }
 
     /// Every option that describes the *output* has to sit after the last `-i`.
     /// Put one before it and ffmpeg attaches it to the following input instead,
