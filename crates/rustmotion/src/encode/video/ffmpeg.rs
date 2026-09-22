@@ -290,6 +290,17 @@ fn ffmpeg_args(
     args
 }
 
+/// Name of the scratch directory a single audio-bearing render call writes
+/// its materialised PCM into. `pid` repeats across the machine's uptime and
+/// `seq` is a small monotonic counter starting at zero, so together they are
+/// a key an outside process could realistically pre-compute and occupy
+/// ahead of time; folding in a nanosecond timestamp neither of those two
+/// alone carries closes that gap without needing a random-number
+/// dependency this crate doesn't already have.
+fn audio_tmp_dir_name(pid: u32, seq: u32, nanos: u128) -> String {
+    format!("rustmotion_audio_{pid}_{seq}_{nanos:x}")
+}
+
 /// Scratch path ffmpeg actually writes to; promoted (renamed) onto the
 /// caller's real `output_path` only after a clean exit with no `pipe_error`.
 /// Kept as a sibling of `output_path` (same directory, same filesystem, so
@@ -461,22 +472,32 @@ fn encode_with_ffmpeg_hw_impl(
     // encodes can run concurrently *within* one process (parallel test
     // threads today; `--frames` segments rendered concurrently by a future
     // distributed worker tomorrow — the exact shape this feature exists to
-    // enable). Two calls sharing a PID-only path would each `create_dir_all`
+    // enable). Two calls sharing a PID-only path would each try to create
     // the same directory, then whichever finishes first would
     // `remove_dir_all` it out from under the other mid-write, surfacing as
     // a bare `NotFound` on `std::fs::write` below. A monotonic counter on
     // top of PID makes every call's directory distinct regardless of
-    // timing.
+    // timing; a nanosecond timestamp on top of *that* keeps the full key
+    // from being small enough for something outside this process to
+    // pre-compute and occupy ahead of time — pid space and a
+    // monotonic-from-zero counter both are. `create_dir` below (not
+    // `_all`) is what actually refuses to proceed if something is already
+    // sitting at the computed path, symlink included; the timestamp only
+    // raises the cost of ever landing on that path in the first place.
     static AUDIO_TMP_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
     let audio_tmp_dir = if !merged_audio.is_empty() {
         let seq = AUDIO_TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        Some(std::env::temp_dir().join(format!("rustmotion_audio_{}_{seq}", std::process::id())))
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        Some(std::env::temp_dir().join(audio_tmp_dir_name(std::process::id(), seq, nanos)))
     } else {
         None
     };
     let pcm_data = if !merged_audio.is_empty() {
         if let Some(ref tmp_dir) = audio_tmp_dir {
-            std::fs::create_dir_all(tmp_dir)?;
+            std::fs::create_dir(tmp_dir)?;
         }
         super::super::audio::mix_audio_tracks_segment(
             &merged_audio,
@@ -837,9 +858,62 @@ pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        ffmpeg_args, ffmpeg_partial_output_path, parse_encoder_names, select_hardware_encoder,
-        HardwareSelection,
+        audio_tmp_dir_name, ffmpeg_args, ffmpeg_partial_output_path, parse_encoder_names,
+        select_hardware_encoder, HardwareSelection,
     };
+
+    // ── audio scratch directory naming: not fully predictable from outside ──
+
+    #[test]
+    fn audio_tmp_dir_name_differs_across_calls_that_share_pid_and_seq() {
+        // A pid+seq pair is small enough to pre-seed exhaustively from
+        // outside the process; folding in a nanosecond timestamp neither of
+        // those two alone carries means a name computed ahead of time from
+        // pid+seq no longer identifies the exact directory this process
+        // will actually create.
+        let a = audio_tmp_dir_name(1234, 0, 111);
+        let b = audio_tmp_dir_name(1234, 0, 222);
+        assert_ne!(
+            a, b,
+            "same pid+seq, different nanos, must differ: {a} vs {b}"
+        );
+    }
+
+    #[test]
+    fn audio_tmp_dir_name_is_stable_for_identical_inputs() {
+        assert_eq!(audio_tmp_dir_name(1, 2, 3), audio_tmp_dir_name(1, 2, 3));
+    }
+
+    /// Characterizes the exact property this fix depends on: swapping
+    /// `create_dir_all` for `create_dir` at the audio scratch directory's
+    /// creation site turns "adopt whatever is already there" into "refuse
+    /// outright" the moment something — attacker-planted symlink included —
+    /// already occupies that path.
+    #[test]
+    fn create_dir_refuses_an_already_occupied_path_that_create_dir_all_would_have_adopted() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_audit_ws_c_preexisting_dir_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).expect("set up a pre-existing directory at the target path");
+
+        assert!(
+            std::fs::create_dir_all(&path).is_ok(),
+            "create_dir_all silently succeeding on a pre-existing directory is exactly the \
+             behavior that let a hostile pre-planted directory (or symlink) be adopted"
+        );
+        assert!(
+            std::fs::create_dir(&path).is_err(),
+            "create_dir must refuse the same pre-existing path instead of adopting it"
+        );
+
+        let _ = std::fs::remove_dir_all(&path);
+    }
 
     // ── partial-output-path naming (pure) ────────────────────────────────────
 
