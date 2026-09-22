@@ -72,7 +72,7 @@ impl LayoutResult {
 /// taffy nodes and our `BoxNode` ids + intrinsic measurers.
 ///
 /// `inset_width`/`inset_height` are this node's own resolved padding+border
-///: taffy's `compute_leaf_layout` already subtracts them from
+/// (RM-27): taffy's `compute_leaf_layout` already subtracts them from
 /// `available_space` before calling the measure function, but forwards
 /// `known_dimensions` — the outer border-box size — untouched, handing an
 /// `IntrinsicMeasure` implementor two arguments in different coordinate
@@ -137,7 +137,7 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
 /// Build one taffy node and, recursively, its subtree.
 ///
 /// `inherited_font_size` is the already-resolved (px) font-size of `node`'s
-/// parent: CSS resolves `em` on every layout property against the
+/// parent (RM-26): CSS resolves `em` on every layout property against the
 /// element's *own* computed font-size, and font-size itself inherits down
 /// the tree unless overridden. `to_taffy_style` and [`content_box_inset`]
 /// only ever see the single `ConversionContext` handed to them, so their

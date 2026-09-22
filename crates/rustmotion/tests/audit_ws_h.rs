@@ -1,5 +1,5 @@
 //! Regression tests for the workstream H (untrusted scenario ingestion)
-//! audit finding that lives in the `rustmotion` crate:.
+//! audit finding that lives in the `rustmotion` crate: RM-46.
 //!
 //! Remote fetching for `include: "https://..."` is deliberate design; the
 //! finding is the absence of any control around it. These tests exercise
@@ -20,7 +20,7 @@ fn scenario_with_remote_include(url: &str) -> Scenario {
     .expect("scenario with a remote include parses")
 }
 
-// ----, part 1: remote includes are denied by default ----
+// ---- RM-46, part 1: remote includes are denied by default ----
 
 #[test]
 fn remote_include_is_denied_by_default() {
@@ -46,7 +46,7 @@ fn remote_include_denial_names_the_opt_in() {
     );
 }
 
-// ----, part 2: once opted in, resolved addresses are still checked
+// ---- RM-46, part 2: once opted in, resolved addresses are still checked
 // against loopback/link-local/private ranges before any request is made ----
 
 #[test]

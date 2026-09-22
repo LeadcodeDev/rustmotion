@@ -382,7 +382,9 @@ mod tests {
             .expect("render")
         };
         let count_red = |rgba: &[u8]| {
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > 180 && p[1] < 90 && p[2] < 90)
                 .count()
         };

@@ -176,7 +176,7 @@ impl Painter for Video {
                 let img_info = ImageInfo::new(
                     (fw as i32, fh as i32),
                     ColorType::RGBA8888,
-                    skia_safe::AlphaType::Premul,
+                    skia_safe::AlphaType::Unpremul,
                     None,
                 );
                 let row_bytes = fw as usize * 4;

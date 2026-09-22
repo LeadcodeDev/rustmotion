@@ -246,7 +246,7 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
 /// = padding + border`) subtracts from a leaf's `available_space` before
 /// handing it to the measure function — see [`crate::engine::layout_pass`],
 /// which uses this to bring `known_dimensions` (still border-box) into that
-/// same content-box space. Percentage padding/border resolves
+/// same content-box space (RM-27). Percentage padding/border resolves
 /// against `ctx.length.parent_size` like every other percentage in this
 /// module; a leaf's own known/available width is not threaded here, so a
 /// percentage inset on a leaf is only as accurate as that shared context.

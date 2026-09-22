@@ -9,8 +9,8 @@
 //! output — is the only externally-observable contract for what the
 //! validator decided (mirrors `motion_path_strict_anim.rs`'s reasoning).
 //!
-//! One section per finding, in briefing order: viewport units, transform
-//! lengths, path rewriting, the three box-model checks, and helper reuse.
+//! One section per finding (RM-05, RM-15, RM-16, RM-31, RM-32, RM-33,
+//! RM-40), in briefing order.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -40,7 +40,7 @@ impl Drop for ScratchFile {
 }
 
 /// Minimal RAII scratch directory — mirrors `skill_files_match_disk.rs`'s
-/// `ScratchDir`. Only the path-rewriting case needs a directory (a file plus a
+/// `ScratchDir`. Only RM-16 needs a directory (a scenario file plus a
 /// sibling asset file).
 struct ScratchDir(PathBuf);
 
@@ -108,7 +108,7 @@ fn find_kind<'a>(report: &'a serde_json::Value, kind: &str) -> Option<&'a serde_
     violations(report).iter().find(|v| v["kind"] == kind)
 }
 
-// ─── vw/vh must resolve against the scenario's real viewport ───────
+// ─── RM-05: vw/vh must resolve against the scenario's real viewport ───────
 
 /// A `width: "90vw"` shape on a 1080×1920 scenario, positioned so its right
 /// edge crosses the viewport edge at EITHER candidate width — 972px (90% of
@@ -195,7 +195,7 @@ fn strict_anim_also_measures_vw_against_the_real_viewport_width() {
     );
 }
 
-// ─── static transform lengths use the node's own font-size and per-axis size ───
+// ─── RM-15: static transform lengths use the node's own font-size and per-axis size ───
 
 /// `translateX(-10em)` on a 96px-font node must resolve against ITS OWN
 /// font-size (960px), not the hardcoded 16px `apply_static_node_transform`
@@ -283,7 +283,7 @@ fn static_translate_percent_resolves_per_axis_not_against_max_of_both() {
     );
 }
 
-// ─── --fix must not bake in machine-absolute asset paths ───────────
+// ─── RM-16: --fix must not bake in machine-absolute asset paths ───────────
 
 /// `--fix` used to serialise `LoadedScenario::raw`, captured AFTER
 /// `rustmotion::assets::rebase_relative_paths` rewrites every existing-file
@@ -355,7 +355,7 @@ fn fix_leaves_relative_asset_paths_untouched() {
     );
 }
 
-// ─── unwrappable_text_overflow must measure the CONTENT box ────────
+// ─── RM-31: unwrappable_text_overflow must measure the CONTENT box ────────
 
 /// A nowrap text's own painter draws inside its CONTENT box
 /// (`LegacyPaintDispatcher` hands it `layout.content_box()`, not the raw
@@ -404,4 +404,197 @@ fn unwrappable_text_overflow_is_measured_against_the_content_box() {
         (width - 100.0).abs() < 1.0,
         "violation bbox should be the 100px CONTENT box, not the 2000px border box: {report_json}"
     );
+}
+
+// ─── RM-32: white-space: nowrap must not silence the height check ─────────
+
+/// A single unwrapped 120px-font line is ~144px tall, well past a 40px-tall
+/// box — the exact case `content_overflows_box` already catches for
+/// wrapping text. `white-space: nowrap` used to return before measuring
+/// height at all, so this validated clean.
+#[test]
+fn nowrap_text_taller_than_its_box_is_still_flagged() {
+    let scenario = ScratchFile::new("rm32-scenario");
+    let report = ScratchFile::new("rm32-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "text",
+                "content": "Hi",
+                "position": "absolute",
+                "x": 50, "y": 50,
+                "style": {
+                    "width": "500px", "height": "40px",
+                    "white-space": "nowrap",
+                    "font-size": "120px",
+                    "color": "#ffffff"
+                }
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "a 120px-font single line is far taller than a 40px box; report={report_json}"
+    );
+    let violation = find_kind(&report_json, "content_overflows_box")
+        .expect("expected a content_overflows_box violation");
+    assert_eq!(violation["axis"], "y", "{report_json}");
+}
+
+// ─── RM-33: auto_scroll_disabled_overflow must use the terminal's CONTENT box height ───
+
+/// A terminal's own painter is NOT self-padding
+/// (`LegacyPaintDispatcher::is_self_padding` matches only `Codeblock`) — it
+/// paints inside its content box, so `auto_scroll: false` must compare
+/// natural height against that, not the border box. 10 lines ≈ 288px
+/// natural height (36px chrome + 32px internal terminal padding + 10×22px
+/// lines at the default 14px font); border box height is 400px, content box
+/// height is 400 - 300 (150px top+bottom CSS padding) = 100px.
+#[test]
+fn terminal_auto_scroll_disabled_overflow_is_measured_against_the_content_box() {
+    let scenario = ScratchFile::new("rm33-scenario");
+    let report = ScratchFile::new("rm33-report");
+    let lines: String = (1..=10)
+        .map(|i| format!(r##"{{ "text": "line {i}" }}"##))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r##"{{
+            "video": {{ "width": 1920, "height": 1080 }},
+            "scenes": [{{
+                "duration": 1.0,
+                "children": [{{
+                    "type": "terminal",
+                    "lines": [{lines}],
+                    "auto_scroll": false,
+                    "position": "absolute",
+                    "x": 50, "y": 50,
+                    "style": {{
+                        "width": "800px", "height": "400px",
+                        "padding": {{ "top": "150px", "bottom": "150px" }}
+                    }}
+                }}]
+            }}]
+        }}"##
+    );
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "~288px of natural content is far past a 100px content box (400px border box minus \
+         300px of padding); report={report_json}"
+    );
+    let violation = find_kind(&report_json, "auto_scroll_disabled_overflow")
+        .expect("expected an auto_scroll_disabled_overflow violation");
+    let height = violation["bbox"]["h"].as_f64().expect("bbox.h is a number");
+    assert!(
+        (height - 100.0).abs() < 1.0,
+        "violation bbox should be the 100px CONTENT box, not the 400px border box: {report_json}"
+    );
+}
+
+/// Negative control: a codeblock genuinely IS self-padding
+/// (`LegacyPaintDispatcher::is_self_padding`), so its own natural-height
+/// formula already bakes its padding in — the codeblock arm must keep
+/// comparing against the BORDER box, unaffected by this fix. Same 60px
+/// padding fixture as the pre-existing
+/// `codeblock_auto_scroll_check_honours_explicit_padding_not_a_hardcoded_16px`
+/// internal test, driven through the CLI instead.
+#[test]
+fn codeblock_auto_scroll_disabled_overflow_still_uses_the_border_box() {
+    let scenario = ScratchFile::new("rm33-codeblock-scenario");
+    let report = ScratchFile::new("rm33-codeblock-report");
+    let code_lines: String = (1..=10)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let json = format!(
+        r##"{{
+            "video": {{ "width": 1920, "height": 1080 }},
+            "scenes": [{{
+                "duration": 1.0,
+                "children": [{{
+                    "type": "codeblock",
+                    "code": "{code_lines}",
+                    "auto_scroll": false,
+                    "style": {{ "width": "600px", "height": "250px", "padding": "60px" }}
+                }}]
+            }}]
+        }}"##
+    );
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(!output.status.success(), "report={report_json}");
+    let violation = find_kind(&report_json, "auto_scroll_disabled_overflow")
+        .expect("expected an auto_scroll_disabled_overflow violation");
+    let height = violation["bbox"]["h"].as_f64().expect("bbox.h is a number");
+    assert!(
+        (height - 250.0).abs() < 1.0,
+        "codeblock is self-padding: the reported bbox must stay the 250px BORDER box, \
+         not a content box: {report_json}"
+    );
+}
+
+// ─── RM-40: geometry.rs must not duplicate box_builder's component_kind ───
+
+/// `rustmotion_components::box_builder::component_kind` is already `pub`
+/// and already imported into this same binary crate elsewhere
+/// (`engine/render/scene.rs:719`) — geometry.rs must reuse it instead of
+/// carrying its own private 60-arm copy that can silently drift from it on
+/// a rename. `rustmotion::cli::commands` is a private module, so this
+/// checks the SOURCE FILE directly rather than calling the (unreachable)
+/// function itself — see this file's own top-of-file doc comment for why
+/// every other test here goes through the CLI subprocess instead.
+#[test]
+fn geometry_does_not_redefine_component_kind() {
+    let source = include_str!("../src/cli/commands/geometry.rs");
+    assert!(
+        !source.contains("fn component_kind"),
+        "geometry.rs must not define its own component_kind — it should call \
+         rustmotion::components::box_builder::component_kind instead"
+    );
+    assert!(
+        source.contains("box_builder"),
+        "geometry.rs must import component_kind from box_builder"
+    );
+}
+
+/// Smoke test: violations must still carry a sensible `component` label
+/// after the switch to the shared helper — proves the dedup didn't silently
+/// break the import wiring.
+#[test]
+fn violation_component_label_still_resolves_after_dedup() {
+    let scenario = ScratchFile::new("rm40-scenario");
+    let report = ScratchFile::new("rm40-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "position": "absolute",
+                "x": 1900, "y": 100,
+                "style": { "width": "100px", "height": "100px" },
+                "fill": "#ff0000"
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    assert!(!output.status.success());
+    let report_json = read_report(&report.0);
+    let violation = find_kind(&report_json, "viewport_overflow").expect("violation present");
+    assert_eq!(violation["component"], "shape", "{report_json}");
 }

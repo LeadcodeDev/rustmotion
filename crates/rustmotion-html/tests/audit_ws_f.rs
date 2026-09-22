@@ -1,17 +1,17 @@
 //! Regression tests for workstream F's 4 confirmed audit findings on the
 //! HTML dialect transpiler: an attribute outside a hardcoded allowlist
-//! vanishing with no error, a CSS shorthand transpiling to a string
-//! the core length parser cannot read and silently resolving to 0px,
+//! vanishing with no error (RM-03), a CSS shorthand transpiling to a string
+//! the core length parser cannot read and silently resolving to 0px (RM-04),
 //! `<script>`/`<style>` source getting painted as text while `<img>`/`<svg>`
-//! children vanish inside inline text elements, and the studio's
+//! children vanish inside inline text elements (RM-11), and the studio's
 //! HTML write-back deleting everything outside `<rustmotion>` in the
-//! author's file.
+//! author's file (RM-12).
 
 use rustmotion_html::{html_to_scenario_value, HtmlError};
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
-// <scene> and <rustmotion> read a hardcoded attribute allowlist;
+// RM-03: <scene> and <rustmotion> read a hardcoded attribute allowlist;
 // every other attribute is dropped with no error.
 // ---------------------------------------------------------------------------
 
@@ -97,7 +97,7 @@ fn inert_attributes_stay_inert_on_container_and_text() {
 }
 
 // ---------------------------------------------------------------------------
-// CSS shorthand values transpile to strings the core length parser
+// RM-04: CSS shorthand values transpile to strings the core length parser
 // cannot read, silently resolving to 0px.
 // ---------------------------------------------------------------------------
 
@@ -189,7 +189,7 @@ fn rgba_color_functional_notation_is_not_treated_as_multi_token() {
 }
 
 // ---------------------------------------------------------------------------
-// text-tag children bypass every guard — <script>/<style> source gets
+// RM-11: text-tag children bypass every guard — <script>/<style> source gets
 // painted, <img>/<svg>/<rm-*> vanish silently.
 // ---------------------------------------------------------------------------
 
@@ -265,7 +265,7 @@ fn inline_formatting_tags_still_flatten_into_the_parent_text() {
 }
 
 // ---------------------------------------------------------------------------
-// studio HTML write-back silently deletes everything outside
+// RM-12: studio HTML write-back silently deletes everything outside
 // <rustmotion> in the author's file.
 // ---------------------------------------------------------------------------
 

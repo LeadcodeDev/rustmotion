@@ -37,7 +37,9 @@ fn render_world_frame(scenario_json: &serde_json::Value, frame_in_view: u32) -> 
 /// for "is the decorative child visible in this frame" that doesn't depend
 /// on knowing any particle's exact on-screen position.
 fn green_pixel_count(buf: &[u8]) -> usize {
-    buf.chunks_exact(4)
+    buf.as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[1] > 100 && px[0] < 80 && px[2] < 80)
         .count()
 }

@@ -1,5 +1,5 @@
 //! Regression tests for the workstream J (layout pass & CSS unit resolution)
-//! audit findings on unit resolution and intrinsic measurement.
+//! audit findings: RM-26, RM-27.
 
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +9,7 @@ use rustmotion_core::css::units::{Length, LengthPercentage as CLP};
 use rustmotion_core::engine::box_tree::{AvailableSpace, BoxNode, IntrinsicMeasure};
 use rustmotion_core::engine::layout_pass::run_layout;
 
-// ---- `em` on layout properties must resolve against the element's
+// ---- RM-26: `em` on layout properties must resolve against the element's
 // own (inherited) font-size, not a constant 16px ----
 
 /// A card sized by its parent's explicit `font-size` (48px) inherits that
@@ -48,7 +48,7 @@ fn em_padding_resolves_against_inherited_font_size_not_a_constant_16px() {
     assert_eq!(content_w, 200.0 - 2.0 * 48.0);
 }
 
-// ---- a leaf's `IntrinsicMeasure::measure` must receive `known` and
+// ---- RM-27: a leaf's `IntrinsicMeasure::measure` must receive `known` and
 // `available` in the same (content-box) coordinate space ----
 
 type RecordedCall = ((Option<f32>, Option<f32>), (AvailableSpace, AvailableSpace));
