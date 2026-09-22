@@ -636,7 +636,7 @@ fn build_child<'a>(
         time_remap,
         &css,
     );
-    let intrinsic = component_intrinsic(&child.component);
+    let intrinsic = component_intrinsic(&child.component, &css);
 
     let principal = BoxNode {
         id,
@@ -1131,12 +1131,22 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
 /// Build an [`IntrinsicMeasure`] for components whose box size depends on
 /// their content (text, codeblock, terminal, etc.). Returns `None` for
 /// components with explicit dimensions or pure containers.
+///
+/// `cascaded_css` is this node's own `CssStyle` after `cascade::inherit_from`
+/// has already merged it against the parent, plus every subsequent overlay
+/// (timeline states, animation) — the exact same value `LegacyPaintDispatcher`
+/// receives at paint time. `Text` uses it so the reserved box always matches
+/// what `Text::paint_content` (which reads the same cascade through
+/// `with_cascaded_style`) actually draws.
 fn component_intrinsic(
     component: &Component,
+    cascaded_css: &CssStyle,
 ) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
     use Component::*;
     match component {
-        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
+        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(
+            &t.with_cascaded_style(cascaded_css),
+        ))),
         GradientText(t) => Some(Arc::new(
             crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
         )),

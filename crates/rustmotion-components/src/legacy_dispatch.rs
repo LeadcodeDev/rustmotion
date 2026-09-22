@@ -8,12 +8,22 @@
 //! skipped: paint_pass already paints their box decorations and recurses into
 //! children — so calling the container's own `paint_content` would do nothing
 //! anyway, and we save a no-op call.
+//!
+//! `dispatch` receives the node's cascaded `CssStyle` (`css` below) from
+//! `paint_pass`, but `Painter::paint_content` has no `CssStyle` parameter —
+//! its signature is frozen — and every painter reads typography off its own
+//! `self.style` instead. `Text` is the one component wired to see the
+//! cascade anyway: `Text::with_cascaded_style` rebuilds it with `css`
+//! folded into its own `style` field before painting, the same technique
+//! `box_builder::component_intrinsic` uses for `TextIntrinsic` so measure
+//! and paint agree.
 
+use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::NodeId;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
-use rustmotion_core::traits::PaintCtx;
+use rustmotion_core::traits::{PaintCtx, Painter};
 use skia_safe::Canvas;
 
 use crate::{ChildComponent, Component};
@@ -65,7 +75,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         &self,
         canvas: &Canvas,
         payload: &(dyn std::any::Any + Send + Sync),
-        _css: &rustmotion_core::css::CssStyle,
+        css: &CssStyle,
         layout: &BoxLayout,
         frame: &PaintFrame,
     ) {
@@ -165,7 +175,12 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             video_height: frame.video_height,
             stagger_offset: stagger_delay,
         };
-        painter.paint_content(canvas, &local, &props, &paint_ctx);
+        if let Component::Text(t) = &child.component {
+            t.with_cascaded_style(css)
+                .paint_content(canvas, &local, &props, &paint_ctx);
+        } else {
+            painter.paint_content(canvas, &local, &props, &paint_ctx);
+        }
 
         canvas.restore();
     }
