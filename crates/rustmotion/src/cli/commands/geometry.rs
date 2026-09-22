@@ -300,7 +300,7 @@ fn walk(
                 check_unwrappable_text(
                     &child.component,
                     &child_path,
-                    &raw_bbox,
+                    layout,
                     viewport,
                     vi,
                     si,
@@ -791,10 +791,32 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
     }
 }
 
+/// natural (unwrapped) width vs the node's own CONTENT box, not its
+/// border box. `LegacyPaintDispatcher::dispatch` hands every non-codeblock
+/// painter (`Text`/`GradientText`/`Caption` included) a synthetic
+/// `BoxLayout` built from `layout.content_box()`, translated to the
+/// content-box origin — so the painter wraps and draws inside the content
+/// box, not the raw taffy layout box this walker reads. Comparing against
+/// the border box (as this used to) under-reports by exactly
+/// `padding.left + padding.right + border.left + border.right`, mirroring
+/// the same fix `check_content_overflows_box` already applies for the
+/// wrapped case.
+///
+/// Measured via the same cosmic-text–backed intrinsic the layout engine
+/// uses. Width is bounded by the node's own resolved content-box width
+/// (not `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
+/// see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic` arms
+/// and `CssStyle::text_autofit`'s doc comment. For a non-autofit node this
+/// changes nothing: `TextIntrinsic::measure` only reads the width
+/// constraint at all when `text_autofit` is on (see its early return), and
+/// `nowrap` already forces a single unwrapped line here regardless of what
+/// width is offered — so `natural_w` below is "natural" in the non-autofit
+/// case exactly as before, and "shrunk to fit, if that's enough" when the
+/// author declared it.
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
-    bbox: &BBox,
+    layout: &BoxLayout,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -806,22 +828,12 @@ fn check_unwrappable_text(
     if !nowrap {
         return;
     }
-    // Measure via the same cosmic-text–backed intrinsic the layout engine
-    // uses. Width is bounded by the node's own resolved `bbox.w` (not
-    // `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
-    // see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic`
-    // arms and `CssStyle::text_autofit`'s doc comment. For a non-autofit
-    // node this changes nothing: `TextIntrinsic::measure` only reads the
-    // width constraint at all when `text_autofit` is on (see its early
-    // return), and `nowrap` already forces a single unwrapped line here
-    // regardless of what width is offered — so `natural_w` below is
-    // "natural" in the non-autofit case exactly as before, and "shrunk to
-    // fit, if that's enough" when the author declared it.
+    let (cx, cy, cw, ch) = layout.content_box();
     let (natural_w, _) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::Definite(bbox.w), AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
     );
-    if natural_w > bbox.w + 0.5 {
+    if natural_w > cw + 0.5 {
         let kind = component_kind(component);
         out.push(GeometryViolation {
             view_index: vi,
@@ -830,11 +842,16 @@ fn check_unwrappable_text(
             component: kind.to_string(),
             axis: Axis::X,
             kind: ViolationKind::UnwrappableTextOverflow,
-            bbox: *bbox,
+            bbox: BBox {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            },
             viewport,
             hint: format!(
                 "{kind} natural width is {natural_w:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
-                bbox.w
+                cw
             ),
         });
     }
