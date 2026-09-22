@@ -132,9 +132,7 @@ pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     if tasks.is_empty() {
         return None;
     }
-    Some(crate::editor::frames::render_frame_deep(
-        &scenario, &tasks, 0, 0.25,
-    ))
+    crate::editor::frames::render_frame_deep(&scenario, &tasks, 0, 0.25).ok()
 }
 
 /// Cheap check: is this JSON a Rustmotion scenario? Avoids the heavier

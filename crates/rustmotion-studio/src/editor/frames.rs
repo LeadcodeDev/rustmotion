@@ -26,20 +26,25 @@ pub const RENDER_STACK: usize = 32 * 1024 * 1024;
 
 /// [`render_frame`] on a thread with [`RENDER_STACK`], for callers that are not
 /// on the main thread. Scoped, so the scenario and tasks are borrowed rather
-/// than cloned.
+/// than cloned. `Err` means the render thread panicked (a Skia panic, a
+/// dimension mismatch, a JPEG encode failure): the caller must not treat that
+/// as a successful empty frame.
+// The panic payload carries no information callers act on; they only branch
+// on success vs. failure (retry-budget ledger, cache, HTTP status).
+#[allow(clippy::result_unit_err)]
 pub fn render_frame_deep(
     scenario: &ResolvedScenario,
     tasks: &[rustmotion::encode::video::FrameTask],
     frame: u32,
     scale: f32,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, ()> {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(RENDER_STACK)
             .spawn_scoped(scope, || render_frame(scenario, tasks, frame, scale))
             .expect("spawn render thread")
             .join()
-            .unwrap_or_default()
+            .map_err(|_| ())
     })
 }
 
