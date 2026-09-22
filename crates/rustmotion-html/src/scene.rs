@@ -5,7 +5,24 @@ use crate::element::children_to_values;
 use crate::element_attrs;
 use crate::parse_background_attr;
 use crate::style::coerce_value;
-use crate::HtmlError;
+use crate::{check_known_attrs, HtmlError};
+
+const KNOWN_SCENE_ATTRS: &[&str] = &[
+    "duration",
+    "align",
+    "justify",
+    "direction",
+    "gap",
+    "padding",
+    "background",
+    "effects",
+    "transition",
+    "transition-duration",
+    "transition-easing",
+    "freeze_at",
+    "world-position",
+    "animated-background",
+];
 
 /// Parse an `effects` attribute value: must be a JSON array.
 fn parse_effects_attr(raw: &str) -> Result<Value, HtmlError> {
@@ -13,10 +30,50 @@ fn parse_effects_attr(raw: &str) -> Result<Value, HtmlError> {
     serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidEffectsJson(e.to_string()))
 }
 
+/// Parse a `world-position` attribute: either `"x,y"` (the idiomatic HTML
+/// form, mirroring `font`'s `weights="400,700"` CSV convention) or a JSON
+/// `{"x":..,"y":..}` object, matching `WorldPosition`'s wire shape.
+fn parse_world_position_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') {
+        return serde_json::from_str(trimmed)
+            .map_err(|_| HtmlError::InvalidWorldPosition(raw.to_string()));
+    }
+    let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+    let [x, y] = parts.as_slice() else {
+        return Err(HtmlError::InvalidWorldPosition(raw.to_string()));
+    };
+    let x: f32 = x
+        .parse()
+        .map_err(|_| HtmlError::InvalidWorldPosition(raw.to_string()))?;
+    let y: f32 = y
+        .parse()
+        .map_err(|_| HtmlError::InvalidWorldPosition(raw.to_string()))?;
+    Ok(serde_json::json!({ "x": x, "y": y }))
+}
+
+/// Parse an `animated-background` attribute: JSON object/array (matching
+/// `scene["animated-background"]`'s `AnimatedBackground` shape, e.g.
+/// `{"preset":"halo","halo":{...},"speed":0}`) if it starts with `{`/`[`,
+/// otherwise a bare string (left for the typed scenario loader to reject —
+/// no preset is nameable without its config, so this never has a legitimate
+/// bare-string form, but the reachable-attribute goal is what matters here:
+/// the value now always reaches the JSON instead of vanishing before it).
+fn parse_animated_background_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        serde_json::from_str(trimmed)
+            .map_err(|e| HtmlError::InvalidAnimatedBackgroundJson(e.to_string()))
+    } else {
+        Ok(Value::from(raw))
+    }
+}
+
 /// Map a `<scene>` element to a scene JSON object. Defaults to a centered flex
 /// layout (overridable via `align`/`justify`/`direction`/`gap`/`padding` attrs).
 pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     let attrs = element_attrs(handle);
+    check_known_attrs("scene", &attrs, KNOWN_SCENE_ATTRS)?;
     let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
 
     let duration = get("duration").ok_or(HtmlError::MissingDuration)?;
@@ -75,6 +132,19 @@ pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
         obj.insert("transition".into(), Value::Object(tr));
     } else if has_transition_params {
         return Err(HtmlError::TransitionParamsWithoutTransition);
+    }
+
+    if let Some(fa) = get("freeze_at") {
+        obj.insert("freeze_at".into(), coerce_value(&fa));
+    }
+    if let Some(wp) = get("world-position") {
+        obj.insert("world-position".into(), parse_world_position_attr(&wp)?);
+    }
+    if let Some(ab) = get("animated-background") {
+        obj.insert(
+            "animated-background".into(),
+            parse_animated_background_attr(&ab)?,
+        );
     }
 
     obj.insert("children".into(), Value::Array(children_to_values(handle)?));

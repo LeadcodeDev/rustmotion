@@ -97,6 +97,44 @@ pub enum HtmlError {
         "<scene> found nested inside <{parent}> — <scene> elements must be direct children of <rustmotion> (only <font> is recursed into)"
     )]
     NestedScene { parent: String },
+    /// Emitted when an element carries an attribute the transpiler never
+    /// reads. `<rustmotion>`, `<scene>`, and native container/text tags only
+    /// ever consume a fixed, small set of attribute names — anything else
+    /// used to vanish with no trace, invisible to `--strict-attrs` because
+    /// it never reached the emitted JSON in the first place.
+    #[error("<{element}> has unsupported attribute(s): {detail} — these are silently ignored today; fix the typo, drop them, or use the attribute the dialect actually reads")]
+    UnknownAttributes { element: String, detail: String },
+    /// Emitted for a `<scene>`'s `world-position` attribute that is neither
+    /// `"x,y"` nor a JSON `{"x":..,"y":..}` object.
+    #[error("world-position=\"{0}\" is not \"x,y\" or a JSON object {{\"x\":..,\"y\":..}}")]
+    InvalidWorldPosition(String),
+    /// Emitted for a `<scene>`'s `animated-background` attribute when its
+    /// value starts with `{`/`[` but fails to parse as JSON.
+    #[error("animated-background attribute contains invalid JSON: {0}")]
+    InvalidAnimatedBackgroundJson(String),
+    /// Emitted for a `style="..."` declaration whose value has more than one
+    /// top-level (paren-aware) token and isn't one of the shorthands the
+    /// transpiler knows how to expand (`padding`/`margin`/`border-radius`'s
+    /// 1-4 value box form, `grid-template-columns`/`-rows`'s track list with
+    /// `repeat()`/`minmax()`). Every other multi-token value used to become
+    /// an opaque string the core length parser cannot read, silently
+    /// resolving to `0px`.
+    #[error("style property '{prop}' has an unsupported multi-token value '{value}' — supported multi-token forms are the padding/margin/border-radius box shorthand and grid-template-columns/-rows track lists with repeat()/minmax(); rewrite as a single value")]
+    UnsupportedStyleShorthand { prop: String, value: String },
+    /// Emitted when a `<script>`/`<img>`/`<svg>`/`<rm-*>`/container element
+    /// is found nested inside an inline text element (`p`/`span`/`h1..h6`/
+    /// `strong`/`em`/`label`). Those flatten their whole subtree to a plain
+    /// string — a nested element with real content (a component, a shape, a
+    /// child container) has nowhere to go and used to either bleed its raw
+    /// source into the string or vanish outright.
+    #[error("<{tag}> cannot appear inside an inline text element (p/span/h1..h6/strong/em/label) — those flatten their content to a plain string, so <{tag}>'s own content would be silently lost; move it outside as a sibling, or wrap the text in a <div>/<rm-*> container instead")]
+    TextContentUnsupportedChild { tag: String },
+    /// Emitted when the HTML serializer itself fails (I/O error into an
+    /// in-memory buffer, or non-UTF-8 output) inside the studio write-back
+    /// path. The write-back functions refuse (return `None`) rather than
+    /// hand the caller a partial or empty buffer to write to disk.
+    #[error("failed to serialize the rewritten HTML: {0}")]
+    SerializeFailed(String),
 }
 
 /// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
@@ -107,6 +145,12 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
     let root = find_element(&dom.document, "rustmotion").ok_or(HtmlError::MissingRoot)?;
     let attrs = element_attrs(&root);
     let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+
+    check_known_attrs(
+        "rustmotion",
+        &attrs,
+        &["width", "height", "fps", "background", "codec", "crf"],
+    )?;
 
     let width = get("width").ok_or(HtmlError::MissingDimensions)?;
     let height = get("height").ok_or(HtmlError::MissingDimensions)?;
@@ -119,6 +163,12 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
     }
     if let Some(bg) = get("background") {
         video.insert("background".into(), parse_background_attr(&bg)?);
+    }
+    if let Some(codec) = get("codec") {
+        video.insert("codec".into(), style::coerce_value(&codec));
+    }
+    if let Some(crf) = get("crf") {
+        video.insert("crf".into(), style::coerce_value(&crf));
     }
 
     let mut scenes = Vec::new();
@@ -261,6 +311,71 @@ pub(crate) fn element_attrs(handle: &Handle) -> Vec<(String, String)> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// `class`/`id`/`data-*` are accepted anywhere and never reach the emitted
+/// scenario JSON — deliberately inert, not a signal of an unread attribute.
+fn is_inert_attr(name: &str) -> bool {
+    name == "class" || name == "id" || name.starts_with("data-")
+}
+
+/// Fail on any attribute of `element` outside `known` (plus the always-inert
+/// `class`/`id`/`data-*`), naming every offender in one error with a
+/// did-you-mean suggestion against `known`. This is what closes the gap
+/// `check_component_attrs` (`rustmotion`'s `--strict-attrs`) cannot: that
+/// check only sees attributes the transpiler already forwarded into the
+/// scenario JSON, so an attribute dropped here was invisible to it.
+pub(crate) fn check_known_attrs(
+    element: &str,
+    attrs: &[(String, String)],
+    known: &[&str],
+) -> Result<(), HtmlError> {
+    let unknown: Vec<&str> = attrs
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| !known.contains(k) && !is_inert_attr(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let detail = unknown
+        .iter()
+        .map(|name| match suggest(name, known) {
+            Some(k) => format!("'{name}' (did you mean '{k}'?)"),
+            None => format!("'{name}'"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(HtmlError::UnknownAttributes {
+        element: element.to_string(),
+        detail,
+    })
+}
+
+/// The closest entry in `known` to `name` (Levenshtein distance <= 2), or
+/// `None` when nothing is close enough to be worth suggesting.
+fn suggest<'a>(name: &str, known: &[&'a str]) -> Option<&'a str> {
+    known
+        .iter()
+        .map(|k| (levenshtein(name, k), *k))
+        .min_by_key(|(distance, _)| *distance)
+        .filter(|(distance, _)| *distance <= 2)
+        .map(|(_, k)| k)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }
 
 /// Depth-first: the first descendant element with the given tag name.
