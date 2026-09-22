@@ -263,3 +263,79 @@ fn inline_formatting_tags_still_flatten_into_the_parent_text() {
         json!("Real bold text")
     );
 }
+
+// ---------------------------------------------------------------------------
+// studio HTML write-back silently deletes everything outside
+// <rustmotion> in the author's file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn write_back_preserves_doctype_head_and_surrounding_comments() {
+    let html = concat!(
+        "<!DOCTYPE html>\n",
+        "<html><head><meta charset=\"utf-8\"></head><body>\n",
+        "<!-- authored by hand -->\n",
+        "<rustmotion width=\"100\" height=\"100\"><scene duration=\"2\">",
+        "<h1 style=\"font-size:96\">Hi</h1></scene></rustmotion>\n",
+        "<!-- trailing note -->\n",
+        "</body></html>\n",
+    );
+    let out = rustmotion_html::set_inline_style(html, "/scenes/0/children/0", "font-size", "120")
+        .expect("pointer resolves");
+    assert!(
+        out.contains("<!DOCTYPE html>"),
+        "doctype must survive: {out}"
+    );
+    assert!(
+        out.contains("<meta charset=\"utf-8\">"),
+        "head must survive: {out}"
+    );
+    assert!(
+        out.contains("<!-- authored by hand -->"),
+        "leading comment must survive: {out}"
+    );
+    assert!(
+        out.contains("<!-- trailing note -->"),
+        "trailing comment must survive: {out}"
+    );
+    assert!(
+        out.contains("font-size:120"),
+        "the edit itself must still apply: {out}"
+    );
+    let v = html_to_scenario_value(&out).expect("round-trips through the transpiler");
+    assert_eq!(
+        v["scenes"][0]["children"][0]["style"]["font-size"],
+        json!(120)
+    );
+}
+
+#[test]
+fn write_back_via_set_text_content_also_preserves_surrounding_document() {
+    let html = concat!(
+        "<!DOCTYPE html>\n",
+        "<!-- keep me -->\n",
+        "<rustmotion width=\"100\" height=\"100\"><scene duration=\"2\">",
+        "<h1>Hi</h1></scene></rustmotion>\n",
+        "<!-- keep me too -->\n",
+    );
+    let out = rustmotion_html::set_text_content(html, "/scenes/0/children/0", "Bonjour")
+        .expect("pointer resolves");
+    assert!(
+        out.contains("<!DOCTYPE html>"),
+        "doctype must survive: {out}"
+    );
+    assert!(out.contains("<!-- keep me -->"), "got: {out}");
+    assert!(out.contains("<!-- keep me too -->"), "got: {out}");
+    let v = html_to_scenario_value(&out).expect("round-trips through the transpiler");
+    assert_eq!(v["scenes"][0]["children"][0]["content"], json!("Bonjour"));
+}
+
+#[test]
+fn write_back_refuses_when_the_closing_tag_cannot_be_located_in_source() {
+    let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 style="font-size:96">Hi</h1></scene>"##;
+    let out = rustmotion_html::set_inline_style(html, "/scenes/0/children/0", "font-size", "120");
+    assert!(
+        out.is_none(),
+        "must refuse rather than write a file it cannot faithfully reconstruct"
+    );
+}
