@@ -282,3 +282,167 @@ fn static_translate_percent_resolves_per_axis_not_against_max_of_both() {
         "{report_json}"
     );
 }
+
+// ─── --fix must not bake in machine-absolute asset paths ───────────
+
+/// `--fix` used to serialise `LoadedScenario::raw`, captured AFTER
+/// `rustmotion::assets::rebase_relative_paths` rewrites every existing-file
+/// `src`/`track` into a canonicalised ABSOLUTE path — so fixing an
+/// unrelated violation (here, a too-wide nowrap text) silently replaced
+/// `"assets/logo.png"` with this machine's own absolute path. The asset
+/// file only needs to EXIST (rebasing is gated on `Path::is_file()`); its
+/// content is irrelevant here since geometry validation never decodes it
+/// (`Image` uses a fixed 400×300 default intrinsic size, not real pixel
+/// dimensions).
+#[test]
+fn fix_leaves_relative_asset_paths_untouched() {
+    let dir = ScratchDir::new("rm16");
+    std::fs::create_dir_all(dir.0.join("assets")).expect("mkdir assets");
+    std::fs::write(
+        dir.0.join("assets/logo.png"),
+        b"not a real png, just needs to exist",
+    )
+    .expect("write asset");
+    let scenario_path = dir.0.join("scenario.json");
+    let json = r##"{
+        "video": { "width": 1920, "height": 4000 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [
+                {
+                    "type": "image",
+                    "src": "assets/logo.png",
+                    "style": { "width": "200px", "height": "150px" }
+                },
+                {
+                    "type": "text",
+                    "content": "This is a fairly long sentence with several short words that will wrap nicely across many lines without any single word being too wide for the box.",
+                    "style": {
+                        "width": "300px", "height": "2000px",
+                        "color": "#ffffff", "font-size": "32px", "white-space": "nowrap"
+                    }
+                }
+            ]
+        }]
+    }"##;
+    std::fs::write(&scenario_path, json).expect("write scenario");
+
+    let output = run_validate(&scenario_path, None, /*fix=*/ true, false);
+    assert!(
+        output.status.success(),
+        "the only violation (the nowrap text) is fixed in place, so this run should now \
+         validate clean; stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let fixed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&scenario_path).expect("read fixed scenario"),
+    )
+    .expect("fixed scenario is valid JSON");
+    let src = fixed["scenes"][0]["children"][0]["src"]
+        .as_str()
+        .expect("image src is a string");
+    assert_eq!(
+        src, "assets/logo.png",
+        "the image src must stay exactly as authored, not rewritten to an absolute path: {fixed}"
+    );
+
+    let text_style = &fixed["scenes"][0]["children"][1]["style"];
+    assert!(
+        text_style.get("white-space").is_none(),
+        "the actual violation --fix targeted must still be fixed: {fixed}"
+    );
+}
+
+// ─── unwrappable_text_overflow must measure the CONTENT box ────────
+
+/// A nowrap text's own painter draws inside its CONTENT box
+/// (`LegacyPaintDispatcher` hands it `layout.content_box()`, not the raw
+/// layout box, for every component except `codeblock`) — so the geometry
+/// check must compare the natural line width against the content box too.
+/// Content box width here is 2000 - 1900 = 100px (950px of padding on each
+/// side); the border box is 2000px. Any real natural width for this
+/// string/font-size sits comfortably in between, so the violation fires if
+/// and only if the content box is used.
+#[test]
+fn unwrappable_text_overflow_is_measured_against_the_content_box() {
+    let scenario = ScratchFile::new("rm31-scenario");
+    let report = ScratchFile::new("rm31-report");
+    let json = r##"{
+        "video": { "width": 2400, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "text",
+                "content": "Hello World Example",
+                "position": "absolute",
+                "x": 50, "y": 50,
+                "style": {
+                    "width": "2000px", "height": "300px",
+                    "padding": { "top": "20px", "right": "950px", "bottom": "20px", "left": "950px" },
+                    "white-space": "nowrap",
+                    "font-size": "48px",
+                    "color": "#ffffff"
+                }
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "the 100px content box (2000px border box minus 1900px of padding) is too narrow \
+         for this nowrap line; report={report_json}"
+    );
+    let violation = find_kind(&report_json, "unwrappable_text_overflow")
+        .expect("expected an unwrappable_text_overflow violation");
+    let width = violation["bbox"]["w"].as_f64().expect("bbox.w is a number");
+    assert!(
+        (width - 100.0).abs() < 1.0,
+        "violation bbox should be the 100px CONTENT box, not the 2000px border box: {report_json}"
+    );
+}
+
+// ─── white-space: nowrap must not silence the height check ─────────
+
+/// A single unwrapped 120px-font line is ~144px tall, well past a 40px-tall
+/// box — the exact case `content_overflows_box` already catches for
+/// wrapping text. `white-space: nowrap` used to return before measuring
+/// height at all, so this validated clean.
+#[test]
+fn nowrap_text_taller_than_its_box_is_still_flagged() {
+    let scenario = ScratchFile::new("rm32-scenario");
+    let report = ScratchFile::new("rm32-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "text",
+                "content": "Hi",
+                "position": "absolute",
+                "x": 50, "y": 50,
+                "style": {
+                    "width": "500px", "height": "40px",
+                    "white-space": "nowrap",
+                    "font-size": "120px",
+                    "color": "#ffffff"
+                }
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "a 120px-font single line is far taller than a 40px box; report={report_json}"
+    );
+    let violation = find_kind(&report_json, "content_overflows_box")
+        .expect("expected a content_overflows_box violation");
+    assert_eq!(violation["axis"], "y", "{report_json}");
+}

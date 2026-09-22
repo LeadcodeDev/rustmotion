@@ -300,7 +300,7 @@ fn walk(
                 check_unwrappable_text(
                     &child.component,
                     &child_path,
-                    &raw_bbox,
+                    layout,
                     viewport,
                     vi,
                     si,
@@ -791,10 +791,32 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
     }
 }
 
+/// natural (unwrapped) width vs the node's own CONTENT box, not its
+/// border box. `LegacyPaintDispatcher::dispatch` hands every non-codeblock
+/// painter (`Text`/`GradientText`/`Caption` included) a synthetic
+/// `BoxLayout` built from `layout.content_box()`, translated to the
+/// content-box origin — so the painter wraps and draws inside the content
+/// box, not the raw taffy layout box this walker reads. Comparing against
+/// the border box (as this used to) under-reports by exactly
+/// `padding.left + padding.right + border.left + border.right`, mirroring
+/// the same fix `check_content_overflows_box` already applies for the
+/// wrapped case.
+///
+/// Measured via the same cosmic-text–backed intrinsic the layout engine
+/// uses. Width is bounded by the node's own resolved content-box width
+/// (not `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
+/// see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic` arms
+/// and `CssStyle::text_autofit`'s doc comment. For a non-autofit node this
+/// changes nothing: `TextIntrinsic::measure` only reads the width
+/// constraint at all when `text_autofit` is on (see its early return), and
+/// `nowrap` already forces a single unwrapped line here regardless of what
+/// width is offered — so `natural_w` below is "natural" in the non-autofit
+/// case exactly as before, and "shrunk to fit, if that's enough" when the
+/// author declared it.
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
-    bbox: &BBox,
+    layout: &BoxLayout,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -806,22 +828,12 @@ fn check_unwrappable_text(
     if !nowrap {
         return;
     }
-    // Measure via the same cosmic-text–backed intrinsic the layout engine
-    // uses. Width is bounded by the node's own resolved `bbox.w` (not
-    // `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
-    // see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic`
-    // arms and `CssStyle::text_autofit`'s doc comment. For a non-autofit
-    // node this changes nothing: `TextIntrinsic::measure` only reads the
-    // width constraint at all when `text_autofit` is on (see its early
-    // return), and `nowrap` already forces a single unwrapped line here
-    // regardless of what width is offered — so `natural_w` below is
-    // "natural" in the non-autofit case exactly as before, and "shrunk to
-    // fit, if that's enough" when the author declared it.
+    let (cx, cy, cw, ch) = layout.content_box();
     let (natural_w, _) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::Definite(bbox.w), AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
     );
-    if natural_w > bbox.w + 0.5 {
+    if natural_w > cw + 0.5 {
         let kind = component_kind(component);
         out.push(GeometryViolation {
             view_index: vi,
@@ -830,11 +842,16 @@ fn check_unwrappable_text(
             component: kind.to_string(),
             axis: Axis::X,
             kind: ViolationKind::UnwrappableTextOverflow,
-            bbox: *bbox,
+            bbox: BBox {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            },
             viewport,
             hint: format!(
                 "{kind} natural width is {natural_w:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
-                bbox.w
+                cw
             ),
         });
     }
@@ -856,14 +873,24 @@ fn check_unwrappable_text(
 /// (`codeblock`/`terminal` are deliberately excluded: their `auto_scroll`
 /// escape hatch makes a smaller-than-natural box intentional).
 ///
-/// Complementary to `check_unwrappable_text`, not overlapping with it:
-/// that one covers `white-space: nowrap`/`pre` (single unwrapped line, width
-/// only, measured at natural/unconstrained width). This one covers the
-/// default wrapping case — measured at the width the box actually *has*
-/// (`content_box().2`, unconstrained height) so it also catches a single
-/// unbreakable word/token/URL that's wider than the box even though wrap is
-/// on (wrapping can't break within a word), plus the width axis stays
-/// consistent with what will actually be painted.
+/// Complementary to `check_unwrappable_text`, not overlapping with it on the
+/// WIDTH axis: that one covers `white-space: nowrap`/`pre` (single unwrapped
+/// line, measured at natural/unconstrained width). This function covers the
+/// default wrapping case's width — measured at the width the box actually
+/// *has* (`content_box().2`, unconstrained height) so it also catches a
+/// single unbreakable word/token/URL that's wider than the box even though
+/// wrap is on (wrapping can't break within a word), plus the width axis
+/// stays consistent with what will actually be painted.
+///
+/// the HEIGHT axis is this function's job regardless of `nowrap` — a
+/// nowrap node used to return here before measuring height at all, so a
+/// single unwrapped line taller than its box validated clean. Re-measuring
+/// nowrap's WIDTH at a constrained space would wrap text that actually
+/// paints as one (too-wide) line, which is exactly why `check_unwrappable_
+/// text` owns that axis instead — but a single line's height is exactly one
+/// `line_height`, independent of any width constraint, so it's measured at
+/// `(MaxContent, Definite(ch))` and reported on `Axis::Y` only, leaving
+/// `Axis::X` to `check_unwrappable_text`.
 fn check_content_overflows_box(
     component: &Component,
     path: &str,
@@ -876,16 +903,41 @@ fn check_content_overflows_box(
     let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
         return;
     };
-    // nowrap/pre is check_unwrappable_text's territory: re-measuring it
-    // here at a constrained width would wrap text that will actually
-    // paint as one (too-wide) line, producing a height number that
-    // doesn't correspond to anything that gets painted.
-    if nowrap {
-        return;
-    }
 
     let (cx, cy, cw, ch) = layout.content_box();
     if cw <= 0.0 || ch <= 0.0 {
+        return;
+    }
+
+    if nowrap {
+        let (_, natural_h) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::Definite(ch)),
+        );
+        let eps = 0.5;
+        if natural_h <= ch + eps {
+            return;
+        }
+        let kind = component_kind(component);
+        out.push(GeometryViolation {
+            view_index: vi,
+            scene_index: si,
+            path: path.to_string(),
+            component: kind.to_string(),
+            axis: Axis::Y,
+            kind: ViolationKind::ContentOverflowsBox,
+            bbox: BBox {
+                x: cx,
+                y: cy,
+                w: cw,
+                h: ch,
+            },
+            viewport,
+            hint: format!(
+                "{kind} line is {natural_h:.0}px tall but its box is only {:.0}px tall — increase style.height (or the parent's), or reduce style.font-size",
+                ch
+            ),
+        });
         return;
     }
 
