@@ -238,6 +238,67 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     style
 }
 
+/// Resolve `padding` + `border` width into a single content-box inset, in
+/// px, per axis: `(horizontal, vertical)` i.e. `(left + right, top +
+/// bottom)`.
+///
+/// Mirrors what taffy 0.10.1's own `compute_leaf_layout` (`content_box_inset
+/// = padding + border`) subtracts from a leaf's `available_space` before
+/// handing it to the measure function — see [`crate::engine::layout_pass`],
+/// which uses this to bring `known_dimensions` (still border-box) into that
+/// same content-box space. Percentage padding/border resolves
+/// against `ctx.length.parent_size` like every other percentage in this
+/// module; a leaf's own known/available width is not threaded here, so a
+/// percentage inset on a leaf is only as accurate as that shared context.
+pub(crate) fn content_box_inset(css: &CssStyle, ctx: &ConversionContext) -> (f32, f32) {
+    let (pt, pr, pb, pl) = css.padding.as_ref().map(Edges::resolve).unwrap_or_default();
+    let padding = (
+        pt.resolve(&ctx.length),
+        pr.resolve(&ctx.length),
+        pb.resolve(&ctx.length),
+        pl.resolve(&ctx.length),
+    );
+    let border = resolve_border_widths_px(css.border.as_ref(), ctx);
+    (
+        padding.1 + padding.3 + border.1 + border.3,
+        padding.0 + padding.2 + border.0 + border.2,
+    )
+}
+
+fn resolve_border_widths_px(
+    b: Option<&super::style::BorderEdges>,
+    ctx: &ConversionContext,
+) -> (f32, f32, f32, f32) {
+    let Some(b) = b else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let uniform = b.width.as_ref().map(Edges::resolve);
+    let pick_side = |side: Option<&super::style::BorderSide>, idx: usize| -> f32 {
+        if let Some(side) = side {
+            if let Some(w) = side.width.as_ref() {
+                return w.resolve(&ctx.length);
+            }
+        }
+        if let Some((t, r, btm, l)) = uniform.as_ref() {
+            let pick = match idx {
+                0 => t,
+                1 => r,
+                2 => btm,
+                3 => l,
+                _ => t,
+            };
+            return pick.resolve(&ctx.length);
+        }
+        0.0
+    };
+    (
+        pick_side(b.top.as_ref(), 0),
+        pick_side(b.right.as_ref(), 1),
+        pick_side(b.bottom.as_ref(), 2),
+        pick_side(b.left.as_ref(), 3),
+    )
+}
+
 fn align_items_to_taffy(a: AlignItems) -> tf::AlignItems {
     match a {
         AlignItems::Stretch => tf::AlignItems::Stretch,
