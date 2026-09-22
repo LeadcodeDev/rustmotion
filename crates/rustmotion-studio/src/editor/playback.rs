@@ -99,6 +99,40 @@ pub fn apply_playback_action(
     request_next_frame_if_playing(playing, window);
 }
 
+pub struct PlayheadStep {
+    pub next: u32,
+    pub rearm_audio: bool,
+}
+
+pub fn advance_playhead(
+    current: u32,
+    last_written: Option<u32>,
+    audio_position: Option<u32>,
+    total: u32,
+) -> PlayheadStep {
+    let total = total.max(1);
+    let seeked_without_us = last_written.is_some_and(|written| written != current);
+    if seeked_without_us {
+        return PlayheadStep {
+            next: current.min(total - 1),
+            rearm_audio: true,
+        };
+    }
+    match audio_position {
+        Some(pos) if pos < total => PlayheadStep {
+            next: pos,
+            rearm_audio: false,
+        },
+        _ => {
+            let next = (current + 1) % total;
+            PlayheadStep {
+                next,
+                rearm_audio: next < current,
+            }
+        }
+    }
+}
+
 pub fn spawn_playback_clock<V: 'static>(
     shared: Shared,
     editor: Entity<EditorState>,
@@ -106,6 +140,7 @@ pub fn spawn_playback_clock<V: 'static>(
 ) {
     cx.spawn(async move |_this, cx| {
         let mut audio_armed = false;
+        let mut last_written: Option<u32> = None;
         loop {
             let fps = {
                 let m = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -120,6 +155,7 @@ pub fn spawn_playback_clock<V: 'static>(
                     super::audio::stop();
                     audio_armed = false;
                 }
+                last_written = None;
                 continue;
             }
             let total = {
@@ -127,19 +163,22 @@ pub fn spawn_playback_clock<V: 'static>(
                 m.total_frames.max(1)
             };
             let current = editor.read_with(cx, |state, _| state.current);
-            if super::audio::has_audio() && !audio_armed {
-                super::audio::play_from_frame(current, fps);
-                audio_armed = true;
-            }
-            let next = match super::audio::position_frame(fps) {
-                Some(f) if f < total => f,
-                _ => (current + 1) % total,
-            };
-            if next < current {
+            let step = advance_playhead(
+                current,
+                last_written,
+                super::audio::position_frame(fps),
+                total,
+            );
+            if step.rearm_audio {
                 audio_armed = false;
             }
+            if super::audio::has_audio() && !audio_armed {
+                super::audio::play_from_frame(step.next, fps);
+                audio_armed = true;
+            }
+            last_written = Some(step.next);
             editor.update(cx, |state, cx| {
-                state.current = next;
+                state.current = step.next;
                 cx.notify();
             });
         }
@@ -390,6 +429,69 @@ fn preview_scale_selector(editor: Entity<EditorState>, current_pct: u16) -> impl
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_scrub_during_playback_is_honoured_not_overwritten() {
+        let step = advance_playhead(900, Some(120), Some(121), 4340);
+        assert_eq!(
+            step.next, 900,
+            "the audio clock still reports 121; adopting it would snap the playhead back"
+        );
+        assert!(
+            step.rearm_audio,
+            "the sound must be moved to where the user dropped the playhead"
+        );
+    }
+
+    #[test]
+    fn a_backward_scrub_during_playback_is_honoured_too() {
+        let step = advance_playhead(30, Some(900), Some(901), 4340);
+        assert_eq!(step.next, 30);
+        assert!(step.rearm_audio);
+    }
+
+    #[test]
+    fn undisturbed_playback_follows_the_audio_clock() {
+        let step = advance_playhead(120, Some(120), Some(121), 4340);
+        assert_eq!(
+            step.next, 121,
+            "a timer drifts against the sound card; the audio position is the reference"
+        );
+        assert!(!step.rearm_audio);
+    }
+
+    #[test]
+    fn undisturbed_playback_without_audio_advances_by_one() {
+        let step = advance_playhead(120, Some(120), None, 4340);
+        assert_eq!(step.next, 121);
+        assert!(!step.rearm_audio);
+    }
+
+    #[test]
+    fn the_first_tick_of_a_session_adopts_the_audio_clock() {
+        let step = advance_playhead(0, None, Some(3), 4340);
+        assert_eq!(
+            step.next, 3,
+            "no previous write means nothing was overridden"
+        );
+        assert!(!step.rearm_audio);
+    }
+
+    #[test]
+    fn wrapping_past_the_end_rearms_the_sound_at_the_start() {
+        let step = advance_playhead(99, Some(99), None, 100);
+        assert_eq!(step.next, 0);
+        assert!(
+            step.rearm_audio,
+            "the track has to restart, not keep running past the end"
+        );
+    }
+
+    #[test]
+    fn a_seek_beyond_the_last_frame_is_clamped() {
+        let step = advance_playhead(9_999, Some(10), Some(11), 100);
+        assert_eq!(step.next, 99);
+    }
+
     #[test]
     fn scrubber_fraction_spans_the_whole_timeline() {
         assert_eq!(frame_to_fraction(0, 4340), 0.0);
