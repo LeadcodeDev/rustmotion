@@ -53,7 +53,7 @@
 use std::collections::HashSet;
 
 use rustmotion::components::box_builder::{
-    build_scene_from_refs, effective_effects, BuildAnimationCtx,
+    build_scene_from_refs, component_kind, effective_effects, BuildAnimationCtx,
 };
 use rustmotion::components::intrinsic::{
     CaptionIntrinsic, CodeblockIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic,
@@ -1252,71 +1252,6 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
             vec![("badge", b.style.font_size_px_or(default_fs))]
         }
         _ => vec![],
-    }
-}
-
-fn component_kind(c: &Component) -> &'static str {
-    match c {
-        Component::Text(_) => "text",
-        Component::Shape(_) => "shape",
-        Component::Image(_) => "image",
-        Component::Icon(_) => "icon",
-        Component::Svg(_) => "svg",
-        Component::Video(_) => "video",
-        Component::Gif(_) => "gif",
-        Component::Counter(_) => "counter",
-        Component::Cursor(_) => "cursor",
-        Component::Pointer(_) => "pointer",
-        Component::NumberWheel(_) => "number_wheel",
-        Component::SuccessCheck(_) => "success_check",
-        Component::Caption(_) => "caption",
-        Component::Codeblock(_) => "codeblock",
-        Component::Avatar(_) => "avatar",
-        Component::AvatarGroup(_) => "avatar_group",
-        Component::Arrow(_) => "arrow",
-        Component::Connector(_) => "connector",
-        Component::Badge(_) => "badge",
-        Component::Callout(_) => "callout",
-        Component::Chart(_) => "chart",
-        Component::Comparison(_) => "comparison",
-        Component::Countdown(_) => "countdown",
-        Component::Divider(_) => "divider",
-        Component::DotMap(_) => "dot_map",
-        Component::Gauge(_) => "gauge",
-        Component::GradientText(_) => "gradient_text",
-        Component::Heatmap(_) => "heatmap",
-        Component::Kbd(_) => "kbd",
-        Component::Line(_) => "line",
-        Component::List(_) => "list",
-        Component::Lottie(_) => "lottie",
-        Component::Marquee(_) => "marquee",
-        Component::Mockup(_) => "mockup",
-        Component::Notification(_) => "notification",
-        Component::Particle(_) => "particle",
-        Component::PillNav(_) => "pill_nav",
-        Component::Progress(_) => "progress",
-        Component::QrCode(_) => "qrcode",
-        Component::Rating(_) => "rating",
-        Component::Skeleton(_) => "skeleton",
-        Component::Slider(_) => "slider",
-        Component::Sparkline(_) => "sparkline",
-        Component::Stat(_) => "stat",
-        Component::Stepper(_) => "stepper",
-        Component::Switch(_) => "switch",
-        Component::RichText(_) => "rich_text",
-        Component::Table(_) => "table",
-        Component::TagCloud(_) => "tag_cloud",
-        Component::Terminal(_) => "terminal",
-        Component::Timeline(_) => "timeline",
-        Component::Tooltip(_) => "tooltip",
-        Component::Treemap(_) => "treemap",
-        Component::Positioned(_) => "positioned",
-        Component::Flex(_) => "flex",
-        Component::Grid(_) => "grid",
-        Component::Card(_) => "card",
-        Component::Container(_) => "container",
-        Component::AudioSpectrum(_) => "audio_spectrum",
-        Component::Waveform(_) => "waveform",
     }
 }
 

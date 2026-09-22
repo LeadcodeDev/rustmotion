@@ -544,3 +544,57 @@ fn codeblock_auto_scroll_disabled_overflow_still_uses_the_border_box() {
          not a content box: {report_json}"
     );
 }
+
+// ─── geometry.rs must not duplicate box_builder's component_kind ───
+
+/// `rustmotion_components::box_builder::component_kind` is already `pub`
+/// and already imported into this same binary crate elsewhere
+/// (`engine/render/scene.rs:719`) — geometry.rs must reuse it instead of
+/// carrying its own private 60-arm copy that can silently drift from it on
+/// a rename. `rustmotion::cli::commands` is a private module, so this
+/// checks the SOURCE FILE directly rather than calling the (unreachable)
+/// function itself — see this file's own top-of-file doc comment for why
+/// every other test here goes through the CLI subprocess instead.
+#[test]
+fn geometry_does_not_redefine_component_kind() {
+    let source = include_str!("../src/cli/commands/geometry.rs");
+    assert!(
+        !source.contains("fn component_kind"),
+        "geometry.rs must not define its own component_kind — it should call \
+         rustmotion::components::box_builder::component_kind instead"
+    );
+    assert!(
+        source.contains("box_builder"),
+        "geometry.rs must import component_kind from box_builder"
+    );
+}
+
+/// Smoke test: violations must still carry a sensible `component` label
+/// after the switch to the shared helper — proves the dedup didn't silently
+/// break the import wiring.
+#[test]
+fn violation_component_label_still_resolves_after_dedup() {
+    let scenario = ScratchFile::new("rm40-scenario");
+    let report = ScratchFile::new("rm40-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "position": "absolute",
+                "x": 1900, "y": 100,
+                "style": { "width": "100px", "height": "100px" },
+                "fill": "#ff0000"
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    assert!(!output.status.success());
+    let report_json = read_report(&report.0);
+    let violation = find_kind(&report_json, "viewport_overflow").expect("violation present");
+    assert_eq!(violation["component"], "shape", "{report_json}");
+}
