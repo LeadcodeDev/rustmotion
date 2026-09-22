@@ -441,7 +441,9 @@ mod tests {
         // Solid variant text is always white — probe for white ink
         // specifically, since the pill background paints regardless.
         let text_ink = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
             .count();
         assert!(

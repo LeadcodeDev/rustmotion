@@ -975,7 +975,7 @@ mod emoji_presentation_tests {
         surface.read_pixels(&info, &mut buf, (W * 4) as usize, (0, 0));
 
         let (mut n, mut sr, mut sg, mut sb) = (0usize, 0f64, 0f64, 0f64);
-        for px in buf.chunks_exact(4) {
+        for px in buf.as_chunks::<4>().0.iter() {
             if px[3] > 40 {
                 n += 1;
                 sr += px[0] as f64;

@@ -333,7 +333,7 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        let lit = buf.chunks_exact(4).filter(|p| p[3] > 0).count();
+        let lit = buf.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
         assert!(
             lit > 20,
             "list at font-size: 2rem must paint visible ink, got {lit} lit pixels"

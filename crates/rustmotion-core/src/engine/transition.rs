@@ -970,9 +970,9 @@ mod camera_pan_tests {
         );
 
         // blend_fade(10, 200, 0.5) = (10*0.5 + 200*0.5 + 0.5) as u8 = 105.
-        for px in out.chunks_exact(4) {
+        for px in out.as_chunks::<4>().0.iter() {
             assert_eq!(
-                px,
+                *px,
                 [105, 105, 105, 255],
                 "mid-pan Static frame must be a blend of bg_a and bg_b, not a copy of either"
             );
