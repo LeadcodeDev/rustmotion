@@ -359,12 +359,11 @@ mod tests {
     /// (an odd width rejected by libx264) doesn't apply here (the `gif`
     /// crate has no such constraint), so this drives the failure the one
     /// way this pure Rust path can actually fail without external tools:
-    /// `total_frames == 0`.
-    /// That returns before any file is touched either way, so what this
-    /// test really pins is the *shape* of the fix — `encode_gif` must never
-    /// promote a partial onto `output_path` when its inner call errors —
-    /// exercised by asserting the scratch/partial path used internally is
-    /// never left behind either.
+    /// `total_frames == 0`. That returns before any file is touched either
+    /// way, so what this test really pins is the *shape* of the fix —
+    /// `encode_gif` must never promote a partial onto `output_path` when its
+    /// inner call errors — exercised by asserting the scratch/partial path
+    /// used internally is never left behind either.
     #[test]
     fn encode_gif_leaves_no_partial_file_behind_on_an_empty_scenario() {
         let json = r#"{"video": {"width": 8, "height": 8, "fps": 10}, "scenes": []}"#;
