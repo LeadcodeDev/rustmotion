@@ -401,7 +401,7 @@ pub fn set_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> O
     let root = find_element(&dom.document, "rustmotion")?;
     let target = resolve_pointer(&root, pointer)?;
     set_style_attr(&target, prop, value)?;
-    Some(serialize_element(&root))
+    splice_rustmotion_subtree(html, &root)
 }
 
 /// Replace the text content of the element addressed by the JSON pointer with
@@ -413,7 +413,7 @@ pub fn set_text_content(html: &str, pointer: &str, text: &str) -> Option<String>
     let root = find_element(&dom.document, "rustmotion")?;
     let target = resolve_pointer(&root, pointer)?;
     set_text(&target, text)?;
-    Some(serialize_element(&root))
+    splice_rustmotion_subtree(html, &root)
 }
 
 /// Set or replace a plain attribute on the element addressed by the JSON
@@ -429,7 +429,7 @@ pub fn set_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Opti
     let root = find_element(&dom.document, "rustmotion")?;
     let target = resolve_pointer(&root, pointer)?;
     set_attr(&target, name, value)?;
-    Some(serialize_element(&root))
+    splice_rustmotion_subtree(html, &root)
 }
 
 /// Remove one inline `style` property from the element addressed by the JSON
@@ -441,7 +441,7 @@ pub fn remove_inline_style(html: &str, pointer: &str, prop: &str) -> Option<Stri
     let root = find_element(&dom.document, "rustmotion")?;
     let target = resolve_pointer(&root, pointer)?;
     remove_style_decl(&target, prop)?;
-    Some(serialize_element(&root))
+    splice_rustmotion_subtree(html, &root)
 }
 
 /// Upsert (or, for an empty value, remove) a plain attribute on an element.
@@ -600,15 +600,42 @@ fn upsert_decl(decls: &str, prop: &str, value: &str) -> String {
         .join("; ")
 }
 
-fn serialize_element(handle: &Handle) -> String {
+/// Re-serialize `root` (the mutated `<rustmotion>` subtree) and splice it
+/// back into `original` at the exact byte span its `<rustmotion>...
+/// </rustmotion>` element occupies there, leaving everything before and
+/// after — doctype, `<head>`, comments, anything else the author wrote —
+/// byte-for-byte untouched. `original` is used as the source of truth for
+/// that surrounding content rather than `root`'s own parsed document,
+/// because `parse_fragment_dom` parses in a body-fragment context, which
+/// does not retain a doctype at all and does not guarantee round-tripping
+/// `<html>`/`<head>`/`<body>` the way the author wrote them. Refuses
+/// (`None`) rather than write a corrupted file when the span can't be
+/// located (no `<rustmotion>`/`</rustmotion>` literal in `original`, e.g. an
+/// unclosed root) or the serializer itself fails.
+fn splice_rustmotion_subtree(original: &str, root: &Handle) -> Option<String> {
+    let open_start = original.find("<rustmotion")?;
+    let close_start = original.rfind("</rustmotion")?;
+    let close_end = close_start + original[close_start..].find('>')? + 1;
+    if close_end <= open_start {
+        return None;
+    }
+    let serialized = serialize_element(root).ok()?;
+    let mut out = String::with_capacity(original.len() + serialized.len());
+    out.push_str(&original[..open_start]);
+    out.push_str(&serialized);
+    out.push_str(&original[close_end..]);
+    Some(out)
+}
+
+fn serialize_element(handle: &Handle) -> Result<String, HtmlError> {
     let mut buf = Vec::new();
     let node: SerializableHandle = handle.clone().into();
     let opts = SerializeOpts {
         traversal_scope: TraversalScope::IncludeNode,
         ..Default::default()
     };
-    let _ = serialize(&mut buf, &node, opts);
-    String::from_utf8(buf).unwrap_or_default()
+    serialize(&mut buf, &node, opts).map_err(|e| HtmlError::SerializeFailed(e.to_string()))?;
+    String::from_utf8(buf).map_err(|e| HtmlError::SerializeFailed(e.to_string()))
 }
 
 #[cfg(test)]
