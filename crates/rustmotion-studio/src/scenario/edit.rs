@@ -1,8 +1,6 @@
 use serde_json::Value;
 
-/// Read a style property at the element addressed by `pointer`, e.g.
-/// (`"/scenes/0/children/0"`, `"color"`). Returns the value as a string.
-#[allow(dead_code)] // symmetric API counterpart to set_style; consumed as the inspector grows
+#[allow(dead_code)]
 pub fn read_style(raw: &Value, pointer: &str, prop: &str) -> Option<String> {
     let el = raw.pointer(pointer)?;
     let v = el.get("style")?.get(prop)?;
@@ -12,9 +10,6 @@ pub fn read_style(raw: &Value, pointer: &str, prop: &str) -> Option<String> {
     })
 }
 
-/// Read the whole `style` object of the element at `pointer` (or `Null`). The
-/// inspector renders every supported property from this single value, which
-/// keeps it stable (frame-independent) for memoization.
 pub fn read_style_object(raw: &Value, pointer: &str) -> Value {
     raw.pointer(pointer)
         .and_then(|el| el.get("style"))
@@ -22,8 +17,6 @@ pub fn read_style_object(raw: &Value, pointer: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Set a style property (as a JSON string) on the element at `pointer`.
-/// Returns the mutated clone; the caller writes it to disk.
 pub fn set_style(mut raw: Value, pointer: &str, prop: &str, value: &str) -> Option<Value> {
     let el = raw.pointer_mut(pointer)?;
     let obj = el.as_object_mut()?;
@@ -35,9 +28,6 @@ pub fn set_style(mut raw: Value, pointer: &str, prop: &str, value: &str) -> Opti
     Some(raw)
 }
 
-/// Read a top-level field (e.g. `"content"`) of the element at `pointer` as a
-/// string. Unlike [`read_style`], this reads a field on the element itself, not
-/// inside its `style` object.
 pub fn read_field(raw: &Value, pointer: &str, field: &str) -> Option<String> {
     let v = raw.pointer(pointer)?.get(field)?;
     Some(match v {
@@ -46,8 +36,6 @@ pub fn read_field(raw: &Value, pointer: &str, field: &str) -> Option<String> {
     })
 }
 
-/// Set a top-level field (e.g. `"content"`, as a JSON string) on the element at
-/// `pointer`. Returns the mutated clone; the caller writes it to disk.
 pub fn set_field(mut raw: Value, pointer: &str, field: &str, value: &str) -> Option<Value> {
     let el = raw.pointer_mut(pointer)?;
     let obj = el.as_object_mut()?;
@@ -55,10 +43,6 @@ pub fn set_field(mut raw: Value, pointer: &str, field: &str, value: &str) -> Opt
     Some(raw)
 }
 
-/// Typed variant of [`set_field`]: writes the JSON value as-is (a number stays
-/// a number, a bool a bool). `Value::Null` REMOVES the field — an emptied
-/// control unsets rather than writing an empty string. Returns the mutated
-/// clone.
 pub fn set_field_value(mut raw: Value, pointer: &str, field: &str, value: Value) -> Option<Value> {
     let el = raw.pointer_mut(pointer)?;
     let obj = el.as_object_mut()?;
@@ -70,9 +54,6 @@ pub fn set_field_value(mut raw: Value, pointer: &str, field: &str, value: Value)
     Some(raw)
 }
 
-/// Typed variant of [`set_style`]: writes the JSON value as-is into the
-/// element's `style` object. `Value::Null` REMOVES the property. Returns the
-/// mutated clone.
 pub fn set_style_value(mut raw: Value, pointer: &str, prop: &str, value: Value) -> Option<Value> {
     let el = raw.pointer_mut(pointer)?;
     let obj = el.as_object_mut()?;
@@ -90,9 +71,6 @@ pub fn set_style_value(mut raw: Value, pointer: &str, prop: &str, value: Value) 
     Some(raw)
 }
 
-/// Duration (seconds) of the scene containing the element at `pointer`
-/// (`/scenes/N/…` or `/composition/V/scenes/N/…`). Used by the inspector's
-/// Timing section as the upper bound for start_at/end_at.
 pub fn scene_duration_for_pointer(raw: &Value, pointer: &str) -> Option<f64> {
     let segs: Vec<&str> = pointer.split('/').collect();
     let scene_ptr = match segs.as_slice() {
@@ -103,8 +81,6 @@ pub fn scene_duration_for_pointer(raw: &Value, pointer: &str) -> Option<f64> {
     raw.pointer(&scene_ptr)?.get("duration")?.as_f64()
 }
 
-/// Append an annotation object to `raw["annotations"]` (creating the array if
-/// absent). Returns the mutated clone.
 pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
     if let Some(obj) = raw.as_object_mut() {
         let arr = obj
@@ -117,7 +93,6 @@ pub fn append_annotation(mut raw: Value, annotation: Value) -> Value {
     raw
 }
 
-/// Remove the annotation with the given id from `raw["annotations"]`.
 pub fn remove_annotation(mut raw: Value, id: &str) -> Value {
     if let Some(Value::Array(a)) = raw.get_mut("annotations") {
         a.retain(|x| x.get("id").and_then(|v| v.as_str()) != Some(id));
@@ -125,7 +100,6 @@ pub fn remove_annotation(mut raw: Value, id: &str) -> Value {
     raw
 }
 
-/// List the annotations as (id, note, frame, kind) tuples for the panel.
 pub fn list_annotations(raw: &Value) -> Vec<(String, String, u64, String)> {
     raw.get("annotations")
         .and_then(|v| v.as_array())
@@ -246,7 +220,6 @@ mod tests {
         assert!(updated["scenes"][0]["children"][0]["style"]
             .get("color")
             .is_none());
-        // Typed write keeps the number.
         let updated =
             set_style_value(updated, "/scenes/0/children/0", "font-size", json!(64)).unwrap();
         assert_eq!(

@@ -1,15 +1,3 @@
-//! Optimistic in-memory edits: apply every edit event to the live model
-//! immediately (rebuild scenario + tasks from memory, bump generation) so the
-//! canvas refreshes in ~one render, while the DISK keeps the existing
-//! debounced write path untouched (250 ms, history/undo, write_error).
-//!
-//! Also owns the self-write ledger: the debounced writer and undo/redo record
-//! a hash of what they wrote; the watcher skips reloads whose disk content
-//! matches the last self-write (the in-memory model is already up to date —
-//! and possibly NEWER under continuous typing, so the skip is a correctness
-//! fix, not just an optimization). External edits (agent, editor) hash
-//! differently and reload normally.
-
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -21,8 +9,6 @@ use rustmotion::schema::ResolvedScenario;
 
 use super::{set_field_value, set_style_value, Shared};
 
-/// One in-memory edit, mirroring the debounced write payloads.
-/// `Value::Null` removes the property / field.
 #[derive(Debug, Clone)]
 pub enum Mutation {
     Style {
@@ -37,12 +23,6 @@ pub enum Mutation {
     },
 }
 
-/// Apply a mutation to the in-memory model: mutate the raw (JSON) or the
-/// in-memory HTML source (retranspiled), rebuild scenario/tasks (fresh Arcs —
-/// the prefetcher follows), bump generation. On rebuild failure (transiently
-/// invalid edit, e.g. mid-typing in a JSON area) the model is left UNTOUCHED
-/// and no write_error is raised — the disk is only ever written by the
-/// debounced path, which has its own guards.
 pub fn apply_optimistic(shared: &Shared, mutation: &Mutation) -> Result<(), String> {
     let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
     let Some(path) = m.path.clone() else {
@@ -50,7 +30,6 @@ pub fn apply_optimistic(shared: &Shared, mutation: &Mutation) -> Result<(), Stri
     };
 
     if rustmotion::loader::is_html_path(&path) {
-        // HTML: mutate the in-memory source, retranspile, rebuild.
         let source = match &m.html_source {
             Some(s) => s.clone(),
             None => std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"))?,
@@ -63,7 +42,6 @@ pub fn apply_optimistic(shared: &Shared, mutation: &Mutation) -> Result<(), Stri
         let scenario = rebuild_from_value(&new_raw)?;
         commit(&mut m, scenario, new_raw, Some(new_source));
     } else {
-        // JSON: mutate the raw value, rebuild.
         let new_raw = apply_to_raw(m.raw.clone(), mutation).ok_or("mutation didn't apply")?;
         let scenario = rebuild_from_value(&new_raw)?;
         commit(&mut m, scenario, new_raw, None);
@@ -71,9 +49,6 @@ pub fn apply_optimistic(shared: &Shared, mutation: &Mutation) -> Result<(), Stri
     Ok(())
 }
 
-/// Adopt a full source text as the new in-memory state (undo/redo: they
-/// rewrite the disk themselves and the watcher skips the self-write, so the
-/// memory must be updated here). Rebuilds like `apply_optimistic`.
 pub fn adopt_source(shared: &Shared, path: &Path, source: &str) -> Result<(), String> {
     let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
     if rustmotion::loader::is_html_path(path) {
@@ -91,8 +66,6 @@ pub fn adopt_source(shared: &Shared, path: &Path, source: &str) -> Result<(), St
     Ok(())
 }
 
-/// Swap the rebuilt state into the model: fresh Arcs (the prefetcher follows),
-/// new totals, generation bump.
 fn commit(
     m: &mut super::StudioModel,
     scenario: ResolvedScenario,
@@ -110,7 +83,6 @@ fn commit(
     m.generation = m.generation.wrapping_add(1);
 }
 
-/// Apply a mutation to a raw JSON document (pure).
 fn apply_to_raw(raw: Value, mutation: &Mutation) -> Option<Value> {
     match mutation {
         Mutation::Style {
@@ -126,8 +98,6 @@ fn apply_to_raw(raw: Value, mutation: &Mutation) -> Option<Value> {
     }
 }
 
-/// Apply a mutation to an HTML source string (pure). `content` maps to the
-/// element's text node; other fields are attributes.
 fn apply_to_html(source: &str, mutation: &Mutation) -> Option<String> {
     match mutation {
         Mutation::Style {
@@ -165,11 +135,8 @@ fn apply_to_html(source: &str, mutation: &Mutation) -> Option<String> {
     }
 }
 
-// ── Self-write ledger ────────────────────────────────────────────────────────
-
 pub type SelfWrites = Arc<Mutex<HashMap<PathBuf, u64>>>;
 
-/// App-global ledger: path → hash of the last content this process wrote.
 pub fn self_write_slot() -> SelfWrites {
     static SLOT: OnceLock<SelfWrites> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -182,62 +149,39 @@ fn content_hash(content: &str) -> u64 {
     h.finish()
 }
 
-/// Record that this process wrote `content` to `path`.
 pub fn note_self_write(slot: &SelfWrites, path: &Path, content: &str) {
     let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
     map.insert(path.to_path_buf(), content_hash(content));
 }
 
-/// Forget the note for `path` (adoption failed → let the watcher reload).
 pub fn clear_self_write(slot: &SelfWrites, path: &Path) {
     let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
     map.remove(path);
 }
 
-/// Whether `content` on disk is exactly the last self-write for `path`
-/// (watcher: true → skip the reload).
 pub fn is_self_write(slot: &SelfWrites, path: &Path, content: &str) -> bool {
     let map = slot.lock().unwrap_or_else(|e| e.into_inner());
     map.get(path) == Some(&content_hash(content))
 }
 
-// ── Pending writes (debounce queue) ─────────────────────────────────────────
-
 pub type PendingWrites = Arc<Mutex<HashMap<PathBuf, Vec<Mutation>>>>;
 
-/// App-global queue of mutations accumulated since the last successful disk
-/// flush, keyed by scenario path. The debounce timer in `inspector.rs`
-/// appends to it on every edit and drains it when it fires; `undo`/`redo`
-/// drain it too, before touching the file, so an orphaned flush that still
-/// fires after a revert has nothing left to replay.
 pub fn pending_write_slot() -> PendingWrites {
     static SLOT: OnceLock<PendingWrites> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
         .clone()
 }
 
-/// Queue one mutation for `path`, to be replayed onto the freshest disk
-/// content the next time the debounce flushes.
 pub fn queue_mutation(slot: &PendingWrites, path: &Path, mutation: Mutation) {
     let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
     map.entry(path.to_path_buf()).or_default().push(mutation);
 }
 
-/// Remove and return every mutation queued for `path`, in the order they were
-/// queued (empty when there is nothing pending: a no-op flush, or a queue a
-/// concurrent undo/redo already drained).
 pub fn take_pending(slot: &PendingWrites, path: &Path) -> Vec<Mutation> {
     let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
     map.remove(path).unwrap_or_default()
 }
 
-// ── Flush decision (pure) ────────────────────────────────────────────────────
-
-/// Replay `mutations`, in order, onto `disk_content` — the freshest content on
-/// disk, read right before the flush, never a snapshot captured back when an
-/// edit happened. `Ok(None)` means every mutation was a no-op (nothing to
-/// write); `Err` means `disk_content` itself could not be parsed as JSON (the
-/// HTML branch has no such failure mode: any string is a valid rebase base).
 pub fn resolve_flush(
     disk_content: &str,
     is_html: bool,
@@ -271,12 +215,6 @@ pub fn resolve_flush(
     }
 }
 
-// ── Rebuild ──────────────────────────────────────────────────────────────────
-
-/// Build a `ResolvedScenario` from a raw scenario JSON value — the same
-/// pipeline as the loader (variable defaults + include resolution; includes
-/// resolve as Inline, so file-relative includes are a known limitation shared
-/// with the diff baseline render).
 fn rebuild_from_value(raw: &Value) -> Result<ResolvedScenario, String> {
     let json = serde_json::to_string(raw).map_err(|e| format!("serialize: {e}"))?;
     rustmotion::loader::load_scenario_from_source(None, Some(&json)).map_err(|e| e.to_string())
@@ -307,21 +245,12 @@ mod tests {
             { "type": "text", "content": "Hi", "style": { "font-size": 48 } }
         ] } ] }"##;
 
-    // ── Integration: full chart-colors write path (user bug repro) ──────
-
-    /// End-to-end repro of "editing chart colors does nothing": promo file →
-    /// optimistic Field mutation with the 8-color palette (the prefill
-    /// write), second mutation turning colors[0] red, rebuild, pixel check on
-    /// the chart's scene. Proves the DATA path (pointer → set_field_value →
-    /// rebuild → painter `get_color`) end to end.
     #[test]
     fn chart_colors_edit_reaches_the_rendered_pixels() {
         let promo = std::path::Path::new("../../examples/rustmotion-promo.json");
         if !promo.exists() {
             panic!("examples/rustmotion-promo.json missing");
         }
-        // Real open path: typed scenario loaded from the file (model_for uses
-        // an empty scenario and would have no frames before the first edit).
         let loaded = rustmotion::loader::load_input(&promo.to_path_buf()).expect("promo loads");
         let shared: Shared = Arc::new(Mutex::new(StudioModel::new(
             loaded,
@@ -329,7 +258,6 @@ mod tests {
             Some(promo.to_path_buf()),
         )));
 
-        // Find the first chart component in the raw (nested scene→div→card→chart).
         fn find_chart(node: &Value, ptr: String, out: &mut Option<String>) {
             if out.is_some() {
                 return;
@@ -371,7 +299,6 @@ mod tests {
                         if *s == scene_idx)
                 })
                 .expect("scene has frames");
-            // Mid-scene so staggered entrances have landed.
             let idx = (base + 45).min(m.tasks.len() - 1);
             rustmotion::encode::render_frame_task_scaled(
                 &m.scenario.video,
@@ -391,7 +318,6 @@ mod tests {
 
         let before = render_scene(&shared);
 
-        // Edit 1: the prefill write (exactly what "+ Add color" commits).
         let palette: Vec<Value> = rustmotion::components::chart::DEFAULT_PALETTE
             .iter()
             .map(|c| Value::String(c.to_string()))
@@ -405,7 +331,6 @@ mod tests {
             },
         )
         .expect("palette write applies");
-        // Identical palette → the canvas must NOT change (the UX trap).
         let after_prefill = render_scene(&shared);
         assert_eq!(
             count_red(&before),
@@ -413,7 +338,6 @@ mod tests {
             "prefill palette renders identically by design"
         );
 
-        // Edit 2: the user picks red for the first series.
         let mut reddened = palette;
         reddened[0] = Value::String("#FF0000".into());
         apply_optimistic(
@@ -433,8 +357,6 @@ mod tests {
             );
         }
         let after_red = render_scene(&shared);
-        // At 0.25 scale the red series line is thin — a clear nonzero jump
-        // is the signal (measured ~14 px; before: 0).
         assert!(
             count_red(&after_red) >= count_red(&before) + 10,
             "chart must actually turn red: before={} after={}",
@@ -443,29 +365,20 @@ mod tests {
         );
     }
 
-    // ── Self-write skip decision ────────────────────────────────────────
-
     #[test]
     fn self_write_skip_decision() {
         let slot: SelfWrites = Arc::new(Mutex::new(HashMap::new()));
         let a = Path::new("/w/a.json");
         let b = Path::new("/w/b.json");
-        // Nothing recorded → reload (not a self-write).
         assert!(!is_self_write(&slot, a, "content"));
         note_self_write(&slot, a, "content");
-        // Identical content → skip.
         assert!(is_self_write(&slot, a, "content"));
-        // Different content (external edit) → reload.
         assert!(!is_self_write(&slot, a, "external change"));
-        // Same content on a DIFFERENT path → reload.
         assert!(!is_self_write(&slot, b, "content"));
-        // Cleared → reload again.
         note_self_write(&slot, a, "content");
         clear_self_write(&slot, a);
         assert!(!is_self_write(&slot, a, "content"));
     }
-
-    // ── Optimistic rebuild (JSON) ───────────────────────────────────────
 
     #[test]
     fn optimistic_style_mutation_rebuilds_the_scenario() {
@@ -485,7 +398,6 @@ mod tests {
             model.raw["scenes"][0]["children"][0]["style"]["font-size"],
             json!(64)
         );
-        // The rebuilt scenario carries the new value too (children are raw values).
         assert_eq!(
             model.scenario.views[0].scenes[0].children[0]["style"]["font-size"],
             json!(64)
@@ -504,7 +416,6 @@ mod tests {
             (m.generation, m.raw.clone())
         };
 
-        // width: "abc" breaks the typed Scenario parse → rebuild fails.
         let m = Mutation::Field {
             pointer: "/video".into(),
             field: "width".into(),
@@ -517,8 +428,6 @@ mod tests {
         assert_eq!(model.raw, raw_before, "raw untouched on failure");
         let _ = std::fs::remove_file(&path);
     }
-
-    // ── Optimistic rebuild (HTML) ───────────────────────────────────────
 
     #[test]
     fn optimistic_html_mutation_retranspiles_in_memory() {
@@ -538,7 +447,6 @@ mod tests {
         apply_optimistic(&shared, &m).expect("html mutation applies");
 
         let model = shared.lock().unwrap();
-        // Retranspiled + re-typed by the transpiler's coercion.
         assert_eq!(model.raw["scenes"][0]["children"][0]["from"], json!(250));
         assert!(
             model
@@ -549,8 +457,6 @@ mod tests {
         );
         let _ = std::fs::remove_file(&p);
     }
-
-    // ── Undo + self-write flow ──────────────────────────────────────────
 
     #[test]
     fn undo_notes_self_write_and_adopts_in_memory() {
@@ -563,12 +469,9 @@ mod tests {
 
         crate::scenario::undo(&shared, &hist);
 
-        // Disk restored…
         let disk = std::fs::read_to_string(&path).unwrap();
         assert_eq!(disk, before);
-        // …the write is recorded as a self-write (watcher will skip it)…
         assert!(is_self_write(&self_write_slot(), &path, &disk));
-        // …and the memory adopted the restored state itself.
         let model = shared.lock().unwrap();
         assert_eq!(
             model.raw["scenes"][0]["children"][0]["style"]["font-size"],

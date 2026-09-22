@@ -1,15 +1,3 @@
-//! Pure scenario diff for the studio's before/after review mode.
-//!
-//! Compares the baseline raw scenario JSON against the current one and
-//! reports element-level changes, identified by JSON pointer. Matching is
-//! positional (by pointer): an element is compared with whatever sits at the
-//! same index in the other tree. Consequently a reorder of different-typed
-//! siblings shows as remove+add (type mismatch at both indices), and a
-//! reorder of same-typed siblings shows as paired field modifications.
-//!
-//! Top-level `annotations` are deliberately ignored (studio feedback, not
-//! scenario content).
-
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,9 +7,6 @@ pub enum ChangeKind {
     Modified,
 }
 
-/// One changed field of a modified element, dot-flattened (`style.font-size`).
-/// `before`/`after` are display strings; an empty string means the field was
-/// absent on that side.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldChange {
     pub field: String,
@@ -29,29 +14,20 @@ pub struct FieldChange {
     pub after: String,
 }
 
-/// One changed element (or the video config / document root), addressed by a
-/// JSON pointer into the current scenario (or the baseline for removals).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElementChange {
     pub pointer: String,
     pub kind: ChangeKind,
-    /// Component `type` ("text", "card", …), or "scene" / "video" / "document".
     pub element_type: String,
-    /// Short display label (content snippet or the type).
     pub label: String,
-    /// Display group ("Video", "Scene 1", "View 2 · Scene 1", "Document").
     pub group: String,
-    /// Per-field before → after list (only for `Modified`).
     pub fields: Vec<FieldChange>,
-    /// The element's `start_at`, for click-to-scrub.
     pub start_at: Option<f64>,
 }
 
-/// Diff two raw scenario JSON documents. Pure.
 pub fn diff_scenarios(baseline: &Value, current: &Value) -> Vec<ElementChange> {
     let mut out = Vec::new();
 
-    // Video config as one pseudo-element.
     let empty = Map::new();
     let b_video = baseline
         .get("video")
@@ -75,8 +51,6 @@ pub fn diff_scenarios(baseline: &Value, current: &Value) -> Vec<ElementChange> {
         });
     }
 
-    // Scene lists: top-level `scenes` and/or `composition/*/scenes`, keyed by
-    // pointer prefix so mismatched shapes fall out as remove+add naturally.
     for (prefix, group_prefix) in scene_prefixes(baseline, current) {
         let b_scenes = scenes_at(baseline, &prefix);
         let c_scenes = scenes_at(current, &prefix);
@@ -95,8 +69,6 @@ pub fn diff_scenarios(baseline: &Value, current: &Value) -> Vec<ElementChange> {
         }
     }
 
-    // Any other top-level drift (fonts, audio, config, backgrounds…) except
-    // scenes/composition (walked above) and annotations (studio feedback).
     let skip = ["video", "scenes", "composition", "annotations"];
     let b_root = baseline.as_object().cloned().unwrap_or_default();
     let c_root = current.as_object().cloned().unwrap_or_default();
@@ -125,8 +97,6 @@ pub fn diff_scenarios(baseline: &Value, current: &Value) -> Vec<ElementChange> {
     out
 }
 
-/// The scene-array pointer prefixes present in either document, with their
-/// display group prefix (`""` or `"View N · "`), deduplicated, stable order.
 fn scene_prefixes(baseline: &Value, current: &Value) -> Vec<(String, String)> {
     let mut prefixes = Vec::new();
     let mut push = |p: String, g: String| {
@@ -150,7 +120,6 @@ fn scene_prefixes(baseline: &Value, current: &Value) -> Vec<(String, String)> {
     prefixes
 }
 
-/// The scene array at a pointer prefix (empty when absent).
 fn scenes_at<'a>(doc: &'a Value, prefix: &str) -> &'a [Value] {
     doc.pointer(prefix)
         .and_then(|v| v.as_array())
@@ -158,9 +127,6 @@ fn scenes_at<'a>(doc: &'a Value, prefix: &str) -> &'a [Value] {
         .unwrap_or(&[])
 }
 
-/// Compare two elements at the same pointer. Same type → field diff (dot
-/// flattened, recursive into objects like `style`, skipping `children`) then
-/// recurse into children pairwise. Different type → remove + add.
 fn diff_element(
     pointer: &str,
     group: &str,
@@ -217,8 +183,6 @@ fn diff_element(
     }
 }
 
-/// Build an Added/Removed entry for a whole element (no recursion inside — one
-/// entry per added/removed subtree).
 fn entry(pointer: &str, kind: ChangeKind, el: &Value, group: &str) -> ElementChange {
     let element_type = el
         .get("type")
@@ -236,9 +200,6 @@ fn entry(pointer: &str, kind: ChangeKind, el: &Value, group: &str) -> ElementCha
     }
 }
 
-/// Dot-flattened field diff over two objects, recursive into nested objects
-/// (style etc.). `children` is skipped at the element's top level only.
-/// Key order: baseline keys first, then current-only keys.
 fn diff_fields(
     prefix: &str,
     b: &Map<String, Value>,
@@ -281,8 +242,6 @@ fn diff_fields(
     }
 }
 
-/// Display string for a JSON value (strings unquoted; floats keep one decimal
-/// via serde's canonical form).
 fn fmt(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -290,7 +249,6 @@ fn fmt(v: &Value) -> String {
     }
 }
 
-/// Short display label: content snippet (24 chars max) or the type.
 fn label_of(el: &Value, fallback: &str) -> String {
     match el.get("content").and_then(|c| c.as_str()) {
         Some(s) if !s.is_empty() => {
@@ -426,7 +384,6 @@ mod tests {
             .unwrap()
             .reverse();
         let d = diff_scenarios(&b, &cur);
-        // Type mismatch at both indices → remove+add per slot.
         assert_eq!(d.len(), 4);
         assert_eq!(
             d.iter().filter(|c| c.kind == ChangeKind::Removed).count(),

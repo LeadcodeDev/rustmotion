@@ -1,17 +1,3 @@
-//! Schema-driven property registry for the inspector.
-//!
-//! Derived lazily (OnceLock) from `schemars::schema_for!(Component)` — the
-//! same source as `rustmotion validate`'s unknown-attribute check — and from
-//! `schema_for!(CssStyle)` for the CSS sections. Two invariants:
-//!
-//! 1. Component root fields: every non-excluded property of every `oneOf`
-//!    variant gets a typed [`PropSpec`]; the exclusion list below is the only
-//!    curation.
-//! 2. CSS completeness BY CONSTRUCTION: every property of the `CssStyle`
-//!    schema lands in exactly one [`CssSection`] — unmapped ones fall into
-//!    `Advanced` automatically, so schema evolution can never silently drop a
-//!    property from the inspector (locked by a test).
-
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -20,15 +6,6 @@ use serde_json::Value;
 use rustmotion::components::Component;
 use rustmotion::core::css::CssStyle;
 
-/// Root component fields NEVER shown as generic controls:
-/// - `type`: the component identity, not editable.
-/// - `style`: the whole CSS block (has its own sections).
-/// - `children`: structural.
-/// - `position`, `x`, `y`, `z-index`: `ChildComponent` wrapper fields.
-/// - `animation`, `timeline`: structured animation config (dedicated tooling
-///   later; a generic control would invite corruption).
-/// - Structured data arrays (chart `data`, rich_text `spans`, …): no sensible
-///   generic control in v1.
 pub const EXCLUDED_FIELDS: &[&str] = &[
     "type",
     "style",
@@ -39,7 +16,6 @@ pub const EXCLUDED_FIELDS: &[&str] = &[
     "z-index",
     "animation",
     "timeline",
-    // structured data arrays
     "data",
     "radar_data",
     "spans",
@@ -61,43 +37,23 @@ pub const EXCLUDED_FIELDS: &[&str] = &[
     "states",
 ];
 
-/// How a schema field is edited by the generic control factory.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropKind {
-    /// Schema `"type": "integer"` (u8/u32/i64… — schemars adds a
-    /// `format: uint8/uint32/…` hint). Writes REAL JSON integers: a `12.0`
-    /// written into a `u32` field fails the typed parse ("invalid type:
-    /// floating point") and would drop the element at render.
     Integer,
-    /// Schema `"type": "number"` (f32/f64 — `format: float/double`).
     Float,
     Bool,
     String,
-    /// String enum with the exact variants from the schema.
     Enum(Vec<String>),
-    /// String whose name contains "color" → color picker.
     Color,
-    /// Array of color strings (gradient_text `colors`) → per-entry pickers.
     ColorList,
-    /// Untagged string|gradient-object (shape `fill`) → mode-switched editor.
     Fill,
-    /// Untagged number|string (Length, LengthPercentage, Size, …) → unit input.
     Unit,
-    /// Object with known schema properties (stat `trend`, `stroke`, …) →
-    /// indented sub-rows through the same control factory (depth ≤ 2).
     Object(Vec<PropSpec>),
-    /// Array of numbers (stat `sparkline_data`, …) → per-entry number rows.
     NumberList,
-    /// Array of non-color strings (chart `axes`/`categories`, …) → per-entry
-    /// text rows.
     StringList,
-    /// Objects/arrays without a known shape → JSON textarea.
     Complex,
 }
 
-/// Shortest display form of a numeric raw string: `"405.0"` → `"405"`,
-/// `"1.40"` → `"1.4"`, `"100"` → `"100"` (Rust's f64 Display is
-/// shortest-round-trip). Non-numeric input passes through unchanged.
 pub fn display_number(raw: &str) -> String {
     raw.trim()
         .parse::<f64>()
@@ -111,10 +67,6 @@ pub struct PropSpec {
     pub kind: PropKind,
 }
 
-/// Default-palette prefill for an EMPTY color list: for `chart.colors`,
-/// "+ Add color" seeds the list with the engine's actual rendering palette so
-/// the user edits what the canvas shows instead of starting from nothing.
-/// Extend the map here when other components gain a palette.
 pub fn palette_prefill(
     tag: &str,
     field: &str,
@@ -129,10 +81,6 @@ pub fn palette_prefill(
     }
 }
 
-/// Next entries after a "+ Add" click (pure, single decision point for every
-/// list editor): an EMPTY list with a prefill (chart palette) is seeded with
-/// it — the user gets all 8 editable rows at once; otherwise one default
-/// entry is appended.
 pub fn next_entries_on_add(
     current: &[String],
     add_value: &str,
@@ -148,8 +96,6 @@ pub fn next_entries_on_add(
     }
 }
 
-/// Mutate one sub-key of an object value: `Null` prunes the key; an object
-/// left empty collapses to `Null` (the whole field gets removed).
 pub fn mutate_object_field(current: &Value, key: &str, new: Value) -> Value {
     let mut map = current.as_object().cloned().unwrap_or_default();
     if new.is_null() {
@@ -164,7 +110,6 @@ pub fn mutate_object_field(current: &Value, key: &str, new: Value) -> Value {
     }
 }
 
-/// Display mode of a [`PropKind::Fill`] value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillMode {
     Single,
@@ -172,8 +117,6 @@ pub enum FillMode {
     Radial,
 }
 
-/// Decompose an existing fill value into `(mode, colors, angle)`. A bare
-/// string is a single color; objects pick Linear/Radial from their `type`.
 pub fn parse_fill(v: &Value) -> (FillMode, Vec<String>, f64) {
     match v {
         Value::String(s) => (FillMode::Single, vec![s.clone()], 0.0),
@@ -198,8 +141,6 @@ pub fn parse_fill(v: &Value) -> (FillMode, Vec<String>, f64) {
     }
 }
 
-/// Serialize a fill editor state back to the scenario value: Single → the hex
-/// string, Linear/Radial → the gradient object (angle only on Linear).
 pub fn fill_to_value(mode: FillMode, colors: &[String], angle: f64) -> Value {
     match mode {
         FillMode::Single => Value::String(
@@ -220,9 +161,6 @@ pub fn fill_to_value(mode: FillMode, colors: &[String], angle: f64) -> Value {
     }
 }
 
-/// The element as the ENGINE sees it: typed round-trip through `Component`
-/// fills every `#[serde(default)]`. Falls back to the raw element when the
-/// round-trip fails (invalid element).
 pub fn effective_element(raw: &Value) -> Value {
     serde_json::from_value::<Component>(raw.clone())
         .ok()
@@ -230,14 +168,10 @@ pub fn effective_element(raw: &Value) -> Value {
         .unwrap_or_else(|| raw.clone())
 }
 
-/// Multiline heuristic for String controls: known long-form field names, or a
-/// current value that already contains a newline.
 pub fn is_multiline(name: &str, value: &str) -> bool {
     matches!(name, "code" | "content" | "message") || value.contains('\n')
 }
 
-/// Engine-default placeholder for string inputs — properties whose effective
-/// default has no displayable VALUE (auto-sized boxes, unset backgrounds).
 pub fn engine_placeholder(name: &str) -> Option<&'static str> {
     match name {
         "font-family" => Some("Inter"),
@@ -250,58 +184,35 @@ pub fn engine_placeholder(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Effective ENGINE defaults for CSS properties left unset in the source —
-/// what the renderer actually uses, so the inspector shows the truth instead
-/// of empty controls (same honesty as the Properties round-trip). `CssStyle`
-/// is all-`Option`, so this is a semantic table (source noted per entry),
-/// not schema-derived.
 pub fn css_effective_default(prop: &str) -> Option<Value> {
     let v = match prop {
-        // Painter: full opacity when unset.
         "opacity" => Value::from(1.0),
-        // CSS initial value; the layout treats unset as static flow.
         "position" => Value::from("static"),
-        // Engine absolute-offset defaults (unset offset = 0).
         "top" | "right" | "bottom" | "left" => Value::from(0),
-        // Paint order default.
         "z-index" => Value::from(0),
-        // Taffy defaults: no spacing when unset.
         "padding" | "margin" | "gap" => Value::from(0),
-        // Painter: square corners when unset.
         "border-radius" => Value::from(0),
-        // CSS initial / engine clipping default.
         "overflow" | "overflow-x" | "overflow-y" => Value::from("visible"),
         "visibility" => Value::from("visible"),
-        // Scene/box-builder default (scenes flow as columns).
         "flex-direction" => Value::from("column"),
-        // Taffy defaults for unset alignment.
         "align-items" => Value::from("start"),
         "justify-content" => Value::from("start"),
-        // CSS spec initial values (taffy follows them).
         "flex-grow" => Value::from(0),
         "flex-shrink" => Value::from(1),
-        // Cascade default weight (Regular · 400 — matches the curated select).
         "font-weight" => Value::from("400"),
         _ => return None,
     };
     Some(v)
 }
 
-/// Painter-constant text sizes per component (the typographic default is NOT
-/// global: text paints at 48px, terminal/codeblock at 14px). Unknown tags →
-/// None (placeholder instead of a wrong number).
 pub fn text_default_font_size(tag: &str) -> Option<f64> {
     match tag {
-        // text.rs: `font_size_px_or(48.0)`.
         "text" | "caption" | "gradient_text" => Some(48.0),
-        // terminal.rs `FONT_SIZE: f32 = 14.0`; codeblock uses the same size.
         "terminal" | "codeblock" => Some(14.0),
         _ => None,
     }
 }
 
-/// Display default for one CSS row of a given component: per-tag font-size,
-/// white text for the text family (renderer default), else the global table.
 pub fn css_display_default(tag: &str, prop: &str) -> Option<Value> {
     match prop {
         "font-size" => text_default_font_size(tag).map(Value::from),
@@ -310,8 +221,6 @@ pub fn css_display_default(tag: &str, prop: &str) -> Option<Value> {
     }
 }
 
-/// `(displayed value, is_default)` for a CSS row: the raw value wins; when
-/// absent, the effective default is shown with the dimmed default marker.
 pub fn css_row_value(raw: String, tag: &str, prop: &str) -> (String, bool) {
     if !raw.is_empty() {
         return (raw, false);
@@ -323,14 +232,10 @@ pub fn css_row_value(raw: String, tag: &str, prop: &str) -> (String, bool) {
     }
 }
 
-/// Root fields (name + kind) for a component tag, schema order. `None` for
-/// unknown tags.
 pub fn component_props(tag: &str) -> Option<&'static Vec<PropSpec>> {
     component_registry().get(tag)
 }
 
-/// tag → root PropSpecs, from the `oneOf` variants of the Component schema
-/// (same walk as the CLI's unknown-attribute check).
 fn component_registry() -> &'static BTreeMap<String, Vec<PropSpec>> {
     static CACHE: OnceLock<BTreeMap<String, Vec<PropSpec>>> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -361,17 +266,10 @@ fn component_registry() -> &'static BTreeMap<String, Vec<PropSpec>> {
     })
 }
 
-// ── Schema walking ───────────────────────────────────────────────────────────
-
-/// Resolve one property schema to a [`PropKind`]. Handles `$ref` into
-/// definitions, single-arm `allOf` wrappers, nullable `anyOf [T, null]`, and
-/// untagged unions (`anyOf` of several arms).
 fn kind_of_schema(name: &str, schema: &Value, defs: &Value, depth: u8) -> PropKind {
     kind_of_schema_inner(name, schema, defs, depth, 0)
 }
 
-/// `obj_level` counts object nesting for [`PropKind::Object`] (capped at 2 —
-/// deeper structures fall back to the JSON textarea).
 fn kind_of_schema_inner(
     name: &str,
     schema: &Value,
@@ -382,7 +280,6 @@ fn kind_of_schema_inner(
     if depth > 8 {
         return PropKind::Complex;
     }
-    // $ref → definitions lookup.
     if let Some(r) = schema.get("$ref").and_then(|r| r.as_str()) {
         let key = r.rsplit('/').next().unwrap_or_default();
         return match defs.get(key) {
@@ -390,19 +287,14 @@ fn kind_of_schema_inner(
             None => PropKind::Complex,
         };
     }
-    // allOf: [X] wrapper (schemars uses it to attach descriptions to refs).
     if let Some(all) = schema.get("allOf").and_then(|a| a.as_array()) {
         if all.len() == 1 {
             return kind_of_schema_inner(name, &all[0], defs, depth + 1, obj_level);
         }
     }
-    // Direct string enum.
     if let Some(variants) = string_enum(schema) {
         return PropKind::Enum(variants);
     }
-    // anyOf/oneOf: drop null arms; single arm → recurse; several → union,
-    // flattened recursively (Size nests LengthPercentage which nests
-    // number|string).
     for key in ["anyOf", "oneOf"] {
         if let Some(arms) = schema.get(key).and_then(|a| a.as_array()) {
             let non_null: Vec<&Value> = arms.iter().filter(|a| !is_null_schema(a)).collect();
@@ -413,7 +305,6 @@ fn kind_of_schema_inner(
             for arm in &non_null {
                 collect_union(arm, defs, depth + 1, &mut info);
             }
-            // Decision order (see the doc comment on `UnionInfo`).
             if info.has_string && info.has_gradient_object {
                 return PropKind::Fill;
             }
@@ -449,8 +340,6 @@ fn kind_of_schema_inner(
     }
 }
 
-/// Sub-specs of an object schema with KNOWN properties (None for map-like /
-/// empty objects → JSON textarea fallback).
 fn object_specs(schema: &Value, defs: &Value, depth: u8, obj_level: u8) -> Option<Vec<PropSpec>> {
     let props = schema.get("properties")?.as_object()?;
     if props.is_empty() {
@@ -467,8 +356,6 @@ fn object_specs(schema: &Value, defs: &Value, depth: u8, obj_level: u8) -> Optio
     )
 }
 
-/// Array whose items resolve to plain strings (labels, axes, categories) —
-/// color-string arrays are caught earlier by `is_color_string_array`.
 fn is_string_array(schema: &Value, defs: &Value, depth: u8) -> bool {
     let Some(items) = schema.get("items") else {
         return false;
@@ -482,7 +369,6 @@ fn is_string_array(schema: &Value, defs: &Value, depth: u8) -> bool {
     info.has_string && !info.has_number
 }
 
-/// Array whose items resolve to numbers (`Vec<f64>`, dash patterns, …).
 fn is_number_array(schema: &Value, defs: &Value, depth: u8) -> bool {
     let Some(items) = schema.get("items") else {
         return false;
@@ -496,9 +382,6 @@ fn is_number_array(schema: &Value, defs: &Value, depth: u8) -> bool {
     info.has_number && !info.has_string && info.variants.is_empty()
 }
 
-/// Array-of-color-strings detection: the items resolve to strings (or a
-/// Color-typed union with a string arm) AND either the field name contains
-/// "color" or the items are the `Color` schema type.
 fn is_color_string_array(name: &str, schema: &Value, defs: &Value, depth: u8) -> bool {
     let Some(items) = schema.get("items") else {
         return false;
@@ -514,25 +397,14 @@ fn is_color_string_array(name: &str, schema: &Value, defs: &Value, depth: u8) ->
     string_items && (name.contains("color") || name.contains("colour") || items_ref_is_color)
 }
 
-/// What a (recursively flattened) union offers. Decision order in
-/// `kind_of_schema`:
-/// 1. string arm + color-ish name → `Color` (untagged string|rgba).
-/// 2. number + (string or keywords) → `Unit` (Length/Size: free text accepts
-///    numbers, "12px" and keywords alike).
-/// 3. keywords only → `Enum` (an unreachable object arm like cubic-bezier is
-///    accepted collateral — the picker covers the keyword variants).
-/// 4. any string arm → `String` (free text is always a valid input).
-/// 5. otherwise `Complex` (JSON textarea).
 #[derive(Default)]
 struct UnionInfo {
     variants: Vec<String>,
     has_number: bool,
     has_string: bool,
-    /// An object arm with a `colors` property (the gradient side of `Fill`).
     has_gradient_object: bool,
 }
 
-/// Recursively flatten a union arm into `UnionInfo`.
 fn collect_union(arm: &Value, defs: &Value, depth: u8, info: &mut UnionInfo) {
     if depth > 8 {
         return;
@@ -564,7 +436,6 @@ fn collect_union(arm: &Value, defs: &Value, depth: u8, info: &mut UnionInfo) {
     }
 }
 
-/// Follow refs/allOf for one union arm (no kind decision).
 fn resolve_arm(arm: &Value, defs: &Value, depth: u8) -> Value {
     if depth > 8 {
         return arm.clone();
@@ -583,7 +454,6 @@ fn resolve_arm(arm: &Value, defs: &Value, depth: u8) -> Value {
     arm.clone()
 }
 
-/// The string variants of `{"enum": ["a", "b"]}` schemas, if all-string.
 fn string_enum(schema: &Value) -> Option<Vec<String>> {
     let arr = schema.get("enum")?.as_array()?;
     let variants: Vec<String> = arr
@@ -601,7 +471,6 @@ fn is_null_schema(schema: &Value) -> bool {
     schema.get("type").and_then(|t| t.as_str()) == Some("null")
 }
 
-/// The non-null primary type of a schema (`"type": "x"` or `["x", "null"]`).
 fn primary_type(schema: &Value) -> Option<&str> {
     match schema.get("type") {
         Some(Value::String(s)) => Some(s.as_str()),
@@ -609,8 +478,6 @@ fn primary_type(schema: &Value) -> Option<&str> {
         _ => None,
     }
 }
-
-// ── CSS sections ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CssSection {
@@ -641,16 +508,12 @@ impl CssSection {
     }
 }
 
-/// Section for a CSS property name. Every KNOWN property is mapped explicitly;
-/// anything else (including future schema additions) lands in `Advanced`.
 pub fn section_for(prop: &str) -> CssSection {
     use CssSection::*;
     match prop {
-        // Typography
         "font-family" | "font-size" | "font-weight" | "font-style" | "line-height"
         | "letter-spacing" | "text-align" | "color" | "white-space" | "text-decoration"
         | "text-shadow" => Typography,
-        // Layout (flex + grid)
         "display"
         | "flex-direction"
         | "flex-wrap"
@@ -670,27 +533,19 @@ pub fn section_for(prop: &str) -> CssSection {
         | "grid-auto-flow"
         | "justify-items"
         | "justify-self" => Layout,
-        // Sizing
         "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
         | "aspect-ratio" | "box-sizing" => Sizing,
-        // Spacing
         "padding" | "margin" => Spacing,
-        // Position
         "position" | "top" | "right" | "bottom" | "left" | "z-index" => Position,
-        // Visual
         "background" | "border" | "border-radius" | "box-shadow" | "opacity" | "mix-blend-mode"
         | "visibility" | "clip-path" => Visual,
-        // Effects
         "filter" | "backdrop-filter" | "transform" | "transform-origin" | "perspective"
         | "perspective-origin" | "transition" | "audio-reactive" => Effects,
-        // Overflow
         "overflow" | "overflow-x" | "overflow-y" | "text-overflow" | "overflow-wrap" => Overflow,
-        // Everything else — including future schema additions — by construction.
         _ => Advanced,
     }
 }
 
-/// All `CssStyle` schema properties with kinds, in schema order.
 pub fn css_props() -> &'static Vec<PropSpec> {
     static CACHE: OnceLock<Vec<PropSpec>> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -712,7 +567,6 @@ pub fn css_props() -> &'static Vec<PropSpec> {
     })
 }
 
-/// The properties of one section, schema order.
 pub fn css_section_props(section: CssSection) -> Vec<&'static PropSpec> {
     css_props()
         .iter()
@@ -720,10 +574,6 @@ pub fn css_section_props(section: CssSection) -> Vec<&'static PropSpec> {
         .collect()
 }
 
-// ── Family → visible sections ────────────────────────────────────────────────
-
-/// Which CSS sections a component family gets: Typography for text-likes,
-/// Layout for containers, the common trunk for everyone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CssFamily {
     TextLike,
@@ -731,8 +581,6 @@ pub enum CssFamily {
     Plain,
 }
 
-/// Classify a component tag for CSS-section visibility (independent from the
-/// inspector's curated-section `Family`).
 pub fn css_family(tag: &str) -> CssFamily {
     match tag {
         "text" | "caption" | "gradient_text" | "rich_text" | "counter" | "kbd" | "badge"
@@ -744,8 +592,6 @@ pub fn css_family(tag: &str) -> CssFamily {
     }
 }
 
-/// The CSS sections shown for a family, display order: the family-specific
-/// section first, then the common trunk.
 pub fn visible_sections(family: CssFamily) -> Vec<CssSection> {
     use CssSection::*;
     let mut out = Vec::new();
@@ -760,8 +606,6 @@ pub fn visible_sections(family: CssFamily) -> Vec<CssSection> {
     out
 }
 
-/// Heuristic slider ranges by property name: `(min, max, step)`. Anything not
-/// listed gets a bare input.
 pub fn slider_range(prop: &str) -> Option<(f64, f64, f64)> {
     match prop {
         "opacity" => Some((0.0, 1.0, 0.01)),
@@ -782,8 +626,6 @@ mod tests {
         props.iter().find(|p| p.name == name).map(|p| &p.kind)
     }
 
-    // ── Component registry ──────────────────────────────────────────────
-
     #[test]
     fn counter_exposes_its_root_fields_with_kinds() {
         let props = component_props("counter").expect("counter in schema");
@@ -793,7 +635,6 @@ mod tests {
         assert_eq!(kind_of(props, "separator"), Some(&PropKind::String));
         assert_eq!(kind_of(props, "prefix"), Some(&PropKind::String));
         assert_eq!(kind_of(props, "suffix"), Some(&PropKind::String));
-        // The exact enum variants come from the schema (snake_case).
         match kind_of(props, "easing") {
             Some(PropKind::Enum(variants)) => {
                 assert!(variants.contains(&"linear".to_string()), "{variants:?}");
@@ -819,8 +660,6 @@ mod tests {
                 );
             }
         }
-        // Spot-check the data arrays actually exist on their components and
-        // are excluded (chart.data, rich_text.spans).
         assert!(component_props("chart").is_some());
         assert!(component_props("rich_text").is_some());
     }
@@ -829,8 +668,6 @@ mod tests {
     fn unknown_tag_has_no_props() {
         assert!(component_props("definitely_not_a_component").is_none());
     }
-
-    // ── CSS bucketing: completeness by construction ─────────────────────
 
     #[test]
     fn every_css_schema_property_is_in_exactly_one_section() {
@@ -890,8 +727,6 @@ mod tests {
     #[test]
     fn css_kinds_are_usable() {
         let all = css_props();
-        // color is a Color control, opacity a Number, display an Enum,
-        // width a Unit (untagged number|string), box-shadow Complex.
         assert_eq!(kind_of(all, "color"), Some(&PropKind::Color));
         assert_eq!(kind_of(all, "opacity"), Some(&PropKind::Float));
         assert!(matches!(kind_of(all, "display"), Some(PropKind::Enum(_))));
@@ -904,8 +739,6 @@ mod tests {
             Some(PropKind::Complex)
         ));
     }
-
-    // ── Family visibility ───────────────────────────────────────────────
 
     #[test]
     fn counter_is_text_like_and_gets_typography() {
@@ -940,14 +773,11 @@ mod tests {
         }
     }
 
-    // ── Round 6: string lists / palette prefill / typed enums ───────────
-
     #[test]
     fn chart_axes_and_categories_are_string_lists() {
         let props = component_props("chart").expect("chart in schema");
         assert_eq!(kind_of(props, "axes"), Some(&PropKind::StringList));
         assert_eq!(kind_of(props, "categories"), Some(&PropKind::StringList));
-        // colors keeps the color editor, sparkline stays numeric (stat).
         assert_eq!(kind_of(props, "colors"), Some(&PropKind::ColorList));
         let stat = component_props("stat").unwrap();
         assert_eq!(kind_of(stat, "sparkline_data"), Some(&PropKind::NumberList));
@@ -967,9 +797,7 @@ mod tests {
         let palette = palette_prefill("chart", "colors", true).expect("chart palette");
         assert_eq!(palette.len(), 8);
         assert_eq!(palette[0], "#3B82F6");
-        // Non-empty list → no prefill (don't clobber user colors).
         assert_eq!(palette_prefill("chart", "colors", false), None);
-        // Other tags/fields → None.
         assert_eq!(palette_prefill("gradient_text", "colors", true), None);
         assert_eq!(palette_prefill("chart", "axes", true), None);
     }
@@ -994,8 +822,6 @@ mod tests {
         }
     }
 
-    // ── Round 7: effective CSS defaults ─────────────────────────────────
-
     #[test]
     fn css_effective_default_table_entries() {
         assert_eq!(css_effective_default("opacity"), Some(Value::from(1.0)));
@@ -1009,7 +835,6 @@ mod tests {
             Some(Value::from("visible"))
         );
         assert_eq!(css_effective_default("flex-shrink"), Some(Value::from(1)));
-        // No displayable default → placeholder territory.
         assert_eq!(css_effective_default("background"), None);
         assert_eq!(css_effective_default("width"), None);
         assert_eq!(engine_placeholder("background"), Some("none"));
@@ -1022,7 +847,6 @@ mod tests {
         assert_eq!(text_default_font_size("codeblock"), Some(14.0));
         assert_eq!(text_default_font_size("text"), Some(48.0));
         assert_eq!(text_default_font_size("made_up_tag"), None);
-        // Routed through the display default too.
         assert_eq!(
             css_display_default("terminal", "font-size"),
             Some(Value::from(14.0))
@@ -1036,12 +860,10 @@ mod tests {
 
     #[test]
     fn css_row_value_prefers_raw_and_marks_defaults() {
-        // Raw present → raw, not a default.
         assert_eq!(
             css_row_value("12px".into(), "text", "opacity"),
             ("12px".to_string(), false)
         );
-        // Raw absent + known default → displayed value with the marker.
         assert_eq!(
             css_row_value(String::new(), "text", "opacity"),
             ("1".to_string(), true)
@@ -1050,33 +872,24 @@ mod tests {
             css_row_value(String::new(), "card", "position"),
             ("static".to_string(), true)
         );
-        // Raw absent, no default → empty, no marker (placeholder shows).
         assert_eq!(
             css_row_value(String::new(), "card", "background"),
             (String::new(), false)
         );
     }
 
-    // ── Chart-colors bug fix: unified add decision ──────────────────────
-
     #[test]
     fn add_click_seeds_palette_or_appends() {
         let palette = palette_prefill("chart", "colors", true).unwrap();
-        // Empty chart colors + prefill → all 8 editable rows at once.
         let seeded = next_entries_on_add(&[], "#ffffff", Some(palette));
         assert_eq!(seeded.len(), 8);
         assert_eq!(seeded[0], "#3B82F6");
-        // Non-empty list → plain append even with a prefill available.
         let appended = next_entries_on_add(&seeded, "#ffffff", Some(palette));
         assert_eq!(appended.len(), 9);
         assert_eq!(appended[8], "#ffffff");
-        // NumberList / StringList (no prefill): empty list appends ONE default
-        // entry — no palette-style seeding, no lost click.
         assert_eq!(next_entries_on_add(&[], "0", None), vec!["0".to_string()]);
         assert_eq!(next_entries_on_add(&[], "", None), vec![String::new()]);
     }
-
-    // ── Round 5: object / number-list editors ───────────────────────────
 
     #[test]
     fn stat_trend_is_an_object_with_known_sub_kinds() {
@@ -1101,8 +914,6 @@ mod tests {
 
     #[test]
     fn shapeless_objects_stay_json_areas() {
-        // An object without known properties (map-like) must NOT become an
-        // Object control.
         let map_schema = serde_json::json!({
             "type": "object",
             "additionalProperties": { "type": "string" }
@@ -1120,10 +931,8 @@ mod tests {
             kind_of(props, "sparkline_data"),
             Some(&PropKind::NumberList)
         );
-        // Color arrays keep their dedicated editor.
         let gt = component_props("gradient_text").unwrap();
         assert_eq!(kind_of(gt, "colors"), Some(&PropKind::ColorList));
-        // Plain string arrays get their own editor (round 6).
         let strings = serde_json::json!({"type": "array", "items": {"type": "string"}});
         assert_eq!(
             kind_of_schema("labels", &strings, &Value::Null, 0),
@@ -1134,19 +943,15 @@ mod tests {
     #[test]
     fn mutate_object_field_sets_prunes_and_collapses() {
         let trend = serde_json::json!({"value": "+340%", "direction": "up"});
-        // Set a sub-key → whole object with the new value.
         let out = mutate_object_field(&trend, "direction", serde_json::json!("down"));
         assert_eq!(
             out,
             serde_json::json!({"value": "+340%", "direction": "down"})
         );
-        // Null prunes the key.
         let out = mutate_object_field(&out, "direction", Value::Null);
         assert_eq!(out, serde_json::json!({"value": "+340%"}));
-        // Last key removed → the whole field collapses to Null.
         let out = mutate_object_field(&out, "value", Value::Null);
         assert!(out.is_null());
-        // Mutating a null/absent object starts a fresh one.
         let out = mutate_object_field(&Value::Null, "value", serde_json::json!("+1%"));
         assert_eq!(out, serde_json::json!({"value": "+1%"}));
     }
@@ -1167,17 +972,12 @@ mod tests {
         );
     }
 
-    // ── Round 3: Integer/Float split + display ──────────────────────────
-
     #[test]
     fn integer_and_float_split_follows_the_schema() {
-        // f64 → "type": "number" → Float.
         let gauge = component_props("gauge").expect("gauge in schema");
         assert_eq!(kind_of(gauge, "value"), Some(&PropKind::Float));
-        // Option<u32> → "type": "integer" (format uint32) → Integer.
         let badge = component_props("badge").expect("badge in schema");
         assert_eq!(kind_of(badge, "count"), Some(&PropKind::Integer));
-        // u8 → "type": "integer" (format uint8) → Integer.
         let counter = component_props("counter").expect("counter in schema");
         assert_eq!(kind_of(counter, "decimals"), Some(&PropKind::Integer));
     }
@@ -1195,9 +995,6 @@ mod tests {
 
     #[test]
     fn integer_write_round_trips_through_the_typed_parse() {
-        // Writing 12 into badge.count must produce a REAL JSON integer: a
-        // 12.0 float makes from_value::<Component> fail ("invalid type:
-        // floating point") and the element would be dropped at render.
         let raw = serde_json::json!({"type": "badge", "text": "New", "count": 12});
         assert!(
             serde_json::from_value::<Component>(raw).is_ok(),
@@ -1209,8 +1006,6 @@ mod tests {
             "float in u32 field must fail — this is why Integer never writes floats"
         );
     }
-
-    // ── Round 2: color editors / effective view / multiline ─────────────
 
     #[test]
     fn gradient_text_colors_is_a_color_list() {
@@ -1269,13 +1064,10 @@ mod tests {
 
     #[test]
     fn effective_element_fills_serde_defaults() {
-        // User bug: gauge without show_value renders the value (default true),
-        // but the inspector showed the switch off.
         let raw = serde_json::json!({"type": "gauge", "value": 50.0});
         let eff = effective_element(&raw);
         assert_eq!(eff["show_value"], serde_json::json!(true));
 
-        // Counter without easing → the exact default variant, serialized.
         let raw = serde_json::json!({"type": "counter", "from": 0, "to": 10});
         let eff = effective_element(&raw);
         assert_eq!(eff["easing"], serde_json::json!("linear"));

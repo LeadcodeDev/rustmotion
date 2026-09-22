@@ -1,44 +1,33 @@
-//! Library data layer: workspace scanning, recent files, and thumbnail cache.
-//! Pure logic (no UI). The home page reads a `SharedLibrary` from context.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-/// Control message to the single re-targetable file watcher.
 pub enum WatchMsg {
     Retarget(PathBuf),
     Changed,
 }
 
-/// A single scenario in the library.
 #[derive(Clone, PartialEq)]
 pub struct ScenarioEntry {
     pub path: PathBuf,
     pub name: String,
-    /// Index into `LibraryState.index` — used for the `/thumb/{i}` URL.
     pub flat_index: usize,
 }
 
-/// A folder group (the workspace root = "Default"; subdirs = their name).
 #[derive(Clone, PartialEq)]
 pub struct Group {
     pub name: String,
     pub entries: Vec<ScenarioEntry>,
 }
 
-/// The full library state, shared between the home UI and the thumbnail handler.
 pub struct LibraryState {
     pub workspace: PathBuf,
     pub groups: Vec<Group>,
     pub recents: Vec<ScenarioEntry>,
-    /// Flat, authoritative path list; `/thumb/{i}` maps to `index[i]`.
     pub index: Vec<PathBuf>,
     pub thumb_cache: HashMap<PathBuf, Arc<Vec<u8>>>,
-    /// When launched with `--file`, start directly in the editor.
     pub start_in_editor: bool,
-    /// Channel to the file watcher (set by `run_preview_root`).
     pub watch_tx: Option<Sender<WatchMsg>>,
 }
 
@@ -59,14 +48,12 @@ impl LibraryState {
         s
     }
 
-    /// Tell the watcher to follow `path` (so editing it hot-reloads the editor).
     pub fn retarget_watch(&self, path: &Path) {
         if let Some(tx) = &self.watch_tx {
             let _ = tx.send(WatchMsg::Retarget(path.to_path_buf()));
         }
     }
 
-    /// Rescan the workspace + reload recents + rebuild the flat index.
     pub fn refresh(&mut self) {
         self.groups = scan_workspace(&self.workspace);
         self.recents = load_recents()
@@ -80,12 +67,9 @@ impl LibraryState {
         self.reindex();
     }
 
-    /// Ensure a freshly-opened path is visible (recents + index) even if it
-    /// lives outside the workspace (e.g. an imported file).
     pub fn note_opened(&mut self, path: &Path) {
         push_recent(path);
         self.refresh();
-        // If still absent (e.g. canonicalization mismatch), append it.
         if !self.index.iter().any(|p| p == path) {
             self.index.push(path.to_path_buf());
         }
@@ -124,8 +108,6 @@ impl LibraryState {
     }
 }
 
-/// Render a scenario's frame 0 to a small JPEG thumbnail. No lock held by design
-/// (the caller renders this off-lock, then re-locks to cache the result).
 pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     let scenario = rustmotion::loader::load_input(&path.to_path_buf()).ok()?;
     let tasks = rustmotion::encode::build_frame_tasks(&scenario);
@@ -135,16 +117,12 @@ pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
     crate::editor::frames::render_frame_deep(&scenario, &tasks, 0, 0.25).ok()
 }
 
-/// Cheap check: is this JSON a Rustmotion scenario? Avoids the heavier
-/// `load_scenario` (includes/variables) during a directory scan.
 pub fn is_scenario_json(v: &serde_json::Value) -> bool {
     v.get("video").map(|x| x.is_object()).unwrap_or(false)
         && (v.get("scenes").map(|x| x.is_array()).unwrap_or(false)
             || v.get("composition").is_some())
 }
 
-/// Scan `root`: `.json` scenarios directly in it → a "Default" group; each
-/// immediate subdirectory with scenarios → its own group.
 pub fn scan_workspace(root: &Path) -> Vec<Group> {
     let mut default = Vec::new();
     let mut subgroups: Vec<Group> = Vec::new();
@@ -199,7 +177,6 @@ fn is_scenario_file(p: &Path) -> bool {
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .map(|v| is_scenario_json(&v))
             .unwrap_or(false),
-        // Cheap HTML-dialect check: a scenario has a <rustmotion> root element.
         Some("html") | Some("htm") => std::fs::read_to_string(p)
             .map(|s| s.contains("<rustmotion"))
             .unwrap_or(false),
@@ -221,8 +198,6 @@ fn file_title(p: &Path) -> String {
         .unwrap_or("untitled")
         .to_string()
 }
-
-// ── Recents ──────────────────────────────────────────────────────────
 
 const RECENTS_CAP: usize = 15;
 
@@ -264,7 +239,6 @@ pub fn push_recent(path: &Path) {
     save_recents(&list);
 }
 
-/// Pure MRU insert: move `path` to front, dedup, cap length.
 pub fn mru_insert(mut list: Vec<PathBuf>, path: PathBuf, cap: usize) -> Vec<PathBuf> {
     list.retain(|p| p != &path);
     list.insert(0, path);
@@ -300,7 +274,6 @@ mod tests {
 
     #[test]
     fn scan_workspace_groups_examples() {
-        // The repo's examples/ dir holds demo.json + component-showcase.json.
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let groups = scan_workspace(&examples);
         let default = groups
