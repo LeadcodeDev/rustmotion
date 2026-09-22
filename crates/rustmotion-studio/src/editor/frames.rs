@@ -51,6 +51,41 @@ pub fn render_frame(
     jpeg
 }
 
+#[allow(clippy::result_unit_err)]
+pub fn render_frame_rgba_deep(
+    scenario: &ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+    scale: f32,
+) -> Result<(u32, u32, Vec<u8>), ()> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(RENDER_STACK)
+            .spawn_scoped(scope, || render_frame_rgba(scenario, tasks, frame, scale))
+            .expect("spawn render thread")
+            .join()
+            .map_err(|_| ())
+    })
+}
+
+pub fn render_frame_rgba(
+    scenario: &ResolvedScenario,
+    tasks: &[rustmotion::encode::video::FrameTask],
+    frame: u32,
+    scale: f32,
+) -> (u32, u32, Vec<u8>) {
+    if tasks.is_empty() {
+        return (0, 0, Vec::new());
+    }
+    let idx = (frame as usize).min(tasks.len() - 1);
+    let task = &tasks[idx];
+    let rgba = rustmotion::encode::render_frame_task_scaled(&scenario.video, scenario, task, scale)
+        .expect("render frame");
+    let w = (scenario.video.width as f32 * scale) as u32;
+    let h = (scenario.video.height as f32 * scale) as u32;
+    (w, h, rgba)
+}
+
 struct BaselineCache {
     path: PathBuf,
     source_hash: u64,
@@ -254,6 +289,41 @@ mod tests {
             "pointer = {:?}",
             text.pointer
         );
+    }
+
+    #[test]
+    fn renders_frame_to_raw_rgba_matching_dimensions() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let (w, h, rgba) = render_frame_rgba(&scenario, &tasks, 0, 1.0);
+        assert_eq!((w, h), (1280, 720));
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn renders_frame_to_raw_rgba_at_reduced_scale() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let (w, h, rgba) = render_frame_rgba(&scenario, &tasks, 0, 0.5);
+        assert_eq!((w, h), (640, 360));
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn render_frame_rgba_empty_tasks_yields_empty_buffer() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let (w, h, rgba) = render_frame_rgba(&scenario, &[], 0, 1.0);
+        assert_eq!((w, h), (0, 0));
+        assert!(rgba.is_empty());
+    }
+
+    #[test]
+    fn render_frame_rgba_deep_matches_render_frame_rgba() {
+        let scenario = rustmotion::loader::load_scenario_from_source(None, Some(SCENARIO)).unwrap();
+        let tasks = rustmotion::encode::build_frame_tasks(&scenario);
+        let (w, h, rgba) = render_frame_rgba_deep(&scenario, &tasks, 0, 1.0).unwrap();
+        assert_eq!((w, h), (1280, 720));
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
     }
 
     #[test]

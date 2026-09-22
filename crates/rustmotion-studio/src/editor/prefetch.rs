@@ -215,6 +215,10 @@ fn prefetch_slot() -> Arc<Mutex<PrefetchTarget>> {
         .clone()
 }
 
+pub fn publish_target(target: PrefetchTarget) {
+    *prefetch_slot().lock().unwrap_or_else(|e| e.into_inner()) = target;
+}
+
 fn target_fingerprint(t: &PrefetchTarget, scale_pct: u16) -> (u32, bool, u64, DiffSide, u16) {
     (t.current, t.playing, t.generation, t.side, scale_pct)
 }
@@ -645,6 +649,30 @@ mod tests {
         assert_eq!(worker_count(4), 2);
         assert_eq!(worker_count(8), 6);
         assert_eq!(worker_count(12), 6, "cap at six");
+    }
+
+    #[test]
+    fn publish_target_overwrites_the_slot() {
+        let target = PrefetchTarget {
+            current: 42,
+            playing: true,
+            generation: 7,
+            side: DiffSide::A,
+            scenario: None,
+            tasks: None,
+            path: Some(PathBuf::from("/tmp/published.json")),
+        };
+        publish_target(target);
+        let published = prefetch_slot()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert_eq!(published.current, 42);
+        assert!(published.playing);
+        assert_eq!(published.generation, 7);
+        assert_eq!(published.side, DiffSide::A);
+        assert_eq!(published.path, Some(PathBuf::from("/tmp/published.json")));
+        publish_target(PrefetchTarget::default());
     }
 
     #[test]

@@ -4,3 +4,4 @@ mod export;
 pub mod frames;
 mod prefetch;
 mod properties;
+pub mod surface;
