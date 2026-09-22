@@ -12,10 +12,7 @@ use crate::components::color_picker::ColorPicker;
 use crate::components::select::{Select, SelectOption};
 use crate::components::slider::Slider;
 use crate::components::switch::Switch;
-use crate::scenario::{
-    apply_optimistic, scene_duration_for_pointer, set_field, set_field_value, set_style,
-    set_style_value, Mutation, Shared,
-};
+use crate::scenario::{apply_optimistic, scene_duration_for_pointer, Mutation, Shared};
 
 use super::view::RevSignal;
 
@@ -2032,72 +2029,31 @@ fn hsv_to_hex(c: Hsv<encoding::Srgb, f64>) -> String {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-/// The payload for a deferred disk write. Carries everything needed to perform
-/// the write so it can be captured by the spawned task without borrowing.
-enum WritePayload {
-    Prop {
-        path: std::path::PathBuf,
-        raw: serde_json::Value,
-        pointer: String,
-        prop: String,
-        value: String,
-    },
-    Content {
-        path: std::path::PathBuf,
-        raw: serde_json::Value,
-        pointer: String,
-        text: String,
-    },
-    /// Typed root-field write (`Value::Null` removes the field / attribute).
-    RootField {
-        path: std::path::PathBuf,
-        raw: serde_json::Value,
-        pointer: String,
-        field: String,
-        value: serde_json::Value,
-    },
-    /// Remove one style property (emptied generic control).
-    StyleRemove {
-        path: std::path::PathBuf,
-        raw: serde_json::Value,
-        pointer: String,
-        prop: String,
-    },
-}
-
-impl WritePayload {
-    fn path(&self) -> &std::path::Path {
-        match self {
-            WritePayload::Prop { path, .. }
-            | WritePayload::Content { path, .. }
-            | WritePayload::RootField { path, .. }
-            | WritePayload::StyleRemove { path, .. } => path,
-        }
-    }
-}
-
-/// A root-field JSON value as an HTML attribute string. `Null` → empty (which
-/// [`rustmotion::loader::set_html_attribute`] treats as "remove"); complex
-/// values are compact JSON (attributes are strings; the transpiler coerces).
-fn root_value_to_attr(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Schedule a debounced disk write (~250 ms). Any previously scheduled write is
-/// cancelled first so only the last value in a burst reaches the disk.
+/// Schedule a debounced disk write (~250 ms). Queues `mutation` onto the
+/// app-global pending list for `path` and (re)starts the timer, cancelling
+/// only the timer — not the queue — so a burst of edits inside the window
+/// accumulates every mutation instead of dropping all but the last.
 ///
-/// On success the model's `write_error` is cleared and the pre-write file state
-/// is pushed onto the undo history; on failure `write_error` is set to the OS
-/// error message and `generation` is bumped so the hot-reload loop picks it up
-/// and shows the topbar indicator. The pending window is surfaced as the
-/// "Saving…" indicator via the history slot.
-fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayload) {
-    // Cancel the previous pending write (if any). `Task::cancel` is safe to
-    // call on an already-completed task (it's a no-op).
+/// When the timer fires it rebases the whole queue onto whatever is on disk
+/// at that moment, never a copy captured back when the edit happened, so a
+/// write from outside the process landing mid-window is preserved instead of
+/// being overwritten by a stale in-memory snapshot.
+///
+/// On success the model's `write_error` is cleared and the pre-write file
+/// state is pushed onto the undo history; on failure `write_error` is set to
+/// the error message and `generation` is bumped so the hot-reload loop picks
+/// it up and shows the topbar indicator. The pending window is surfaced as
+/// the "Saving…" indicator via the history slot. [`crate::scenario::undo`]
+/// and [`crate::scenario::redo`] drain the queue before touching the file, so
+/// an orphaned flush that still fires after a revert has nothing to replay.
+fn schedule_write(
+    debounce: &WriteDebounce,
+    shared: Shared,
+    path: std::path::PathBuf,
+    mutation: Mutation,
+) {
+    crate::scenario::queue_mutation(&crate::scenario::pending_write_slot(), &path, mutation);
+
     {
         let mut slot = debounce.0.borrow_mut();
         if let Some(prev) = slot.take() {
@@ -2109,28 +2065,32 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
     let debounce_slot = debounce.0.clone();
     let task = spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-
-        // Clear the slot so the next write doesn't try to cancel this one.
         *debounce_slot.borrow_mut() = None;
 
-        // Capture the file state BEFORE the write: one history entry per
-        // effective disk write.
-        let snapshot = std::fs::read_to_string(payload.path()).ok();
-        let result = perform_write(&payload);
+        let mutations =
+            crate::scenario::take_pending(&crate::scenario::pending_write_slot(), &path);
         crate::scenario::set_saving(&crate::scenario::history_slot(), false);
-        if let (Ok(true), Some(snapshot)) = (&result, snapshot) {
-            crate::scenario::record_edit(
-                &crate::scenario::history_slot(),
-                payload.path(),
-                snapshot,
-            );
+        if mutations.is_empty() {
+            return;
         }
+
+        let is_html = rustmotion::loader::is_html_path(&path);
+        let read = std::fs::read_to_string(&path).map_err(|e| format!("read: {e}"));
+        let result: Result<bool, String> = match &read {
+            Ok(content) => match crate::scenario::resolve_flush(content, is_html, &mutations) {
+                Ok(Some(new_content)) => write_and_note(&path, &new_content).map(|()| true),
+                Ok(None) => Ok(false),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e.clone()),
+        };
+        if let (Ok(true), Ok(snapshot)) = (&result, &read) {
+            crate::scenario::record_edit(&crate::scenario::history_slot(), &path, snapshot.clone());
+        }
+
         let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
         match result {
-            Ok(_) => {
-                // Clear any previous write error on success.
-                m.write_error = None;
-            }
+            Ok(_) => m.write_error = None,
             Err(e) => {
                 m.write_error = Some(e);
                 m.generation = m.generation.wrapping_add(1);
@@ -2138,7 +2098,6 @@ fn schedule_write(debounce: &WriteDebounce, shared: Shared, payload: WritePayloa
         }
     });
 
-    // Store the new handle for the next cancellation.
     *debounce.0.borrow_mut() = Some(task);
 }
 
@@ -2150,112 +2109,12 @@ fn write_and_note(path: &std::path::Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Execute the actual file write. Returns `Ok(true)` when the file was
-/// written, `Ok(false)` when the edit was a no-op (nothing to record in the
-/// undo history), or an error message.
-fn perform_write(payload: &WritePayload) -> Result<bool, String> {
-    match payload {
-        WritePayload::Prop {
-            path,
-            raw,
-            pointer,
-            prop,
-            value,
-        } => {
-            if rustmotion::loader::is_html_path(path) {
-                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-                if let Some(updated) =
-                    rustmotion::loader::set_html_inline_style(&html, pointer, prop, value)
-                {
-                    write_and_note(path, &updated)?;
-                    return Ok(true);
-                }
-            } else if let Some(updated) = set_style(raw.clone(), pointer, prop, value) {
-                let text =
-                    serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                write_and_note(path, &text)?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-        WritePayload::Content {
-            path,
-            raw,
-            pointer,
-            text,
-        } => {
-            if rustmotion::loader::is_html_path(path) {
-                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-                if let Some(updated) =
-                    rustmotion::loader::set_html_text_content(&html, pointer, text)
-                {
-                    write_and_note(path, &updated)?;
-                    return Ok(true);
-                }
-            } else if let Some(updated) = set_field(raw.clone(), pointer, "content", text) {
-                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                write_and_note(path, &s)?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-        WritePayload::RootField {
-            path,
-            raw,
-            pointer,
-            field,
-            value,
-        } => {
-            if rustmotion::loader::is_html_path(path) {
-                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-                let attr = root_value_to_attr(value);
-                if let Some(updated) =
-                    rustmotion::loader::set_html_attribute(&html, pointer, field, &attr)
-                {
-                    write_and_note(path, &updated)?;
-                    return Ok(true);
-                }
-            } else if let Some(updated) =
-                set_field_value(raw.clone(), pointer, field, value.clone())
-            {
-                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                write_and_note(path, &s)?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-        WritePayload::StyleRemove {
-            path,
-            raw,
-            pointer,
-            prop,
-        } => {
-            if rustmotion::loader::is_html_path(path) {
-                let html = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-                if let Some(updated) =
-                    rustmotion::loader::remove_html_inline_style(&html, pointer, prop)
-                {
-                    write_and_note(path, &updated)?;
-                    return Ok(true);
-                }
-            } else if let Some(updated) =
-                set_style_value(raw.clone(), pointer, prop, serde_json::Value::Null)
-            {
-                let s = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
-                write_and_note(path, &s)?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-    }
-}
-
 /// Apply an edit to the in-memory model immediately (canvas refreshes in ~one
 /// render) and nudge the hot-reload signal. Rebuild failures are transient
 /// (mid-typing) and silently keep the previous model — the disk write path
 /// has its own guards.
-fn optimistic(shared: &Shared, mutation: Mutation) {
-    if apply_optimistic(shared, &mutation).is_ok() {
+fn optimistic(shared: &Shared, mutation: &Mutation) {
+    if apply_optimistic(shared, mutation).is_ok() {
         if let Some(rev) = try_consume_context::<RevSignal>() {
             let mut r = rev.0;
             r.set(r() + 1);
@@ -2272,129 +2131,83 @@ fn write_prop(shared: &Shared, pointer: &str, prop: &str, value: &str) {
     if value.trim().is_empty() {
         return;
     }
-    optimistic(
-        shared,
-        Mutation::Style {
-            pointer: pointer.to_string(),
-            prop: prop.to_string(),
-            value: serde_json::Value::String(value.to_string()),
-        },
-    );
-    let (path, raw) = {
+    let mutation = Mutation::Style {
+        pointer: pointer.to_string(),
+        prop: prop.to_string(),
+        value: serde_json::Value::String(value.to_string()),
+    };
+    optimistic(shared, &mutation);
+    let path = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (m.path.clone(), m.raw.clone())
+        m.path.clone()
     };
     let Some(path) = path else {
         return;
     };
     let debounce = consume_context::<WriteDebounce>();
-    schedule_write(
-        &debounce,
-        shared.clone(),
-        WritePayload::Prop {
-            path,
-            raw,
-            pointer: pointer.to_string(),
-            prop: prop.to_string(),
-            value: value.to_string(),
-        },
-    );
+    schedule_write(&debounce, shared.clone(), path, mutation);
 }
 
 /// Typed write of a component root field (schema-driven Properties section).
 /// `Value::Null` removes the field (JSON) / the attribute (HTML). Debounced
 /// with the same guarantees as [`write_prop`].
 fn write_root_field(shared: &Shared, pointer: &str, field: &str, value: serde_json::Value) {
-    optimistic(
-        shared,
-        Mutation::Field {
-            pointer: pointer.to_string(),
-            field: field.to_string(),
-            value: value.clone(),
-        },
-    );
-    let (path, raw) = {
+    let mutation = Mutation::Field {
+        pointer: pointer.to_string(),
+        field: field.to_string(),
+        value,
+    };
+    optimistic(shared, &mutation);
+    let path = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (m.path.clone(), m.raw.clone())
+        m.path.clone()
     };
     let Some(path) = path else {
         return;
     };
     let debounce = consume_context::<WriteDebounce>();
-    schedule_write(
-        &debounce,
-        shared.clone(),
-        WritePayload::RootField {
-            path,
-            raw,
-            pointer: pointer.to_string(),
-            field: field.to_string(),
-            value,
-        },
-    );
+    schedule_write(&debounce, shared.clone(), path, mutation);
 }
 
 /// Remove one style property (an emptied generic control unsets the key /
 /// declaration rather than writing an empty string). Debounced.
 fn write_style_removal(shared: &Shared, pointer: &str, prop: &str) {
-    optimistic(
-        shared,
-        Mutation::Style {
-            pointer: pointer.to_string(),
-            prop: prop.to_string(),
-            value: serde_json::Value::Null,
-        },
-    );
-    let (path, raw) = {
+    let mutation = Mutation::Style {
+        pointer: pointer.to_string(),
+        prop: prop.to_string(),
+        value: serde_json::Value::Null,
+    };
+    optimistic(shared, &mutation);
+    let path = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (m.path.clone(), m.raw.clone())
+        m.path.clone()
     };
     let Some(path) = path else {
         return;
     };
     let debounce = consume_context::<WriteDebounce>();
-    schedule_write(
-        &debounce,
-        shared.clone(),
-        WritePayload::StyleRemove {
-            path,
-            raw,
-            pointer: pointer.to_string(),
-            prop: prop.to_string(),
-        },
-    );
+    schedule_write(&debounce, shared.clone(), path, mutation);
 }
 
 /// Write the element's text `content` back to the scenario file. Unlike
 /// [`write_prop`], an empty value is allowed (clearing the text is valid).
 /// Schedules a debounced write (~250 ms); errors are surfaced in the topbar.
 fn write_content(shared: &Shared, pointer: &str, text: &str) {
-    optimistic(
-        shared,
-        Mutation::Field {
-            pointer: pointer.to_string(),
-            field: "content".to_string(),
-            value: serde_json::Value::String(text.to_string()),
-        },
-    );
-    let (path, raw) = {
+    let mutation = Mutation::Field {
+        pointer: pointer.to_string(),
+        field: "content".to_string(),
+        value: serde_json::Value::String(text.to_string()),
+    };
+    optimistic(shared, &mutation);
+    let path = {
         let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        (m.path.clone(), m.raw.clone())
+        m.path.clone()
     };
     let Some(path) = path else {
         return;
     };
     let debounce = consume_context::<WriteDebounce>();
-    schedule_write(
-        &debounce,
-        shared.clone(),
-        WritePayload::Content {
-            path,
-            raw,
-            pointer: pointer.to_string(),
-            text: text.to_string(),
-        },
-    );
+    schedule_write(&debounce, shared.clone(), path, mutation);
 }
 
 #[cfg(test)]

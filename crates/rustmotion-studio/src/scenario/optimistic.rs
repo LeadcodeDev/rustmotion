@@ -201,6 +201,76 @@ pub fn is_self_write(slot: &SelfWrites, path: &Path, content: &str) -> bool {
     map.get(path) == Some(&content_hash(content))
 }
 
+// ── Pending writes (debounce queue) ─────────────────────────────────────────
+
+pub type PendingWrites = Arc<Mutex<HashMap<PathBuf, Vec<Mutation>>>>;
+
+/// App-global queue of mutations accumulated since the last successful disk
+/// flush, keyed by scenario path. The debounce timer in `inspector.rs`
+/// appends to it on every edit and drains it when it fires; `undo`/`redo`
+/// drain it too, before touching the file, so an orphaned flush that still
+/// fires after a revert has nothing left to replay.
+pub fn pending_write_slot() -> PendingWrites {
+    static SLOT: OnceLock<PendingWrites> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
+}
+
+/// Queue one mutation for `path`, to be replayed onto the freshest disk
+/// content the next time the debounce flushes.
+pub fn queue_mutation(slot: &PendingWrites, path: &Path, mutation: Mutation) {
+    let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(path.to_path_buf()).or_default().push(mutation);
+}
+
+/// Remove and return every mutation queued for `path`, in the order they were
+/// queued (empty when there is nothing pending: a no-op flush, or a queue a
+/// concurrent undo/redo already drained).
+pub fn take_pending(slot: &PendingWrites, path: &Path) -> Vec<Mutation> {
+    let mut map = slot.lock().unwrap_or_else(|e| e.into_inner());
+    map.remove(path).unwrap_or_default()
+}
+
+// ── Flush decision (pure) ────────────────────────────────────────────────────
+
+/// Replay `mutations`, in order, onto `disk_content` — the freshest content on
+/// disk, read right before the flush, never a snapshot captured back when an
+/// edit happened. `Ok(None)` means every mutation was a no-op (nothing to
+/// write); `Err` means `disk_content` itself could not be parsed as JSON (the
+/// HTML branch has no such failure mode: any string is a valid rebase base).
+pub fn resolve_flush(
+    disk_content: &str,
+    is_html: bool,
+    mutations: &[Mutation],
+) -> Result<Option<String>, String> {
+    if is_html {
+        let mut current = disk_content.to_string();
+        let mut changed = false;
+        for mutation in mutations {
+            if let Some(updated) = apply_to_html(&current, mutation) {
+                current = updated;
+                changed = true;
+            }
+        }
+        Ok(changed.then_some(current))
+    } else {
+        let mut value: Value =
+            serde_json::from_str(disk_content).map_err(|e| format!("parse: {e}"))?;
+        let mut changed = false;
+        for mutation in mutations {
+            if let Some(updated) = apply_to_raw(value.clone(), mutation) {
+                value = updated;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        let text = serde_json::to_string_pretty(&value).map_err(|e| format!("json: {e}"))?;
+        Ok(Some(text))
+    }
+}
+
 // ── Rebuild ──────────────────────────────────────────────────────────────────
 
 /// Build a `ResolvedScenario` from a raw scenario JSON value — the same
