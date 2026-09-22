@@ -194,3 +194,91 @@ fn strict_anim_also_measures_vw_against_the_real_viewport_width() {
         "--strict-anim pass (line ~1347) must also be clean: {report_json}"
     );
 }
+
+// ─── static transform lengths use the node's own font-size and per-axis size ───
+
+/// `translateX(-10em)` on a 96px-font node must resolve against ITS OWN
+/// font-size (960px), not the hardcoded 16px `apply_static_node_transform`
+/// used to assume (160px). At x=200 with a 100px-wide box, the correct
+/// translate pushes the box to x=-760 (fully off-frame, a real violation);
+/// the buggy 160px translate only reaches x=40 (still on-frame, silent).
+#[test]
+fn static_translate_em_resolves_against_the_nodes_own_font_size() {
+    let scenario = ScratchFile::new("rm15-em-scenario");
+    let report = ScratchFile::new("rm15-em-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "position": "absolute",
+                "x": 200, "y": 400,
+                "style": {
+                    "width": "100px", "height": "50px",
+                    "font-size": "96px",
+                    "transform": [{ "fn": "translate-x", "x": "-10em" }]
+                },
+                "fill": "#ff0000"
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "a -10em translate on a 96px-font node must push the shape off-frame; report={report_json}"
+    );
+    let violation = find_kind(&report_json, "viewport_overflow")
+        .expect("expected a viewport_overflow violation");
+    let x = violation["bbox"]["x"].as_f64().expect("bbox.x is a number");
+    assert!(
+        (x - (-760.0)).abs() < 2.0,
+        "expected bbox.x ~ -760 (200 - 10*96), got {x}: {report_json}"
+    );
+}
+
+/// `translateY(50%)` on a WIDE, SHORT box (1000×100) must resolve against
+/// its OWN height (50px), not `max(width, height)` (500px) — the exact
+/// mistake `paint_pass.rs`'s `length_ctx_x`/`length_ctx_y` split exists to
+/// avoid. The correct 50px shift keeps the box on-frame; the buggy 500px
+/// shift pushes its bottom edge to 1400px, past the 1080px-tall viewport.
+#[test]
+fn static_translate_percent_resolves_per_axis_not_against_max_of_both() {
+    let scenario = ScratchFile::new("rm15-percent-scenario");
+    let report = ScratchFile::new("rm15-percent-report");
+    let json = r##"{
+        "video": { "width": 1920, "height": 1080 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "position": "absolute",
+                "x": 100, "y": 800,
+                "style": {
+                    "width": "1000px", "height": "100px",
+                    "transform": [{ "fn": "translate-y", "y": "50%" }]
+                },
+                "fill": "#ff0000"
+            }]
+        }]
+    }"##;
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        output.status.success(),
+        "a 50% translateY on a 1000x100 box must resolve against its own 100px height \
+         (50px shift, still on-frame), not max(1000,100); report={report_json}"
+    );
+    assert_eq!(
+        count_kind(&report_json, "viewport_overflow"),
+        0,
+        "{report_json}"
+    );
+}

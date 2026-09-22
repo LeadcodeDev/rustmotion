@@ -473,6 +473,16 @@ fn container_clips(c: &Component) -> bool {
 /// path, out of scope for this fix. Animated transform-producing presets are
 /// folded separately in `walk_anim`; this only handles what a component
 /// declares directly in `style.transform`.
+///
+/// `font_size` is the NODE's own resolved font-size
+/// (`css.font_size_px_or(16.0)`), not a hardcoded 16px — an `em` length in
+/// `transform` must scale with the element it's declared on, exactly like
+/// `paint_pass.rs`'s `length_ctx` does for the same field. Percentage
+/// lengths inside `transform` resolve per axis (`ctx_x`/`ctx_y`, mirroring
+/// `paint_pass.rs`'s `length_ctx_x`/`length_ctx_y`) rather than against a
+/// single `bbox.w.max(bbox.h)` shared by both axes — see
+/// `apply_transform_chain`'s doc comment for why a shared context there was
+/// wrong for every non-square box.
 fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)) -> BBox {
     let transform = match css.transform.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -482,8 +492,16 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
         viewport_width: viewport.0,
         viewport_height: viewport.1,
         parent_size: bbox.w.max(bbox.h),
-        font_size: 16.0,
+        font_size: css.font_size_px_or(16.0),
         root_font_size: 16.0,
+    };
+    let ctx_x = LengthContext {
+        parent_size: bbox.w,
+        ..ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: bbox.h,
+        ..ctx
     };
     let (pivot_x, pivot_y) = resolve_transform_origin_2d(css.transform_origin.as_ref(), bbox, &ctx);
     let corners = [
@@ -498,7 +516,7 @@ fn apply_static_node_transform(bbox: &BBox, css: &CssStyle, viewport: (f32, f32)
     let mut min_y = f32::INFINITY;
     let mut max_y = f32::NEG_INFINITY;
     for (cx, cy) in corners {
-        let (tx, ty) = apply_transform_chain(transform, cx - pivot_x, cy - pivot_y, &ctx);
+        let (tx, ty) = apply_transform_chain(transform, cx - pivot_x, cy - pivot_y, &ctx_x, &ctx_y);
         let (wx, wy) = (pivot_x + tx, pivot_y + ty);
         min_x = min_x.min(wx);
         max_x = max_x.max(wx);
@@ -584,15 +602,32 @@ fn resolve_transform_origin_2d(
 /// clockwise on a y-down canvas, i.e. `x' = x·cosθ − y·sinθ`,
 /// `y' = x·sinθ + y·cosθ`); `Skew`/`SkewX`/`SkewY` match `Canvas::skew`
 /// (`x' = x + y·tan(skew_x)`, `y' = y + x·tan(skew_y)`).
-fn apply_transform_chain(list: &[TransformFn], x: f32, y: f32, ctx: &LengthContext) -> (f32, f32) {
+///
+/// `ctx_x`/`ctx_y` are separate contexts differing only in
+/// `parent_size` (the box's own width / height respectively), used for
+/// `Translate`/`TranslateX`/`TranslateY`/`Translate3d`'s percentage
+/// resolution — CSS resolves a translate's x-component percentage against
+/// the box's own WIDTH and the y-component against its own HEIGHT, never a
+/// single value shared by both axes (that's only correct for square boxes).
+/// `Scale`/`Rotate`/`Skew` take unitless factors/degrees and never consult
+/// either context.
+fn apply_transform_chain(
+    list: &[TransformFn],
+    x: f32,
+    y: f32,
+    ctx_x: &LengthContext,
+    ctx_y: &LengthContext,
+) -> (f32, f32) {
     let (mut x, mut y) = (x, y);
     for f in list.iter().rev() {
         let (nx, ny) = match f {
-            TransformFn::Translate { x: tx, y: ty } => (x + tx.resolve(ctx), y + ty.resolve(ctx)),
-            TransformFn::TranslateX { x: tx } => (x + tx.resolve(ctx), y),
-            TransformFn::TranslateY { y: ty } => (x, y + ty.resolve(ctx)),
+            TransformFn::Translate { x: tx, y: ty } => {
+                (x + tx.resolve(ctx_x), y + ty.resolve(ctx_y))
+            }
+            TransformFn::TranslateX { x: tx } => (x + tx.resolve(ctx_x), y),
+            TransformFn::TranslateY { y: ty } => (x, y + ty.resolve(ctx_y)),
             TransformFn::Translate3d { x: tx, y: ty, .. } => {
-                (x + tx.resolve(ctx), y + ty.resolve(ctx))
+                (x + tx.resolve(ctx_x), y + ty.resolve(ctx_y))
             }
             TransformFn::Scale { x: sx, y: sy } => (x * sx, y * sy),
             TransformFn::ScaleX { x: sx } => (x * sx, y),
