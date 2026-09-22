@@ -99,8 +99,14 @@ impl Table {
         Some(skia_safe::Font::from_typeface(typeface, font_size))
     }
 
-    /// Resolve column widths: use explicit widths if provided, else equal distribution.
-    fn resolve_column_widths(&self, total_w: f32) -> Vec<f32> {
+    /// Resolve column widths: explicit widths if provided (padded with an
+    /// equal share for any column left unspecified); otherwise
+    /// [`Self::natural_column_widths`] scaled proportionally so the columns
+    /// still sum to exactly `total_w`, whatever that box actually laid out
+    /// at (which — since taffy's intrinsic measurement and this painted
+    /// width can diverge, e.g. a `card` giving the table less room than its
+    /// natural size — is not always identical to the natural total).
+    fn resolve_column_widths(&self, total_w: f32, font_size: f32) -> Vec<f32> {
         let col_count = self.headers.len().max(1);
         if let Some(widths) = &self.column_widths {
             let mut result: Vec<f32> = widths.to_vec();
@@ -111,10 +117,52 @@ impl Table {
                 result.push(remaining / remaining_cols as f32);
             }
             result.truncate(col_count);
-            result
-        } else {
-            vec![total_w / col_count as f32; col_count]
+            return result;
         }
+        let natural = self.natural_column_widths(font_size);
+        let natural_total: f32 = natural.iter().sum();
+        if natural_total <= 0.0 || total_w <= 0.0 {
+            return vec![total_w / col_count as f32; col_count];
+        }
+        let scale = total_w / natural_total;
+        natural.into_iter().map(|w| w * scale).collect()
+    }
+
+    /// Per-column natural width: each column's own header/cell text
+    /// (measured with the bold header font, matching `paint`'s header row)
+    /// plus `2 × cell_padding`, indexed like `headers`. Shared by
+    /// `TableIntrinsic::from_table` (which sums this for the box's natural
+    /// total width) and `resolve_column_widths` above (which scales it to
+    /// whatever width the box actually laid out at) — a single source for
+    /// the per-column distribution keeps the two from drifting apart the
+    /// way an even split and a content-fitted sum used to.
+    pub(crate) fn natural_column_widths(&self, font_size: f32) -> Vec<f32> {
+        let col_count = self.headers.len().max(1);
+        let font_style = skia_safe::FontStyle::bold();
+        let family = self.style.font_family.as_deref().unwrap_or("Inter");
+        let Ok(typeface) = typeface_with_fallback(family, font_style) else {
+            let min_col_w = DEFAULT_FONT_SIZE * 8.0 + DEFAULT_CELL_PADDING * 2.0;
+            return vec![min_col_w; col_count];
+        };
+        let font = skia_safe::Font::from_typeface(typeface, font_size);
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
+        let cell_padding = self.cell_padding;
+
+        let mut col_widths: Vec<f32> = vec![0.0; col_count];
+        for (i, header) in self.headers.iter().enumerate() {
+            let w = measure_text_with_fallback(header, &font, &emoji_font, 0.0);
+            col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
+        }
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let w = measure_text_with_fallback(cell, &font, &emoji_font, 0.0);
+                col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
+            }
+        }
+        col_widths
     }
 
     /// Get alignment for a specific column.
@@ -152,7 +200,7 @@ impl Table {
             14.0,
         );
         let col_count = self.headers.len().max(1);
-        let col_widths = self.resolve_column_widths(w);
+        let col_widths = self.resolve_column_widths(w, font_size);
         let row_h = self.row_height(font_size);
 
         let header_color = self.header_color.as_deref().unwrap_or("#374151");

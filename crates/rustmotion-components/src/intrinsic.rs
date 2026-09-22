@@ -875,17 +875,18 @@ impl IntrinsicMeasure for TerminalIntrinsic {
 // Table intrinsic measurer
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::table::{
-    Table, DEFAULT_CELL_PADDING, DEFAULT_FONT_SIZE as TABLE_FONT_SIZE, DEFAULT_ROW_HEIGHT_RATIO,
-};
+use crate::table::{Table, DEFAULT_FONT_SIZE as TABLE_FONT_SIZE, DEFAULT_ROW_HEIGHT_RATIO};
 
 /// Intrinsic measurer for [`Table`].
 ///
-/// Natural size formula (matches the painter exactly):
+/// Natural size formula (matches the painter exactly, since both now read
+/// the same per-column distribution — see [`Table::natural_column_widths`]):
 /// - `row_height = font_size × DEFAULT_ROW_HEIGHT_RATIO`
 /// - `height = (1 + row_count) × row_height`  (header + data rows)
-/// - `width`: if `column_widths` are provided, their sum; otherwise each
-///   column gets `max(header_text_width + 2 × cell_padding, min_col_width)`.
+/// - `width`: if `column_widths` are provided, their sum; otherwise the sum
+///   of `Table::natural_column_widths`, which the painter's own
+///   `resolve_column_widths` scales proportionally to whatever width the
+///   box actually laid out at.
 pub struct TableIntrinsic {
     row_height: f32,
     row_count: usize, // data rows only; header adds 1
@@ -909,44 +910,12 @@ impl TableIntrinsic {
     }
 
     fn compute_width(t: &Table, font_size: f32) -> f32 {
-        // Explicit column widths provided → sum them.
         if let Some(widths) = &t.column_widths {
             if !widths.is_empty() {
                 return widths.iter().sum();
             }
         }
-
-        // Measure each header with the bold font; add 2× cell_padding per column.
-        let font_style = skia_safe::FontStyle::bold();
-        let family = t.style.font_family.as_deref().unwrap_or("Inter");
-        let Ok(typeface) = typeface_with_fallback(family, font_style) else {
-            // Font unavailable: fall back to col_count × a reasonable minimum.
-            let col_count = t.headers.len().max(1) as f32;
-            return col_count * (TABLE_FONT_SIZE * 8.0 + DEFAULT_CELL_PADDING * 2.0);
-        };
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-        let cell_padding = t.cell_padding;
-
-        // Also consider data cell widths to size columns appropriately.
-        let col_count = t.headers.len().max(1);
-        let mut col_widths: Vec<f32> = vec![0.0; col_count];
-
-        for (i, header) in t.headers.iter().enumerate() {
-            let w = measure_text_with_fallback(header, &font, &emoji_font, 0.0);
-            col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
-        }
-        for row in &t.rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i >= col_count {
-                    break;
-                }
-                let w = measure_text_with_fallback(cell, &font, &emoji_font, 0.0);
-                col_widths[i] = col_widths[i].max(w + cell_padding * 2.0);
-            }
-        }
-
-        col_widths.iter().sum()
+        t.natural_column_widths(font_size).iter().sum()
     }
 }
 
