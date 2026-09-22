@@ -242,3 +242,41 @@ fn linear_gradient_180deg_puts_the_first_stop_at_the_top() {
         "angle: 180 must put the black last stop at the bottom, got {bottom:?}"
     );
 }
+
+// ---- `spring_settle_time` must not be rescanned on every `spring_value` call ----
+
+#[test]
+fn spring_settle_time_is_memoized_not_rescanned_every_call() {
+    // `SpringConfig::duration` routes every `spring_value` sample through
+    // `spring_settle_time`'s 2k-20k-step coarse-then-bisect scan (see
+    // animator.rs). The scan result depends only on the spring's own
+    // (damping, stiffness, mass, threshold) — invariant across every frame
+    // an animation is sampled at — so repeating it per call is pure waste.
+    // Measured uncached on this parameter set: 2000 calls take ~530ms in a
+    // debug build; memoized, the same 2000 calls (one real scan, the rest
+    // cache hits) complete in well under a tenth of that.
+    let config = SpringConfig {
+        damping: 37.0,
+        stiffness: 733.0,
+        mass: 1.0,
+        duration: Some(0.42),
+        rest_threshold: None,
+    };
+    let start = std::time::Instant::now();
+    let mut acc = 0.0;
+    for i in 0..2000 {
+        let t = (i as f64) * 1e-4;
+        acc += spring_value(t, &config);
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        acc.is_finite(),
+        "sanity: accumulated spring values must be finite"
+    );
+    assert!(
+        elapsed.as_millis() < 150,
+        "2000 spring_value calls with the same spring parameters took {elapsed:?}; \
+         spring_settle_time must be memoized on (damping, stiffness, mass, threshold) rather \
+         than re-scanned on every call"
+    );
+}
