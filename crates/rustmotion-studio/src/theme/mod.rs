@@ -13,7 +13,6 @@ pub fn apply(pref: ThemePref, window: Option<&mut Window>, cx: &mut App) {
     }
 }
 
-#[allow(dead_code)]
 pub fn set(state: &Entity<StudioState>, pref: ThemePref, window: &mut Window, cx: &mut App) {
     state.update(cx, |state, cx| {
         state.theme_pref = pref;

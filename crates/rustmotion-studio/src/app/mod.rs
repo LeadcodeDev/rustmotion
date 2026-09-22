@@ -1,6 +1,5 @@
 mod overlays;
 mod root;
-#[allow(dead_code)]
 pub mod state;
 mod window;
 

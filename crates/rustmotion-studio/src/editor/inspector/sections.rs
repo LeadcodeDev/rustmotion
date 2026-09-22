@@ -513,12 +513,6 @@ pub fn fmt_unit(v: f64, step: f64, unit: &str) -> String {
     }
 }
 
-pub fn num_display(value: &str, step: f64) -> String {
-    parse_num(value)
-        .map(|v| fmt_num(v, step))
-        .unwrap_or_else(|| value.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,5 @@
 mod app;
-#[allow(dead_code)]
 pub mod editor;
-#[allow(dead_code)]
 mod library;
 pub mod scenario;
 mod theme;

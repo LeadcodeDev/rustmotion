@@ -86,12 +86,14 @@ pub fn hex_string(color: Hsla) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub struct ColorWidget {
     pub picker: Entity<ColorPickerState>,
     pub hex: Entity<InputState>,
     pub id: u64,
 }
 
+#[allow(dead_code)]
 pub enum ScalarWidget {
     Switch {
         checked: bool,
@@ -1154,21 +1156,6 @@ fn fill_seg_button(
         .on_click(cx.listener(move |this, _, window, cx| {
             this.fill_set_mode(&field, mode, window, cx);
         }))
-}
-
-pub fn seg_button(
-    id: &'static str,
-    label: &'static str,
-    active: bool,
-    on_click: impl Fn(&mut InspectorPanel, &mut Window, &mut Context<InspectorPanel>) + 'static,
-    cx: &mut Context<InspectorPanel>,
-) -> impl IntoElement {
-    Button::new(id)
-        .label(label)
-        .when(active, |b| b.primary())
-        .when(!active, |b| b.ghost())
-        .xsmall()
-        .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
 }
 
 #[cfg(test)]

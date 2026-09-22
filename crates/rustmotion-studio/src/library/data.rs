@@ -108,15 +108,6 @@ impl LibraryState {
     }
 }
 
-pub fn render_thumbnail(path: &Path) -> Option<Vec<u8>> {
-    let scenario = rustmotion::loader::load_input(&path.to_path_buf()).ok()?;
-    let tasks = rustmotion::encode::build_frame_tasks(&scenario);
-    if tasks.is_empty() {
-        return None;
-    }
-    crate::editor::frames::render_frame_deep(&scenario, &tasks, 0, 0.25).ok()
-}
-
 pub fn is_scenario_json(v: &serde_json::Value) -> bool {
     v.get("video").map(|x| x.is_object()).unwrap_or(false)
         && (v.get("scenes").map(|x| x.is_array()).unwrap_or(false)

@@ -6,7 +6,6 @@ fn theme_pref_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("rustmotion").join("theme.json"))
 }
 
-#[allow(dead_code)]
 fn label_for(pref: ThemePref) -> &'static str {
     match pref {
         ThemePref::Light => "light",
@@ -36,7 +35,6 @@ pub fn load_theme_pref() -> ThemePref {
     parse_label(&label)
 }
 
-#[allow(dead_code)]
 pub fn save_theme_pref(pref: ThemePref) {
     if let Some(path) = theme_pref_path() {
         if let Some(parent) = path.parent() {

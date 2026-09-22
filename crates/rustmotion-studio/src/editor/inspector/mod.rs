@@ -25,6 +25,7 @@ use controls::{Row, ScalarWidget};
 use sections::{family, Ctrl, Family};
 use write::Target;
 
+#[allow(dead_code)]
 struct SelectionData {
     pointer: String,
     kind: String,
