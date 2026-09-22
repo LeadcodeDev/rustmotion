@@ -251,9 +251,43 @@ pub fn ffmpeg_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Rejects a `src` that names a network URL rather than a local file path.
+///
+/// `extract_video_frame` below hands `src` to `ffmpeg -i` verbatim; ffmpeg's
+/// own demuxer understands its full built-in protocol set (`http://`,
+/// `rtmp://`, `concat:`, …), which turns an unfiltered `src` into an SSRF
+/// primitive — a scenario author can point it at
+/// `http://169.254.169.254/...` (the cloud metadata endpoint) or an internal
+/// service, and read the exit status as a port-scan oracle. Remote
+/// video was never a designed feature here — this module's own `is_remote`
+/// doc, a few functions below, and `rustmotion info`'s identical assumption
+/// both already treat every `src` as a local path — so this closes an
+/// accidental reach rather than opening an allowlist for one.
+fn reject_remote_video_src(src: &str) -> Result<()> {
+    let Some(scheme_end) = src.find("://") else {
+        return Ok(());
+    };
+    let scheme = &src[..scheme_end];
+    let looks_like_scheme = !scheme.is_empty()
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if looks_like_scheme {
+        return Err(RustmotionError::Generic(format!(
+            "video src '{src}' names a '{scheme}://' URL — rustmotion does not fetch video \
+             over the network, only local file paths are accepted"
+        )));
+    }
+    Ok(())
+}
+
 pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Result<Vec<u8>> {
+    reject_remote_video_src(src)?;
     let output = std::process::Command::new("ffmpeg")
         .args([
+            "-protocol_whitelist",
+            "file",
             "-ss",
             &format!("{:.3}", time),
             "-i",
