@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use dashmap::DashMap;
 
@@ -33,6 +34,40 @@ static GIF_CACHE: OnceLock<GifCacheMap> = OnceLock::new();
 
 pub fn gif_cache() -> &'static GifCacheMap {
     GIF_CACHE.get_or_init(|| Arc::new(DashMap::new()))
+}
+
+// ─── Shared HTTP agent ──────────────────────────────────────────────────────
+
+/// The [`ureq::Agent`] every outbound HTTP call in this crate must go
+/// through — the icon fetch below, and the remote `include` fetch in the
+/// `rustmotion` crate (`crates/rustmotion/src/include.rs`), which imports
+/// [`http_agent`] rather than building its own.
+///
+/// `ureq::get(...)`, the free function used before this fix, always resolves
+/// to an *unconfigured* default agent. In ureq 3.x every field of
+/// `Timeouts` defaults to `None` except `await_100` (`config.rs`'s `impl
+/// Default for Timeouts`), so a host that accepts the TCP connection and
+/// then never answers — or trickles one byte a minute — hangs the calling
+/// thread forever; ureq's 10 MB body cap bounds bytes, not time. On the icon
+/// path that thread can be a render worker with nobody at the keyboard to
+/// notice.
+///
+/// `Config::builder()` starts from `Config::default()`, which already
+/// resolves a proxy from `HTTPS_PROXY`/`https_proxy`/`HTTP_PROXY`/
+/// `http_proxy`/`ALL_PROXY` via `Proxy::try_from_env()` — the same audit
+/// separately found every network call here ignoring a configured egress
+/// proxy, and routing through the builder rather than hand-building a
+/// `Config` fixes that as a side effect, not a separate change.
+static HTTP_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+
+pub fn http_agent() -> &'static ureq::Agent {
+    HTTP_AGENT.get_or_init(|| {
+        let config = ureq::config::Config::builder()
+            .timeout_global(Some(Duration::from_secs(20)))
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .build();
+        ureq::Agent::new_with_config(config)
+    })
 }
 
 // ─── Icon fetching ──────────────────────────────────────────────────────────
@@ -138,7 +173,8 @@ pub fn fetch_icon_svg_in(
         "https://api.iconify.design/{}/{}.svg?color=%23{}&width={}&height={}",
         prefix, name, hex_color, width, height
     );
-    let response = ureq::get(&url)
+    let response = http_agent()
+        .get(&url)
         .call()
         .map_err(|e| RustmotionError::IconFetch {
             icon: icon.to_string(),
