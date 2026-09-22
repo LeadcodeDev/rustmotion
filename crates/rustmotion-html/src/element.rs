@@ -37,20 +37,48 @@ fn tag_kind(tag: &str) -> TagKind {
     }
 }
 
-/// Concatenated text of an element and all its descendants.
-pub(crate) fn inner_text(handle: &Handle) -> String {
+/// Concatenated text of an element and all its descendants. Nested inline
+/// formatting tags (`strong`/`em`/`label`/…) flatten in, matching real HTML;
+/// `<script>`/`<title>`/`<noscript>`/`<template>`/`<head>` are skipped
+/// (never visually render either); `<style>` and any element with real,
+/// non-flattenable content (`<img>`, `<svg>`, `<video>`, `<rm-*>`, a nested
+/// container) are refused rather than having their source painted or their
+/// content silently vanish — see [`HtmlError::TextContentUnsupportedChild`].
+pub(crate) fn inner_text(handle: &Handle) -> Result<String, HtmlError> {
     let mut out = String::new();
-    collect_text(handle, &mut out);
-    out.trim().to_string()
+    collect_text(handle, &mut out)?;
+    Ok(out.trim().to_string())
 }
 
-fn collect_text(handle: &Handle, out: &mut String) {
+fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
     if let NodeData::Text { contents } = &handle.data {
         out.push_str(&contents.borrow());
+        return Ok(());
+    }
+    if matches!(handle.data, NodeData::Element { .. }) {
+        if let Some(tag) = tag_name(handle) {
+            if tag == "style" {
+                return Err(HtmlError::StyleElementUnsupported);
+            }
+            match tag_kind(&tag) {
+                TagKind::Ignored => return Ok(()),
+                TagKind::UnsupportedNative(suggestion) => {
+                    return Err(HtmlError::UnsupportedNativeElement {
+                        tag,
+                        suggestion: suggestion.to_string(),
+                    })
+                }
+                TagKind::Container | TagKind::Custom(_) => {
+                    return Err(HtmlError::TextContentUnsupportedChild { tag })
+                }
+                TagKind::Text => {}
+            }
+        }
     }
     for child in handle.children.borrow().iter() {
-        collect_text(child, out);
+        collect_text(child, out)?;
     }
+    Ok(())
 }
 
 /// Pull `style="..."` and `anim="..."` from an element's attributes into one
@@ -94,7 +122,7 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
             obj.insert("type".into(), Value::from("text"));
-            obj.insert("content".into(), Value::from(inner_text(handle)));
+            obj.insert("content".into(), Value::from(inner_text(handle)?));
             if let Some(style) = style_object(&attrs)? {
                 obj.insert("style".into(), style);
             }

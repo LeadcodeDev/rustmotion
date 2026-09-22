@@ -187,3 +187,79 @@ fn rgba_color_functional_notation_is_not_treated_as_multi_token() {
         json!("rgba(0, 0, 0, 0.5)")
     );
 }
+
+// ---------------------------------------------------------------------------
+// text-tag children bypass every guard — <script>/<style> source gets
+// painted, <img>/<svg>/<rm-*> vanish silently.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn script_nested_inside_paragraph_is_not_painted() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><p>Real <script>var secret = 1; alert(2);</script></p></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("<script> inside <p> must not block transpilation");
+    assert_eq!(
+        v["scenes"][0]["children"][0]["content"],
+        json!("Real"),
+        "the script source must never be painted as text: {v}"
+    );
+}
+
+#[test]
+fn style_nested_inside_heading_is_refused_not_painted() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><h1>Title<style>h1{color:#0f0}</style></h1></scene></rustmotion>"##;
+    let err = html_to_scenario_value(html)
+        .expect_err("<style> inside <h1> must be refused, not painted as text");
+    assert!(
+        matches!(err, HtmlError::StyleElementUnsupported),
+        "expected StyleElementUnsupported, got: {err:?}"
+    );
+}
+
+#[test]
+fn img_nested_inside_paragraph_is_refused_not_dropped() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><p>cap<img src="hero.png"></p></scene></rustmotion>"##;
+    let err = html_to_scenario_value(html)
+        .expect_err("<img> inside <p> must be refused, not silently dropped");
+    match err {
+        HtmlError::UnsupportedNativeElement { tag, suggestion } => {
+            assert_eq!(tag, "img");
+            assert_eq!(suggestion, "rm-image");
+        }
+        other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
+    }
+}
+
+#[test]
+fn svg_nested_inside_heading_is_refused_not_dropped() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><h1>t<svg viewBox="0 0 10 10"><circle r="4"></circle></svg></h1></scene></rustmotion>"##;
+    let err = html_to_scenario_value(html)
+        .expect_err("<svg> inside <h1> must be refused, not silently dropped");
+    match err {
+        HtmlError::UnsupportedNativeElement { tag, suggestion } => {
+            assert_eq!(tag, "svg");
+            assert_eq!(suggestion, "rm-svg");
+        }
+        other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
+    }
+}
+
+#[test]
+fn rm_counter_nested_inside_span_is_refused_not_dropped() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><span>n=<rm-counter from="0" to="100"></rm-counter></span></scene></rustmotion>"##;
+    let err = html_to_scenario_value(html)
+        .expect_err("<rm-counter> inside <span> must be refused, not silently dropped");
+    match err {
+        HtmlError::TextContentUnsupportedChild { tag } => assert_eq!(tag, "rm-counter"),
+        other => panic!("expected TextContentUnsupportedChild, got: {other:?}"),
+    }
+}
+
+#[test]
+fn inline_formatting_tags_still_flatten_into_the_parent_text() {
+    let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><p>Real <strong>bold</strong> text</p></scene></rustmotion>"##;
+    let v = html_to_scenario_value(html).expect("nested inline formatting must still flatten");
+    assert_eq!(
+        v["scenes"][0]["children"][0]["content"],
+        json!("Real bold text")
+    );
+}
