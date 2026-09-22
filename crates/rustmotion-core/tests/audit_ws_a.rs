@@ -7,9 +7,11 @@ use rustmotion_core::css::style::{
 };
 use rustmotion_core::css::taffy_bridge::ConversionContext;
 use rustmotion_core::css::units::{Length, LengthPercentage as CLP};
+use rustmotion_core::engine::animator::spring_value;
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode};
 use rustmotion_core::engine::layout_pass::run_layout;
 use rustmotion_core::engine::paint_pass::{paint_tree, NoopDispatcher, PaintFrame};
+use rustmotion_core::schema::SpringConfig;
 
 fn test_frame(w: u32, h: u32) -> PaintFrame {
     PaintFrame {
@@ -130,4 +132,62 @@ fn opacity_layer_does_not_clip_own_outset_box_shadow() {
         above_faded.0 > 200 && above_faded.1 < 50,
         "an opacity<1 layer must not clip the node's own outset box-shadow, got {above_faded:?}"
     );
+}
+
+// ---- underdamped spring step response must start from rest ----
+
+fn spring_config(damping: f64, stiffness: f64, mass: f64) -> SpringConfig {
+    SpringConfig {
+        damping,
+        stiffness,
+        mass,
+        duration: None,
+        rest_threshold: None,
+    }
+}
+
+#[test]
+fn underdamped_spring_step_response_starts_at_rest() {
+    // Shipped defaults named in the audit finding: damping=15, stiffness=100,
+    // mass=1 -> zeta=0.75 (underdamped). A step response that starts from
+    // rest has ~0 velocity at t=0; a wrong sine-argument formula produces a
+    // jolt of about 6.21/s instead.
+    let config = spring_config(15.0, 100.0, 1.0);
+    let h = 1e-5;
+    let v0 = spring_value(0.0, &config);
+    assert!(v0.abs() < 1e-9, "sanity: spring must start at 0, got {v0}");
+
+    let vh = spring_value(h, &config);
+    let slope = (vh - v0) / h;
+    assert!(
+        slope.abs() < 0.05,
+        "underdamped step response must start at rest (~0 initial velocity), got slope {slope}"
+    );
+}
+
+#[test]
+fn underdamped_spring_matches_the_analytic_closed_form() {
+    // Reference computed independently of the engine's implementation from
+    // the textbook closed form for an underdamped step response:
+    //   1 - e^{-zeta*omega*t} * [cos(omega_d*t) + (zeta*omega/omega_d)*sin(omega_d*t)]
+    let damping = 15.0_f64;
+    let stiffness = 100.0_f64;
+    let mass = 1.0_f64;
+    let omega = (stiffness / mass).sqrt();
+    let zeta = damping / (2.0 * (stiffness * mass).sqrt());
+    let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+    let reference = |t: f64| -> f64 {
+        let decay = (-zeta * omega * t).exp();
+        1.0 - decay * ((omega_d * t).cos() + (zeta * omega / omega_d) * (omega_d * t).sin())
+    };
+
+    let config = spring_config(damping, stiffness, mass);
+    for t in [0.0, 1.0 / 60.0, 0.1, 0.3, 0.6, 1.0] {
+        let expected = reference(t);
+        let actual = spring_value(t, &config);
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "t={t}: expected {expected} (analytic reference), got {actual}"
+        );
+    }
 }
