@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::sync::Arc;
 
 use crate::components::{ChildComponent, Component};
@@ -7,6 +8,54 @@ use rustmotion_core::engine::renderer::{
     video_frame_cache,
 };
 use rustmotion_core::traits::{Styled, Timed};
+
+/// Total bytes `VIDEO_FRAME_CACHE` may hold across every distinct
+/// `(src, width, height)` entry combined. `preextract_video_frames` refuses
+/// to add an entry that would push the cache past this ceiling rather than
+/// caching it anyway — a video past the budget renders blank for the
+/// affected frames, the same degraded outcome an ffmpeg failure already
+/// produces on this path, instead of the process exhausting memory (a single
+/// 1080p 30s embed alone reaches ~7.5 GB of raw decoded RGBA held in memory
+/// forever, with no eviction).
+pub const VIDEO_FRAME_CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Bytes one raw RGBA frame at `width`×`height` occupies, computed in `u64`
+/// and saturating rather than the plain `u32` multiplication this used to be:
+/// `width * height * 4` in `u32` wraps for a large-enough declared size
+/// (65536×16384 wraps to 0), which downstream turned into a division by
+/// zero. Saturating instead of panicking means an absurd declared size still
+/// fails the budget check below rather than crashing the preload pass.
+pub fn video_frame_byte_size(width: u32, height: u32) -> u64 {
+    u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(4)
+}
+
+/// Whether caching `additional_bytes` more on top of `already_cached_bytes`
+/// would cross [`VIDEO_FRAME_CACHE_BUDGET_BYTES`]. Saturating so a caller
+/// that already (somehow) exceeds the budget, or an `additional_bytes` at
+/// `u64::MAX` from a saturated [`video_frame_byte_size`], still reports
+/// "over budget" instead of wrapping back under it.
+pub fn would_exceed_cache_budget(already_cached_bytes: u64, additional_bytes: u64) -> bool {
+    already_cached_bytes.saturating_add(additional_bytes) > VIDEO_FRAME_CACHE_BUDGET_BYTES
+}
+
+/// Bytes currently held across every entry of the process-global video-frame
+/// cache. `VIDEO_FRAME_CACHE` has no eviction (see `assets.rs`), so this is a
+/// running total the caller checks before adding to it, not a size taken
+/// from any single-entry accounting the map itself keeps.
+fn video_frame_cache_bytes() -> u64 {
+    video_frame_cache()
+        .iter()
+        .map(|entry| {
+            entry
+                .value()
+                .iter()
+                .map(|(_, data, _, _)| data.len() as u64)
+                .sum::<u64>()
+        })
+        .sum()
+}
 
 /// Pre-fetch and cache all icon components before rendering.
 /// Call this before the render loop to avoid HTTP requests during parallel rendering.
@@ -157,6 +206,16 @@ pub fn prefetch_icons(scenes: &[Scene]) {
 /// already established for embedded-video *audio* extraction
 /// (`encode::video_audio::collect_video_audio_tracks`), which this frame
 /// path never inherited.
+///
+/// ffmpeg's rawvideo stdout is read directly off the pipe in
+/// `frame_byte_size` chunks (`Read::read_exact`) rather than buffered whole
+/// via `Command::output` and then copied frame-by-frame out of that buffer —
+/// the old shape held the full decode in memory twice at its peak. A byte
+/// budget (`would_exceed_cache_budget`) is checked before ffmpeg is even
+/// spawned, and the read loop itself stops at `expected_frames` regardless,
+/// so a source that would blow the budget is refused up front and one that
+/// somehow outputs more frames than the requested time range implies cannot
+/// grow the cache past what was budgeted for it.
 pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
     if !ffmpeg_available() {
         eprintln!(
@@ -212,7 +271,34 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
             let max_time = times.last().copied().unwrap_or(0.0);
             let duration = max_time - min_time + (1.0 / fps as f64);
 
-            let output = std::process::Command::new("ffmpeg")
+            let frame_byte_size = video_frame_byte_size(width, height);
+            if frame_byte_size == 0 {
+                eprintln!(
+                    "rustmotion: video frame preextraction: '{}' resolved to a zero-byte \
+                     frame size ({width}x{height}) — refusing to preextract. This video will \
+                     render blank for the affected frames.",
+                    video.src
+                );
+                return;
+            }
+            let expected_frames = (times.len() as u64).saturating_add(1);
+            let expected_bytes = frame_byte_size.saturating_mul(expected_frames);
+            let already_cached = video_frame_cache_bytes();
+            if would_exceed_cache_budget(already_cached, expected_bytes) {
+                eprintln!(
+                    "rustmotion: video frame preextraction: caching '{}' at {width}x{height} \
+                     would need ~{} MiB on top of the {} MiB already cached, over the {} MiB \
+                     budget — refusing to preextract. This video will render blank for the \
+                     affected frames.",
+                    video.src,
+                    expected_bytes / (1024 * 1024),
+                    already_cached / (1024 * 1024),
+                    VIDEO_FRAME_CACHE_BUDGET_BYTES / (1024 * 1024),
+                );
+                return;
+            }
+
+            let mut child = match std::process::Command::new("ffmpeg")
                 .args([
                     "-ss",
                     &format!("{:.3}", min_time),
@@ -231,35 +317,80 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
                 ])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
-                .output();
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(e) => {
+                    eprintln!(
+                        "rustmotion: video frame preextraction: could not spawn ffmpeg for \
+                         '{}': {}. This video will render blank for the affected frames.",
+                        video.src, e
+                    );
+                    return;
+                }
+            };
 
-            match output {
-                Ok(output) if output.status.success() => {
-                    let frame_size = (width * height * 4) as usize;
-                    let data = &output.stdout;
-                    let num_frames = data.len() / frame_size;
-                    let mut frames: Vec<(f64, Vec<u8>, u32, u32)> = Vec::with_capacity(num_frames);
+            let Some(mut stdout) = child.stdout.take() else {
+                eprintln!(
+                    "rustmotion: video frame preextraction: ffmpeg for '{}' produced no \
+                     stdout pipe. This video will render blank for the affected frames.",
+                    video.src
+                );
+                let _ = child.wait();
+                return;
+            };
 
-                    for idx in 0..num_frames {
-                        let start = idx * frame_size;
-                        let frame_data = data[start..start + frame_size].to_vec();
-                        let time = min_time + idx as f64 / fps as f64;
-                        frames.push((time, frame_data, width, height));
+            let frame_size = frame_byte_size as usize;
+            let max_frames = expected_frames as usize;
+            let mut frames: Vec<(f64, Vec<u8>, u32, u32)> = Vec::with_capacity(times.len());
+            loop {
+                if frames.len() >= max_frames {
+                    break;
+                }
+                let mut buf = vec![0u8; frame_size];
+                match stdout.read_exact(&mut buf) {
+                    Ok(()) => {
+                        let time = min_time + frames.len() as f64 / fps as f64;
+                        frames.push((time, buf, width, height));
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => {
+                        eprintln!(
+                            "rustmotion: video frame preextraction: reading ffmpeg output for \
+                             '{}' failed: {}. Keeping the {} frame(s) decoded so far.",
+                            video.src,
+                            e,
+                            frames.len()
+                        );
+                        break;
+                    }
+                }
+            }
+            drop(stdout);
 
+            match child.wait() {
+                Ok(status) if status.success() => {
+                    if frames.is_empty() {
+                        eprintln!(
+                            "rustmotion: video frame preextraction: ffmpeg produced no frames \
+                             for '{}'. This video will render blank for the affected frames.",
+                            video.src
+                        );
+                        return;
+                    }
                     cache.insert(cache_key, Arc::new(frames));
                 }
-                Ok(output) => {
+                Ok(status) => {
                     eprintln!(
                         "rustmotion: video frame preextraction: ffmpeg failed to decode \
                          frames from '{}' (exit status: {}). This video will render blank \
                          for the affected frames.",
-                        video.src, output.status
+                        video.src, status
                     );
                 }
                 Err(e) => {
                     eprintln!(
-                        "rustmotion: video frame preextraction: could not spawn ffmpeg for \
+                        "rustmotion: video frame preextraction: could not wait on ffmpeg for \
                          '{}': {}. This video will render blank for the affected frames.",
                         video.src, e
                     );
