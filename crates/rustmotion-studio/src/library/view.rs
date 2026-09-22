@@ -100,7 +100,7 @@ fn open_scenario(state: &Entity<StudioState>, path: PathBuf, cx: &mut App) {
         lib.note_opened(&path);
         lib.retarget_watch(&path);
     }
-    crate::app::spawn_asset_prefetch(shared.clone());
+    crate::app::spawn_scenario_warmup(shared.clone());
     state.update(cx, |studio, cx| {
         studio.view = View::Editor;
         cx.notify();

@@ -71,7 +71,7 @@ pub fn run_preview_root(
     let library: SharedLibrary =
         Arc::new(Mutex::new(LibraryState::new(workspace, start_in_editor)));
 
-    spawn_asset_prefetch(shared.clone());
+    spawn_scenario_warmup(shared.clone());
 
     if watch {
         let tx = spawn_watcher(shared.clone());
@@ -101,7 +101,7 @@ pub fn run_preview_root(
     Ok(())
 }
 
-pub fn spawn_asset_prefetch(shared: Shared) {
+pub fn spawn_scenario_warmup(shared: Shared) {
     std::thread::spawn(move || {
         let (scenario, fps) = {
             let m = shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -111,8 +111,20 @@ pub fn spawn_asset_prefetch(shared: Shared) {
             engine::prefetch_icons(&view.scenes);
             engine::preextract_video_frames(&view.scenes, fps);
         }
+        let failures = rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
+        let audio_error = (!failures.is_empty()).then(|| {
+            failures
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ")
+        });
+
         let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
-        m.generation = m.generation.wrapping_add(1);
+        if Arc::ptr_eq(&m.scenario, &scenario) {
+            m.audio_error = audio_error;
+            m.generation = m.generation.wrapping_add(1);
+        }
     });
 }
 
@@ -162,6 +174,8 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                         let g = m.generation.wrapping_add(1);
                         *m = StudioModel::new(scenario, error, Some(p.clone()));
                         m.generation = g;
+                        drop(m);
+                        spawn_scenario_warmup(shared.clone());
                     }
                 }
             }
