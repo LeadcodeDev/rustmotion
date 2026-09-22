@@ -22,7 +22,7 @@ use rustmotion_core::schema::{
 };
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Text {
     pub content: String,
     #[serde(default)]
@@ -58,6 +58,24 @@ rustmotion_core::impl_traits!(Text {
     Timed => timing,
     Styled => style,
 });
+
+impl Text {
+    /// `Painter::paint_content` and `TextIntrinsic::from_text` both read
+    /// `self.style` directly and have no way to receive the box tree's
+    /// resolved `CssStyle` — the `Painter` trait's signature is frozen, and
+    /// `self` is bound to this exact struct. `resolved` is the box-tree
+    /// node's own `CssStyle` after `cascade::inherit_from` already merged
+    /// it against the parent at `box_builder` build time, so — mirroring
+    /// `inherit_from`'s own "child overrides parent" rule — filling this
+    /// clone's still-unset inheritable fields from it reproduces the same
+    /// outcome the box tree already computed, just where the painter and
+    /// the intrinsic measurer can see it.
+    pub fn with_cascaded_style(&self, resolved: &CssStyle) -> Self {
+        let mut clone = self.clone();
+        rustmotion_core::css::cascade::inherit_from(resolved, &mut clone.style);
+        clone
+    }
+}
 
 /// Eased progress (0..1) of unit `idx` at `time`, honouring the config's
 /// deterministic jitter.
