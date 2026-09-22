@@ -13,12 +13,14 @@
 //! by a command channel; position and state are published as atomics the UI
 //! reads without ever touching that thread.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use rustmotion::schema::ResolvedScenario;
+use rustmotion::schema::{AudioTrack, ResolvedScenario};
 
 enum Cmd {
     /// Interleaved stereo f32 for the whole scenario, and its sample rate.
@@ -143,6 +145,22 @@ fn channel_count() -> rodio::ChannelCount {
 
 fn sample_rate(rate: u32) -> rodio::SampleRate {
     rodio::SampleRate::new(rate).unwrap_or(rodio::SampleRate::new(44_100).unwrap())
+}
+
+/// Fingerprint of everything a mix depends on: every track's placement and
+/// volume envelope, plus the total duration silence pads out to. Serialised
+/// rather than hashed field by field so a field added to `AudioTrack` cannot
+/// silently drop out of the comparison. Two scenarios with the same
+/// fingerprint would remix to the same PCM, so [`use_hot_reload`](super::playback::use_hot_reload)
+/// calls [`prepare`] only when it changes — an edit to anything else (layout,
+/// text, color) must not re-decode and resample every track from scratch.
+pub fn audio_fingerprint(audio: &[AudioTrack], total_duration: f64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(audio)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    total_duration.to_bits().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Mix the scenario's audio in the background and hand it to the audio thread.
