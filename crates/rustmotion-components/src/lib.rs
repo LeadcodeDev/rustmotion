@@ -67,7 +67,8 @@ pub mod world_bitmap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use rustmotion_core::traits::{Animatable, Painter, Styled, Timed};
+use rustmotion_core::css::CssStyle;
+use rustmotion_core::traits::{Animatable, Painter, Styled, StyledMut, Timed};
 
 pub use arrow::Arrow;
 pub use audio_spectrum::AudioSpectrum;
@@ -615,8 +616,11 @@ impl Component {
         }
     }
 
-    /// Returns the Painter trait. All 51 components are migrated to the new
-    /// pipeline; the dispatcher always uses Painter::paint_content.
+    /// Returns the Painter trait. Every `Component` variant is migrated to
+    /// the new pipeline; the dispatcher always uses Painter::paint_content.
+    /// `tests/audit_ws_i.rs::cascaded_components_match_the_verified_set`
+    /// exercises every variant — not a count here, which would just go
+    /// stale again the next time a component is added.
     pub fn as_painter(&self) -> Option<&dyn Painter> {
         match self {
             Component::AudioSpectrum(c) => Some(c),
@@ -680,5 +684,135 @@ impl Component {
             Component::Arrow(c) => Some(c),
             Component::Connector(c) => Some(c),
         }
+    }
+
+    /// `Some(clone)` for the components whose `Painter`/intrinsic measurer
+    /// read inherited typography (`color`, `font-*`, `text-align`,
+    /// `white-space`, ...) off their own `style` field with `resolved`'s
+    /// twelve `cascade::inherit_from` properties folded in; `None` for every
+    /// other component, since the cascade cannot affect anything they draw.
+    /// `resolved` is the caller's own `CssStyle` post-cascade (`box_builder`
+    /// and `LegacyPaintDispatcher` both already have it on hand).
+    ///
+    /// The `true` set below was built by reading every component's own
+    /// `paint`/`paint_content` (and, where one exists, its `*Intrinsic`
+    /// measurer) for a direct `self.style.color`/`font_family`/`font_size`/
+    /// `font_weight`/`font_style` read with no cascade in between — not by
+    /// guessing from the component's name. Several read only `font-size`/
+    /// `font-family` and keep their own dedicated field for text colour
+    /// (`Kbd::text_color`, `PillNav::text_color`, `Terminal`'s theme) —
+    /// still members, since those two properties alone are enough for the
+    /// same defect: a `font-size` set on a card never reaching the child.
+    ///
+    /// Exhaustive on purpose, no wildcard arm: adding a new `Component`
+    /// variant is a compile error here until this match says whether it
+    /// belongs to that set — the same completeness `as_painter`/
+    /// `as_animatable`/`as_timed`/`as_styled` above already enforce for
+    /// their own questions, extended to this one.
+    /// `tests/audit_ws_i.rs::cascaded_components_match_the_verified_set`
+    /// pins the current membership directly, so a variant silently
+    /// reclassified here still fails a test even though the compiler has
+    /// nothing to object to.
+    ///
+    /// Builds the clone via a `serde_json` round-trip rather than `Clone`:
+    /// `Component`'s inner types are already `Serialize + Deserialize` (the
+    /// whole scenario tree is built that way), but not every one of them is
+    /// `Clone` — `Caption`'s `CaptionWord`/`CaptionStyle` (`rustmotion-core`)
+    /// are not, and adding it there is outside this crate. The round trip
+    /// costs more than a field-wise clone would, but only for the
+    /// components in the `Some` arm, and only once per box-tree build /
+    /// paint call — the same per-frame cost class `box_builder` already
+    /// pays elsewhere.
+    pub fn with_cascaded_style(&self, resolved: &CssStyle) -> Option<Component> {
+        let is_typographic = match self {
+            Component::Text(_)
+            | Component::GradientText(_)
+            | Component::Caption(_)
+            | Component::RichText(_)
+            | Component::Badge(_)
+            | Component::Callout(_)
+            | Component::Counter(_)
+            | Component::Divider(_)
+            | Component::Icon(_)
+            | Component::Kbd(_)
+            | Component::List(_)
+            | Component::Marquee(_)
+            | Component::Notification(_)
+            | Component::NumberWheel(_)
+            | Component::PillNav(_)
+            | Component::Table(_)
+            | Component::Terminal(_)
+            | Component::Tooltip(_) => true,
+            Component::AudioSpectrum(_)
+            | Component::Shape(_)
+            | Component::Image(_)
+            | Component::Svg(_)
+            | Component::Video(_)
+            | Component::Gif(_)
+            | Component::Cursor(_)
+            | Component::Codeblock(_)
+            | Component::Connector(_)
+            | Component::Avatar(_)
+            | Component::AvatarGroup(_)
+            | Component::Arrow(_)
+            | Component::Chart(_)
+            | Component::Comparison(_)
+            | Component::Countdown(_)
+            | Component::DotMap(_)
+            | Component::Gauge(_)
+            | Component::Heatmap(_)
+            | Component::Line(_)
+            | Component::Lottie(_)
+            | Component::Mockup(_)
+            | Component::Particle(_)
+            | Component::Progress(_)
+            | Component::QrCode(_)
+            | Component::SuccessCheck(_)
+            | Component::Pointer(_)
+            | Component::Rating(_)
+            | Component::Skeleton(_)
+            | Component::Slider(_)
+            | Component::Sparkline(_)
+            | Component::Stat(_)
+            | Component::Stepper(_)
+            | Component::Switch(_)
+            | Component::TagCloud(_)
+            | Component::Timeline(_)
+            | Component::Treemap(_)
+            | Component::Positioned(_)
+            | Component::Flex(_)
+            | Component::Grid(_)
+            | Component::Card(_)
+            | Component::Container(_)
+            | Component::Waveform(_) => false,
+        };
+        if !is_typographic {
+            return None;
+        }
+        let value = serde_json::to_value(self).ok()?;
+        let mut clone: Component = serde_json::from_value(value).ok()?;
+        let style = match &mut clone {
+            Component::Text(c) => c.style_config_mut(),
+            Component::GradientText(c) => c.style_config_mut(),
+            Component::Caption(c) => c.style_config_mut(),
+            Component::RichText(c) => c.style_config_mut(),
+            Component::Badge(c) => c.style_config_mut(),
+            Component::Callout(c) => c.style_config_mut(),
+            Component::Counter(c) => c.style_config_mut(),
+            Component::Divider(c) => c.style_config_mut(),
+            Component::Icon(c) => c.style_config_mut(),
+            Component::Kbd(c) => c.style_config_mut(),
+            Component::List(c) => c.style_config_mut(),
+            Component::Marquee(c) => c.style_config_mut(),
+            Component::Notification(c) => c.style_config_mut(),
+            Component::NumberWheel(c) => c.style_config_mut(),
+            Component::PillNav(c) => c.style_config_mut(),
+            Component::Table(c) => c.style_config_mut(),
+            Component::Terminal(c) => c.style_config_mut(),
+            Component::Tooltip(c) => c.style_config_mut(),
+            _ => unreachable!("classified as typographic by the match above"),
+        };
+        rustmotion_core::css::cascade::inherit_from(resolved, style);
+        Some(clone)
     }
 }

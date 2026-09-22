@@ -2,7 +2,7 @@
 //! taffy-laid-out `BoxNode` tree back to component-typed `Painter` impls.
 //!
 //! Naming kept as "legacy" for now to avoid churn in callers; this is the
-//! sole dispatcher in use since all 51 components implement `Painter`.
+//! sole dispatcher in use since every component implements `Painter`.
 //!
 //! Containers (Card / Flex / Grid / Container / Positioned) are intentionally
 //! skipped: paint_pass already paints their box decorations and recurses into
@@ -12,18 +12,18 @@
 //! `dispatch` receives the node's cascaded `CssStyle` (`css` below) from
 //! `paint_pass`, but `Painter::paint_content` has no `CssStyle` parameter —
 //! its signature is frozen — and every painter reads typography off its own
-//! `self.style` instead. `Text` is the one component wired to see the
-//! cascade anyway: `Text::with_cascaded_style` rebuilds it with `css`
-//! folded into its own `style` field before painting, the same technique
-//! `box_builder::component_intrinsic` uses for `TextIntrinsic` so measure
-//! and paint agree.
+//! `self.style` instead. `Component::with_cascaded_style` rebuilds the
+//! subset of components that read inherited typography off their own style
+//! with `css` folded in before painting, the same call
+//! `box_builder::component_intrinsic` makes for the intrinsic measurers so
+//! measure and paint agree.
 
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::NodeId;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::paint_pass::{PaintDispatcher, PaintFrame};
-use rustmotion_core::traits::{PaintCtx, Painter};
+use rustmotion_core::traits::PaintCtx;
 use skia_safe::Canvas;
 
 use crate::{ChildComponent, Component};
@@ -125,7 +125,9 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             return;
         }
 
-        let Some(painter) = child.component.as_painter() else {
+        let cascaded_component = child.component.with_cascaded_style(css);
+        let effective_component = cascaded_component.as_ref().unwrap_or(&child.component);
+        let Some(painter) = effective_component.as_painter() else {
             return;
         };
 
@@ -175,12 +177,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             video_height: frame.video_height,
             stagger_offset: stagger_delay,
         };
-        if let Component::Text(t) = &child.component {
-            t.with_cascaded_style(css)
-                .paint_content(canvas, &local, &props, &paint_ctx);
-        } else {
-            painter.paint_content(canvas, &local, &props, &paint_ctx);
-        }
+        painter.paint_content(canvas, &local, &props, &paint_ctx);
 
         canvas.restore();
     }
