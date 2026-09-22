@@ -53,7 +53,7 @@
 use std::collections::HashSet;
 
 use rustmotion::components::box_builder::{
-    build_scene_from_refs, component_kind, effective_effects, BuildAnimationCtx,
+    build_scene_from_refs, effective_effects, BuildAnimationCtx,
 };
 use rustmotion::components::intrinsic::{
     CaptionIntrinsic, CodeblockIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic,
@@ -300,14 +300,22 @@ fn walk(
                 check_unwrappable_text(
                     &child.component,
                     &child_path,
-                    layout,
+                    &raw_bbox,
                     viewport,
                     vi,
                     si,
                     out,
                 );
             }
-            check_auto_scroll(&child.component, &child_path, layout, viewport, vi, si, out);
+            check_auto_scroll(
+                &child.component,
+                &child_path,
+                &raw_bbox,
+                viewport,
+                vi,
+                si,
+                out,
+            );
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
@@ -783,32 +791,10 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
     }
 }
 
-/// natural (unwrapped) width vs the node's own CONTENT box, not its
-/// border box. `LegacyPaintDispatcher::dispatch` hands every non-codeblock
-/// painter (`Text`/`GradientText`/`Caption` included) a synthetic
-/// `BoxLayout` built from `layout.content_box()`, translated to the
-/// content-box origin — so the painter wraps and draws inside the content
-/// box, not the raw taffy layout box this walker reads. Comparing against
-/// the border box (as this used to) under-reports by exactly
-/// `padding.left + padding.right + border.left + border.right`, mirroring
-/// the same fix `check_content_overflows_box` already applies for the
-/// wrapped case.
-///
-/// Measured via the same cosmic-text–backed intrinsic the layout engine
-/// uses. Width is bounded by the node's own resolved content-box width
-/// (not `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
-/// see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic` arms
-/// and `CssStyle::text_autofit`'s doc comment. For a non-autofit node this
-/// changes nothing: `TextIntrinsic::measure` only reads the width
-/// constraint at all when `text_autofit` is on (see its early return), and
-/// `nowrap` already forces a single unwrapped line here regardless of what
-/// width is offered — so `natural_w` below is "natural" in the non-autofit
-/// case exactly as before, and "shrunk to fit, if that's enough" when the
-/// author declared it.
 fn check_unwrappable_text(
     component: &Component,
     path: &str,
-    layout: &BoxLayout,
+    bbox: &BBox,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -820,12 +806,22 @@ fn check_unwrappable_text(
     if !nowrap {
         return;
     }
-    let (cx, cy, cw, ch) = layout.content_box();
+    // Measure via the same cosmic-text–backed intrinsic the layout engine
+    // uses. Width is bounded by the node's own resolved `bbox.w` (not
+    // `MaxContent`) so a `text-autofit: true` node can shrink to fit it —
+    // see `measurer_and_nowrap`'s `TextIntrinsic`/`GradientTextIntrinsic`
+    // arms and `CssStyle::text_autofit`'s doc comment. For a non-autofit
+    // node this changes nothing: `TextIntrinsic::measure` only reads the
+    // width constraint at all when `text_autofit` is on (see its early
+    // return), and `nowrap` already forces a single unwrapped line here
+    // regardless of what width is offered — so `natural_w` below is
+    // "natural" in the non-autofit case exactly as before, and "shrunk to
+    // fit, if that's enough" when the author declared it.
     let (natural_w, _) = intrinsic.measure(
         (None, None),
-        (AvailableSpace::Definite(cw), AvailableSpace::MaxContent),
+        (AvailableSpace::Definite(bbox.w), AvailableSpace::MaxContent),
     );
-    if natural_w > cw + 0.5 {
+    if natural_w > bbox.w + 0.5 {
         let kind = component_kind(component);
         out.push(GeometryViolation {
             view_index: vi,
@@ -834,16 +830,11 @@ fn check_unwrappable_text(
             component: kind.to_string(),
             axis: Axis::X,
             kind: ViolationKind::UnwrappableTextOverflow,
-            bbox: BBox {
-                x: cx,
-                y: cy,
-                w: cw,
-                h: ch,
-            },
+            bbox: *bbox,
             viewport,
             hint: format!(
                 "{kind} natural width is {natural_w:.0}px but only {:.0}px available — remove style.white-space: nowrap (or set it to normal) so it can wrap, or reduce style.font-size",
-                cw
+                bbox.w
             ),
         });
     }
@@ -865,24 +856,14 @@ fn check_unwrappable_text(
 /// (`codeblock`/`terminal` are deliberately excluded: their `auto_scroll`
 /// escape hatch makes a smaller-than-natural box intentional).
 ///
-/// Complementary to `check_unwrappable_text`, not overlapping with it on the
-/// WIDTH axis: that one covers `white-space: nowrap`/`pre` (single unwrapped
-/// line, measured at natural/unconstrained width). This function covers the
-/// default wrapping case's width — measured at the width the box actually
-/// *has* (`content_box().2`, unconstrained height) so it also catches a
-/// single unbreakable word/token/URL that's wider than the box even though
-/// wrap is on (wrapping can't break within a word), plus the width axis
-/// stays consistent with what will actually be painted.
-///
-/// the HEIGHT axis is this function's job regardless of `nowrap` — a
-/// nowrap node used to return here before measuring height at all, so a
-/// single unwrapped line taller than its box validated clean. Re-measuring
-/// nowrap's WIDTH at a constrained space would wrap text that actually
-/// paints as one (too-wide) line, which is exactly why `check_unwrappable_
-/// text` owns that axis instead — but a single line's height is exactly one
-/// `line_height`, independent of any width constraint, so it's measured at
-/// `(MaxContent, Definite(ch))` and reported on `Axis::Y` only, leaving
-/// `Axis::X` to `check_unwrappable_text`.
+/// Complementary to `check_unwrappable_text`, not overlapping with it:
+/// that one covers `white-space: nowrap`/`pre` (single unwrapped line, width
+/// only, measured at natural/unconstrained width). This one covers the
+/// default wrapping case — measured at the width the box actually *has*
+/// (`content_box().2`, unconstrained height) so it also catches a single
+/// unbreakable word/token/URL that's wider than the box even though wrap is
+/// on (wrapping can't break within a word), plus the width axis stays
+/// consistent with what will actually be painted.
 fn check_content_overflows_box(
     component: &Component,
     path: &str,
@@ -895,41 +876,16 @@ fn check_content_overflows_box(
     let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
         return;
     };
-
-    let (cx, cy, cw, ch) = layout.content_box();
-    if cw <= 0.0 || ch <= 0.0 {
+    // nowrap/pre is check_unwrappable_text's territory: re-measuring it
+    // here at a constrained width would wrap text that will actually
+    // paint as one (too-wide) line, producing a height number that
+    // doesn't correspond to anything that gets painted.
+    if nowrap {
         return;
     }
 
-    if nowrap {
-        let (_, natural_h) = intrinsic.measure(
-            (None, None),
-            (AvailableSpace::MaxContent, AvailableSpace::Definite(ch)),
-        );
-        let eps = 0.5;
-        if natural_h <= ch + eps {
-            return;
-        }
-        let kind = component_kind(component);
-        out.push(GeometryViolation {
-            view_index: vi,
-            scene_index: si,
-            path: path.to_string(),
-            component: kind.to_string(),
-            axis: Axis::Y,
-            kind: ViolationKind::ContentOverflowsBox,
-            bbox: BBox {
-                x: cx,
-                y: cy,
-                w: cw,
-                h: ch,
-            },
-            viewport,
-            hint: format!(
-                "{kind} line is {natural_h:.0}px tall but its box is only {:.0}px tall — increase style.height (or the parent's), or reduce style.font-size",
-                ch
-            ),
-        });
+    let (cx, cy, cw, ch) = layout.content_box();
+    if cw <= 0.0 || ch <= 0.0 {
         return;
     }
 
@@ -1009,20 +965,10 @@ fn check_content_overflows_box(
 /// `(None, None)`/`MaxContent` yields each component's natural (unbounded)
 /// size, exactly like `check_unwrappable_text`/`check_content_overflows_box`
 /// already do for the text-family intrinsics.
-///
-/// the codeblock and terminal arms compare against different boxes,
-/// on purpose. `LegacyPaintDispatcher::is_self_padding` matches only
-/// `Component::Codeblock` — a codeblock is handed the raw (border) layout
-/// box and paints its own padding inside it (`compute_code_dimensions`
-/// already bakes `style.padding_px()` into `natural_h`, so comparing against
-/// the border box is the byte-for-byte-correct pairing). Every other
-/// painter, terminal included, is handed `layout.content_box()` instead —
-/// so the terminal arm compares against that, not the border box, or it
-/// under-reports by exactly the node's own padding.
 fn check_auto_scroll(
     component: &Component,
     path: &str,
-    layout: &BoxLayout,
+    bbox: &BBox,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -1033,7 +979,6 @@ fn check_auto_scroll(
         Component::Codeblock(cb) if !cb.auto_scroll => {
             let (_, natural_h) =
                 CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
-            let bbox = bbox_of(layout);
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -1042,7 +987,7 @@ fn check_auto_scroll(
                     component: "codeblock".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox,
+                    bbox: *bbox,
                     viewport,
                     hint: format!(
                         "codeblock content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or shorten code",
@@ -1054,8 +999,7 @@ fn check_auto_scroll(
         Component::Terminal(t) if !t.auto_scroll => {
             let (_, natural_h) =
                 TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
-            let (cx, cy, cw, ch) = layout.content_box();
-            if natural_h > ch + 0.5 {
+            if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
                     scene_index: si,
@@ -1063,16 +1007,11 @@ fn check_auto_scroll(
                     component: "terminal".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: BBox {
-                        x: cx,
-                        y: cy,
-                        w: cw,
-                        h: ch,
-                    },
+                    bbox: *bbox,
                     viewport,
                     hint: format!(
                         "terminal content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or remove lines",
-                        natural_h, ch
+                        natural_h, bbox.h
                     ),
                 });
             }
@@ -1252,6 +1191,71 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
             vec![("badge", b.style.font_size_px_or(default_fs))]
         }
         _ => vec![],
+    }
+}
+
+fn component_kind(c: &Component) -> &'static str {
+    match c {
+        Component::Text(_) => "text",
+        Component::Shape(_) => "shape",
+        Component::Image(_) => "image",
+        Component::Icon(_) => "icon",
+        Component::Svg(_) => "svg",
+        Component::Video(_) => "video",
+        Component::Gif(_) => "gif",
+        Component::Counter(_) => "counter",
+        Component::Cursor(_) => "cursor",
+        Component::Pointer(_) => "pointer",
+        Component::NumberWheel(_) => "number_wheel",
+        Component::SuccessCheck(_) => "success_check",
+        Component::Caption(_) => "caption",
+        Component::Codeblock(_) => "codeblock",
+        Component::Avatar(_) => "avatar",
+        Component::AvatarGroup(_) => "avatar_group",
+        Component::Arrow(_) => "arrow",
+        Component::Connector(_) => "connector",
+        Component::Badge(_) => "badge",
+        Component::Callout(_) => "callout",
+        Component::Chart(_) => "chart",
+        Component::Comparison(_) => "comparison",
+        Component::Countdown(_) => "countdown",
+        Component::Divider(_) => "divider",
+        Component::DotMap(_) => "dot_map",
+        Component::Gauge(_) => "gauge",
+        Component::GradientText(_) => "gradient_text",
+        Component::Heatmap(_) => "heatmap",
+        Component::Kbd(_) => "kbd",
+        Component::Line(_) => "line",
+        Component::List(_) => "list",
+        Component::Lottie(_) => "lottie",
+        Component::Marquee(_) => "marquee",
+        Component::Mockup(_) => "mockup",
+        Component::Notification(_) => "notification",
+        Component::Particle(_) => "particle",
+        Component::PillNav(_) => "pill_nav",
+        Component::Progress(_) => "progress",
+        Component::QrCode(_) => "qrcode",
+        Component::Rating(_) => "rating",
+        Component::Skeleton(_) => "skeleton",
+        Component::Slider(_) => "slider",
+        Component::Sparkline(_) => "sparkline",
+        Component::Stat(_) => "stat",
+        Component::Stepper(_) => "stepper",
+        Component::Switch(_) => "switch",
+        Component::RichText(_) => "rich_text",
+        Component::Table(_) => "table",
+        Component::TagCloud(_) => "tag_cloud",
+        Component::Terminal(_) => "terminal",
+        Component::Timeline(_) => "timeline",
+        Component::Tooltip(_) => "tooltip",
+        Component::Treemap(_) => "treemap",
+        Component::Positioned(_) => "positioned",
+        Component::Flex(_) => "flex",
+        Component::Grid(_) => "grid",
+        Component::Card(_) => "card",
+        Component::Container(_) => "container",
+        Component::AudioSpectrum(_) => "audio_spectrum",
+        Component::Waveform(_) => "waveform",
     }
 }
 
