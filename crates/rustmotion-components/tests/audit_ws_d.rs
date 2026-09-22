@@ -186,3 +186,98 @@ fn fill_fit_still_stretches_to_the_whole_box() {
         "fill must cover every corner"
     );
 }
+
+// ─── `trim_end` was honoured only on the extracted audio ───────────────────
+
+/// Frames beyond `trim_end` sit in the cache (simulating a preextraction
+/// window, or a direct extraction, wider than the intended trim), so the
+/// picture path must never pick one of them once `trim_end` is set: past
+/// `trim_end`, playback holds on the last in-window frame. Before the fix,
+/// `source_time` had no upper bound at all — querying past `trim_end` on a
+/// cache/source that extends further would draw whatever sits further
+/// along the source, not the frame at the trim boundary.
+#[test]
+fn trim_end_clamps_playback_instead_of_running_past_it() {
+    let src = unique_src("trimend");
+    let cache_key = format!("{src}:20x20");
+    let frames = vec![
+        (0.0, solid_rgba([255, 0, 0, 255], 2, 2), 2, 2),
+        (0.5, solid_rgba([0, 0, 255, 255], 2, 2), 2, 2),
+        (1.0, solid_rgba([0, 255, 0, 255], 2, 2), 2, 2),
+        (1.5, solid_rgba([128, 0, 128, 255], 2, 2), 2, 2),
+        (2.0, solid_rgba([255, 165, 0, 255], 2, 2), 2, 2),
+    ];
+    video_frame_cache().insert(cache_key, Arc::new(frames));
+
+    let v = video(&src, ImageFit::Fill, Some(0.0), Some(1.0), None);
+    let ctx = ctx_at(1.8);
+    let pixels = paint_and_read(&v, &ctx, 20, 20, false);
+
+    assert_eq!(
+        px(&pixels, 20, 10, 10),
+        [0, 255, 0, 255],
+        "past trim_end, playback must clamp to the frame at trim_end (green), not the frame \
+         nearest the unclamped query time (orange)"
+    );
+}
+
+// ─── `loop_video` made neither the picture nor the audio loop ─────────────
+
+/// Cache frames only cover `[0.0, 1.0)`; `trim_end: Some(1.0)` gives
+/// `loop_video` a window to wrap within without needing a real source file
+/// to probe. Querying at `ctx.time = 2.1` (raw source time 2.1s, i.e. "2
+/// full loops plus 0.1s") must land near 0.1s once wrapped — nearest to
+/// that among `{0.0, 0.25, 0.5, 0.75}` is red. Before this fix, the same
+/// query — with the trim-end clamp from the previous test already in place
+/// but no loop branch yet — clamped to `min(2.1, 1.0) = 1.0`, whose nearest
+/// cached frame is yellow: a clearly different pixel, which is what proves
+/// this test is exercising the loop path and not being masked by the clamp.
+#[test]
+fn loop_video_wraps_playback_within_the_trim_window() {
+    let src = unique_src("loop");
+    let cache_key = format!("{src}:20x20");
+    let frames = vec![
+        (0.0, solid_rgba([255, 0, 0, 255], 2, 2), 2, 2),
+        (0.25, solid_rgba([0, 255, 0, 255], 2, 2), 2, 2),
+        (0.5, solid_rgba([0, 0, 255, 255], 2, 2), 2, 2),
+        (0.75, solid_rgba([255, 255, 0, 255], 2, 2), 2, 2),
+    ];
+    video_frame_cache().insert(cache_key, Arc::new(frames));
+
+    let v = video(&src, ImageFit::Fill, Some(0.0), Some(1.0), Some(true));
+    let ctx = ctx_at(2.1);
+    let pixels = paint_and_read(&v, &ctx, 20, 20, false);
+
+    assert_eq!(
+        px(&pixels, 20, 10, 10),
+        [255, 0, 0, 255],
+        "looping must wrap the query time back into the window (nearest: red), not clamp to \
+         the window's own end (nearest: yellow)"
+    );
+}
+
+/// Without `loop_video`, a `trim_end`-bounded video must still clamp
+/// (unaffected by the loop branch existing) rather than wrap — the same
+/// scenario as the wrap test above, minus the flag.
+#[test]
+fn without_loop_video_playback_still_clamps_not_wraps() {
+    let src = unique_src("no-loop");
+    let cache_key = format!("{src}:20x20");
+    let frames = vec![
+        (0.0, solid_rgba([255, 0, 0, 255], 2, 2), 2, 2),
+        (0.25, solid_rgba([0, 255, 0, 255], 2, 2), 2, 2),
+        (0.5, solid_rgba([0, 0, 255, 255], 2, 2), 2, 2),
+        (0.75, solid_rgba([255, 255, 0, 255], 2, 2), 2, 2),
+    ];
+    video_frame_cache().insert(cache_key, Arc::new(frames));
+
+    let v = video(&src, ImageFit::Fill, Some(0.0), Some(1.0), None);
+    let ctx = ctx_at(2.1);
+    let pixels = paint_and_read(&v, &ctx, 20, 20, false);
+
+    assert_eq!(
+        px(&pixels, 20, 10, 10),
+        [255, 255, 0, 255],
+        "no loop_video: must clamp to the window's end (nearest: yellow), not wrap"
+    );
+}
