@@ -28,10 +28,16 @@ pub fn coerce_value(raw: &str) -> Value {
     Value::from(t.to_string())
 }
 
-/// Parse an inline `style="a:b; c:d"` declaration list into a JSON style object.
-/// `grid-template-columns`/`-rows` are split into string arrays; all other
-/// properties pass through their kebab-case name with a coerced value.
-pub fn parse_inline_style(decls: &str) -> Map<String, Value> {
+/// Parse an inline `style="a:b; c:d"` declaration list into a JSON style
+/// object. `padding`/`margin`/`border-radius` accept the CSS 1/2/3/4-value
+/// box shorthand, expanded into the `{top,right,bottom,left}` /
+/// `{top-left,top-right,bottom-right,bottom-left}` object the core CSS
+/// engine's `Edges`/`BorderRadius` types deserialize. `grid-template-columns`/
+/// `-rows` accept a track list, `repeat()`/`minmax()` included. Any other
+/// property whose value is more than one top-level (paren-aware) token is
+/// refused rather than passed through as an opaque string the core length
+/// parser cannot read (see [`HtmlError::UnsupportedStyleShorthand`]).
+pub fn parse_inline_style(decls: &str) -> Result<Map<String, Value>, HtmlError> {
     let mut map = Map::new();
     for decl in decls.split(';') {
         let decl = decl.trim();
@@ -43,17 +49,198 @@ pub fn parse_inline_style(decls: &str) -> Map<String, Value> {
         };
         let prop = prop.trim().to_string();
         let value = value.trim();
-        if prop == "grid-template-columns" || prop == "grid-template-rows" {
-            let arr: Vec<Value> = value
-                .split_whitespace()
-                .map(|t| Value::from(t.to_string()))
-                .collect();
-            map.insert(prop, Value::Array(arr));
-        } else {
-            map.insert(prop, coerce_value(value));
+        match prop.as_str() {
+            "grid-template-columns" | "grid-template-rows" => {
+                map.insert(
+                    prop.clone(),
+                    Value::Array(parse_grid_template(&prop, value)?),
+                );
+            }
+            "padding" | "margin" => {
+                let tokens = split_top_level_tokens(value);
+                match tokens.len() {
+                    1 => {
+                        map.insert(prop, coerce_value(value));
+                    }
+                    2..=4 => {
+                        map.insert(prop, expand_box_edges(&tokens));
+                    }
+                    _ => {
+                        return Err(HtmlError::UnsupportedStyleShorthand {
+                            prop,
+                            value: value.to_string(),
+                        })
+                    }
+                }
+            }
+            "border-radius" => {
+                let tokens = split_top_level_tokens(value);
+                match tokens.len() {
+                    1 => {
+                        map.insert(prop, coerce_value(value));
+                    }
+                    2..=4 => {
+                        map.insert(prop, expand_border_radius_corners(&tokens));
+                    }
+                    _ => {
+                        return Err(HtmlError::UnsupportedStyleShorthand {
+                            prop,
+                            value: value.to_string(),
+                        })
+                    }
+                }
+            }
+            _ => {
+                if split_top_level_tokens(value).len() > 1 {
+                    return Err(HtmlError::UnsupportedStyleShorthand {
+                        prop,
+                        value: value.to_string(),
+                    });
+                }
+                map.insert(prop, coerce_value(value));
+            }
         }
     }
-    map
+    Ok(map)
+}
+
+/// Split a CSS value on top-level whitespace: whitespace inside a `(...)`
+/// span (e.g. the argument list of `rgba(0, 0, 0, 0.5)` or `repeat(3, 1fr)`)
+/// does not count as a separator, so a single functional-notation value
+/// stays one token while a genuine multi-value shorthand (`24px 48px`)
+/// splits into its parts.
+fn split_top_level_tokens(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut depth = 0i32;
+    let mut token_start: Option<usize> = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if c.is_whitespace() && depth == 0 {
+            if let Some(start) = token_start.take() {
+                tokens.push(&s[start..i]);
+            }
+        } else if token_start.is_none() {
+            token_start = Some(i);
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push(&s[start..]);
+    }
+    tokens
+}
+
+/// Expand a 2/3/4-value `padding`/`margin` shorthand into the
+/// `{top,right,bottom,left}` object `Edges::Sides` deserializes, following
+/// the standard CSS clockwise-from-top expansion rule.
+fn expand_box_edges(tokens: &[&str]) -> Value {
+    let (top, right, bottom, left) = match tokens {
+        [a, b] => (*a, *b, *a, *b),
+        [a, b, c] => (*a, *b, *c, *b),
+        [a, b, c, d] => (*a, *b, *c, *d),
+        _ => unreachable!("caller only passes 2..=4 tokens"),
+    };
+    let mut edges = Map::new();
+    edges.insert("top".into(), coerce_value(top));
+    edges.insert("right".into(), coerce_value(right));
+    edges.insert("bottom".into(), coerce_value(bottom));
+    edges.insert("left".into(), coerce_value(left));
+    Value::Object(edges)
+}
+
+/// Expand a 2/3/4-value `border-radius` shorthand into the
+/// `{top-left,top-right,bottom-right,bottom-left}` object
+/// `BorderRadius::Corners` deserializes, following the standard CSS
+/// clockwise-from-top-left expansion rule (a different starting corner than
+/// [`expand_box_edges`], per the CSS box-shorthand spec).
+fn expand_border_radius_corners(tokens: &[&str]) -> Value {
+    let (top_left, top_right, bottom_right, bottom_left) = match tokens {
+        [a, b] => (*a, *b, *a, *b),
+        [a, b, c] => (*a, *b, *c, *b),
+        [a, b, c, d] => (*a, *b, *c, *d),
+        _ => unreachable!("caller only passes 2..=4 tokens"),
+    };
+    let mut corners = Map::new();
+    corners.insert("top-left".into(), coerce_value(top_left));
+    corners.insert("top-right".into(), coerce_value(top_right));
+    corners.insert("bottom-right".into(), coerce_value(bottom_right));
+    corners.insert("bottom-left".into(), coerce_value(bottom_left));
+    Value::Object(corners)
+}
+
+/// Parse a `grid-template-columns`/`-rows` track list into the flat
+/// `Vec<GridTrack>` JSON the core CSS engine expects: `repeat(n, track)`
+/// expands into `n` copies of `track`, `minmax(min, max)` becomes
+/// `{"min":..,"max":..}`, and every other token passes through
+/// [`coerce_value`] unchanged (a bare number for `fr`, a keyword string, or
+/// an explicit length).
+fn parse_grid_template(prop: &str, value: &str) -> Result<Vec<Value>, HtmlError> {
+    let mut out = Vec::new();
+    for token in split_top_level_tokens(value) {
+        push_grid_track(prop, token, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn push_grid_track(prop: &str, token: &str, out: &mut Vec<Value>) -> Result<(), HtmlError> {
+    if let Some(inner) = token
+        .strip_prefix("repeat(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let (count_str, pattern) =
+            inner
+                .split_once(',')
+                .ok_or_else(|| HtmlError::UnsupportedStyleShorthand {
+                    prop: prop.to_string(),
+                    value: token.to_string(),
+                })?;
+        let count: usize =
+            count_str
+                .trim()
+                .parse()
+                .map_err(|_| HtmlError::UnsupportedStyleShorthand {
+                    prop: prop.to_string(),
+                    value: token.to_string(),
+                })?;
+        let pattern_tokens = split_top_level_tokens(pattern.trim());
+        if pattern_tokens.is_empty() {
+            return Err(HtmlError::UnsupportedStyleShorthand {
+                prop: prop.to_string(),
+                value: token.to_string(),
+            });
+        }
+        for _ in 0..count {
+            for t in &pattern_tokens {
+                out.push(parse_single_grid_track(prop, t)?);
+            }
+        }
+        return Ok(());
+    }
+    out.push(parse_single_grid_track(prop, token)?);
+    Ok(())
+}
+
+fn parse_single_grid_track(prop: &str, token: &str) -> Result<Value, HtmlError> {
+    if let Some(inner) = token
+        .strip_prefix("minmax(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let (min_s, max_s) =
+            inner
+                .split_once(',')
+                .ok_or_else(|| HtmlError::UnsupportedStyleShorthand {
+                    prop: prop.to_string(),
+                    value: token.to_string(),
+                })?;
+        let mut minmax = Map::new();
+        minmax.insert("min".into(), coerce_value(min_s.trim()));
+        minmax.insert("max".into(), coerce_value(max_s.trim()));
+        return Ok(Value::Object(minmax));
+    }
+    Ok(coerce_value(token))
 }
 
 /// Parse an `anim` attribute into the `style.animation` JSON array.
@@ -187,7 +374,7 @@ mod tests {
 
     #[test]
     fn parses_declarations_into_style_object() {
-        let m = parse_inline_style("font-size:96px; color:#fff; text-align:center");
+        let m = parse_inline_style("font-size:96px; color:#fff; text-align:center").unwrap();
         assert_eq!(m.get("font-size"), Some(&json!(96)));
         assert_eq!(m.get("color"), Some(&json!("#fff")));
         assert_eq!(m.get("text-align"), Some(&json!("center")));
@@ -195,7 +382,7 @@ mod tests {
 
     #[test]
     fn grid_template_becomes_string_array() {
-        let m = parse_inline_style("grid-template-columns: 1fr 1fr");
+        let m = parse_inline_style("grid-template-columns: 1fr 1fr").unwrap();
         assert_eq!(m.get("grid-template-columns"), Some(&json!(["1fr", "1fr"])));
     }
 
