@@ -6,7 +6,7 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    extract_video_frame, find_closest_frame, video_frame_cache,
+    extract_video_frame, find_closest_frame, probe_video_metadata, video_frame_cache,
 };
 use rustmotion_core::schema::{ImageFit, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -92,6 +92,70 @@ fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &
     }
 }
 
+/// The source clip's own duration, probed via `ffprobe` and memoized per
+/// `src` for the life of the process — `effective_source_time` below is
+/// called once per painted frame, and re-probing on every one of them would
+/// mean one subprocess spawn per frame for any looping video with no
+/// explicit `trim_end`. `None` on a probe failure (no ffprobe on `PATH`, or
+/// the source can't be read) is memoized too, so a broken source fails fast
+/// on every subsequent frame instead of retrying the same failing probe.
+fn video_duration_secs(src: &str) -> Option<f64> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(src)
+    {
+        return *hit;
+    }
+    let probed = probe_video_metadata(src).ok().map(|p| p.duration_secs);
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(src.to_string(), probed);
+    probed
+}
+
+impl Video {
+    /// The timestamp to sample from the source clip for a given scene time.
+    ///
+    /// Honours `trim_end` on the picture the same way the audio track
+    /// already does: past `trim_end`, playback holds on the last in-window
+    /// frame instead of continuing to draw whatever the source contains
+    /// beyond the intended trim point. When `loop_video` is set, playback
+    /// wraps within `[trim_start, trim_end)` instead of clamping — falling
+    /// back to the source's own probed duration as the loop window only
+    /// when `trim_end` is absent, since that is the only case where the
+    /// window cannot otherwise be known at all.
+    fn effective_source_time(&self, ctx_time: f64) -> f64 {
+        let rate = self.playback_rate.unwrap_or(1.0);
+        let trim_start = self.trim_start.unwrap_or(0.0);
+        let raw = trim_start + ctx_time * rate;
+
+        if let Some(end) = self.trim_end {
+            if end > trim_start {
+                return if self.loop_video == Some(true) {
+                    trim_start + (raw - trim_start).rem_euclid(end - trim_start)
+                } else {
+                    raw.min(end)
+                };
+            }
+        } else if self.loop_video == Some(true) {
+            if let Some(duration) = video_duration_secs(&self.src) {
+                if duration > trim_start {
+                    return trim_start + (raw - trim_start).rem_euclid(duration - trim_start);
+                }
+            }
+        }
+
+        raw
+    }
+}
+
 impl Painter for Video {
     fn paint_content(
         &self,
@@ -100,9 +164,7 @@ impl Painter for Video {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let rate = self.playback_rate.unwrap_or(1.0);
-        let trim_start = self.trim_start.unwrap_or(0.0);
-        let source_time = trim_start + ctx.time * rate;
+        let source_time = self.effective_source_time(ctx.time);
         let width = layout.width as u32;
         let height = layout.height as u32;
 
