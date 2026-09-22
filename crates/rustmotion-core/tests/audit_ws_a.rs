@@ -1,5 +1,5 @@
 //! Regression tests for the workstream A (animation & paint) audit findings
-//! tracked in issue #220.
+//! tracked in issue #220: RM-01, RM-09, RM-10, RM-37.
 
 use rustmotion_core::css::style::{
     Background, BackgroundLayer, BoxShadow, Color as CssColor, CssStyle, Display, FlexDirection,
@@ -72,7 +72,7 @@ fn probe(buf: &[u8], w: u32, x: usize, y: usize) -> (u8, u8, u8) {
     (buf[i], buf[i + 1], buf[i + 2])
 }
 
-// ---- opacity layer must not clip the node's own outset box-shadow ----
+// ---- RM-01: opacity layer must not clip the node's own outset box-shadow ----
 
 fn card_with_shadow(opacity: Option<f32>) -> BoxNode {
     let css = CssStyle {
@@ -134,7 +134,7 @@ fn opacity_layer_does_not_clip_own_outset_box_shadow() {
     );
 }
 
-// ---- underdamped spring step response must start from rest ----
+// ---- RM-09: underdamped spring step response must start from rest ----
 
 fn spring_config(damping: f64, stiffness: f64, mass: f64) -> SpringConfig {
     SpringConfig {
@@ -192,7 +192,7 @@ fn underdamped_spring_matches_the_analytic_closed_form() {
     }
 }
 
-// ---- linear-gradient(180deg, ...) must put the first stop at the top ----
+// ---- RM-10: linear-gradient(180deg, ...) must put the first stop at the top ----
 
 fn gradient_card(w: f32, h: f32, angle: f32) -> BoxNode {
     let css = CssStyle {
@@ -243,7 +243,7 @@ fn linear_gradient_180deg_puts_the_first_stop_at_the_top() {
     );
 }
 
-// ---- `spring_settle_time` must not be rescanned on every `spring_value` call ----
+// ---- RM-37: `spring_settle_time` must not be rescanned on every `spring_value` call ----
 
 #[test]
 fn spring_settle_time_is_memoized_not_rescanned_every_call() {

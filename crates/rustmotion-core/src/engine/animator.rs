@@ -2867,7 +2867,7 @@ mod spring_duration_tests {
         // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.027616 — 2.76%
         // past the target, well outside any reasonable rest_threshold
         // (default 0.5%). An author asking this spring to "finish at 0.8s"
-        // got a value nowhere near rest. Reference recomputed when the
+        // got a value nowhere near rest. Reference recomputed for RM-09
         // (issue #220): the solver's underdamped branch fed the wrong
         // argument to its sine term, so this captured value moved when that
         // was corrected.
