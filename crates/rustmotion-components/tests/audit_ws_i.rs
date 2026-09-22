@@ -1,5 +1,4 @@
-//! Regression tests for workstream I of the 2026-09 audit (components and
-//! the CSS cascade).
+//! Regression tests for components and the CSS cascade:
 //!
 //! - `apply_intrinsic_overrides`'s default-size branches resolved
 //!   `font-size` through the context-free `font_size_px_or`, which returns
@@ -8,8 +7,8 @@
 //! - `cascade::inherit_from` computes inherited `color`/`font-*` but
 //!   nothing on the render path ever reads the result — every painter reads
 //!   its own component's un-cascaded `style` field instead.
-//! - `TableIntrinsic` measures content-fitted per-column widths, but
-//!   the painter splits the box evenly across columns regardless.
+//! - `TableIntrinsic` measures content-fitted per-column widths, but the
+//!   painter splits the box evenly across columns regardless.
 
 use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
 use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
@@ -30,7 +29,7 @@ fn single_child_scene(json: serde_json::Value) -> ChildComponent {
     }
 }
 
-// ─── default sizes must resolve against the node's font-size ───────────────
+// ─── relative font-size on box_builder's default-size branches ────────────
 
 #[test]
 fn marquee_with_relative_font_size_gets_a_positive_height() {
@@ -68,10 +67,10 @@ fn marquee_with_relative_font_size_gets_a_positive_height() {
     );
 }
 
-// ─── ──────────────────────────────────────────────────────────────────
+// ─── CSS cascade reaching the painter and the intrinsic measurer ──────────
 
-const RM07_W: i32 = 600;
-const RM07_H: i32 = 500;
+const CASCADE_SCENE_W: i32 = 600;
+const CASCADE_SCENE_H: i32 = 500;
 
 struct PaintedScene {
     pixels: Vec<u8>,
@@ -84,7 +83,7 @@ fn paint_card_with_text_child(card_json: serde_json::Value) -> PaintedScene {
 
     let built = build_scene_with_anim(
         &children,
-        (RM07_W as f32, RM07_H as f32),
+        (CASCADE_SCENE_W as f32, CASCADE_SCENE_H as f32),
         BuildAnimationCtx {
             time: 0.0,
             scenario_time: 0.0,
@@ -94,14 +93,14 @@ fn paint_card_with_text_child(card_json: serde_json::Value) -> PaintedScene {
     );
     let layout = run_layout(
         &built.root,
-        (RM07_W as f32, RM07_H as f32),
+        (CASCADE_SCENE_W as f32, CASCADE_SCENE_H as f32),
         &ConversionContext::default(),
     );
     let text_id = built.root.children[0].children[0].id;
     let text_layout_height = layout.get(text_id).expect("text laid out").height;
 
-    let mut surface =
-        skia_safe::surfaces::raster_n32_premul((RM07_W, RM07_H)).expect("raster surface");
+    let mut surface = skia_safe::surfaces::raster_n32_premul((CASCADE_SCENE_W, CASCADE_SCENE_H))
+        .expect("raster surface");
     let canvas = surface.canvas();
     canvas.clear(skia_safe::Color::BLACK);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
@@ -110,17 +109,17 @@ fn paint_card_with_text_child(card_json: serde_json::Value) -> PaintedScene {
         scenario_time: 0.0,
         frame_index: 0,
         fps: 30,
-        video_width: RM07_W as u32,
-        video_height: RM07_H as u32,
+        video_width: CASCADE_SCENE_W as u32,
+        video_height: CASCADE_SCENE_H as u32,
         scene_duration: 1.0,
         camera: None,
     };
     paint_tree(canvas, &built.root, &layout, &frame, &dispatcher);
 
-    let row_bytes = RM07_W as usize * 4;
-    let mut pixels = vec![0u8; row_bytes * RM07_H as usize];
+    let row_bytes = CASCADE_SCENE_W as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * CASCADE_SCENE_H as usize];
     let info = skia_safe::ImageInfo::new(
-        (RM07_W, RM07_H),
+        (CASCADE_SCENE_W, CASCADE_SCENE_H),
         skia_safe::ColorType::RGBA8888,
         skia_safe::AlphaType::Premul,
         None,
@@ -210,5 +209,95 @@ fn text_own_color_wins_over_cascaded_card_color_at_paint_time() {
         red_pixels, 0,
         "text's own explicit color must win over the card's cascaded red — \
          found {red_pixels} red-dominant pixels"
+    );
+}
+
+// ─── table column widths: painter vs. intrinsic measurer ──────────────────
+
+#[test]
+fn table_columns_are_sized_by_content_not_split_evenly() {
+    // `TableIntrinsic::compute_width` measures each column's own natural
+    // width (header/cell text + padding) and sums them for the box's
+    // reserved size, but `Table::resolve_column_widths` (the *painter*'s own
+    // distribution) just divides the laid-out width evenly across columns
+    // regardless. A table whose columns have very different natural widths
+    // ("ID" vs. a long description) used to get a column border sitting at
+    // the arithmetic midpoint of the box, not near the natural split the
+    // measurer already computed.
+    use rustmotion_components::Component;
+    use rustmotion_core::engine::animator::AnimatedProperties;
+    use rustmotion_core::engine::layout_pass::BoxLayout;
+    use rustmotion_core::traits::{PaintCtx, Painter};
+
+    let component: Component = serde_json::from_value(serde_json::json!({
+        "type": "table",
+        "headers": ["ID", "Description of the incident"],
+        "rows": [["1", "Something happened during the incident"]]
+    }))
+    .expect("deserialize table");
+    let Component::Table(table) = component else {
+        panic!("expected a table component");
+    };
+
+    const W: i32 = 500;
+    const H: i32 = 100;
+    let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+    let canvas = surface.canvas();
+    canvas.clear(skia_safe::Color::BLACK);
+    let layout = BoxLayout {
+        x: 0.0,
+        y: 0.0,
+        width: W as f32,
+        height: H as f32,
+        ..Default::default()
+    };
+    let ctx = PaintCtx {
+        time: 0.0,
+        scenario_time: 0.0,
+        scene_duration: 1.0,
+        frame_index: 0,
+        fps: 30,
+        video_width: W as u32,
+        video_height: H as u32,
+        stagger_offset: 0.0,
+    };
+    table.paint_content(canvas, &layout, &AnimatedProperties::default(), &ctx);
+
+    let snapshot = surface.image_snapshot();
+    let info = skia_safe::ImageInfo::new(
+        (W, H),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut buf = vec![0u8; (W * H * 4) as usize];
+    assert!(snapshot.read_pixels(
+        &info,
+        &mut buf,
+        (W * 4) as usize,
+        skia_safe::IPoint::new(0, 0),
+        skia_safe::image::CachingHint::Disallow,
+    ));
+
+    let y = 15usize;
+    let border_distance = |x: usize| -> i32 {
+        let idx = (y * W as usize + x) * 4;
+        let (r, g, b) = (buf[idx] as i32, buf[idx + 1] as i32, buf[idx + 2] as i32);
+        (r - 0x4B).abs() + (g - 0x55).abs() + (b - 0x63).abs()
+    };
+    let boundary_x = (20usize..(W as usize - 20))
+        .min_by_key(|&x| border_distance(x))
+        .expect("scan range is non-empty");
+    assert!(
+        border_distance(boundary_x) < 90,
+        "no column-boundary border line found in the interior of the table \
+         (closest match at x={boundary_x}, distance={})",
+        border_distance(boundary_x)
+    );
+    assert!(
+        boundary_x < 200,
+        "the ID/Description column boundary should sit near the natural \
+         header-width split, not near the evenly-split midpoint (250) — \
+         found it at x={boundary_x}"
     );
 }
