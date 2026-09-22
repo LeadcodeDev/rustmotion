@@ -95,10 +95,10 @@ fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &
 /// The source clip's own duration, probed via `ffprobe` and memoized per
 /// `src` for the life of the process — `effective_source_time` below is
 /// called once per painted frame, and re-probing on every one of them would
-/// mean one subprocess spawn per frame for any looping video. `None` on a
-/// probe failure (no ffprobe on `PATH`, or the source can't be read) is
-/// memoized too, so a broken source fails fast on every subsequent frame
-/// instead of retrying the same failing probe.
+/// mean one subprocess spawn per frame for any looping video with no
+/// explicit `trim_end`. `None` on a probe failure (no ffprobe on `PATH`, or
+/// the source can't be read) is memoized too, so a broken source fails fast
+/// on every subsequent frame instead of retrying the same failing probe.
 fn video_duration_secs(src: &str) -> Option<f64> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, Option<f64>>>,
@@ -122,15 +122,29 @@ fn video_duration_secs(src: &str) -> Option<f64> {
 
 impl Video {
     /// The timestamp to sample from the source clip for a given scene time.
-    /// When `loop_video` is set, playback wraps within the source's own
-    /// probed duration instead of running past it and holding on
-    /// whatever the last extractable frame happens to be.
+    ///
+    /// Honours `trim_end` on the picture the same way the audio track
+    /// already does: past `trim_end`, playback holds on the last in-window
+    /// frame instead of continuing to draw whatever the source contains
+    /// beyond the intended trim point. When `loop_video` is set, playback
+    /// wraps within `[trim_start, trim_end)` instead of clamping — falling
+    /// back to the source's own probed duration as the loop window only
+    /// when `trim_end` is absent, since that is the only case where the
+    /// window cannot otherwise be known at all.
     fn effective_source_time(&self, ctx_time: f64) -> f64 {
         let rate = self.playback_rate.unwrap_or(1.0);
         let trim_start = self.trim_start.unwrap_or(0.0);
         let raw = trim_start + ctx_time * rate;
 
-        if self.loop_video == Some(true) {
+        if let Some(end) = self.trim_end {
+            if end > trim_start {
+                return if self.loop_video == Some(true) {
+                    trim_start + (raw - trim_start).rem_euclid(end - trim_start)
+                } else {
+                    raw.min(end)
+                };
+            }
+        } else if self.loop_video == Some(true) {
             if let Some(duration) = video_duration_secs(&self.src) {
                 if duration > trim_start {
                     return trim_start + (raw - trim_start).rem_euclid(duration - trim_start);
@@ -162,7 +176,7 @@ impl Painter for Video {
                 let img_info = ImageInfo::new(
                     (fw as i32, fh as i32),
                     ColorType::RGBA8888,
-                    skia_safe::AlphaType::Premul,
+                    skia_safe::AlphaType::Unpremul,
                     None,
                 );
                 let row_bytes = fw as usize * 4;
