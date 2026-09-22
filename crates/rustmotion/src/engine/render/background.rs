@@ -567,6 +567,12 @@ fn draw_bg_pixel_grid(
 }
 
 /// Tiled heropattern background.
+///
+/// The tile is rasterized once at `cfg.scale`, using `heropattern_raster_size`
+/// and a matching `resvg` render transform, then tiled 1:1 by the shader.
+/// It used to be rasterized at 1x and magnified by the shader's own matrix
+/// instead, which turned the vector source into hard nearest-neighbour
+/// blocks above `scale: 1` and aliased it below `scale: 1`.
 fn draw_bg_heropattern(
     canvas: &Canvas,
     cfg: &HeropatternConfig,
@@ -584,7 +590,6 @@ fn draw_bg_heropattern(
         return;
     }
 
-    // Build the SVG source with color/opacity substituted
     let svg_content = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">{}</svg>"#,
         def.width,
@@ -596,20 +601,23 @@ fn draw_bg_heropattern(
             .replace("{{opacity}}", &cfg.opacity.to_string()),
     );
 
-    // Render one tile via usvg/resvg
     let opt = usvg::Options::default();
     let Ok(tree) = usvg::Tree::from_data(svg_content.as_bytes(), &opt) else {
         return;
     };
 
-    let pw = def.width.ceil() as u32;
-    let ph = def.height.ceil() as u32;
+    let (pw, ph) = heropattern_raster_size(def.width, def.height, cfg.scale);
     let Some(mut pixmap) = tiny_skia::Pixmap::new(pw, ph) else {
         return;
     };
-    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    let render_scale_x = pw as f32 / def.width;
+    let render_scale_y = ph as f32 / def.height;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(render_scale_x, render_scale_y),
+        &mut pixmap.as_mut(),
+    );
 
-    // Convert to Skia image
     let info = ImageInfo::new(
         (pw as i32, ph as i32),
         ColorType::RGBA8888,
@@ -625,16 +633,10 @@ fn draw_bg_heropattern(
         return;
     };
 
-    // Build a tiled shader from the tile image
-    let matrix = if cfg.scale != 1.0 {
-        Some(skia_safe::Matrix::scale((cfg.scale, cfg.scale)))
-    } else {
-        None
-    };
     let Some(shader) = tile_image.to_shader(
         (skia_safe::TileMode::Repeat, skia_safe::TileMode::Repeat),
-        skia_safe::SamplingOptions::default(),
-        matrix.as_ref(),
+        skia_safe::SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::None),
+        None,
     ) else {
         return;
     };
@@ -653,6 +655,21 @@ fn draw_bg_heropattern(
         ),
         &paint,
     );
+}
+
+/// Pixel size to rasterize one heropattern tile at, so the vector source is
+/// re-rendered crisp at `scale` instead of rasterized at the pattern's
+/// native `(width, height)` and then magnified. Clamped to `MAX_TILE_PX`
+/// per axis: `HeropatternConfig::scale` has no upper bound in the schema, so
+/// an unclamped scale could ask for an arbitrarily large pixmap allocation.
+/// A clamped tile still tiles seamlessly with itself — it just renders
+/// smaller than an extreme `scale` asked for, which is the trade the "sane
+/// maximum" this is named for is making.
+fn heropattern_raster_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
+    const MAX_TILE_PX: f32 = 4096.0;
+    let pw = (width * scale).ceil().clamp(1.0, MAX_TILE_PX) as u32;
+    let ph = (height * scale).ceil().clamp(1.0, MAX_TILE_PX) as u32;
+    (pw, ph)
 }
 
 /// Interpolate two AnimatedBackground structs. `t` goes from 0.0 (fully `a`) to 1.0 (fully `b`).
@@ -1521,5 +1538,52 @@ mod heropattern_period_tests {
             "the clamped period must stay a whole multiple of the pattern's own 16px width, got {spacing_x}"
         );
         assert!(spacing_x >= 20.0);
+    }
+}
+
+#[cfg(test)]
+mod heropattern_raster_tests {
+    //! The heropattern tile used to be rasterized at 1x (the
+    //! pattern's native width/height) and then magnified by the shader's
+    //! own matrix with nearest-neighbour sampling — blocky above `scale: 1`,
+    //! aliased below it. `heropattern_raster_size` must honour `scale`
+    //! directly in the raster resolution instead.
+
+    use super::*;
+
+    #[test]
+    fn raster_size_scales_with_cfg_scale_not_pinned_to_1x() {
+        let (pw, ph) = heropattern_raster_size(32.0, 64.0, 4.0);
+        assert_eq!(
+            (pw, ph),
+            (128, 256),
+            "the pixmap must be sized for the scaled tile, not the pattern's native 32x64"
+        );
+    }
+
+    #[test]
+    fn raster_size_matches_the_pattern_exactly_at_scale_1() {
+        assert_eq!(heropattern_raster_size(32.0, 64.0, 1.0), (32, 64));
+    }
+
+    #[test]
+    fn raster_size_is_clamped_for_an_unbounded_scale() {
+        let (pw, ph) = heropattern_raster_size(32.0, 64.0, 100_000.0);
+        assert!(
+            pw <= 4096 && ph <= 4096,
+            "an extreme scale must not attempt an unbounded pixmap allocation, got {pw}x{ph}"
+        );
+    }
+
+    #[test]
+    fn draw_bg_heropattern_does_not_panic_at_an_extreme_scale() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((64, 64)).expect("surface");
+        let cfg = HeropatternConfig {
+            pattern: "aztec".to_string(),
+            color: "#FFFFFF".to_string(),
+            opacity: 0.1,
+            scale: 100_000.0,
+        };
+        draw_bg_heropattern(surface.canvas(), &cfg, 0.0, 64.0, 64.0);
     }
 }
