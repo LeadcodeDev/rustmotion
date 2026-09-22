@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use gpui_component::notification::Notification;
+use gpui_component::WindowExt as _;
+use gpui_kit::{div, Context, IntoElement, Render, Window};
 
 use crate::scenario::Shared;
 
@@ -158,6 +163,90 @@ fn ffmpeg_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+const EXPORT_POLL_INTERVAL: Duration = Duration::from_millis(150);
+
+struct ExportNotificationKind;
+
+pub struct ExportWatcher {
+    status: SharedExport,
+    last: ExportStatus,
+}
+
+impl ExportWatcher {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let this = Self {
+            status: export_slot(),
+            last: ExportStatus::Idle,
+        };
+        this.start_polling(window, cx);
+        this
+    }
+
+    fn start_polling(&self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor().timer(EXPORT_POLL_INTERVAL).await;
+            let alive = this
+                .update_in(cx, |this, window, cx| this.tick(window, cx))
+                .is_ok();
+            if !alive {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self
+            .status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if current == self.last {
+            return;
+        }
+        self.last = current.clone();
+
+        match current {
+            ExportStatus::Idle => {
+                window.remove_notification::<ExportNotificationKind>(cx);
+            }
+            ExportStatus::Running { .. } => {
+                window.push_notification(
+                    Notification::info(export_label(&current))
+                        .title("Exporting")
+                        .id::<ExportNotificationKind>()
+                        .autohide(false),
+                    cx,
+                );
+            }
+            ExportStatus::Done(ref path) => {
+                window.push_notification(
+                    Notification::success(format!("Saved to {}", path.display()))
+                        .title("Export complete")
+                        .id::<ExportNotificationKind>()
+                        .autohide(true),
+                    cx,
+                );
+            }
+            ExportStatus::Failed(ref message) => {
+                window.push_notification(
+                    Notification::error(message.clone())
+                        .title("Export failed")
+                        .id::<ExportNotificationKind>()
+                        .autohide(false),
+                    cx,
+                );
+            }
+        }
+    }
+}
+
+impl Render for ExportWatcher {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }
 
 #[cfg(test)]

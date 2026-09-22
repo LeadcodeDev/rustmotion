@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod audio;
 pub mod diff_panel;
 mod export;
