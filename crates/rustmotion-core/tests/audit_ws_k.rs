@@ -1,5 +1,5 @@
 //! Regression tests for the workstream K (docs, schema, CI) audit findings:
-//! documentation drift and inert schema fields.
+//! RM-02, RM-47, RM-52.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -58,7 +58,7 @@ fn count_component_variants(lib_rs: &str) -> usize {
         .count()
 }
 
-/// README.md and `rustmotion-components/Cargo.toml` (the text
+/// RM-02 / RM-47: README.md and `rustmotion-components/Cargo.toml` (the text
 /// crates.io shows for the published crate) both claimed "51 components"
 /// while `Component` actually had 60 variants — and nothing kept the two in
 /// sync. Locks the documented counts to the real one so a future component
@@ -103,14 +103,14 @@ fn documented_component_count_matches_enum_variant_count() {
 const KNOWN_INERT_FIELDS: &[(&str, &str)] = &[
     (
         "codec",
-        " VideoConfig.codec is not threaded into the encode path. Honouring it means \
+        "RM-50: VideoConfig.codec is not threaded into the encode path. Honouring it means \
          editing crates/rustmotion/src/cli/mod.rs (the Render/Batch/Still command handlers) and \
          crates/rustmotion/src/encode/, both outside workstream K's owned files — see the \
          workstream K report's handover for the exact wiring point.",
     ),
     (
         "intensity",
-        " MotionBlurConfig.intensity is read into AnimatedProperties.motion_blur \
+        "RM-51: MotionBlurConfig.intensity is read into AnimatedProperties.motion_blur \
          (crates/rustmotion-core/src/engine/animator.rs:259) but nothing reads that field \
          afterwards. Wiring it into the ghost-opacity math, or deleting it, both touch \
          crates/rustmotion-components/src/box_builder.rs and crates/rustmotion-core/src/engine/\
@@ -192,8 +192,8 @@ fn extract_pub_field_names(source: &str) -> Vec<String> {
     names
 }
 
-/// nothing stopped a schema field from parsing successfully and then
-/// being read by no code path — (`VideoConfig.codec`) and
+/// RM-52: nothing stopped a schema field from parsing successfully and then
+/// being read by no code path — RM-50 (`VideoConfig.codec`) and RM-51
 /// (`MotionBlurConfig.intensity`) are exactly that defect, and the format's
 /// credibility as an LLM generation target rests on a field either doing
 /// something or failing to parse. This test greps the workspace for a
