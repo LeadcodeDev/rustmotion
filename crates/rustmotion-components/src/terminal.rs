@@ -536,7 +536,9 @@ mod tests {
         // specifically: pixels that are not the dark theme background color
         // (#1E1E1E) and not fully transparent.
         let text_ink = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && !(p[0] < 40 && p[1] < 40 && p[2] < 40))
             .count();
         assert!(

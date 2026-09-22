@@ -267,7 +267,9 @@ mod tests {
         // for near-white ink specifically, since the bubble background
         // paints regardless of font-size.
         let text_ink = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[0] > 200 && p[1] > 200 && p[2] > 200)
             .count();
         assert!(
