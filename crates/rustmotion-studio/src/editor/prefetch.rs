@@ -1,41 +1,22 @@
-//! Frame prefetch: an app-global JPEG cache plus a background thread that
-//! renders the frames around the playhead ahead of time, so the asset handler
-//! can answer from memory during playback.
-//!
-//! The prefetcher never touches the model lock: the UI publishes Arc
-//! snapshots of the scenario/tasks (see [`use_prefetch_publisher`]) and the
-//! thread renders from those. The handler and the prefetcher share the cache
-//! mutex; a frame can at worst be rendered twice when the `<img>` requests it
-//! while the prefetcher is mid-render (accepted — no cross-coordination).
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use dioxus::prelude::*;
-
 use rustmotion::encode::video::FrameTask;
 use rustmotion::schema::ResolvedScenario;
 
-use crate::scenario::{baseline_slot, get_baseline, Shared};
+use crate::scenario::{baseline_slot, get_baseline};
 
 use super::diff_panel::DiffSide;
 use super::frames::{baseline_arcs, render_frame};
 
-/// Cache bound (~120 JPEG frames).
 pub const CACHE_CAP: usize = 120;
-/// Frames prefetched ahead of the playhead.
 pub const WINDOW_AHEAD: u32 = 30;
-/// Frames kept behind the playhead while paused (scrub-back comfort).
 pub const WINDOW_BEHIND: u32 = 5;
 
-/// Preview render scale in percent. Applies to every preview render (prefetch
-/// workers and the on-demand asset handler); the export path always renders at
-/// full resolution. Atomic so non-UI threads read it without a Dioxus runtime.
 pub const DEFAULT_PREVIEW_SCALE_PCT: u16 = 50;
-/// The scales offered by the transport-bar quality selector.
 pub const PREVIEW_SCALE_CHOICES: [u16; 4] = [100, 75, 50, 25];
 
 static PREVIEW_SCALE_PCT: AtomicU16 = AtomicU16::new(DEFAULT_PREVIEW_SCALE_PCT);
@@ -48,14 +29,10 @@ pub fn set_preview_scale_pct(pct: u16) {
     PREVIEW_SCALE_PCT.store(pct.clamp(10, 100), Ordering::Relaxed);
 }
 
-/// Percent → render scale factor for [`render_frame`].
 pub fn scale_factor(pct: u16) -> f32 {
     pct as f32 / 100.0
 }
 
-/// Cache key: which model state (`generation` = model generation for side B,
-/// baseline source hash for side A), which side, which frame, at which
-/// preview scale (a frame rendered at 50% must never be served for 100%).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameKey {
     pub generation: u64,
@@ -64,11 +41,6 @@ pub struct FrameKey {
     pub scale_pct: u16,
 }
 
-// ── Pure logic ───────────────────────────────────────────────────────────────
-
-/// The frames to prefetch, nearest-first from `current`. Playing → forward
-/// only `[current, current+AHEAD]`; paused → also `WINDOW_BEHIND` back.
-/// Clamped to `[0, total)`; forward wins distance ties.
 pub fn prefetch_window(current: u32, playing: bool, total: u32) -> Vec<u32> {
     if total == 0 {
         return Vec::new();
@@ -78,7 +50,6 @@ pub fn prefetch_window(current: u32, playing: bool, total: u32) -> Vec<u32> {
     let lo = current.saturating_sub(behind);
     let hi = current.saturating_add(WINDOW_AHEAD).min(total - 1);
 
-    // Nearest-first from `current`, forward before backward on equal distance.
     let mut out = Vec::with_capacity((hi - lo + 1) as usize);
     out.push(current);
     for d in 1..=(WINDOW_AHEAD.max(behind)) {
@@ -93,11 +64,6 @@ pub fn prefetch_window(current: u32, playing: bool, total: u32) -> Vec<u32> {
     out
 }
 
-/// Which keys to drop: every entry at a different preview scale than
-/// `scale_pct`, every stale-generation entry for a side whose expected
-/// generation is known (`None` = unknowable, keep), then — if the map would
-/// still exceed `cap` — the entries farthest from the playhead (`head`) until
-/// it fits.
 pub fn select_evictions(
     keys: &[FrameKey],
     gen_b: Option<u64>,
@@ -118,17 +84,12 @@ pub fn select_evictions(
 
     let mut fresh: Vec<FrameKey> = keys.iter().filter(|k| !is_stale(k)).copied().collect();
     if fresh.len() > cap {
-        // Farthest from the playhead go first.
         fresh.sort_by_key(|k| std::cmp::Reverse(k.frame.abs_diff(head)));
         evict.extend(fresh.drain(..fresh.len() - cap));
     }
     evict
 }
 
-// ── Cache ────────────────────────────────────────────────────────────────────
-
-/// Bounded JPEG frame cache. All mutation goes through [`FrameCache::insert`],
-/// which applies the eviction policy.
 #[derive(Default)]
 pub struct FrameCache {
     map: HashMap<FrameKey, Arc<Vec<u8>>>,
@@ -143,16 +104,12 @@ impl FrameCache {
         self.map.contains_key(key)
     }
 
-    /// Entry count — test-only introspection for the bound assertions.
     #[cfg(test)]
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Insert a frame then enforce the eviction policy around the playhead.
-    /// `scale_pct` is the expected preview scale: entries at any other scale
-    /// are purged (a scale change instantly frees the whole stale set).
     pub fn insert(
         &mut self,
         key: FrameKey,
@@ -172,26 +129,18 @@ impl FrameCache {
 
 pub type SharedFrameCache = Arc<Mutex<FrameCache>>;
 
-/// The app-global frame cache.
 pub fn frame_cache() -> SharedFrameCache {
     static SLOT: OnceLock<SharedFrameCache> = OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(FrameCache::default())))
         .clone()
 }
 
-// ── Claim set ────────────────────────────────────────────────────────────────
-
-/// In-flight render claims shared by the prefetch workers: a worker renders a
-/// frame only after winning its claim, so N workers spread over the window
-/// instead of rendering the same nearest frame N times.
 #[derive(Default)]
 pub struct ClaimSet {
     set: HashSet<FrameKey>,
 }
 
 impl ClaimSet {
-    /// `true` when the caller now owns the claim; `false` when another worker
-    /// already holds it.
     pub fn try_claim(&mut self, key: FrameKey) -> bool {
         self.set.insert(key)
     }
@@ -206,16 +155,8 @@ fn claims() -> &'static Mutex<ClaimSet> {
     SLOT.get_or_init(|| Mutex::new(ClaimSet::default()))
 }
 
-// ── Failure ledger ───────────────────────────────────────────────────────────
-
-/// Attempts a frame gets before workers and the handler stop re-rendering it.
-/// One retry absorbs transient panics; beyond that a panicking frame must not
-/// become an infinite render-panic loop that pegs the workers (the preview
-/// shows the neighboring frame instead).
 pub const MAX_RENDER_ATTEMPTS: u8 = 2;
 
-/// Panicked render attempts per key. Keys carry the generation, so a model
-/// edit naturally retires old entries; the size cap is a runaway backstop.
 #[derive(Default)]
 pub struct FailLedger {
     map: HashMap<FrameKey, u8>,
@@ -239,18 +180,10 @@ pub(crate) fn fail_ledger() -> &'static Mutex<FailLedger> {
     SLOT.get_or_init(|| Mutex::new(FailLedger::default()))
 }
 
-/// Prefetch worker count for a machine with `cores` logical cores: leave two
-/// for the UI/webview and the asset handler, keep at least two workers so a
-/// slow frame never serializes the window, and cap at six (JPEG frames past
-/// that saturate the cache mutex instead of helping).
 pub fn worker_count(cores: usize) -> usize {
     cores.saturating_sub(2).clamp(2, 6)
 }
 
-// ── Prefetcher ───────────────────────────────────────────────────────────────
-
-/// What the UI wants prefetched, published every time the playhead/side/model
-/// moves. Holds Arc snapshots so the thread renders without the model lock.
 #[derive(Clone)]
 pub struct PrefetchTarget {
     pub current: u32,
@@ -259,7 +192,6 @@ pub struct PrefetchTarget {
     pub side: DiffSide,
     pub scenario: Option<Arc<ResolvedScenario>>,
     pub tasks: Option<Arc<Vec<FrameTask>>>,
-    /// Scenario path, for the baseline lookup when side A is active.
     pub path: Option<PathBuf>,
 }
 
@@ -283,15 +215,10 @@ fn prefetch_slot() -> Arc<Mutex<PrefetchTarget>> {
         .clone()
 }
 
-/// (current, playing, generation, side, scale) — the tuple whose change aborts
-/// an in-flight prefetch pass so the window re-targets immediately.
 fn target_fingerprint(t: &PrefetchTarget, scale_pct: u16) -> (u32, bool, u64, DiffSide, u16) {
     (t.current, t.playing, t.generation, t.side, scale_pct)
 }
 
-/// Spawn the prefetch worker pool (idempotent). Workers share the window
-/// through the claim set: each renders the nearest unclaimed missing frame,
-/// so throughput scales with cores instead of serializing on one thread.
 pub fn ensure_prefetcher() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
@@ -299,9 +226,6 @@ pub fn ensure_prefetcher() {
             .map(|n| n.get())
             .unwrap_or(4);
         for _ in 0..worker_count(cores) {
-            // Explicit stack: these workers render, and the 2 MiB default is
-            // not enough for a deeply nested scenario in a debug build. Sized
-            // once here rather than per frame — see `frames::RENDER_STACK`.
             let _ = std::thread::Builder::new()
                 .stack_size(crate::editor::frames::RENDER_STACK)
                 .spawn(prefetch_loop);
@@ -317,7 +241,6 @@ fn prefetch_loop() {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
 
-        // Resolve what to render for the ACTIVE side only.
         let (gen, scenario, tasks) = match target.side {
             DiffSide::B => match (&target.scenario, &target.tasks) {
                 (Some(s), Some(t)) => (target.generation, s.clone(), t.clone()),
@@ -341,8 +264,6 @@ fn prefetch_loop() {
         let window = prefetch_window(target.current, target.playing, total);
         let scale = preview_scale_pct();
         let fingerprint = target_fingerprint(&target, scale);
-        // Expected generations for eviction: the model generation is always
-        // known; the baseline hash only while side A is active.
         let (gen_b, gen_a) = match target.side {
             DiffSide::B => (Some(gen), None),
             DiffSide::A => (Some(target.generation), Some(gen)),
@@ -362,8 +283,6 @@ fn prefetch_loop() {
             {
                 continue;
             }
-            // A frame that keeps panicking gets MAX_RENDER_ATTEMPTS, then is
-            // left alone — never an infinite render-panic loop.
             if fail_ledger()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -371,7 +290,6 @@ fn prefetch_loop() {
             {
                 continue;
             }
-            // Another worker already rendering this frame → take the next one.
             if !claims()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -379,15 +297,11 @@ fn prefetch_loop() {
             {
                 continue;
             }
-            // Double-check after winning the claim: the asset handler may have
-            // rendered and inserted this frame while we raced for it.
             let already = frame_cache()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .contains(&key);
             if !already {
-                // Panic fence: a Skia panic must skip the frame, not kill the
-                // worker for the whole session.
                 let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_frame(&scenario, &tasks, frame, scale_factor(scale))
                 }));
@@ -407,9 +321,6 @@ fn prefetch_loop() {
                 .unwrap_or_else(|e| e.into_inner())
                 .release(&key);
 
-            // Abort the pass as soon as the UI retargets (seek, play/pause,
-            // reload, side flip, scale change) so the new window starts
-            // immediately.
             let now = prefetch_slot()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -419,48 +330,6 @@ fn prefetch_loop() {
             }
         }
     }
-}
-
-/// Publish the prefetch target from the UI (and start the thread on first
-/// use). Re-runs whenever the playhead, play state, diff side, or the model
-/// (via `rev`) changes; takes only a brief model lock to clone the Arcs.
-pub fn use_prefetch_publisher(
-    shared: Shared,
-    current: Signal<u32>,
-    playing: Signal<bool>,
-    rev: Signal<u64>,
-    diff_active: Signal<bool>,
-    diff_side: Signal<DiffSide>,
-) {
-    ensure_prefetcher();
-    use_effect(move || {
-        let cur = current();
-        let play = playing();
-        let _ = rev(); // re-publish fresh Arcs after every hot reload
-        let side = if diff_active() {
-            diff_side()
-        } else {
-            DiffSide::B
-        };
-        let (scenario, tasks, generation, path) = {
-            let m = shared.lock().unwrap_or_else(|e| e.into_inner());
-            (
-                Some(m.scenario.clone()),
-                Some(m.tasks.clone()),
-                m.generation,
-                m.path.clone(),
-            )
-        };
-        *prefetch_slot().lock().unwrap_or_else(|e| e.into_inner()) = PrefetchTarget {
-            current: cur,
-            playing: play,
-            generation,
-            side,
-            scenario,
-            tasks,
-            path,
-        };
-    });
 }
 
 #[cfg(test)]
@@ -475,8 +344,6 @@ mod tests {
             scale_pct: 100,
         }
     }
-
-    // ── Window ──────────────────────────────────────────────────────────
 
     #[test]
     fn window_playing_is_forward_only_ascending() {
@@ -494,7 +361,6 @@ mod tests {
     fn window_paused_is_nearest_first_with_backtrack() {
         let w = prefetch_window(10, false, 1000);
         assert_eq!(w.len(), (WINDOW_AHEAD + WINDOW_BEHIND + 1) as usize);
-        // Nearest-first, forward wins ties: 10, 11, 9, 12, 8, …
         assert_eq!(&w[0..5], &[10, 11, 9, 12, 8]);
         assert!(w.contains(&5) && w.contains(&40));
         assert!(!w.contains(&4) && !w.contains(&41));
@@ -516,7 +382,6 @@ mod tests {
     fn window_clamps_at_end() {
         let w = prefetch_window(99, true, 100);
         assert_eq!(w, vec![99]);
-        // Current beyond total clamps into range instead of exceeding it.
         let w = prefetch_window(500, true, 100);
         assert!(w.iter().all(|&f| f < 100));
     }
@@ -527,14 +392,12 @@ mod tests {
         assert!(prefetch_window(10, false, 0).is_empty());
     }
 
-    // ── Eviction ────────────────────────────────────────────────────────
-
     #[test]
     fn evictions_drop_stale_generations_first() {
         let keys = vec![
-            key(1, DiffSide::B, 0), // stale (gen_b = 2)
+            key(1, DiffSide::B, 0),
             key(2, DiffSide::B, 5),
-            key(7, DiffSide::A, 5), // stale (gen_a = 9)
+            key(7, DiffSide::A, 5),
             key(9, DiffSide::A, 6),
         ];
         let out = select_evictions(&keys, Some(2), Some(9), 5, 100, 100);
@@ -552,7 +415,6 @@ mod tests {
 
     #[test]
     fn evictions_then_farthest_from_head() {
-        // 6 fresh entries, cap 4 → evict the 2 farthest from head=10.
         let keys: Vec<FrameKey> = [10u32, 11, 9, 30, 50, 12]
             .iter()
             .map(|&f| key(1, DiffSide::B, f))
@@ -565,10 +427,9 @@ mod tests {
 
     #[test]
     fn evictions_stale_then_distance_combined() {
-        let mut keys: Vec<FrameKey> = (0..5).map(|f| key(1, DiffSide::B, f)).collect(); // stale
-        keys.extend((0..6).map(|f| key(2, DiffSide::B, f * 10))); // fresh: 0,10,20,30,40,50
+        let mut keys: Vec<FrameKey> = (0..5).map(|f| key(1, DiffSide::B, f)).collect();
+        keys.extend((0..6).map(|f| key(2, DiffSide::B, f * 10)));
         let out = select_evictions(&keys, Some(2), None, 0, 4, 100);
-        // All 5 stale go, plus the 2 farthest fresh (50, 40) to reach cap 4.
         assert_eq!(out.len(), 7);
         assert!(out.contains(&key(2, DiffSide::B, 50)));
         assert!(out.contains(&key(2, DiffSide::B, 40)));
@@ -588,8 +449,6 @@ mod tests {
         let out = select_evictions(&[old, fresh], Some(1), None, 5, 100, 50);
         assert_eq!(out, vec![old], "same frame at the old scale is stale");
     }
-
-    // ── Cache integration (fake frames, no threads) ─────────────────────
 
     #[test]
     fn cache_roundtrip_and_side_separation() {
@@ -627,7 +486,6 @@ mod tests {
         for f in 0..10 {
             c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0, 100);
         }
-        // First insert of the new generation purges every old-gen entry.
         c.insert(key(2, DiffSide::B, 0), vec![0], Some(2), None, 0, 100);
         assert_eq!(c.len(), 1);
         assert!(c.contains(&key(2, DiffSide::B, 0)));
@@ -639,7 +497,6 @@ mod tests {
         for f in 0..10 {
             c.insert(key(1, DiffSide::B, f), vec![0], Some(1), None, 0, 100);
         }
-        // First insert after a scale switch purges every 100% entry.
         let half = FrameKey {
             scale_pct: 50,
             ..key(1, DiffSide::B, 0)
@@ -648,8 +505,6 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert!(c.contains(&half));
     }
-
-    // ── Claims / workers ────────────────────────────────────────────────
 
     #[test]
     fn claim_is_exclusive_until_released() {
@@ -674,10 +529,6 @@ mod tests {
         assert!(claims.try_claim(other_scale), "other scale");
     }
 
-    /// TEMP diagnostic (not CI): full-pipeline soak — real worker pool, a
-    /// simulated 30fps playhead publishing targets, a simulated asset handler
-    /// serving frames, and the canvas hit-map pass. Prints RSS + serve stats.
-    /// `cargo test -p rustmotion-studio --release soak_full -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn soak_full_pipeline_rss() {
@@ -708,7 +559,6 @@ mod tests {
         static SERVED: AtomicU32 = AtomicU32::new(0);
         static MISSES: AtomicU32 = AtomicU32::new(0);
 
-        // Simulated playback + asset handler + canvas hit pass, 30fps for 60s.
         let s2 = scenario.clone();
         let t2 = tasks.clone();
         let sim = std::thread::spawn(move || {
@@ -753,7 +603,6 @@ mod tests {
                     }
                 }
                 SERVED.fetch_add(1, Ordering::Relaxed);
-                // The canvas hit-map layout pass runs on every tick in the app.
                 let _ = frame_hits(&s2, &t2, current, "/scenes/0");
             }
         });

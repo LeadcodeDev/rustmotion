@@ -1,17 +1,8 @@
-//! Background video export: encodes the current scenario to an MP4 next to the
-//! source file, reusing the exact CLI encode pipeline (ffmpeg when available,
-//! embedded openh264 otherwise). The encode runs on a plain `std::thread` with
-//! progress reported through a shared status slot the UI polls.
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use dioxus::prelude::*;
 
 use crate::scenario::Shared;
 
-/// Lifecycle of one export, shared between the encode thread and the UI.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExportStatus {
     Idle,
@@ -30,42 +21,14 @@ impl ExportStatus {
     }
 }
 
-/// The cross-thread status slot. The encode thread writes; the UI polls.
 pub type SharedExport = Arc<Mutex<ExportStatus>>;
 
-/// The app-global status slot. Global (not per-component) so a running export
-/// survives a switch to the library and back: the remounted topbar re-attaches
-/// to the same slot, and `start_export`'s running-check keeps exports serial
-/// app-wide.
 pub fn export_slot() -> SharedExport {
     static SLOT: std::sync::OnceLock<SharedExport> = std::sync::OnceLock::new();
     SLOT.get_or_init(|| Arc::new(Mutex::new(ExportStatus::Idle)))
         .clone()
 }
 
-/// Poll the shared export status into a Dioxus signal (~150 ms), following the
-/// same polling pattern as `use_hot_reload`. Signal writes only fire on change
-/// so idle polling doesn't re-render the topbar.
-pub fn use_export_poll(status: SharedExport, mut sig: Signal<ExportStatus>) {
-    use_future(move || {
-        let status = status.clone();
-        async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let s = status.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if s != sig() {
-                    sig.set(s);
-                }
-            }
-        }
-    });
-}
-
-/// Kick off a background export of the scenario currently loaded in `shared`.
-/// No-op if an export is already running. The scenario is re-loaded from its
-/// source on the worker thread (`ResolvedScenario` isn't `Clone`, and the
-/// watcher keeps the on-disk file authoritative), so the model lock is held
-/// only long enough to snapshot the path and raw JSON.
 pub fn start_export(shared: &Shared, status: &SharedExport) {
     {
         let mut st = status.lock().unwrap_or_else(|e| e.into_inner());
@@ -86,10 +49,6 @@ pub fn start_export(shared: &Shared, status: &SharedExport) {
 
     let status = status.clone();
     std::thread::spawn(move || {
-        // A Skia/encoder panic must not leave the status stuck on Running
-        // (and a poisoned status Mutex would break every later export), so
-        // the whole encode is fenced with catch_unwind — same rationale as
-        // the frame asset handler.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_export(path, raw, &status)
         }));
@@ -102,7 +61,6 @@ pub fn start_export(shared: &Shared, status: &SharedExport) {
     });
 }
 
-/// Load, render and encode; returns the output path or a user-facing reason.
 fn run_export(
     path: Option<PathBuf>,
     raw: serde_json::Value,
@@ -133,9 +91,6 @@ fn run_export(
         *status.lock().unwrap_or_else(|e| e.into_inner()) = status_for_progress(&p);
     };
 
-    // Same pipeline selection as the CLI: ffmpeg when available (10-bit
-    // H.264), embedded openh264 otherwise. Output is fixed to .mp4, so the
-    // codec is h264; the scenario's optional `crf` is honored.
     if ffmpeg_available() {
         rustmotion::encode::encode_with_ffmpeg(
             &scenario,
@@ -154,7 +109,6 @@ fn run_export(
     Ok(output)
 }
 
-/// Map an encoder progress event to the UI status.
 fn status_for_progress(p: &rustmotion::encode::EncodeProgress) -> ExportStatus {
     use rustmotion::encode::EncodeProgress;
     match p {
@@ -176,8 +130,6 @@ fn status_for_progress(p: &rustmotion::encode::EncodeProgress) -> ExportStatus {
     }
 }
 
-/// v1 output location: `<scenario dir>/<stem>.mp4`, or `./export.mp4` when the
-/// scenario has no path.
 fn output_path(source: &Option<PathBuf>) -> PathBuf {
     match source {
         Some(p) => p.with_extension("mp4"),
@@ -187,7 +139,6 @@ fn output_path(source: &Option<PathBuf>) -> PathBuf {
     }
 }
 
-/// Label for the export button, with a live percentage while running.
 pub fn export_label(status: &ExportStatus) -> String {
     match status {
         ExportStatus::Running { phase, done, total } if *total > 0 => {
@@ -199,7 +150,6 @@ pub fn export_label(status: &ExportStatus) -> String {
     }
 }
 
-/// Same detection as the CLI: probe `ffmpeg -version`.
 fn ffmpeg_available() -> bool {
     std::process::Command::new("ffmpeg")
         .arg("-version")
@@ -208,69 +158,6 @@ fn ffmpeg_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-/// Floating export-status toast, bottom-right of the canvas area (absolute in
-/// the canvas container — no measurement). Running → live progression;
-/// success → auto-dismissed after ~6 s; failure → persistent with a close
-/// button. Replaces the old topbar status spans, which overlapped the
-/// centered scenario title.
-#[component]
-pub fn ExportToast() -> Element {
-    let export = use_hook(export_slot);
-    let status = use_signal(|| ExportStatus::Idle);
-    use_export_poll(export.clone(), status);
-    let mut dismissed = use_signal(|| None::<ExportStatus>);
-
-    // Auto-dismiss success ~6 s after it appears (a NEW export produces a
-    // different status value, so the toast reappears naturally).
-    use_effect(move || {
-        let s = status();
-        if matches!(s, ExportStatus::Done(_)) && dismissed.peek().as_ref() != Some(&s) {
-            spawn(async move {
-                tokio::time::sleep(Duration::from_secs(6)).await;
-                if *status.peek() == s {
-                    dismissed.set(Some(s));
-                }
-            });
-        }
-    });
-
-    let s = status();
-    if matches!(s, ExportStatus::Idle) || dismissed() == Some(s.clone()) {
-        return rsx! {};
-    }
-
-    rsx! {
-        div { style: "position:absolute; right:16px; bottom:16px; z-index:900; display:flex; align-items:center; gap:8px; max-width:60%; padding:8px 12px; font-size:12px; background:var(--rm-surface-2); border:1px solid var(--rm-border); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.35);",
-            match &s {
-                ExportStatus::Running { .. } => rsx! {
-                    span { style: "color:var(--rm-text); white-space:nowrap;", "{export_label(&s)}" }
-                },
-                ExportStatus::Done(path) => rsx! {
-                    span {
-                        title: "{path.display()}",
-                        style: "color:var(--rm-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
-                        "Exported: {path.display()}"
-                    }
-                },
-                ExportStatus::Failed(reason) => rsx! {
-                    span {
-                        title: "{reason}",
-                        style: "color:var(--rm-error); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
-                        "Export failed: {reason}"
-                    }
-                    button {
-                        style: "background:none; border:none; color:var(--rm-text-muted); cursor:pointer; font-size:13px; padding:0 2px;",
-                        title: "Dismiss",
-                        onclick: move |_| dismissed.set(Some(s.clone())),
-                        "✕"
-                    }
-                },
-                ExportStatus::Idle => rsx! {},
-            }
-        }
-    }
 }
 
 #[cfg(test)]

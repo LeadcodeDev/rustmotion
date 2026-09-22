@@ -1,16 +1,6 @@
-//! The scenario editor: playback, the clickable element overlay, the property
-//! inspector, and the comments/annotations panel.
-
-mod annotations;
 pub mod audio;
-mod diff_panel;
+pub mod diff_panel;
 mod export;
 pub mod frames;
-mod inspector;
-mod playback;
 mod prefetch;
 mod properties;
-mod topbar;
-mod view;
-
-pub use view::StudioApp;
