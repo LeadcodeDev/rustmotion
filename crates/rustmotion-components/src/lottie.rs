@@ -525,7 +525,7 @@ mod tests {
 
         let mut red_sum: u64 = 0;
         let mut blue_sum: u64 = 0;
-        for px in buf.chunks_exact(4) {
+        for px in buf.as_chunks::<4>().0.iter() {
             let r = px[0] as u64;
             let _g = px[1] as u64;
             let b = px[2] as u64;

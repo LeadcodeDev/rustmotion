@@ -339,7 +339,9 @@ mod tests {
         // face — probe for near-white ink specifically, since the face/
         // border/shadow paint regardless of font-size.
         let text_ink = buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[0] > 180 && p[1] > 180 && p[2] > 180)
             .count();
         assert!(

@@ -77,7 +77,7 @@ fn render(json: serde_json::Value) -> Vec<u8> {
 }
 
 fn lit_pixels(buf: &[u8]) -> usize {
-    buf.chunks_exact(4).filter(|p| p[3] > 0).count()
+    buf.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count()
 }
 
 #[test]

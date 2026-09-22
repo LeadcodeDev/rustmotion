@@ -82,7 +82,11 @@ fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
 }
 
 fn count_pixels(buf: &[u8], pred: impl Fn(&[u8]) -> bool) -> usize {
-    buf.chunks_exact(4).filter(|p| pred(p)).count()
+    buf.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| pred(p.as_slice()))
+        .count()
 }
 
 fn lit_pixels(buf: &[u8]) -> usize {
