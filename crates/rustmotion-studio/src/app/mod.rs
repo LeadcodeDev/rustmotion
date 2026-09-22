@@ -2,6 +2,7 @@
 //! re-targetable file watcher.
 
 mod root;
+pub mod state;
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
