@@ -177,7 +177,11 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
 
             let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
             let built = build_scene_from_refs(children.iter(), viewport_f, root_css, None);
-            let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+            let layouts = run_layout(
+                &built.root,
+                viewport_f,
+                &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
+            );
 
             let camera = scene
                 .camera
@@ -1344,7 +1348,11 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                     fps,
                 });
                 let built = build_scene_from_refs(children.iter(), viewport_f, root_css, anim);
-                let layouts = run_layout(&built.root, viewport_f, &ConversionContext::default());
+                let layouts = run_layout(
+                    &built.root,
+                    viewport_f,
+                    &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
+                );
 
                 walk_anim(
                     &children,
