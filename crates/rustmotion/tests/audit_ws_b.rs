@@ -446,3 +446,101 @@ fn nowrap_text_taller_than_its_box_is_still_flagged() {
         .expect("expected a content_overflows_box violation");
     assert_eq!(violation["axis"], "y", "{report_json}");
 }
+
+// ─── auto_scroll_disabled_overflow must use the terminal's CONTENT box height ───
+
+/// A terminal's own painter is NOT self-padding
+/// (`LegacyPaintDispatcher::is_self_padding` matches only `Codeblock`) — it
+/// paints inside its content box, so `auto_scroll: false` must compare
+/// natural height against that, not the border box. 10 lines ≈ 288px
+/// natural height (36px chrome + 32px internal terminal padding + 10×22px
+/// lines at the default 14px font); border box height is 400px, content box
+/// height is 400 - 300 (150px top+bottom CSS padding) = 100px.
+#[test]
+fn terminal_auto_scroll_disabled_overflow_is_measured_against_the_content_box() {
+    let scenario = ScratchFile::new("rm33-scenario");
+    let report = ScratchFile::new("rm33-report");
+    let lines: String = (1..=10)
+        .map(|i| format!(r##"{{ "text": "line {i}" }}"##))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r##"{{
+            "video": {{ "width": 1920, "height": 1080 }},
+            "scenes": [{{
+                "duration": 1.0,
+                "children": [{{
+                    "type": "terminal",
+                    "lines": [{lines}],
+                    "auto_scroll": false,
+                    "position": "absolute",
+                    "x": 50, "y": 50,
+                    "style": {{
+                        "width": "800px", "height": "400px",
+                        "padding": {{ "top": "150px", "bottom": "150px" }}
+                    }}
+                }}]
+            }}]
+        }}"##
+    );
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(
+        !output.status.success(),
+        "~288px of natural content is far past a 100px content box (400px border box minus \
+         300px of padding); report={report_json}"
+    );
+    let violation = find_kind(&report_json, "auto_scroll_disabled_overflow")
+        .expect("expected an auto_scroll_disabled_overflow violation");
+    let height = violation["bbox"]["h"].as_f64().expect("bbox.h is a number");
+    assert!(
+        (height - 100.0).abs() < 1.0,
+        "violation bbox should be the 100px CONTENT box, not the 400px border box: {report_json}"
+    );
+}
+
+/// Negative control: a codeblock genuinely IS self-padding
+/// (`LegacyPaintDispatcher::is_self_padding`), so its own natural-height
+/// formula already bakes its padding in — the codeblock arm must keep
+/// comparing against the BORDER box, unaffected by this fix. Same 60px
+/// padding fixture as the pre-existing
+/// `codeblock_auto_scroll_check_honours_explicit_padding_not_a_hardcoded_16px`
+/// internal test, driven through the CLI instead.
+#[test]
+fn codeblock_auto_scroll_disabled_overflow_still_uses_the_border_box() {
+    let scenario = ScratchFile::new("rm33-codeblock-scenario");
+    let report = ScratchFile::new("rm33-codeblock-report");
+    let code_lines: String = (1..=10)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let json = format!(
+        r##"{{
+            "video": {{ "width": 1920, "height": 1080 }},
+            "scenes": [{{
+                "duration": 1.0,
+                "children": [{{
+                    "type": "codeblock",
+                    "code": "{code_lines}",
+                    "auto_scroll": false,
+                    "style": {{ "width": "600px", "height": "250px", "padding": "60px" }}
+                }}]
+            }}]
+        }}"##
+    );
+    std::fs::write(&scenario.0, json).expect("write scenario");
+
+    let output = run_validate(&scenario.0, Some(&report.0), false, false);
+    let report_json = read_report(&report.0);
+    assert!(!output.status.success(), "report={report_json}");
+    let violation = find_kind(&report_json, "auto_scroll_disabled_overflow")
+        .expect("expected an auto_scroll_disabled_overflow violation");
+    let height = violation["bbox"]["h"].as_f64().expect("bbox.h is a number");
+    assert!(
+        (height - 250.0).abs() < 1.0,
+        "codeblock is self-padding: the reported bbox must stay the 250px BORDER box, \
+         not a content box: {report_json}"
+    );
+}

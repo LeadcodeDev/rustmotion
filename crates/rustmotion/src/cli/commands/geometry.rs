@@ -307,15 +307,7 @@ fn walk(
                     out,
                 );
             }
-            check_auto_scroll(
-                &child.component,
-                &child_path,
-                &raw_bbox,
-                viewport,
-                vi,
-                si,
-                out,
-            );
+            check_auto_scroll(&child.component, &child_path, layout, viewport, vi, si, out);
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
@@ -1017,10 +1009,20 @@ fn check_content_overflows_box(
 /// `(None, None)`/`MaxContent` yields each component's natural (unbounded)
 /// size, exactly like `check_unwrappable_text`/`check_content_overflows_box`
 /// already do for the text-family intrinsics.
+///
+/// the codeblock and terminal arms compare against different boxes,
+/// on purpose. `LegacyPaintDispatcher::is_self_padding` matches only
+/// `Component::Codeblock` — a codeblock is handed the raw (border) layout
+/// box and paints its own padding inside it (`compute_code_dimensions`
+/// already bakes `style.padding_px()` into `natural_h`, so comparing against
+/// the border box is the byte-for-byte-correct pairing). Every other
+/// painter, terminal included, is handed `layout.content_box()` instead —
+/// so the terminal arm compares against that, not the border box, or it
+/// under-reports by exactly the node's own padding.
 fn check_auto_scroll(
     component: &Component,
     path: &str,
-    bbox: &BBox,
+    layout: &BoxLayout,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -1031,6 +1033,7 @@ fn check_auto_scroll(
         Component::Codeblock(cb) if !cb.auto_scroll => {
             let (_, natural_h) =
                 CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
+            let bbox = bbox_of(layout);
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -1039,7 +1042,7 @@ fn check_auto_scroll(
                     component: "codeblock".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: *bbox,
+                    bbox,
                     viewport,
                     hint: format!(
                         "codeblock content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or shorten code",
@@ -1051,7 +1054,8 @@ fn check_auto_scroll(
         Component::Terminal(t) if !t.auto_scroll => {
             let (_, natural_h) =
                 TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
-            if natural_h > bbox.h + 0.5 {
+            let (cx, cy, cw, ch) = layout.content_box();
+            if natural_h > ch + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
                     scene_index: si,
@@ -1059,11 +1063,16 @@ fn check_auto_scroll(
                     component: "terminal".to_string(),
                     axis: Axis::Y,
                     kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: *bbox,
+                    bbox: BBox {
+                        x: cx,
+                        y: cy,
+                        w: cw,
+                        h: ch,
+                    },
                     viewport,
                     hint: format!(
                         "terminal content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or remove lines",
-                        natural_h, bbox.h
+                        natural_h, ch
                     ),
                 });
             }
