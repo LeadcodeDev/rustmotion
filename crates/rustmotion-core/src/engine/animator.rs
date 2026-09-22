@@ -500,8 +500,7 @@ fn spring_value_raw(t: f64, damping: f64, stiffness: f64, mass: f64) -> f64 {
         // Underdamped
         let omega_d = omega * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega * t).exp();
-        1.0 - decay
-            * ((zeta * omega * t / omega_d).sin() * (zeta * omega / omega_d) + (omega_d * t).cos())
+        1.0 - decay * ((omega_d * t).sin() * (zeta * omega / omega_d) + (omega_d * t).cos())
     } else if (zeta - 1.0).abs() < 1e-6 {
         // Critically damped
         let decay = (-omega * t).exp();
@@ -2838,19 +2837,22 @@ mod spring_duration_tests {
         //
         // damping=6, stiffness=120, mass=1 (the same "underdamped" preset
         // this file already uses for elastic_in / kf_anim_spring_underdamped)
-        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.043467 — 4.35%
-        // past the target, an order of magnitude outside any reasonable
-        // rest_threshold (default 0.5%). An author asking this spring to
-        // "finish at 0.8s" got a value nowhere near rest.
+        // at t=0.8s: spring_value_raw(0.8, 6, 120, 1) ~= 1.027616 — 2.76%
+        // past the target, well outside any reasonable rest_threshold
+        // (default 0.5%). An author asking this spring to "finish at 0.8s"
+        // got a value nowhere near rest. Reference recomputed when the
+        // (issue #220): the solver's underdamped branch fed the wrong
+        // argument to its sine term, so this captured value moved when that
+        // was corrected.
         let v = spring_value_raw(0.8, 6.0, 120.0, 1.0);
         assert!(
-            (v - 1.043467).abs() < 1e-5,
-            "captured red-phase reference value drifted: got {v}, expected ~1.043467"
+            (v - 1.027616).abs() < 1e-5,
+            "captured red-phase reference value drifted: got {v}, expected ~1.027616"
         );
         assert!(
-            (v - 1.0).abs() > 0.04,
+            (v - 1.0).abs() > 0.02,
             "red-phase claim: at t=duration the unscaled spring must still be far from rest \
-             (got diff {:.6}, expected > 0.04)",
+             (got diff {:.6}, expected > 0.02)",
             (v - 1.0).abs()
         );
     }
@@ -2867,7 +2869,7 @@ mod spring_duration_tests {
         let threshold = DEFAULT_SPRING_REST_THRESHOLD;
 
         // Green phase: the same (damping, stiffness, mass) that the
-        // red-phase test above showed is 4.35% off at t=0.8s without a
+        // red-phase test above showed is 2.76% off at t=0.8s without a
         // `duration` must now be within `threshold` of rest at t=0.8s.
         let v_at_duration = spring_value(0.8, &config);
         assert!(
