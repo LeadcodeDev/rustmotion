@@ -13,28 +13,16 @@ path = "src/bin/main.rs"
 
 [dependencies]
 rustmotion = { path = "../rustmotion" }
-
-# Pinned exactly, for two reasons. These are 0.x crates that ship breaking
-# changes in patch slots (0.6.2 removed the dock tiles canvas), and 0.7.0
-# removes `Root::render_dialog_layer`/`_sheet_`/`_notification_` with no
-# documented replacement — the three calls this app needs, kept isolated in
-# `app/overlays.rs` so that migration stays a localised patch. The kit in turn
-# pins `gpui-pre` at `=0.3.6`, so the whole graph moves in lockstep anyway;
-# saying so here makes it visible rather than surprising.
 gpui-kit = "=0.6.6"
-
+gpui-component = "0.6.6"
 clap = { version = "4", features = ["derive"] }
 notify = "7"
-# Also a *direct* dependency now, not only a transitive one: `RenderImage::new`
-# takes an `image::Frame`, and gpui-kit does not re-export `image`, so the types
-# only unify if we name the same major version ourselves.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-# Same reason: `RenderImage::new` takes a `SmallVec<[Frame; 1]>`.
 smallvec = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["time"] }
 rfd = "0.17"
 rodio = { version = "0.22", default-features = false, features = ["playback"] }
 dirs = "6.0.0"
-palette = { version = "0.7.6", default-features = false }
+palette = { version = "0.7.6", default-features = false, features = ["std"] }
 schemars = "0.8"

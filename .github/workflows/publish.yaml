@@ -13,12 +13,15 @@ jobs:
 
       - name: Install system dependencies
         # Doit rester identique à ci.yaml : l'étape « Run tests » ci-dessous lance
-        # `cargo test --workspace`, qui compile rustmotion-studio et tire donc la
-        # pile GTK/WebKit, elle-même adossée à glib-2.0. Sans ces paquets le build
-        # de glib-sys échoue et la release s'arrête avant toute publication.
-        # webkit/gtk/xdo: required to compile rustmotion-studio (dioxus desktop)
+        # `cargo test --workspace`, qui compile ET LIE rustmotion-studio. Sans ces
+        # paquets l'édition de liens échoue et la release s'arrête avant toute
+        # publication.
+        # xkbcommon-x11/wayland/xcb-cursor : exigés par gpui, à l'édition de liens
+        # seulement. clippy passe sans eux puisqu'il ne lie pas — la panne
+        # n'apparaît donc qu'au job de test. C'est ce qui a cassé le premier CI du
+        # chantier gpui (#306) : `-lxkbcommon-x11` introuvable, clippy vert.
         # asound: required by cpal, which rodio pulls in for preview audio
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libxkbcommon-x11-dev libwayland-dev libxcb-cursor-dev libasound2-dev
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
 

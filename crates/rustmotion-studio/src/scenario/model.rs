@@ -43,21 +43,14 @@ impl StudioModel {
             .unwrap_or(serde_json::Value::Null);
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         let total_frames = tasks.len() as u32;
-        let failures = rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
-        let audio_error = (!failures.is_empty()).then(|| {
-            failures
-                .iter()
-                .map(|f| f.to_string())
-                .collect::<Vec<_>>()
-                .join(" · ")
-        });
+
         Self {
             scenario: Arc::new(scenario),
             tasks: Arc::new(tasks),
             total_frames,
             error,
             write_error: None,
-            audio_error,
+            audio_error: None,
             generation: 0,
             path,
             raw,
@@ -88,5 +81,36 @@ pub fn empty_scenario() -> ResolvedScenario {
             camera_pan_duration: 0.0,
         }],
         included_paths: vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_a_scenario_does_not_decode_its_audio_on_the_calling_thread() {
+        let dir = std::env::temp_dir().join(format!("rm-audio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("with-audio.json");
+        std::fs::write(
+            &path,
+            r##"{ "video": { "width": 64, "height": 36, "background": "#000000" },
+                  "audio": [ { "src": "does-not-exist.wav" } ],
+                  "scenes": [ { "duration": 1.0 } ] }"##,
+        )
+        .unwrap();
+
+        let scenario = rustmotion::loader::load_input(&path).expect("load");
+        let model = StudioModel::new(scenario, None, Some(path.clone()));
+
+        assert!(
+            model.audio_error.is_none(),
+            "a missing track would have reported a failure had the analysis run inline; \
+             it belongs on the warmup thread, because decoding a 25 MB wav froze the \
+             library for two seconds before the editor could show its spinner"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
