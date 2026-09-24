@@ -25,36 +25,3 @@ pub enum View {
     Library,
     Editor,
 }
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Theme {
-    Dark,
-    Light,
-    System,
-}
-
-impl Theme {
-    pub fn class(self) -> &'static str {
-        match self {
-            Theme::Dark => "rm-dark",
-            Theme::Light => "rm-light",
-            Theme::System => "rm-system",
-        }
-    }
-
-    pub fn next(self) -> Theme {
-        match self {
-            Theme::Dark => Theme::Light,
-            Theme::Light => Theme::System,
-            Theme::System => Theme::Dark,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Theme::Dark => "Dark",
-            Theme::Light => "Light",
-            Theme::System => "System",
-        }
-    }
-}

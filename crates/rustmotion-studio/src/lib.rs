@@ -1,8 +1,8 @@
 mod app;
-mod components;
 pub mod editor;
 mod library;
 pub mod scenario;
+mod theme;
 
 pub use app::{run_preview, run_preview_with_error};
 
@@ -15,15 +15,20 @@ use rustmotion::loader::load_scenario;
 #[derive(Parser)]
 #[command(name = "rustmotion-studio", about = "Rustmotion live preview studio")]
 pub struct Cli {
-    /// Path to a JSON scenario to open directly in the editor (optional).
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        help = "Path to a JSON scenario to open directly in the editor (optional)."
+    )]
     file: Option<PathBuf>,
-    /// Workspace directory to scan for scenarios (default: current directory).
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        help = "Workspace directory to scan for scenarios (default: current directory)."
+    )]
     dir: Option<PathBuf>,
 }
 
-/// Returns the clap Command for shell completion generation.
 pub fn command() -> clap::Command {
     Cli::command()
 }

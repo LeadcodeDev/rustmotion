@@ -1,8 +1,7 @@
-//! The application shell: process entry points, the launch wiring, and the
-//! re-targetable file watcher.
-
+mod overlays;
 mod root;
 pub mod state;
+mod window;
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -13,15 +12,12 @@ use rustmotion::error::Result;
 use rustmotion::schema::ResolvedScenario;
 
 use crate::library::{LibraryState, SharedLibrary, WatchMsg};
-use crate::scenario::{empty_scenario, Shared, StudioModel};
-use root::StudioRoot;
+use crate::scenario::{empty_scenario, Shared, StudioModel, View};
 
 fn default_workspace() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// CLI-facing entry: open a scenario directly into the editor. The library
-/// home uses the file's parent directory as the workspace.
 pub fn run_preview(
     scenario: ResolvedScenario,
     input_path: Option<PathBuf>,
@@ -31,7 +27,6 @@ pub fn run_preview(
     run_preview_root(scenario, None, input_path, workspace, true, watch)
 }
 
-/// CLI-facing entry for the error case (file failed to load).
 pub fn run_preview_with_error(
     initial_error: String,
     input_path: Option<PathBuf>,
@@ -56,8 +51,6 @@ fn workspace_for(input_path: &Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(default_workspace)
 }
 
-/// Launch the studio root: library home + editor, sharing one model, a library
-/// state, and a re-targetable file watcher.
 pub fn run_preview_root(
     scenario: ResolvedScenario,
     initial_error: Option<String>,
@@ -66,13 +59,6 @@ pub fn run_preview_root(
     start_in_editor: bool,
     watch: bool,
 ) -> Result<()> {
-    for view in &scenario.views {
-        engine::prefetch_icons(&view.scenes);
-        engine::preextract_video_frames(&view.scenes, scenario.video.fps);
-    }
-    // Audio analysis is NOT done here: it belongs to `StudioModel::new`, which
-    // every load path goes through. Doing it once at launch left a scenario
-    // opened or reloaded later with the wrong (or no) analysis for the session.
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
@@ -85,6 +71,8 @@ pub fn run_preview_root(
     let library: SharedLibrary =
         Arc::new(Mutex::new(LibraryState::new(workspace, start_in_editor)));
 
+    spawn_scenario_warmup(shared.clone());
+
     if watch {
         let tx = spawn_watcher(shared.clone());
         if let Some(p) = input_path.clone() {
@@ -93,17 +81,53 @@ pub fn run_preview_root(
         library.lock().unwrap_or_else(|e| e.into_inner()).watch_tx = Some(tx);
     }
 
-    dioxus::LaunchBuilder::desktop()
-        .with_context(shared)
-        .with_context(library)
-        .launch(StudioRoot);
+    let view = if start_in_editor {
+        View::Editor
+    } else {
+        View::Library
+    };
+    let theme_pref = crate::theme::persist::load_theme_pref();
+
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets::new(""))
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            cx.spawn(async move |cx| {
+                window::open(shared, library, view, theme_pref, cx);
+            })
+            .detach();
+        });
 
     Ok(())
 }
 
-/// One long-lived watcher thread owning a single `notify::Watcher`, driven by a
-/// channel of [`WatchMsg`]. `Retarget` switches the watched file; `Changed`
-/// (from the notify callback) reloads the current file into the shared model.
+pub fn spawn_scenario_warmup(shared: Shared) {
+    std::thread::spawn(move || {
+        let (scenario, fps) = {
+            let m = shared.lock().unwrap_or_else(|e| e.into_inner());
+            (m.scenario.clone(), m.scenario.video.fps)
+        };
+        for view in &scenario.views {
+            engine::prefetch_icons(&view.scenes);
+            engine::preextract_video_frames(&view.scenes, fps);
+        }
+        let failures = rustmotion::encode::audio_analysis::analyze_scenario_audio(&scenario);
+        let audio_error = (!failures.is_empty()).then(|| {
+            failures
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(" \u{b7} ")
+        });
+
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
+        if Arc::ptr_eq(&m.scenario, &scenario) {
+            m.audio_error = audio_error;
+            m.generation = m.generation.wrapping_add(1);
+        }
+    });
+}
+
 fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
     use notify::{RecursiveMode, Watcher};
     let (tx, rx) = std::sync::mpsc::channel::<WatchMsg>();
@@ -133,12 +157,6 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                 }
                 WatchMsg::Changed => {
                     if let Some(p) = current.clone() {
-                        // Self-write skip: if the disk content is exactly what
-                        // this process last wrote (debounced write, undo), the
-                        // in-memory model is already up to date — and possibly
-                        // NEWER under continuous typing. Reloading would
-                        // clobber it, so skip. External edits hash differently
-                        // and reload normally.
                         if let Ok(content) = std::fs::read_to_string(&p) {
                             if crate::scenario::is_self_write(
                                 &crate::scenario::self_write_slot(),
@@ -156,6 +174,8 @@ fn spawn_watcher(shared: Shared) -> Sender<WatchMsg> {
                         let g = m.generation.wrapping_add(1);
                         *m = StudioModel::new(scenario, error, Some(p.clone()));
                         m.generation = g;
+                        drop(m);
+                        spawn_scenario_warmup(shared.clone());
                     }
                 }
             }
