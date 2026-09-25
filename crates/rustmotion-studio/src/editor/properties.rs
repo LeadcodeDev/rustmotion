@@ -512,8 +512,7 @@ pub fn section_for(prop: &str) -> CssSection {
     use CssSection::*;
     match prop {
         "font-family" | "font-size" | "font-weight" | "font-style" | "line-height"
-        | "letter-spacing" | "text-align" | "color" | "white-space"
-        | "text-shadow" => Typography,
+        | "letter-spacing" | "text-align" | "color" | "white-space" | "text-shadow" => Typography,
         "display"
         | "flex-direction"
         | "flex-wrap"
