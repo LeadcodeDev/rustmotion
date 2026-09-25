@@ -87,14 +87,18 @@ fn encode_png_sequence_to_dir(
     let mut batch_base: u32 = 0;
 
     for batch in tasks.chunks(batch_size) {
-        let results: Vec<Result<(u32, Vec<u8>)>> = batch
+        let results: Vec<Result<()>> = batch
             .par_iter()
             .enumerate()
             .map(|(local_idx, task)| {
                 let frame_num = batch_base + local_idx as u32;
                 let rgba = render_frame_task(config, scenario, task)?;
+                let img = image::RgbaImage::from_raw(width, height, rgba)
+                    .ok_or(RustmotionError::PixelImage)?;
+                let path = output_dir.join(format!("frame_{:05}.png", frame_num));
+                img.save(&path)?;
                 progress_counter.fetch_add(1, Ordering::Relaxed);
-                Ok((frame_num, rgba))
+                Ok(())
             })
             .collect();
 
@@ -108,11 +112,7 @@ fn encode_png_sequence_to_dir(
         }
 
         for result in results {
-            let (frame_num, rgba) = result?;
-            let path = output_dir.join(format!("frame_{:05}.png", frame_num));
-            let img = image::RgbaImage::from_raw(width, height, rgba)
-                .ok_or(RustmotionError::PixelImage)?;
-            img.save(&path)?;
+            result?;
         }
     }
 
@@ -236,8 +236,8 @@ fn encode_gif_to_path(
         }
 
         for result in results {
-            let rgba = result?;
-            let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba.clone(), 10);
+            let mut rgba = result?;
+            let mut frame = gif::Frame::from_rgba_speed(gif_w, gif_h, &mut rgba, 10);
             frame.delay = gif_frame_delay_cs(frame_idx, fps);
             frame_idx += 1;
             encoder
@@ -274,10 +274,30 @@ fn gif_frame_delay_cs(frame_index: u32, fps: u32) -> u16 {
     delay.clamp(2, u16::MAX as i64) as u16
 }
 
+#[cfg(unix)]
+fn raw_stdout_writer() -> Box<dyn Write> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let stdout = std::io::stdout();
+    let borrowed_stdout_fd = unsafe { std::fs::File::from_raw_fd(stdout.as_raw_fd()) };
+    let duplicated_fd = borrowed_stdout_fd.try_clone();
+    std::mem::forget(borrowed_stdout_fd);
+    match duplicated_fd {
+        Ok(file) => Box::new(BufWriter::with_capacity(1 << 20, file)),
+        Err(_) => Box::new(std::io::stdout()),
+    }
+}
+
+#[cfg(not(unix))]
+fn raw_stdout_writer() -> Box<dyn Write> {
+    Box::new(std::io::stdout())
+}
+
 /// Stream raw RGBA pixel data to stdout for piping to external tools.
 pub fn encode_raw_stdout(scenario: &Scenario, quiet: bool) -> Result<()> {
-    let mut stdout = std::io::stdout().lock();
-    encode_raw_frames(scenario, quiet, &mut stdout)
+    let mut writer = raw_stdout_writer();
+    encode_raw_frames(scenario, quiet, writer.as_mut())?;
+    writer.flush()?;
+    Ok(())
 }
 
 /// Shared implementation behind `encode_raw_stdout`, generic over the writer
@@ -309,12 +329,23 @@ fn encode_raw_frames(scenario: &Scenario, quiet: bool, writer: &mut dyn Write) -
         return Err(RustmotionError::NoFrames);
     }
 
-    for (idx, task) in tasks.iter().enumerate() {
-        let rgba = render_frame_task(config, scenario, task)?;
-        writer.write_all(&rgba)?;
+    let batch_size = (rayon::current_num_threads() * 2).max(4);
+    let mut frames_written: u32 = 0;
 
-        if !quiet {
-            eprint!("\rFrame {}", idx);
+    for batch in tasks.chunks(batch_size) {
+        let results: Vec<Result<Vec<u8>>> = batch
+            .par_iter()
+            .map(|task| render_frame_task(config, scenario, task))
+            .collect();
+
+        for result in results {
+            let rgba = result?;
+            writer.write_all(&rgba)?;
+            frames_written += 1;
+
+            if !quiet {
+                eprint!("\rFrame {}", frames_written - 1);
+            }
         }
     }
 
