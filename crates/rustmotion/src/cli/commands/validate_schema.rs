@@ -461,7 +461,6 @@ fn classify_transition_property(name: &str) -> TransitionPropertyKind {
         | "white-space"
         | "overflow-wrap"
         | "text-overflow"
-        | "text-decoration"
         | "text-autofit"
         | "mix-blend-mode"
         | "clip-path"
