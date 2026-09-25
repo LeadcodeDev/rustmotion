@@ -73,6 +73,7 @@
       "children": [
         {
           "type": "particle",
+          "bleed": true,
           "particle_type": "halo",
           "count": 10,
           "colors": [
