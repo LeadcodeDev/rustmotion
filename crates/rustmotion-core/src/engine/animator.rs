@@ -336,7 +336,13 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
             }
         }
         EasingType::Bounce => bounce_ease_out(t),
-        EasingType::Spring => t, // Spring handled separately
+        EasingType::Spring => spring_value(
+            t,
+            &SpringConfig {
+                duration: Some(1.0),
+                ..SpringConfig::default()
+            },
+        ),
         EasingType::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
     }
 }
@@ -409,6 +415,33 @@ fn ease_in_out_cubic(t: f64) -> f64 {
         4.0 * t * t * t
     } else {
         1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+#[cfg(test)]
+mod generic_ease_spring_tests {
+    use super::*;
+
+    #[test]
+    fn spring_easing_is_no_longer_a_silent_linear_passthrough() {
+        let linear = 0.5;
+        let spring = ease(0.5, &EasingType::Spring);
+        assert!(
+            (spring - linear).abs() > 0.05,
+            "\"spring\" easing outside a keyframe segment (wiggle, motion_path, scene \
+             transitions) must apply the spring's shape, not silently fall back to linear: \
+             got {spring}, linear would be {linear}"
+        );
+    }
+
+    #[test]
+    fn spring_easing_is_still_pinned_at_both_ends_like_every_other_easing() {
+        assert_eq!(ease(0.0, &EasingType::Spring), 0.0);
+        let at_one = ease(1.0, &EasingType::Spring);
+        assert!(
+            (at_one - 1.0).abs() < 0.01,
+            "spring easing must settle close to 1.0 by t=1.0, got {at_one}"
+        );
     }
 }
 
@@ -1019,7 +1052,12 @@ fn resolve_animation_value_full(anim: &Animation, time: f64) -> ResolvedValue {
 
             let progress = match segment_easing {
                 EasingType::Spring => {
-                    let spring_config = anim.spring.clone().unwrap_or_default();
+                    let mut spring_config = anim.spring.clone().unwrap_or_default();
+                    if spring_config.duration.is_none()
+                        && spring_rest_time(&spring_config) > segment_duration
+                    {
+                        spring_config.duration = Some(segment_duration);
+                    }
                     spring_value(local_t * segment_duration, &spring_config)
                 }
                 other => ease(local_t, other),
@@ -3136,6 +3174,141 @@ mod spring_duration_tests {
         assert_eq!(
             spring_value(0.0, &config),
             spring_value_raw(0.0, 6.0, 120.0, 1.0)
+        );
+    }
+}
+
+#[cfg(test)]
+mod spring_keyframe_segment_tests {
+    use super::*;
+
+    fn two_point_spring_animation(
+        property: &str,
+        segment_duration: f64,
+        v0: f64,
+        v1: f64,
+        spring: SpringConfig,
+    ) -> Animation {
+        Animation {
+            property: property.to_string(),
+            keyframes: vec![
+                Keyframe {
+                    time: 0.0,
+                    value: KeyframeValue::Number(v0),
+                    easing: None,
+                },
+                Keyframe {
+                    time: segment_duration,
+                    value: KeyframeValue::Number(v1),
+                    easing: None,
+                },
+            ],
+            easing: EasingType::Spring,
+            spring: Some(spring),
+        }
+    }
+
+    #[test]
+    fn a_spring_without_an_explicit_duration_nearly_settles_by_the_segment_end() {
+        let segment_duration = 0.3;
+        let anim = two_point_spring_animation(
+            "scale",
+            segment_duration,
+            0.0,
+            100.0,
+            SpringConfig {
+                damping: 2.0,
+                stiffness: 100.0,
+                mass: 1.0,
+                duration: None,
+                rest_threshold: None,
+            },
+        );
+
+        let just_inside_the_segment =
+            resolve_keyframe_track(&anim, segment_duration * 0.999).as_f64();
+        assert!(
+            (just_inside_the_segment - 100.0).abs() < 5.0,
+            "value just before the keyframe's own declared end should already be close to the \
+             target instead of overshooting far past it: got {just_inside_the_segment}"
+        );
+    }
+
+    #[test]
+    fn a_spring_that_already_settles_in_time_keeps_its_authored_shape() {
+        let segment_duration = 1.5;
+        let damping = 20.0;
+        let stiffness = 100.0;
+        let mass = 1.0;
+        let natural_rest = spring_rest_time(&SpringConfig {
+            damping,
+            stiffness,
+            mass,
+            duration: None,
+            rest_threshold: None,
+        });
+        assert!(
+            natural_rest < segment_duration,
+            "test setup: this spring must already settle within the segment, got rest_time \
+             {natural_rest} for a {segment_duration}s segment"
+        );
+
+        let anim = two_point_spring_animation(
+            "scale",
+            segment_duration,
+            0.0,
+            100.0,
+            SpringConfig {
+                damping,
+                stiffness,
+                mass,
+                duration: None,
+                rest_threshold: None,
+            },
+        );
+
+        let mid_segment_time = segment_duration * 0.5;
+        let got = resolve_keyframe_track(&anim, mid_segment_time).as_f64();
+        let unrescaled = 100.0 * spring_value_raw(mid_segment_time, damping, stiffness, mass);
+        assert!(
+            (got - unrescaled).abs() < 1e-9,
+            "a spring whose natural settle time already fits inside the segment must keep its \
+             author-chosen shape, not be rescaled to fit tighter: got {got}, expected {unrescaled}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_spring_duration_is_not_overridden_by_the_segment_span() {
+        let anim = two_point_spring_animation(
+            "scale",
+            10.0,
+            0.0,
+            100.0,
+            SpringConfig {
+                damping: 6.0,
+                stiffness: 120.0,
+                mass: 1.0,
+                duration: Some(0.8),
+                rest_threshold: None,
+            },
+        );
+
+        let at_the_authored_duration = resolve_keyframe_track(&anim, 0.8).as_f64();
+        let reference = 100.0
+            * spring_value(
+                0.8,
+                &SpringConfig {
+                    damping: 6.0,
+                    stiffness: 120.0,
+                    mass: 1.0,
+                    duration: Some(0.8),
+                    rest_threshold: None,
+                },
+            );
+        assert!(
+            (at_the_authored_duration - reference).abs() < 1e-9,
+            "an explicit spring.duration must still drive the rescale, not the (far longer) \
+             10s keyframe span: got {at_the_authored_duration}, expected {reference}"
         );
     }
 }
