@@ -54,7 +54,7 @@ pub fn encode_video_range(
 fn encode_video_impl(
     scenario: &Scenario,
     output_path: &str,
-    _quiet: bool,
+    quiet: bool,
     frame_range: Option<(u32, u32)>,
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
@@ -111,7 +111,6 @@ fn encode_video_impl(
 
         for yuv_result in yuv_frames {
             let yuv = yuv_result?;
-            encoder.force_intra_frame();
             let yuv_buf = YUVBuffer::from_vec(yuv, width as usize, height as usize);
             let bitstream = encoder
                 .encode(&yuv_buf)
@@ -137,6 +136,7 @@ fn encode_video_impl(
         segment_duration,
         scenario_total_duration,
         segment_start,
+        quiet,
     )?;
 
     Ok(())
@@ -303,7 +303,7 @@ pub fn encode_video_incremental(
     for i in 0..num_scenes {
         if needs_render[i] {
             new_segments.push(SceneSegment {
-                h264_data: rendered_segments.remove(&i).unwrap_or_default(),
+                h264_data: std::sync::Arc::new(rendered_segments.remove(&i).unwrap_or_default()),
                 scene_hash: scene_hashes[i],
             });
         } else {
@@ -348,6 +348,7 @@ pub fn encode_video_incremental(
         total_duration,
         total_duration,
         0.0,
+        quiet,
     )?;
 
     if !quiet && on_progress.is_none() {
@@ -417,6 +418,40 @@ mod incremental_tests {
         let _ = std::fs::remove_file(&out);
     }
 
+    #[test]
+    fn a_clean_slots_h264_buffer_is_shared_not_copied_across_watch_iterations() {
+        let json = |text: &str| {
+            format!(
+                r##"{{"video": {{"width": 32, "height": 32, "fps": 10}},
+                "scenes": [
+                    {{"duration": 0.3, "children": [{{"type": "text", "content": "static"}}]}},
+                    {{"duration": 0.3, "children": [{{"type": "text", "content": "{text}"}}]}}
+                ]}}"##
+            )
+        };
+        let out = std::env::temp_dir().join(format!(
+            "rustmotion_incr_shared_buf_{}.mp4",
+            std::process::id()
+        ));
+        let out_str = out.to_str().unwrap();
+
+        let base = load_scenario_from_source(None, Some(&json("one"))).unwrap();
+        let segments =
+            encode_video_incremental(&base, out_str, true, None, None).expect("first run");
+
+        let changed = load_scenario_from_source(None, Some(&json("TWO"))).unwrap();
+        let segments2 = encode_video_incremental(&changed, out_str, true, Some(&segments), None)
+            .expect("second run");
+
+        assert!(
+            std::sync::Arc::ptr_eq(&segments[0].h264_data, &segments2[0].h264_data),
+            "slot 0 (scene \"static\") did not change and must be reused as the same \
+             allocation (an Arc clone), not deep-copied, across --watch iterations"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
     fn ffprobe_on_path() -> bool {
         std::process::Command::new("ffprobe")
             .args(["-version"])
@@ -450,6 +485,72 @@ mod incremental_tests {
             .trim()
             .parse::<u32>()
             .ok()
+    }
+
+    fn ffprobe_keyframe_count(path: &str) -> Option<u32> {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=key_frame",
+                "-of",
+                "csv=p=0",
+                path,
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| l.trim() == "1")
+                .count() as u32,
+        )
+    }
+
+    #[test]
+    fn a_full_render_does_not_force_every_frame_to_be_a_keyframe() {
+        if !ffprobe_on_path() {
+            eprintln!(
+                "a_full_render_does_not_force_every_frame_to_be_a_keyframe: ffprobe not found — \
+                 skipping"
+            );
+            return;
+        }
+
+        let fps = 10u32;
+        let total_frames = 60u32;
+        let duration = total_frames as f64 / fps as f64;
+        let json = format!(
+            r#"{{"video": {{"width": 64, "height": 64, "fps": {fps}}},
+                 "scenes": [{{"duration": {duration}, "children": []}}]}}"#
+        );
+        let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rustmotion_full_render_not_all_intra_{}.mp4",
+            std::process::id()
+        ));
+        encode_video(&scenario, out.to_str().unwrap(), true, None).expect("full render");
+
+        let frames = ffprobe_frame_count(out.to_str().unwrap()).expect("must probe frame count");
+        let keyframes =
+            ffprobe_keyframe_count(out.to_str().unwrap()).expect("must probe keyframe count");
+        assert_eq!(frames, total_frames);
+        assert!(
+            keyframes < frames,
+            "a full (non-incremental) render must not force every frame to be a keyframe — \
+             segment independence is only needed on the incremental path, and forcing IDR-only \
+             here inflates the file for no benefit (got {keyframes} keyframes out of {frames} \
+             frames)"
+        );
+
+        let _ = std::fs::remove_file(&out);
     }
 
     #[test]

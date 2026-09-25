@@ -176,7 +176,11 @@ pub fn probe_audio_metadata(path: &str) -> Result<AudioProbe> {
 /// segment". Kept as its own entry point for API stability (existing
 /// callers, this module's own unit test).
 pub fn mix_audio_tracks(tracks: &[AudioTrack], total_duration: f64) -> Result<Option<Vec<u8>>> {
-    mix_audio_tracks_segment(tracks, total_duration, 0.0, total_duration)
+    mix_audio_tracks_segment(tracks, total_duration, 0.0, total_duration, false)
+}
+
+fn loading_audio_message(quiet: bool, src: &str) -> Option<String> {
+    (!quiet).then(|| format!("  Loading audio: {src}"))
 }
 
 /// Mix multiple audio tracks, but only materialize the samples that fall
@@ -203,6 +207,7 @@ pub fn mix_audio_tracks_segment(
     scenario_total_duration: f64,
     segment_start: f64,
     segment_duration: f64,
+    quiet: bool,
 ) -> Result<Option<Vec<u8>>> {
     if tracks.is_empty() {
         return Ok(None);
@@ -223,7 +228,9 @@ pub fn mix_audio_tracks_segment(
         * TARGET_CHANNELS as usize;
 
     for track in tracks {
-        eprintln!("  Loading audio: {}", track.src);
+        if let Some(message) = loading_audio_message(quiet, &track.src) {
+            eprintln!("{message}");
+        }
 
         let (samples, src_rate, src_channels) = decode_audio_file(&track.src)?;
 
@@ -505,6 +512,21 @@ fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn loading_audio_message_is_suppressed_when_quiet() {
+        assert_eq!(
+            loading_audio_message(false, "a.wav"),
+            Some("  Loading audio: a.wav".to_string()),
+            "non-quiet mode must still print which track is loading"
+        );
+        assert_eq!(
+            loading_audio_message(true, "a.wav"),
+            None,
+            "--quiet documents \"suppress all output except errors\" — this per-track line is \
+             neither, so it must be silenced too"
+        );
+    }
+
     // ── decode_audio_file must trust the decoded spec, not the header ────────
     //
     // Reproducing the exact divergence through a real file needs a decoder
@@ -714,14 +736,15 @@ mod tests {
         };
         let tracks = [track];
 
-        let whole = mix_audio_tracks_segment(&tracks, scenario_duration, 0.0, scenario_duration)
-            .expect("whole mix must succeed")
-            .expect("must return Some(pcm)");
+        let whole =
+            mix_audio_tracks_segment(&tracks, scenario_duration, 0.0, scenario_duration, true)
+                .expect("whole mix must succeed")
+                .expect("must return Some(pcm)");
 
         let bounds = [(0.0, 0.7), (0.7, 0.7), (1.4, 0.6)];
         let mut concatenated = Vec::new();
         for (start, duration) in bounds {
-            let seg = mix_audio_tracks_segment(&tracks, scenario_duration, start, duration)
+            let seg = mix_audio_tracks_segment(&tracks, scenario_duration, start, duration, true)
                 .expect("segment mix must succeed")
                 .expect("must return Some(pcm)");
             concatenated.extend_from_slice(&seg);
@@ -782,7 +805,7 @@ mod tests {
         let tracks = [track];
 
         // Segment [1.0, 2.0) sits entirely after the track's own end.
-        let seg = mix_audio_tracks_segment(&tracks, scenario_duration, 1.0, 1.0)
+        let seg = mix_audio_tracks_segment(&tracks, scenario_duration, 1.0, 1.0, true)
             .expect("mix must succeed")
             .expect("must return Some(pcm)");
         assert!(
@@ -837,10 +860,15 @@ mod tests {
         // Segment 2, correctly windowed: [0.7s, 2.0s) of the scenario.
         let segment_start = 0.7_f64;
         let segment_duration = 1.3_f64;
-        let correct =
-            mix_audio_tracks_segment(&tracks, scenario_duration, segment_start, segment_duration)
-                .expect("mix must succeed")
-                .expect("must return Some(pcm)");
+        let correct = mix_audio_tracks_segment(
+            &tracks,
+            scenario_duration,
+            segment_start,
+            segment_duration,
+            true,
+        )
+        .expect("mix must succeed")
+        .expect("must return Some(pcm)");
 
         // The bug: mixing the same segment's own duration with no offset —
         // exactly the call shape available before this fix existed.

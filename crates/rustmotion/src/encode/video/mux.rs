@@ -29,6 +29,7 @@ pub(super) fn mux_h264_to_mp4(
     segment_duration: f64,
     scenario_total_duration: f64,
     segment_start: f64,
+    quiet: bool,
 ) -> Result<()> {
     // Collect audio from embedded video components and merge with scenario.audio.
     let video_tracks = super::super::video_audio::collect_video_audio_tracks(scenario);
@@ -44,6 +45,7 @@ pub(super) fn mux_h264_to_mp4(
             scenario_total_duration,
             segment_start,
             segment_duration,
+            quiet,
         )?
     } else {
         None

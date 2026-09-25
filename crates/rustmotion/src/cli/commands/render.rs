@@ -62,6 +62,19 @@ fn clear_all_media_caches() {
     engine::video_frame_cache().clear();
 }
 
+fn incremental_quality_tradeoff_warning(
+    can_incremental: bool,
+    ffmpeg_available: bool,
+) -> Option<&'static str> {
+    (can_incremental && ffmpeg_available).then_some(
+        "--watch is re-rendering with the bundled incremental encoder (h264, 8-bit, larger \
+         files, no hardware acceleration) for fast turnaround on change, even though ffmpeg is \
+         on PATH — incremental re-encoding only exists for that bundled encoder today. `render` \
+         without --watch uses ffmpeg and produces a smaller, higher-quality 10-bit file; re-run \
+         it once you are done iterating.",
+    )
+}
+
 /// Load + validate a scenario for watch mode. On validation failure prints the
 /// report and returns the typed error so the caller can decide how to handle it.
 ///
@@ -351,6 +364,21 @@ pub fn cmd_watch(
         || hardware_acceleration;
     let can_incremental =
         frame.is_none() && !matches!(fmt, "png-seq" | "gif" | "raw") && !use_ffmpeg;
+
+    let ffmpeg_available = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !quiet {
+        if let Some(warning) =
+            incremental_quality_tradeoff_warning(can_incremental, ffmpeg_available)
+        {
+            eprintln!("Warning: {warning}");
+        }
+    }
 
     let output_str = output
         .to_str()
@@ -765,5 +793,25 @@ mod tests {
         let warnings_explicit_h264 = check_native_fallback(Some("h264"), false, "mp4", None)
             .expect("an explicit --codec h264 must be accepted identically to the default");
         assert!(warnings_explicit_h264.is_empty());
+    }
+
+    #[test]
+    fn incremental_quality_tradeoff_warning_fires_only_when_ffmpeg_goes_unused() {
+        assert!(
+            incremental_quality_tradeoff_warning(true, true).is_some(),
+            "the default --watch combination takes the bundled encoder even when ffmpeg is on \
+             PATH — that gap must not stay silent (F-PERF-ENC-4)"
+        );
+        assert!(
+            incremental_quality_tradeoff_warning(true, false).is_none(),
+            "no ffmpeg on PATH at all: the bundled encoder is not a tradeoff, it is the only \
+             option, same as a plain `render` without --watch"
+        );
+        assert!(
+            incremental_quality_tradeoff_warning(false, true).is_none(),
+            "a flag already routed this render through ffmpeg (e.g. --codec prores, --transparent): \
+             no tradeoff to warn about"
+        );
+        assert!(incremental_quality_tradeoff_warning(false, false).is_none());
     }
 }

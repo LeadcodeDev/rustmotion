@@ -256,7 +256,16 @@ fn ffmpeg_args(
                 push(&["-pix_fmt", alpha_fmt("yuva420p", "yuv420p")], &mut args);
             }
             "prores" => {
-                push(&["-c:v", "prores_ks", "-profile:v", "4"], &mut args);
+                let prores_profile_matching_pix_fmt = alpha_fmt("4", "3");
+                push(
+                    &[
+                        "-c:v",
+                        "prores_ks",
+                        "-profile:v",
+                        prores_profile_matching_pix_fmt,
+                    ],
+                    &mut args,
+                );
                 push(
                     &["-pix_fmt", alpha_fmt("yuva444p10le", "yuv422p10le")],
                     &mut args,
@@ -444,6 +453,16 @@ pub fn check_transparent_codec(codec: &str, transparent: bool) -> Result<()> {
     Ok(())
 }
 
+struct RemoveDirAllOnDrop(Option<std::path::PathBuf>);
+
+impl Drop for RemoveDirAllOnDrop {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encode_with_ffmpeg_hw_impl(
     scenario: &Scenario,
@@ -457,6 +476,11 @@ fn encode_with_ffmpeg_hw_impl(
     mut on_progress: Option<&mut dyn FnMut(EncodeProgress)>,
 ) -> Result<()> {
     check_transparent_codec(codec, transparent)?;
+    let container = std::path::Path::new(output_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp4");
+    super::formats::check_codec_container(codec, container)?;
 
     let config = &scenario.video;
     let width = config.width;
@@ -528,6 +552,7 @@ fn encode_with_ffmpeg_hw_impl(
     } else {
         None
     };
+    let _audio_tmp_dir_cleanup = RemoveDirAllOnDrop(audio_tmp_dir.clone());
     let pcm_data = if !merged_audio.is_empty() {
         if let Some(ref tmp_dir) = audio_tmp_dir {
             std::fs::create_dir(tmp_dir)?;
@@ -537,6 +562,7 @@ fn encode_with_ffmpeg_hw_impl(
             scenario_total_duration,
             segment_start,
             segment_duration,
+            quiet,
         )?
     } else {
         None
@@ -726,10 +752,6 @@ fn encode_with_ffmpeg_hw_impl(
     // join does not block on anything still running.
     let stderr_text = stderr_reader.and_then(|h| h.join().ok());
 
-    if let Some(ref tmp_dir) = audio_tmp_dir {
-        let _ = std::fs::remove_dir_all(tmp_dir);
-    }
-
     // ffmpeg's actual complaint sits in the last few lines of stderr. Build the
     // summary once: every failure path needs it, and `--quiet` must not be the
     // difference between a diagnosable error and "Broken pipe".
@@ -800,6 +822,102 @@ fn ffmpeg_stderr_summary(stderr: &[u8]) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     (!summary.trim().is_empty()).then_some(summary)
+}
+
+struct ConcatVideoFormat {
+    codec_name: String,
+    width: u32,
+    height: u32,
+    pix_fmt: String,
+}
+
+fn probe_video_format(path: &std::path::Path) -> Result<ConcatVideoFormat> {
+    let out = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,width,height,pix_fmt",
+            "-of",
+            "default=nw=1",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| RustmotionError::FfmpegSpawn {
+            reason: e.to_string(),
+        })?;
+    if !out.status.success() {
+        return Err(RustmotionError::Generic(format!(
+            "could not probe '{}' for its video format — it may be unreadable or corrupt: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut codec_name: Option<String> = None;
+    let mut width: Option<u32> = None;
+    let mut height: Option<u32> = None;
+    let mut pix_fmt: Option<String> = None;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("codec_name=") {
+            codec_name = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("width=") {
+            width = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("height=") {
+            height = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("pix_fmt=") {
+            pix_fmt = Some(v.trim().to_string());
+        }
+    }
+    match (codec_name, width, height, pix_fmt) {
+        (Some(codec_name), Some(width), Some(height), Some(pix_fmt)) => Ok(ConcatVideoFormat {
+            codec_name,
+            width,
+            height,
+            pix_fmt,
+        }),
+        _ => Err(RustmotionError::Generic(format!(
+            "could not read '{}' video codec/resolution/pixel format from ffprobe output — it \
+             may be unreadable or corrupt: {text}",
+            path.display()
+        ))),
+    }
+}
+
+fn check_inputs_share_video_format(inputs: &[std::path::PathBuf]) -> Result<()> {
+    let mut formats = inputs
+        .iter()
+        .map(|p| Ok::<_, RustmotionError>((p, probe_video_format(p)?)));
+    let Some(first) = formats.next() else {
+        return Ok(());
+    };
+    let (first_path, first_format) = first?;
+    for entry in formats {
+        let (path, format) = entry?;
+        if format.codec_name != first_format.codec_name
+            || format.width != first_format.width
+            || format.height != first_format.height
+            || format.pix_fmt != first_format.pix_fmt
+        {
+            return Err(RustmotionError::Generic(format!(
+                "concat requires every segment to share codec/resolution/pixel format — '{}' \
+                 is {}x{} {}/{}, but '{}' is {}x{} {}/{}",
+                path.display(),
+                format.width,
+                format.height,
+                format.codec_name,
+                format.pix_fmt,
+                first_path.display(),
+                first_format.width,
+                first_format.height,
+                first_format.codec_name,
+                first_format.pix_fmt,
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn segment_has_audio_stream(path: &std::path::Path) -> bool {
@@ -1012,19 +1130,16 @@ fn verify_concat_frame_count(output_path: &str, expected_frames: u32) -> Result<
 /// works when every segment's bitstream is independently decodable at its
 /// boundary — in practice, every frame at every segment boundary has to be
 /// a keyframe, and the segments' encoder settings (profile, resolution,
-/// pixel format) have to match exactly. `encode_video_range` (the native
-/// openh264 path) happens to force an intra frame on *every* output frame
-/// already (`encoder.force_intra_frame()`, unrelated to frame ranges — it
-/// predates this feature), so its segments would trivially qualify. But
-/// this function's actual callers go through the ffmpeg path
+/// pixel format) have to match exactly. Neither `encode_video_range` (the
+/// native openh264 path, GOP-encoded like any full render) nor this
+/// function's actual callers — the ffmpeg path
 /// (`encode_with_ffmpeg_hw_range`), the one `render` actually uses whenever
-/// ffmpeg is on `PATH` (the CLI's default): that path hands GOP structure
-/// to libx264/libx265 with no per-frame intra control at all, so segment
-/// boundaries are not guaranteed keyframes and a raw bitstream join would
-/// silently produce an undecodable or corrupted joint at some cuts. Making
-/// bitstream concatenation reliable needs an encoding-side change (forcing
-/// a keyframe at every segment boundary, or exposing a GOP-alignment knob)
-/// that does not exist yet.
+/// ffmpeg is on `PATH` (the CLI's default) — give any per-frame intra
+/// control, so segment boundaries are not guaranteed keyframes and a raw
+/// bitstream join would silently produce an undecodable or corrupted joint
+/// at some cuts. Making bitstream concatenation reliable needs an
+/// encoding-side change (forcing a keyframe at every segment boundary, or
+/// exposing a GOP-alignment knob) that does not exist yet.
 ///
 /// The concat demuxer sidesteps all of that: it trusts each segment's own
 /// container-level framing and restitches the streams, so it works
@@ -1039,6 +1154,7 @@ pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> 
             "concat requires at least one input segment".to_string(),
         ));
     }
+    check_inputs_share_video_format(inputs)?;
 
     // The concat demuxer reads a text list of `file '<path>'` lines. Paths
     // are canonicalized so the list works regardless of the process's
@@ -1126,6 +1242,7 @@ mod tests {
     use super::{
         audio_tmp_dir_name, check_transparent_codec, ffmpeg_args, ffmpeg_partial_output_path,
         parse_encoder_names, segment_has_audio_stream, select_hardware_encoder, HardwareSelection,
+        RemoveDirAllOnDrop,
     };
 
     // ── audio scratch directory naming: not fully predictable from outside ──
@@ -1353,6 +1470,28 @@ mod tests {
     }
 
     #[test]
+    fn opaque_prores_uses_the_422_hq_profile_not_4444() {
+        let profile_at = |t: bool| {
+            let a = ffmpeg_args(320, 240, 30, "prores", 23, t, None, None, "o.mov");
+            let i = a.iter().position(|s| s == "-profile:v").unwrap();
+            a[i + 1].clone()
+        };
+        assert_eq!(
+            profile_at(false),
+            "3",
+            "opaque prores must encode profile 3 (422 HQ), which actually pairs with the \
+             yuv422p10le pixel format this path emits — profile 4 (4444) forces ffmpeg to \
+             silently upgrade to a 4:4:4/12-bit format instead of honouring what was asked"
+        );
+        assert_eq!(
+            profile_at(true),
+            "4",
+            "transparent prores still needs profile 4 (4444) — it is the only ProRes profile \
+             with an alpha channel"
+        );
+    }
+
+    #[test]
     fn check_transparent_codec_only_refuses_h264_and_h265() {
         for codec in ["h264", "h265", "hevc"] {
             let err = check_transparent_codec(codec, true)
@@ -1417,6 +1556,54 @@ mod tests {
             );
             let _ = std::fs::remove_file(&out);
         }
+    }
+
+    #[test]
+    fn encode_with_ffmpeg_hw_range_refuses_a_codec_the_container_cannot_hold_before_rendering() {
+        let json = r#"{"video": {"width": 32, "height": 32, "fps": 10},
+             "scenes": [{"duration": 1.0, "children": []}]}"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_ffmpeg_range_codec_container_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&out);
+
+        let result = super::encode_with_ffmpeg_hw_range(
+            &scenario,
+            out.to_str().unwrap(),
+            true,
+            "prores",
+            None,
+            false,
+            false,
+            (0, 4),
+            None,
+        );
+
+        let err = result.expect_err(
+            "--frames with a codec/container pair check_codec_container refuses (prores into \
+             .mp4) must be caught before any frame is rendered — the same guard `render` gets \
+             without --frames — instead of surfacing as a raw ffmpeg failure after the whole \
+             segment renders",
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("prores"), "{msg}");
+        assert!(
+            msg.contains(".mov"),
+            "the message must name what works: {msg}"
+        );
+        assert!(
+            !out.exists(),
+            "refusing the pair must happen before any frame is rendered or piped to ffmpeg"
+        );
+
+        let _ = std::fs::remove_file(&out);
     }
 
     // ── Hardware acceleration: pure argument construction ───────────────────
@@ -1913,6 +2100,82 @@ Encoders:
         let _ = std::fs::remove_file(&out);
     }
 
+    #[test]
+    fn a_failed_audio_decode_does_not_leak_the_scratch_directory() {
+        let bad_audio = std::env::temp_dir().join(format!(
+            "rm_ffmpeg_leak_bad_audio_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&bad_audio, b"not actually audio").expect("write garbage audio file");
+
+        let json = format!(
+            r#"{{"video": {{"width": 32, "height": 32, "fps": 10}},
+                 "audio": [{{"src": "{}"}}],
+                 "scenes": [{{"duration": 0.2, "children": []}}]}}"#,
+            bad_audio.to_str().unwrap().replace('\\', "\\\\")
+        );
+        let scenario = crate::loader::load_scenario_from_source(None, Some(&json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rm_ffmpeg_leak_out_{}_{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let result = super::encode_with_ffmpeg_hw(
+            &scenario,
+            out.to_str().unwrap(),
+            true,
+            "h264",
+            None,
+            false,
+            false,
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "a garbage audio source must fail the decode, not silently succeed — this is the \
+             precondition the leak actually needs: `create_dir` runs before the decode, so the \
+             scratch directory exists by the time it fails"
+        );
+
+        let _ = std::fs::remove_file(&bad_audio);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn remove_dir_all_on_drop_removes_the_directory_when_it_goes_out_of_scope() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustmotion_remove_dir_all_on_drop_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).expect("set up a directory to guard");
+        assert!(dir.exists());
+
+        {
+            let _guard = RemoveDirAllOnDrop(Some(dir.clone()));
+        }
+
+        assert!(
+            !dir.exists(),
+            "the directory must be gone once the guard drops — this is what closes the leak an \
+             early `?` return (e.g. a failed audio decode, before ffmpeg is ever spawned) used \
+             to skip, since the only cleanup used to sit after `child.wait()`"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Frame-range render + concat: the brief's "test that matters most" ──
     //
     // "rendre un scénario en un seul morceau, puis le même en N segments
@@ -2267,6 +2530,71 @@ Encoders:
         );
 
         for p in [&valid_seg, &corrupt_seg, &out] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn concat_refuses_segments_with_different_resolutions() {
+        if !ffmpeg_on_path() || !ffprobe_on_path() {
+            eprintln!(
+                "concat_refuses_segments_with_different_resolutions: ffmpeg/ffprobe not found \
+                 — skipping"
+            );
+            return;
+        }
+
+        let json_at = |size: u32| {
+            format!(
+                r#"{{"video": {{"width": {size}, "height": {size}, "fps": 10}},
+                     "scenes": [{{"duration": 0.3, "children": []}}]}}"#
+            )
+        };
+
+        let pid = std::process::id();
+        let small_seg = std::env::temp_dir().join(format!("rm_concat_reso_small_{pid}.mp4"));
+        let big_seg = std::env::temp_dir().join(format!("rm_concat_reso_big_{pid}.mp4"));
+        let out = std::env::temp_dir().join(format!("rm_concat_reso_out_{pid}.mp4"));
+        for p in [&small_seg, &big_seg, &out] {
+            let _ = std::fs::remove_file(p);
+        }
+
+        for (size, path) in [(64u32, &small_seg), (128u32, &big_seg)] {
+            let scenario =
+                crate::loader::load_scenario_from_source(None, Some(&json_at(size))).expect("load");
+            super::encode_with_ffmpeg_hw(
+                &scenario,
+                path.to_str().unwrap(),
+                true,
+                "h264",
+                None,
+                false,
+                false,
+                None,
+            )
+            .unwrap_or_else(|e| panic!("{size}x{size} segment render must succeed: {e}"));
+        }
+
+        let result = super::concat_mp4_segments(
+            &[small_seg.clone(), big_seg.clone()],
+            out.to_str().unwrap(),
+        );
+
+        let err = result.expect_err(
+            "concat must refuse segments of different resolutions instead of producing a file \
+             whose header contradicts its frames",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("64") && msg.contains("128"),
+            "the refusal must name the actual mismatching dimensions: {msg}"
+        );
+        assert!(
+            !out.exists(),
+            "no output should be left behind when concat refuses the input"
+        );
+
+        for p in [&small_seg, &big_seg, &out] {
             let _ = std::fs::remove_file(p);
         }
     }
