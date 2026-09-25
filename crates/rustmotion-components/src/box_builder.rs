@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
+use rustmotion_core::css::style::{AlignItems, AlignSelf, CssStyle, Position, Size as CSize};
 use rustmotion_core::css::{apply_animated_props, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
@@ -277,7 +277,7 @@ fn build_ghosts<'a>(
 
     let base_css_for_ghost = |ghost_time: f64, ghost_opacity_scale: f32| -> CssStyle {
         // Start from the same base CSS as the principal.
-        let mut css = component_css(&child.component);
+        let mut css = component_css(&child.component, parent_css);
         if let Some((x, y)) = child.absolute_position() {
             css.position = Some(Position::Absolute);
             css.left = Some(CLP::Px(x));
@@ -493,7 +493,7 @@ fn build_child<'a>(
     stagger_delays.push(anim_delay);
     time_params.push(time_remap);
 
-    let mut css = component_css(&child.component);
+    let mut css = component_css(&child.component, parent_css);
 
     // Apply per-child position/z-index from the wrapper.
     if let Some((x, y)) = child.absolute_position() {
@@ -1311,10 +1311,10 @@ fn container_children<'a>(
 
 /// Pull the component's `CssStyle`, augmented with intrinsic `width`/`height`
 /// for components that carry a fixed size.
-fn component_css(component: &Component) -> CssStyle {
+fn component_css(component: &Component, parent_css: &CssStyle) -> CssStyle {
     let mut css = component_style(component).clone();
     apply_default_display(component, &mut css);
-    apply_intrinsic_overrides(component, &mut css);
+    apply_intrinsic_overrides(component, &mut css, parent_css);
     css
 }
 
@@ -1359,9 +1359,16 @@ fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool)
 /// Apply per-component CSS overrides for things that the legacy
 /// `Widget::measure` derived from constraints (e.g. divider stretching to its
 /// parent, line bounding box from its endpoints).
-fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
+fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle, parent_css: &CssStyle) {
     use Component::*;
     match component {
+        Badge(_) => {
+            if css.align_self.is_none()
+                && matches!(parent_css.align_items, None | Some(AlignItems::Stretch))
+            {
+                css.align_self = Some(AlignSelf::FlexStart);
+            }
+        }
         Text(t) => {
             // M1: `white-space: nowrap|pre` must style the *content*, not
             // silently resize the *box*. Without this, CSS's "automatic
@@ -2905,6 +2912,40 @@ mod tests {
             (l.height - 30.2).abs() < 2.0,
             "badge height should be ~30.2, got {}",
             l.height
+        );
+    }
+
+    fn flowing_badge() -> ChildComponent {
+        serde_json::from_value(serde_json::json!({
+            "type": "badge",
+            "text": "New"
+        }))
+        .expect("badge deserializes")
+    }
+
+    #[test]
+    fn badge_does_not_stretch_under_the_default_cross_axis() {
+        let scene = vec![flowing_badge()];
+        let built = build_scene_with_root(&scene, (400.0, 200.0), default_root_css((400.0, 200.0)));
+        assert_eq!(
+            built.root.children[0].css.align_self,
+            Some(AlignSelf::FlexStart),
+            "a badge under the default (stretch) cross-axis must opt out of \
+             stretching, or it grows to the parent's full width"
+        );
+    }
+
+    #[test]
+    fn badge_honours_an_explicit_center_from_its_parent() {
+        let mut root_css = default_root_css((400.0, 200.0));
+        root_css.align_items = Some(AlignItems::Center);
+        let scene = vec![flowing_badge()];
+        let built = build_scene_with_root(&scene, (400.0, 200.0), root_css);
+        assert_eq!(
+            built.root.children[0].css.align_self, None,
+            "a badge whose parent explicitly requests align-items: center \
+             must not override it with its own flex-start default — it \
+             should inherit the parent's alignment like any other child"
         );
     }
 
