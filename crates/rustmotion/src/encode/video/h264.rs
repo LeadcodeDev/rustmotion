@@ -301,18 +301,27 @@ pub fn encode_video_incremental(
     // Assemble final segments
     let mut new_segments = Vec::with_capacity(num_scenes);
     for i in 0..num_scenes {
-        if let Some(h264_data) = rendered_segments.remove(&i) {
+        if needs_render[i] {
             new_segments.push(SceneSegment {
-                h264_data,
+                h264_data: rendered_segments.remove(&i).unwrap_or_default(),
                 scene_hash: scene_hashes[i],
             });
-        } else if let Some(prev) = prev_segments {
+        } else {
+            let prev_seg = prev_segments.and_then(|p| p.get(i)).expect(
+                "plan_dirty only marks a slot clean when prev_segments has the same length \
+                 and order as slots, so a clean slot's index must exist in prev_segments",
+            );
             new_segments.push(SceneSegment {
-                h264_data: prev[i].h264_data.clone(),
-                scene_hash: prev[i].scene_hash,
+                h264_data: prev_seg.h264_data.clone(),
+                scene_hash: prev_seg.scene_hash,
             });
         }
     }
+    debug_assert_eq!(
+        new_segments.len(),
+        num_scenes,
+        "every slot must produce exactly one SceneSegment, in order"
+    );
 
     // Concatenate and mux
     let total_h264_size: usize = new_segments.iter().map(|s| s.h264_data.len()).sum();
@@ -405,6 +414,134 @@ mod incremental_tests {
             second_total > 0 && second_total < first_total,
             "second run must re-render a strict subset (first={first_total}, second={second_total})"
         );
+        let _ = std::fs::remove_file(&out);
+    }
+
+    fn ffprobe_on_path() -> bool {
+        std::process::Command::new("ffprobe")
+            .args(["-version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn ffprobe_frame_count(path: &str) -> Option<u32> {
+        let out = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u32>()
+            .ok()
+    }
+
+    #[test]
+    fn shortening_a_scene_with_an_outgoing_transition_dirties_its_successor() {
+        if !ffprobe_on_path() {
+            eprintln!(
+                "shortening_a_scene_with_an_outgoing_transition_dirties_its_successor: \
+                 ffprobe not found — skipping"
+            );
+            return;
+        }
+
+        let json = |a_duration: f64| {
+            format!(
+                r##"{{
+                "video": {{"width": 32, "height": 32, "fps": 10}},
+                "scenes": [
+                    {{"duration": {a_duration}, "children": []}},
+                    {{"duration": 2.0, "transition": {{"type": "fade", "duration": 1.0}}, "children": []}}
+                ]
+            }}"##
+            )
+        };
+
+        let out = std::env::temp_dir().join(format!(
+            "rustmotion_incr_predecessor_dirty_{}.mp4",
+            std::process::id()
+        ));
+        let out_str = out.to_str().unwrap();
+
+        let base = load_scenario_from_source(None, Some(&json(2.0))).unwrap();
+        let segments =
+            encode_video_incremental(&base, out_str, true, None, None).expect("first run");
+
+        let cold_frames =
+            ffprobe_frame_count(out_str).expect("first run must produce a readable mp4");
+        assert_eq!(
+            cold_frames, 30,
+            "A(2.0s)+B(2.0s) with a 1.0s fade at 10fps = 30 frames"
+        );
+
+        let shortened = load_scenario_from_source(None, Some(&json(0.5))).unwrap();
+        encode_video_incremental(&shortened, out_str, true, Some(&segments), None)
+            .expect("second run must succeed");
+
+        let watch_frames =
+            ffprobe_frame_count(out_str).expect("second run must produce a readable mp4");
+
+        assert_eq!(
+            watch_frames, 20,
+            "shortening A to 0.5s must give the same 20 frames a cold render gives — B's stale \
+             cached segment (still windowed for A's old 2.0s duration) must not be reused just \
+             because B's own JSON did not change"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn a_zero_frame_slot_survives_two_watch_iterations_without_desyncing_indices() {
+        let json = r##"{
+            "video": {"width": 320, "height": 240, "fps": 10},
+            "scenes": [
+                {"duration": 1.0, "children": [], "background": "#000001"},
+                {"duration": 1.0, "children": []},
+                {"duration": 0.02, "children": []}
+            ]
+        }"##;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+
+        let out = std::env::temp_dir().join(format!(
+            "rustmotion_incr_zero_frame_slot_{}.mp4",
+            std::process::id()
+        ));
+        let out_str = out.to_str().unwrap();
+
+        let segments = encode_video_incremental(&scenario, out_str, true, None, None)
+            .expect("first run must succeed");
+        assert_eq!(
+            segments.len(),
+            3,
+            "one SceneSegment per slot, including the zero-frame third scene — \
+             got {} instead of 3, so the third slot was silently dropped",
+            segments.len()
+        );
+
+        let changed_json = json.replace("#000001", "#000002");
+        let changed = load_scenario_from_source(None, Some(&changed_json)).expect("load");
+        let segments2 = encode_video_incremental(&changed, out_str, true, Some(&segments), None)
+            .expect("second run must not panic on the zero-frame slot's stale index");
+        assert_eq!(segments2.len(), 3);
+
         let _ = std::fs::remove_file(&out);
     }
 

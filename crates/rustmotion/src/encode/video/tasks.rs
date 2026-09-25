@@ -782,7 +782,18 @@ pub fn slot_hash(scenario: &Scenario, slot: &SegmentSlot) -> u64 {
         SegmentSlot::Scene {
             view_idx,
             scene_idx,
-        } => hash_scene(&scenario.views[*view_idx].scenes[*scene_idx]),
+        } => {
+            let scenes = &scenario.views[*view_idx].scenes;
+            let mut h = DefaultHasher::new();
+            hash_scene(&scenes[*scene_idx]).hash(&mut h);
+            if *scene_idx > 0 {
+                let fps = scenario.video.fps;
+                actual_outgoing_transition(scenes, scene_idx - 1, fps)
+                    .0
+                    .hash(&mut h);
+            }
+            h.finish()
+        }
         SegmentSlot::ViewTransition { view_idx } => {
             let mut h = DefaultHasher::new();
             let prev_view = &scenario.views[view_idx - 1];
