@@ -60,9 +60,10 @@
 //! to one component instead of the whole file. `use` + its overrides field
 //! mirrors `IncludeDirective { include, config }` (a name plus overrides) —
 //! *except* the overrides field is called **`props`**, not `config`. That is
-//! a deliberate, load-bearing difference, not inconsistency: [`substitute`]
-//! (shared with `variables.rs`) skips recursing into any object key literally
-//! named `"config"`, so that the scenario-level `config` *declarations* block
+//! a deliberate, load-bearing difference, not inconsistency:
+//! [`crate::variables::substitute_directive_bindings`] skips recursing into
+//! any object key literally named `"config"`, so that the scenario-level
+//! `config` *declarations* block
 //! (whose `default` values must stay literal, see
 //! `variables::test_config_key_not_substituted`) is never accidentally
 //! rewritten by whole-document substitution. Reusing that same key name for
@@ -147,7 +148,7 @@ use serde_json::Value;
 
 use crate::error::{Result, RustmotionError};
 use crate::schema::VariableType;
-use crate::variables::substitute;
+use crate::variables::substitute_directive_bindings;
 
 /// Defense-in-depth ceiling on nested `use`/`for-each` expansion. True
 /// self-reference cycles are caught immediately by the name stack in
@@ -195,8 +196,6 @@ struct ComponentDefinition {
 #[serde(deny_unknown_fields)]
 struct ComponentParam {
     #[serde(rename = "type")]
-    #[allow(dead_code)]
-    // documentation/schema parity with `config`; not cross-checked against `default`'s actual JSON type (same as `VariableDefinition::var_type` today)
     param_type: VariableType,
     #[serde(default)]
     default: Option<Value>,
@@ -248,6 +247,7 @@ fn is_use(v: &Value) -> bool {
 pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
     let defs = extract_component_definitions(value, file_label)?;
     let mut budget = MAX_EXPANSION_NODES;
+    let root_scope: HashMap<String, Value> = HashMap::new();
 
     let Value::Object(root) = value else {
         return Ok(());
@@ -267,6 +267,7 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
                 &mut stack,
                 0,
                 &mut budget,
+                &root_scope,
             )?;
             out.push(scene);
         }
@@ -290,6 +291,7 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
                             &mut stack,
                             0,
                             &mut budget,
+                            &root_scope,
                         )?;
                         out.push(scene);
                     }
@@ -393,6 +395,7 @@ fn walk_children(
     stack: &mut Vec<String>,
     depth: u32,
     budget: &mut u64,
+    scope: &HashMap<String, Value>,
 ) -> Result<()> {
     match value {
         Value::Object(map) => {
@@ -402,7 +405,7 @@ fn walk_children(
                     for (i, entry) in arr.into_iter().enumerate() {
                         let entry_loc = format!("{location}.children[{i}]");
                         expanded.extend(resolve_entry(
-                            entry, defs, file_label, &entry_loc, stack, depth, budget,
+                            entry, defs, file_label, &entry_loc, stack, depth, budget, scope,
                         )?);
                     }
                     map.insert("children".to_string(), Value::Array(expanded));
@@ -412,12 +415,12 @@ fn walk_children(
                 if k == "children" {
                     continue;
                 }
-                walk_children(v, defs, file_label, location, stack, depth, budget)?;
+                walk_children(v, defs, file_label, location, stack, depth, budget, scope)?;
             }
         }
         Value::Array(arr) => {
             for v in arr.iter_mut() {
-                walk_children(v, defs, file_label, location, stack, depth, budget)?;
+                walk_children(v, defs, file_label, location, stack, depth, budget, scope)?;
             }
         }
         _ => {}
@@ -447,6 +450,7 @@ fn resolve_entry(
     stack: &mut Vec<String>,
     depth: u32,
     budget: &mut u64,
+    scope: &HashMap<String, Value>,
 ) -> Result<Vec<Value>> {
     if depth > MAX_EXPANSION_DEPTH {
         return Err(RustmotionError::ExpansionDepthExceeded {
@@ -467,31 +471,21 @@ fn resolve_entry(
                 stack,
                 depth + 1,
                 budget,
+                scope,
             )?);
         }
         return Ok(out);
     }
 
     if is_for_each(&entry) {
-        let produced = expand_for_each_directive(entry, file_label, location, budget)?;
-        let mut out = Vec::with_capacity(produced.len());
-        for (i, node) in produced.into_iter().enumerate() {
-            let iter_loc = format!("{location}[{i}]");
-            out.extend(resolve_entry(
-                node,
-                defs,
-                file_label,
-                &iter_loc,
-                stack,
-                depth + 1,
-                budget,
-            )?);
-        }
-        return Ok(out);
+        return expand_for_each_directive(
+            entry, defs, file_label, location, stack, depth, budget, scope,
+        );
     }
 
     if is_use(&entry) {
-        let (name, node) = expand_use_directive(entry, defs, file_label, location)?;
+        let (name, node, use_scope) =
+            expand_use_directive(entry, defs, file_label, location, scope)?;
         if stack.contains(&name) {
             let mut chain = stack.clone();
             chain.push(name);
@@ -501,27 +495,43 @@ fn resolve_entry(
             });
         }
         stack.push(name);
-        let result = resolve_entry(node, defs, file_label, location, stack, depth + 1, budget);
+        let result = resolve_entry(
+            node,
+            defs,
+            file_label,
+            location,
+            stack,
+            depth + 1,
+            budget,
+            &use_scope,
+        );
         stack.pop();
         return result;
     }
 
     let mut node = entry;
-    walk_children(&mut node, defs, file_label, location, stack, depth, budget)?;
+    walk_children(
+        &mut node, defs, file_label, location, stack, depth, budget, scope,
+    )?;
     Ok(vec![node])
 }
 
 fn expand_for_each_directive(
     entry: Value,
+    defs: &HashMap<String, ComponentDefinition>,
     file_label: &str,
     location: &str,
+    stack: &mut Vec<String>,
+    depth: u32,
     budget: &mut u64,
+    scope: &HashMap<String, Value>,
 ) -> Result<Vec<Value>> {
-    let directive: ForEachDirective =
+    let mut directive: ForEachDirective =
         serde_json::from_value(entry).map_err(|e| RustmotionError::ForEachDirectiveInvalid {
             path: format!("{file_label}: {location}"),
             reason: e.to_string(),
         })?;
+    substitute_directive_bindings(&mut directive.for_each, scope, file_label)?;
 
     let items = match &directive.for_each {
         Value::Array(items) => items.clone(),
@@ -559,9 +569,23 @@ fn expand_for_each_directive(
             .entry("item".to_string())
             .or_insert_with(|| element.clone());
 
+        let mut item_scope = scope.clone();
+        item_scope.extend(bindings);
+
         let mut node = directive.template.clone();
-        substitute(&mut node, &bindings, file_label)?;
-        out.push(node);
+        substitute_directive_bindings(&mut node, &item_scope, file_label)?;
+
+        let iter_loc = format!("{location}[{idx}]");
+        out.extend(resolve_entry(
+            node,
+            defs,
+            file_label,
+            &iter_loc,
+            stack,
+            depth + 1,
+            budget,
+            &item_scope,
+        )?);
     }
     Ok(out)
 }
@@ -571,12 +595,16 @@ fn expand_use_directive(
     defs: &HashMap<String, ComponentDefinition>,
     file_label: &str,
     location: &str,
-) -> Result<(String, Value)> {
-    let directive: UseDirective =
+    scope: &HashMap<String, Value>,
+) -> Result<(String, Value, HashMap<String, Value>)> {
+    let mut directive: UseDirective =
         serde_json::from_value(entry).map_err(|e| RustmotionError::UseDirectiveInvalid {
             path: format!("{file_label}: {location}"),
             reason: e.to_string(),
         })?;
+    for prop_value in directive.props.values_mut() {
+        substitute_directive_bindings(prop_value, scope, file_label)?;
+    }
 
     let def = defs
         .get(&directive.use_name)
@@ -597,14 +625,10 @@ fn expand_use_directive(
 
     let mut bindings: HashMap<String, Value> = HashMap::with_capacity(def.params.len());
     for (pname, pdef) in &def.params {
-        match directive.props.get(pname) {
-            Some(v) => {
-                bindings.insert(pname.clone(), v.clone());
-            }
+        let (value, origin) = match directive.props.get(pname) {
+            Some(v) => (v.clone(), "props value"),
             None => match &pdef.default {
-                Some(d) => {
-                    bindings.insert(pname.clone(), d.clone());
-                }
+                Some(d) => (d.clone(), "default value"),
                 None => {
                     return Err(RustmotionError::ComponentParamMissing {
                         component: directive.use_name.clone(),
@@ -613,12 +637,23 @@ fn expand_use_directive(
                     })
                 }
             },
+        };
+        if !crate::variables::value_matches_declared_type(&value, &pdef.param_type) {
+            let declared = crate::variables::declared_type_name(&pdef.param_type);
+            let actual = crate::variables::json_type_name(&value);
+            return Err(RustmotionError::ComponentParamTypeMismatch {
+                component: directive.use_name.clone(),
+                param: pname.clone(),
+                path: format!("{file_label}: {location}"),
+                detail: format!("is declared as type \"{declared}\" but its {origin} is a {actual}"),
+            });
         }
+        bindings.insert(pname.clone(), value);
     }
 
     let mut node = def.template.clone();
-    substitute(&mut node, &bindings, file_label)?;
-    Ok((directive.use_name.clone(), node))
+    substitute_directive_bindings(&mut node, &bindings, file_label)?;
+    Ok((directive.use_name.clone(), node, bindings))
 }
 
 fn describe_value(v: &Value) -> String {
@@ -963,6 +998,23 @@ mod tests {
     }
 
     #[test]
+    fn use_with_a_prop_value_of_the_wrong_declared_type_is_a_named_error() {
+        let out = expand(doc_with_stat_card(
+            json!({ "label": "Revenue", "value": "not-a-number" }),
+        ));
+        let err = out.expect_err("a string prop for a declared `number` param must be rejected");
+        match &err {
+            RustmotionError::ComponentParamTypeMismatch {
+                component, param, ..
+            } => {
+                assert_eq!(component, "stat_card");
+                assert_eq!(param, "value");
+            }
+            other => panic!("expected ComponentParamTypeMismatch, got {other}"),
+        }
+    }
+
+    #[test]
     fn use_with_an_undeclared_prop_key_is_a_named_error() {
         let out = expand(doc_with_stat_card(
             json!({ "label": "x", "labell": "typo" }),
@@ -1123,6 +1175,134 @@ mod tests {
         assert_eq!(inner.len(), 2);
         assert_eq!(inner[0]["content"], json!(1));
         assert_eq!(inner[1]["content"], json!(2));
+    }
+
+    fn expand_after_variables(mut value: Value) -> Result<Value> {
+        crate::variables::apply_variables(&mut value, None, "test.json")?;
+        expand_directives(&mut value, "test.json")?;
+        Ok(value)
+    }
+
+    #[test]
+    fn a_config_variable_does_not_shadow_a_for_each_binding_of_the_same_name() {
+        let doc = json!({
+            "config": {
+                "label": { "type": "string", "default": "CONFIG-VALUE" }
+            },
+            "video": { "width": 100, "height": 100 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "label": "ITEM-A" }, { "label": "ITEM-B" } ],
+                    "template": { "type": "text", "content": "$label" }
+                }]
+            }]
+        });
+        let out = expand_after_variables(doc).expect("expands");
+        let children = out["scenes"][0]["children"].as_array().unwrap();
+        assert_eq!(
+            children[0]["content"],
+            json!("ITEM-A"),
+            "the for-each item's own `label` must win over the scenario `config` variable of the \
+             same name, not be silently overwritten by it: {children:#?}"
+        );
+        assert_eq!(children[1]["content"], json!("ITEM-B"));
+    }
+
+    #[test]
+    fn a_config_variable_does_not_shadow_a_use_props_binding_of_the_same_name() {
+        let doc = json!({
+            "config": {
+                "label": { "type": "string", "default": "CONFIG-VALUE" }
+            },
+            "video": { "width": 100, "height": 100 },
+            "components": {
+                "row": {
+                    "params": { "label": { "type": "string" } },
+                    "template": { "type": "text", "content": "$label" }
+                }
+            },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{ "use": "row", "props": { "label": "PROPS-VALUE" } }]
+            }]
+        });
+        let out = expand_after_variables(doc).expect("expands");
+        assert_eq!(
+            out["scenes"][0]["children"][0]["content"],
+            json!("PROPS-VALUE"),
+            "the `use` site's own props must win over the scenario `config` variable of the same \
+             name"
+        );
+    }
+
+    #[test]
+    fn a_nested_for_each_binding_shadows_the_outer_for_each_binding_of_the_same_name() {
+        let doc = json!({
+            "video": { "width": 100, "height": 100 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "label": "OUTER", "tags": [ { "label": "inner-1" }, { "label": "inner-2" } ] } ],
+                    "template": {
+                        "type": "card",
+                        "children": [{
+                            "for-each": "$tags",
+                            "template": { "type": "text", "content": "$label" }
+                        }]
+                    }
+                }]
+            }]
+        });
+        let out = expand(doc).unwrap();
+        let inner = out["scenes"][0]["children"][0]["children"]
+            .as_array()
+            .unwrap();
+        assert_eq!(inner.len(), 2);
+        assert_eq!(
+            inner[0]["content"],
+            json!("inner-1"),
+            "inner for-each item must shadow the outer item's `label`: {inner:#?}"
+        );
+        assert_eq!(inner[1]["content"], json!("inner-2"));
+    }
+
+    #[test]
+    fn an_outer_for_each_binding_still_reaches_a_nested_use_props_two_levels_down() {
+        let doc = json!({
+            "video": { "width": 100, "height": 100 },
+            "components": {
+                "tag_pill": {
+                    "params": {
+                        "tag": { "type": "string" },
+                        "card_color": { "type": "string" }
+                    },
+                    "template": { "type": "text", "content": "$tag/$card_color" }
+                }
+            },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "color": "red", "tags": ["a", "b"] } ],
+                    "template": {
+                        "type": "card",
+                        "children": [{
+                            "for-each": "$tags",
+                            "template": {
+                                "use": "tag_pill",
+                                "props": { "tag": "$item", "card_color": "$color" }
+                            }
+                        }]
+                    }
+                }]
+            }]
+        });
+        let out = expand(doc).unwrap();
+        let inner = out["scenes"][0]["children"][0]["children"]
+            .as_array()
+            .unwrap();
+        assert_eq!(inner[0]["content"], json!("a/red"), "{inner:#?}");
+        assert_eq!(inner[1]["content"], json!("b/red"), "{inner:#?}");
     }
 
     // ---- the tree-identity proof, at the JSON-value level ----

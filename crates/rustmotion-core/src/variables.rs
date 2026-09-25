@@ -8,7 +8,7 @@ use crate::schema::{VariableDefinition, VariableType};
 
 /// Whether `value`'s JSON type matches `var_type` — a `number`-typed
 /// variable's default or override must actually be a JSON number, etc.
-fn value_matches_declared_type(value: &Value, var_type: &VariableType) -> bool {
+pub(crate) fn value_matches_declared_type(value: &Value, var_type: &VariableType) -> bool {
     match var_type {
         VariableType::String => value.is_string(),
         VariableType::Number => value.is_number(),
@@ -18,7 +18,7 @@ fn value_matches_declared_type(value: &Value, var_type: &VariableType) -> bool {
     }
 }
 
-fn json_type_name(value: &Value) -> &'static str {
+pub(crate) fn json_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",
@@ -29,7 +29,7 @@ fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-fn declared_type_name(var_type: &VariableType) -> &'static str {
+pub(crate) fn declared_type_name(var_type: &VariableType) -> &'static str {
     match var_type {
         VariableType::String => "string",
         VariableType::Number => "number",
@@ -90,20 +90,31 @@ fn merge_variables(
     Ok(merged)
 }
 
-/// Recursively substitute variable references in a JSON value tree.
-///
-/// `pub(crate)` (not private) so `crate::expand` can reuse the exact same
-/// `$name` / `{"$var": "name"}` / interpolation semantics for component-param
-/// and `for-each` item/index bindings, rather than re-implementing a second,
-/// subtly-different substitution pass. Same reason `"config"` is skipped here
-/// (see the loop below): a component-template clone can itself contain a
-/// nested `use`'s `props` block — deliberately *not* named `config`, so this
-/// skip does not swallow it (see `expand.rs` module doc for why `props` was
-/// chosen over `config` for that field).
+const UNEXPANDED_DIRECTIVE_KEYS: &[&str] = &["config", "template", "props", "components"];
+
+const UNEXPANDED_NESTED_TEMPLATE_KEYS: &[&str] = &["config", "template", "components"];
+
 pub(crate) fn substitute(
     value: &mut Value,
     vars: &HashMap<String, Value>,
     path: &str,
+) -> Result<()> {
+    substitute_skipping(value, vars, path, UNEXPANDED_DIRECTIVE_KEYS)
+}
+
+pub(crate) fn substitute_directive_bindings(
+    value: &mut Value,
+    vars: &HashMap<String, Value>,
+    path: &str,
+) -> Result<()> {
+    substitute_skipping(value, vars, path, UNEXPANDED_NESTED_TEMPLATE_KEYS)
+}
+
+fn substitute_skipping(
+    value: &mut Value,
+    vars: &HashMap<String, Value>,
+    path: &str,
+    skip_keys: &[&str],
 ) -> Result<()> {
     match value {
         Value::String(s) => {
@@ -138,20 +149,20 @@ pub(crate) fn substitute(
                 }
             }
 
-            // Recurse into object values, but skip "variables" key (don't substitute in definitions)
+            // Recurse into object values, but skip reserved directive/definition keys
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
-                if key == "config" {
+                if skip_keys.contains(&key.as_str()) {
                     continue;
                 }
                 if let Some(v) = map.get_mut(&key) {
-                    substitute(v, vars, path)?;
+                    substitute_skipping(v, vars, path, skip_keys)?;
                 }
             }
         }
         Value::Array(arr) => {
             for item in arr.iter_mut() {
-                substitute(item, vars, path)?;
+                substitute_skipping(item, vars, path, skip_keys)?;
             }
         }
         _ => {}
@@ -726,6 +737,28 @@ mod tests {
             err,
             crate::error::RustmotionError::UndefinedVariable { .. }
         ));
+    }
+
+    #[test]
+    fn apply_variables_does_not_rewrite_for_each_template_bodies() {
+        let mut doc = json!({
+            "config": { "label": { "type": "string", "default": "CONFIG-VALUE" } },
+            "video": { "width": 100, "height": 100 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "label": "ITEM-A" } ],
+                    "template": { "type": "text", "content": "$label" }
+                }]
+            }]
+        });
+        apply_defaults(&mut doc).unwrap();
+        assert_eq!(
+            doc["scenes"][0]["children"][0]["template"]["content"],
+            json!("$label"),
+            "the for-each template body must still carry the unresolved binding after \
+             apply_variables, for expand::expand_directives to fill in per item: {doc:#?}"
+        );
     }
 
     #[test]
