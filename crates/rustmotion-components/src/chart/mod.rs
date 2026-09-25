@@ -109,6 +109,9 @@ pub struct Chart {
     #[serde(default = "default_inner_radius")]
     pub inner_radius: f64,
 
+    #[serde(default = "default_radial_max")]
+    pub max: f64,
+
     // Area-specific
     #[serde(default = "default_fill_opacity")]
     pub fill_opacity: f32,
@@ -172,6 +175,10 @@ fn default_animation_duration() -> f64 {
 
 fn default_inner_radius() -> f64 {
     0.6
+}
+
+fn default_radial_max() -> f64 {
+    100.0
 }
 
 fn default_fill_opacity() -> f32 {
@@ -338,6 +345,7 @@ mod tests {
             animation_duration: 1.5,
             colors: None,
             inner_radius: 0.6,
+            max: default_radial_max(),
             fill_opacity: 0.3,
             smooth: false,
             categories: Vec::new(),

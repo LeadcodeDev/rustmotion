@@ -405,6 +405,7 @@ mod tests {
             animation_duration: 1.5,
             colors: None,
             inner_radius: 0.6,
+            max: 100.0,
             fill_opacity: 0.3,
             smooth: false,
             categories: Vec::new(),

@@ -3,7 +3,7 @@ use skia_safe::{Canvas, PaintStyle};
 
 use rustmotion_core::engine::renderer::paint_from_hex;
 
-use super::axes::format_number;
+use super::axes::format_tick_for_step;
 use super::line::series_scale;
 use super::Chart;
 
@@ -33,8 +33,9 @@ impl Chart {
         // axis. Passing `categorical: false` places tick i at i/(n-1) of the
         // width, which is exactly where those fractions fall.
         let x_labels: Vec<String> = if self.show_x_labels {
+            let step = (max_x - min_x) / 5.0;
             (0..=5)
-                .map(|i| format_number(min_x + (max_x - min_x) * (i as f64 / 5.0)))
+                .map(|i| format_tick_for_step(min_x + (max_x - min_x) * (i as f64 / 5.0), step))
                 .collect()
         } else {
             Vec::new()

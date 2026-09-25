@@ -35,13 +35,37 @@ pub(super) fn series_scale(
     })
 }
 
+pub(super) fn zero_anchored_scale(
+    values: impl Iterator<Item = f64> + Clone,
+) -> (f64, f64, impl Fn(f64) -> f32) {
+    let min_val = values.clone().fold(f64::INFINITY, f64::min);
+    let max_val = values.fold(f64::NEG_INFINITY, f64::max);
+    let (min_val, max_val) = if min_val.is_finite() && max_val.is_finite() {
+        (min_val, max_val)
+    } else {
+        (0.0, 0.0)
+    };
+    let flat = (max_val - min_val).abs() < f64::EPSILON;
+    let domain_min = if flat { min_val } else { min_val.min(0.0) };
+    let domain_max = if flat { max_val } else { max_val.max(0.0) };
+    let range = if flat { 1.0 } else { domain_max - domain_min };
+    (domain_min, domain_max, move |v: f64| {
+        if flat {
+            0.5
+        } else {
+            ((v - domain_min) / range) as f32
+        }
+    })
+}
+
 impl Chart {
     pub(super) fn render_line(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let (mt, mr, mb, ml) = self.chart_margins();
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
+        let (min_val, max_val, norm) = zero_anchored_scale(self.data.iter().map(|d| d.value));
+        let zero_y = mt + chart_h - norm(0.0) * chart_h;
 
         let n = self.data.len();
         let x_labels: Vec<String> = self
@@ -77,7 +101,7 @@ impl Chart {
 
             if i == 0 {
                 path.move_to((x, y));
-                fill_path.move_to((x, mt + chart_h));
+                fill_path.move_to((x, zero_y));
                 fill_path.line_to((x, y));
             } else {
                 path.line_to((x, y));
@@ -86,7 +110,7 @@ impl Chart {
         }
 
         let last_x = ml + chart_w;
-        fill_path.line_to((last_x, mt + chart_h));
+        fill_path.line_to((last_x, zero_y));
         fill_path.close();
 
         // Clip for animation
@@ -133,7 +157,8 @@ impl Chart {
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        let (min_val, max_val, norm) = series_scale(self.data.iter().map(|d| d.value));
+        let (min_val, max_val, norm) = zero_anchored_scale(self.data.iter().map(|d| d.value));
+        let zero_y = mt + chart_h - norm(0.0) * chart_h;
 
         let n = self.data.len();
         let x_labels: Vec<String> = self
@@ -175,7 +200,7 @@ impl Chart {
         if self.smooth && pts.len() >= 3 {
             // Catmull-Rom -> cubic bezier for smooth curves
             line_path.move_to(pts[0]);
-            fill_path.move_to((pts[0].0, mt + chart_h));
+            fill_path.move_to((pts[0].0, zero_y));
             fill_path.line_to(pts[0]);
 
             for i in 0..pts.len() - 1 {
@@ -200,7 +225,7 @@ impl Chart {
             for (i, &(x, y)) in pts.iter().enumerate() {
                 if i == 0 {
                     line_path.move_to((x, y));
-                    fill_path.move_to((x, mt + chart_h));
+                    fill_path.move_to((x, zero_y));
                     fill_path.line_to((x, y));
                 } else {
                     line_path.line_to((x, y));
@@ -210,7 +235,7 @@ impl Chart {
         }
 
         let last_x = pts.last().map(|p| p.0).unwrap_or(ml + chart_w);
-        fill_path.line_to((last_x, mt + chart_h));
+        fill_path.line_to((last_x, zero_y));
         fill_path.close();
 
         // Clip for animation
@@ -262,5 +287,114 @@ impl Chart {
 
         canvas.restore();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chart::{ChartDataPoint, ChartType};
+    use rustmotion_core::css::CssStyle;
+    use rustmotion_core::traits::TimingConfig;
+
+    fn base_chart(chart_type: ChartType, data: Vec<ChartDataPoint>) -> Chart {
+        Chart {
+            chart_type,
+            data,
+            animated: false,
+            animation_duration: 1.5,
+            colors: None,
+            inner_radius: 0.6,
+            max: 100.0,
+            fill_opacity: 0.3,
+            smooth: false,
+            categories: Vec::new(),
+            series: Vec::new(),
+            axes: Vec::new(),
+            radar_data: Vec::new(),
+            points: Vec::new(),
+            direction: None,
+            show_grid: false,
+            show_x_labels: false,
+            show_y_labels: false,
+            grid_color: "#FFFFFF15".to_string(),
+            label_color: "#888888".to_string(),
+            label_font_size: 18.0,
+            show_labels: false,
+            timing: TimingConfig::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn point(value: f64) -> ChartDataPoint {
+        ChartDataPoint {
+            value,
+            label: None,
+            color: None,
+        }
+    }
+
+    #[test]
+    fn zero_anchored_scale_puts_zero_on_the_domain_edge_instead_of_the_series_minimum() {
+        let (min_val, max_val, norm) = zero_anchored_scale([100.0, 105.0].into_iter());
+        assert_eq!(min_val, 0.0);
+        assert_eq!(max_val, 105.0);
+        assert!(
+            norm(100.0) > 0.9,
+            "100 out of a 0..105 domain must sit near the top, got {}",
+            norm(100.0)
+        );
+    }
+
+    #[test]
+    fn zero_anchored_scale_keeps_a_flat_series_centred() {
+        let (min_val, max_val, norm) = zero_anchored_scale([7.0, 7.0, 7.0].into_iter());
+        assert_eq!(min_val, 7.0);
+        assert_eq!(max_val, 7.0);
+        assert_eq!(norm(7.0), 0.5);
+    }
+
+    #[test]
+    fn a_close_pair_of_far_from_zero_values_does_not_paint_the_smaller_one_at_the_axis_floor() {
+        const W: i32 = 216;
+        const H: i32 = 216;
+        let chart = base_chart(ChartType::Line, vec![point(100.0), point(105.0)]);
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            chart
+                .render_line(canvas, W as f32, H as f32, 1.0)
+                .expect("paint");
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        let is_dot_ink = |x: i32, y: i32| {
+            let idx = ((y * W + x) * 4) as usize;
+            let (r, g, b, a) = (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3]);
+            a > 200 && r < 100 && g > 100 && g < 160 && b > 200
+        };
+        let first_point_x = 8;
+        let near_bottom_y = H - 10;
+        assert!(
+            !is_dot_ink(first_point_x, near_bottom_y),
+            "value 100 of a series that only spans 100..105 must not be painted at \
+             the chart floor, as if it were close to zero"
+        );
     }
 }

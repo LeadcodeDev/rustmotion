@@ -24,11 +24,36 @@ pub(super) fn format_number(val: f64) -> String {
         format!("{:.1}M", val / 1_000_000.0)
     } else if val.abs() >= 1_000.0 {
         format!("{:.1}K", val / 1_000.0)
-    } else if val.fract().abs() < 0.01 {
-        format!("{}", val as i64)
+    } else if (val - val.round()).abs() < 1e-9 {
+        format!("{}", val.round() as i64)
     } else {
         format!("{:.1}", val)
     }
+}
+
+fn tick_decimals(step: f64) -> usize {
+    let step = step.abs();
+    if !step.is_finite() || step <= 0.0 {
+        return 0;
+    }
+    let mut decimals = 0usize;
+    let mut scaled = step;
+    while scaled < 0.999_999 && decimals < 6 {
+        scaled *= 10.0;
+        decimals += 1;
+    }
+    decimals
+}
+
+pub(super) fn format_tick_for_step(val: f64, step: f64) -> String {
+    if val.abs() >= 1_000_000.0 {
+        return format!("{:.1}M", val / 1_000_000.0);
+    }
+    if val.abs() >= 1_000.0 {
+        return format!("{:.1}K", val / 1_000.0);
+    }
+    let decimals = tick_decimals(step);
+    format!("{val:.decimals$}")
 }
 
 impl Chart {
@@ -63,6 +88,7 @@ impl Chart {
         // Grid lines + Y labels
         let grid_steps = 5;
         let range = max_val - min_val;
+        let tick_step = range / grid_steps as f64;
 
         for i in 0..=grid_steps {
             let frac = i as f32 / grid_steps as f32;
@@ -78,7 +104,7 @@ impl Chart {
 
             if self.show_y_labels {
                 let val = min_val + range * frac as f64;
-                let label = format_number(val);
+                let label = format_tick_for_step(val, tick_step);
                 let mut label_paint = paint_from_hex(&self.label_color);
                 label_paint.set_anti_alias(true);
                 let label_w = measure_text_with_fallback(&label, &font, &emoji_font, 0.0);
@@ -164,6 +190,7 @@ impl Chart {
 
         let grid_steps = 5;
         let range = max_val - min_val;
+        let tick_step = range / grid_steps as f64;
 
         for i in 0..=grid_steps {
             let frac = i as f32 / grid_steps as f32;
@@ -178,7 +205,7 @@ impl Chart {
             }
 
             if self.show_x_labels {
-                let label = format_number(min_val + range * frac as f64);
+                let label = format_tick_for_step(min_val + range * frac as f64, tick_step);
                 let mut label_paint = paint_from_hex(&self.label_color);
                 label_paint.set_anti_alias(true);
                 let label_w = measure_text_with_fallback(&label, &font, &emoji_font, 0.0);
@@ -197,5 +224,38 @@ impl Chart {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_number_does_not_flip_a_float_noise_integer_to_a_different_branch_than_its_exact_neighbour(
+    ) {
+        assert_eq!(format_number(-2.0), "-2");
+        assert_eq!(format_number(-1.999_999_999_999_999_6), "-2");
+    }
+
+    #[test]
+    fn format_tick_for_step_keeps_enough_decimals_to_tell_sub_unit_ticks_apart() {
+        assert_eq!(format_tick_for_step(0.01, 0.01), "0.01");
+        assert_eq!(format_tick_for_step(0.0, 0.01), "0.00");
+        assert_ne!(
+            format_tick_for_step(0.01, 0.01),
+            format_tick_for_step(0.0, 0.01),
+            "two ticks a step apart must not render identically"
+        );
+    }
+
+    #[test]
+    fn format_tick_for_step_does_not_flip_branch_on_float_noise() {
+        assert_eq!(format_tick_for_step(-1.999_999_999_999_999_6, 1.0), "-2");
+    }
+
+    #[test]
+    fn format_tick_for_step_uses_whole_numbers_for_a_whole_number_step() {
+        assert_eq!(format_tick_for_step(4.0, 2.0), "4");
     }
 }

@@ -6,8 +6,8 @@ use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
-    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
-    typeface_with_fallback,
+    draw_text_with_fallback, emoji_typeface, format_counter_value, measure_text_with_fallback,
+    paint_from_hex, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -66,6 +66,10 @@ pub struct Gauge {
     pub end_angle: f32,
     #[serde(default = "default_show_value")]
     pub show_value: bool,
+    #[serde(default)]
+    pub decimals: u8,
+    #[serde(default)]
+    pub suffix: Option<String>,
     #[serde(default = "default_animated")]
     pub animated: bool,
     #[serde(default = "default_animation_duration")]
@@ -103,6 +107,11 @@ impl Gauge {
         1.0 - (1.0 - p).powi(3)
     }
 
+    fn display_text(&self, progress: f32) -> String {
+        let display_val = self.min + (self.value - self.min) * progress as f64;
+        format_counter_value(display_val, self.decimals, &None, &None, &self.suffix)
+    }
+
     fn paint(&self, canvas: &Canvas, layout_w: f32, layout_h: f32, time: f64) {
         let w = layout_w;
         let h = layout_h;
@@ -137,8 +146,7 @@ impl Gauge {
 
         // Value text
         if self.show_value {
-            let display_val = self.min + (self.value - self.min) * progress as f64;
-            let text = format!("{}", display_val.round() as i64);
+            let text = self.display_text(progress);
 
             let font_size = (radius * 0.45).max(16.0);
             let font_style = skia_safe::FontStyle::bold();
@@ -210,5 +218,56 @@ impl Painter for Gauge {
         ctx: &PaintCtx,
     ) {
         self.paint(canvas, layout.width, layout.height, ctx.time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_gauge(value: f64, max: f64, decimals: u8) -> Gauge {
+        Gauge {
+            value,
+            min: 0.0,
+            max,
+            label: None,
+            track_color: default_track_color(),
+            fill_color: default_fill_color(),
+            track_width: default_track_width(),
+            start_angle: default_start_angle(),
+            end_angle: default_end_angle(),
+            show_value: true,
+            decimals,
+            suffix: None,
+            animated: false,
+            animation_duration: default_animation_duration(),
+            timing: TimingConfig::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn display_text_keeps_the_requested_decimals_instead_of_rounding_to_a_whole_number() {
+        let gauge = base_gauge(4.7, 5.0, 1);
+        assert_eq!(
+            gauge.display_text(1.0),
+            "4.7",
+            "with decimals: 1 the fill arc at 94% must not read as a rounded \"5\""
+        );
+    }
+
+    #[test]
+    fn display_text_defaults_to_a_whole_number_when_decimals_is_unset() {
+        let gauge = base_gauge(75.0, 100.0, 0);
+        assert_eq!(gauge.display_text(1.0), "75");
+    }
+
+    #[test]
+    fn display_text_appends_the_suffix() {
+        let mut gauge = base_gauge(48.0, 100.0, 0);
+        gauge.suffix = Some("%".to_string());
+        assert_eq!(gauge.display_text(1.0), "48%");
     }
 }

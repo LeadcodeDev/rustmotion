@@ -65,12 +65,13 @@ impl Counter {
     ///
     /// The ramp starts at `start_at` and runs for `duration`, falling back to
     /// the rest of the scene when no duration is given.
-    fn ramp_progress(&self, time: f64, scene_duration: f64) -> f64 {
+    fn ramp_progress(&self, time: f64, scene_duration: f64, fps: u32) -> f64 {
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
+        let last_frame_offset = if fps > 0 { 1.0 / fps as f64 } else { 0.0 };
         let ramp = match self.duration {
             Some(d) if d > 0.0 => d,
-            _ => scene_duration - start,
+            _ => (scene_duration - start - last_frame_offset).max(0.0),
         };
         if ramp > 0.0 {
             (elapsed / ramp).clamp(0.0, 1.0)
@@ -128,7 +129,10 @@ impl Counter {
             _ => TextAlign::Left,
         };
 
-        let progress = ease(self.ramp_progress(time, scene_duration), &self.easing);
+        let progress = ease(
+            self.ramp_progress(time, scene_duration, ctx.fps),
+            &self.easing,
+        );
         let value = self.from + (self.to - self.from) * progress;
         let content = format_counter_value(
             value,
@@ -323,25 +327,38 @@ mod tests {
         // The behaviour that made counters unreadable: nothing settles early,
         // so the figure is still moving when the scene cuts away.
         let c = counter(None, None);
-        assert!(c.ramp_progress(3.9, 4.0) < 1.0);
-        assert_eq!(c.ramp_progress(4.0, 4.0), 1.0);
+        assert!(c.ramp_progress(3.9, 4.0, 30) < 1.0);
+        assert_eq!(c.ramp_progress(4.0, 4.0, 30), 1.0);
+    }
+
+    #[test]
+    fn without_duration_the_count_reaches_its_target_on_the_last_rendered_frame() {
+        let c = counter(None, None);
+        let fps = 30u32;
+        let scene_duration = 3.0;
+        let last_rendered_frame_time = (scene_duration * fps as f64 - 1.0) / fps as f64;
+        assert_eq!(
+            c.ramp_progress(last_rendered_frame_time, scene_duration, fps),
+            1.0,
+            "the count must have fully landed by the last frame that actually gets rendered"
+        );
     }
 
     #[test]
     fn duration_makes_the_count_land_early_and_hold() {
         let c = counter(Some(1.5), None);
-        assert_eq!(c.ramp_progress(1.5, 4.0), 1.0);
+        assert_eq!(c.ramp_progress(1.5, 4.0, 30), 1.0);
         // Held for the rest of the scene, which is the point.
-        assert_eq!(c.ramp_progress(3.0, 4.0), 1.0);
-        assert!((c.ramp_progress(0.75, 4.0) - 0.5).abs() < 1e-9);
+        assert_eq!(c.ramp_progress(3.0, 4.0, 30), 1.0);
+        assert!((c.ramp_progress(0.75, 4.0, 30) - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn duration_is_measured_from_start_at() {
         let c = counter(Some(2.0), Some(1.0));
-        assert_eq!(c.ramp_progress(1.0, 6.0), 0.0);
-        assert!((c.ramp_progress(2.0, 6.0) - 0.5).abs() < 1e-9);
-        assert_eq!(c.ramp_progress(3.0, 6.0), 1.0);
+        assert_eq!(c.ramp_progress(1.0, 6.0, 30), 0.0);
+        assert!((c.ramp_progress(2.0, 6.0, 30) - 0.5).abs() < 1e-9);
+        assert_eq!(c.ramp_progress(3.0, 6.0, 30), 1.0);
     }
 
     #[test]
@@ -349,13 +366,16 @@ mod tests {
         // Deliberate: the author asked for a slow count, and silently speeding
         // it up would be a surprise. It simply never reaches `to`.
         let c = counter(Some(10.0), None);
-        assert!(c.ramp_progress(4.0, 4.0) < 0.5);
+        assert!(c.ramp_progress(4.0, 4.0, 30) < 0.5);
     }
 
     #[test]
     fn a_zero_or_negative_duration_falls_back_to_the_scene() {
         let c = counter(Some(0.0), None);
-        assert!((c.ramp_progress(2.0, 4.0) - 0.5).abs() < 1e-9);
+        let fps = 30u32;
+        let fallback_ramp = 4.0 - 1.0 / fps as f64;
+        let expected = 2.0 / fallback_ramp;
+        assert!((c.ramp_progress(2.0, 4.0, fps) - expected).abs() < 1e-9);
     }
 
     // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
