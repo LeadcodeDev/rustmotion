@@ -1025,8 +1025,23 @@ Style: `width`, `height` (default: uses image dimensions)
 | `src`      | string   | `null` — path to SVG file (either `src` or `data` required) |
 | `data`     | string   | `null` — inline SVG markup                                  |
 | `position` | `{x, y}` | `{0, 0}`                                                    |
+| `reveal`   | enum     | `"stroke"` — how a draw-on animation uncovers the artwork: `"stroke"` traces each path as a contour, `"fill"` sweeps a mask across the painted shape so gradients and patterns show as they arrive |
+| `draw`     | bool     | `false` — force draw-on mode even at `draw_progress: 1.0`    |
+| `draw_stroke_width` | f32 | `2.0` — stroke width used when tracing a fill-only path   |
 
 Style: `width`, `height` (default: intrinsic SVG dimensions)
+
+Drive either mode with the `draw_progress` animatable property. The two compose: stack a
+`reveal: "stroke"` copy that fades out over a `reveal: "fill"` copy that fades in, and the mark
+draws its outline first, then takes its colour.
+
+```json
+{ "type": "svg", "src": "logo.svg", "reveal": "fill",
+  "style": { "width": 260, "height": 281, "animation": [
+    { "name": "keyframes", "duration": 2.2, "keyframes": [
+      { "property": "draw_progress", "easing": "ease_in_out",
+        "keyframes": [{ "time": 0, "value": 0 }, { "time": 2.2, "value": 1 }] }] }] } }
+```
 
 ### 5. `icon`
 
