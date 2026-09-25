@@ -16,6 +16,7 @@ use std::path::PathBuf;
 
 use crate::components::{ChildComponent, Component};
 use crate::schema::{AudioTrack, ResolvedScenario, ViewType};
+use rustmotion_core::engine::renderer::reject_remote_video_src;
 
 // ─── Scene offset computation ─────────────────────────────────────────────────
 
@@ -357,6 +358,11 @@ fn extract_audio_to_wav(
     trim_end: Option<f64>,
     rate: f64,
 ) -> Option<PathBuf> {
+    if let Err(e) = reject_remote_video_src(src) {
+        eprintln!("rustmotion: embedded-video audio: {e}. Skipping.");
+        return None;
+    }
+
     let wav_path = wav_cache_path(src, trim_start, trim_end, rate);
 
     // Reuse cached extraction — but only a genuine regular file placed here
@@ -377,6 +383,9 @@ fn extract_audio_to_wav(
     let partial_path = partial_wav_path(&wav_path);
 
     let mut args: Vec<String> = Vec::new();
+
+    args.push("-protocol_whitelist".to_string());
+    args.push("file".to_string());
 
     // Input seek (trim_start)
     if trim_start > 0.0 {
@@ -960,6 +969,46 @@ mod tests {
 
         let _ = std::fs::remove_file(&wav_path);
         let _ = std::fs::remove_file(&fixture);
+    }
+
+    #[test]
+    fn extract_audio_to_wav_never_lets_a_remote_src_reach_ffmpeg() {
+        if !ffmpeg_available() {
+            eprintln!(
+                "extract_audio_to_wav_never_lets_a_remote_src_reach_ffmpeg: ffmpeg not found — \
+                 skipping"
+            );
+            return;
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let port = listener
+            .local_addr()
+            .expect("listener has a local addr")
+            .port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let _ = tx.send(());
+                drop(stream);
+            }
+        });
+
+        let src = format!("http://127.0.0.1:{port}/clip.mp4");
+        let result = extract_audio_to_wav(&src, 0.0, None, 1.0);
+
+        let reached = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        assert!(
+            !reached,
+            "a remote video src must be rejected before ffmpeg is ever spawned — the local \
+             listener this test owns must never see a connection"
+        );
+        assert!(
+            result.is_none(),
+            "a rejected remote src must not produce a cached WAV path"
+        );
     }
 
     // ── Integration test (gated on ffmpeg) ───────────────────────────────────

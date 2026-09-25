@@ -5,7 +5,7 @@ use crate::components::{ChildComponent, Component};
 use crate::schema::Scene;
 use rustmotion_core::engine::renderer::{
     asset_cache, fetch_icon_svg, ffmpeg_available, icon_cache_dir, icon_cache_key,
-    sandboxed_svg_options, video_frame_cache,
+    reject_remote_video_src, sandboxed_svg_options, video_frame_cache,
 };
 use rustmotion_core::traits::{Styled, Timed};
 
@@ -239,6 +239,13 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
 
     fn collect_videos(child: &ChildComponent, scene_frames: u32, fps: u32) {
         if let Component::Video(video) = &child.component {
+            if let Err(e) = reject_remote_video_src(&video.src) {
+                eprintln!(
+                    "rustmotion: video frame preextraction: {e}. This video will render blank \
+                     for the affected frames."
+                );
+                return;
+            }
             use rustmotion_core::css::style::Size as CSize;
             use rustmotion_core::css::units::LengthPercentage;
             // Size now comes from CSS style; skip preload if not set as fixed px.
@@ -312,6 +319,8 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
 
             let mut child = match std::process::Command::new("ffmpeg")
                 .args([
+                    "-protocol_whitelist",
+                    "file",
                     "-ss",
                     &format!("{:.3}", min_time),
                     "-t",
@@ -496,6 +505,51 @@ mod tests {
         assert!(
             expected >= 199,
             "expected frame count must cover the full 2x-rate source span (>=199), got {expected}"
+        );
+    }
+
+    #[test]
+    fn preextract_video_frames_never_lets_a_remote_src_reach_ffmpeg() {
+        if !ffmpeg_available() {
+            eprintln!(
+                "preextract_video_frames_never_lets_a_remote_src_reach_ffmpeg: ffmpeg not \
+                 found — skipping"
+            );
+            return;
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let port = listener
+            .local_addr()
+            .expect("listener has a local addr")
+            .port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let _ = tx.send(());
+                drop(stream);
+            }
+        });
+
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 0.5,
+            "children": [{
+                "type": "video",
+                "src": format!("http://127.0.0.1:{port}/clip.mp4"),
+                "style": { "width": 64, "height": 36 }
+            }]
+        }))
+        .expect("scene must deserialize");
+
+        preextract_video_frames(std::slice::from_ref(&scene), 30);
+
+        let reached = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        assert!(
+            !reached,
+            "a remote video src must be rejected before ffmpeg is ever spawned — the local \
+             listener this test owns must never see a connection"
         );
     }
 }
