@@ -229,7 +229,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         viewport_width: ctx.viewport_size.0,
         viewport_height: ctx.viewport_size.1,
         parent_size: box_layout.width.max(box_layout.height),
-        font_size: node.css.font_size_px_or(16.0),
+        font_size: ctx.layout.font_size(node.id).unwrap_or(16.0),
         root_font_size: 16.0,
     };
     // Per-axis contexts for `transform`'s translate percentages: CSS

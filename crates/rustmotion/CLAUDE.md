@@ -46,7 +46,7 @@ Ne duplique pas un sous-arbre. Si dix cartes ne diffèrent que par leurs donnée
 }]
 ```
 
-Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$index` et `$item`. `params` a la forme de `config` ; omettre `default` rend le paramètre requis. La clé d'overrides est **`props`**, pas `config` — ce nom-là est réservé et serait sauté par la substitution.
+Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$index` et `$item`. `params` a la forme de `config` ; omettre `default` rend le paramètre requis. La clé d'overrides est **`props`**, pas `config` — ce nom-là est réservé : un `use` portant une clé `config` échoue au chargement sur un champ inconnu. Ce n'est pas un saut silencieux.
 
 `components` est local au fichier qui le déclare. On peut itérer sur un tableau venu d'une variable ; on ne peut pas instancier un composant défini dans un fichier inclus. Toute erreur — cycle, tableau manquant, composant inconnu, paramètre absent — est nommée et située. Voir [rules/templates-and-iteration.md](.claude/skills/rustmotion/rules/templates-and-iteration.md).
 
