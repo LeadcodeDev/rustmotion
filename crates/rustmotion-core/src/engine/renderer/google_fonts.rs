@@ -62,13 +62,12 @@ pub fn resolve_google_font(
 ) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(cache_dir).map_err(RustmotionError::Io)?;
 
-    let slug = family_slug(family);
     let mut paths = Vec::with_capacity(weights.len());
     let mut missing_weights: Vec<u16> = Vec::new();
 
     // Check which weights are already cached.
     for &weight in weights {
-        let dest = cache_dir.join(format!("{slug}-{weight}.ttf"));
+        let dest = font_cache_file(cache_dir, family, weight)?;
         if dest.exists() {
             paths.push(dest);
         } else {
@@ -98,7 +97,7 @@ pub fn resolve_google_font(
         let ttf_url = ttf_urls
             .get(i)
             .unwrap_or_else(|| &ttf_urls[ttf_urls.len() - 1]);
-        let dest = cache_dir.join(format!("{slug}-{weight}.ttf"));
+        let dest = font_cache_file(cache_dir, family, weight)?;
         fetch_ttf(ttf_url, &dest, family, weight)?;
         paths.push(dest);
     }
@@ -181,6 +180,22 @@ pub fn parse_ttf_urls(css: &str) -> Vec<String> {
 /// ```
 pub fn family_slug(family: &str) -> String {
     family.to_lowercase().replace(' ', "-")
+}
+
+fn font_cache_file(cache_dir: &Path, family: &str, weight: u16) -> Result<PathBuf> {
+    let slug = family_slug(family);
+    let file_name = format!("{slug}-{weight}.ttf");
+    if file_name_escapes_cache_dir(&file_name) {
+        return Err(RustmotionError::Generic(format!(
+            "font family '{family}' would resolve to cache file name '{file_name}', \
+             which escapes the font cache directory — refusing"
+        )));
+    }
+    Ok(cache_dir.join(file_name))
+}
+
+fn file_name_escapes_cache_dir(file_name: &str) -> bool {
+    file_name.contains('/') || file_name.contains('\\') || file_name.contains('\0')
 }
 
 // ─── Network helpers ─────────────────────────────────────────────────────────
@@ -349,6 +364,32 @@ mod tests {
         let paths = resolve_google_font("Inter", &[400], &cache_dir).unwrap();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], pre_placed);
+    }
+
+    #[test]
+    fn family_name_with_an_absolute_path_cannot_escape_the_cache_directory() {
+        let cache_dir = make_test_cache("escape-guard-cache");
+        let witness_dir = make_test_cache("escape-guard-witness");
+        let witness_dir_str = witness_dir.to_str().expect("utf8 tempdir path");
+
+        let family = format!("{witness_dir_str}/planted");
+        let weight = 400u16;
+
+        let slug = family_slug(&family);
+        let witness_path = PathBuf::from(format!("{slug}-{weight}.ttf"));
+        std::fs::write(
+            &witness_path,
+            b"must never be reachable through the font cache",
+        )
+        .unwrap();
+
+        let result = resolve_google_font(&family, &[weight], &cache_dir);
+
+        assert!(
+            result.is_err(),
+            "a font family that resolves outside cache_dir must be a named, refused error, \
+             not a silent hit on {witness_path:?} — got {result:?}"
+        );
     }
 
     #[test]

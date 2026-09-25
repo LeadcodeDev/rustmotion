@@ -5,7 +5,7 @@ use crate::components::{ChildComponent, Component};
 use crate::schema::Scene;
 use rustmotion_core::engine::renderer::{
     asset_cache, fetch_icon_svg, ffmpeg_available, icon_cache_dir, icon_cache_key,
-    video_frame_cache,
+    sandboxed_svg_options, video_frame_cache,
 };
 use rustmotion_core::traits::{Styled, Timed};
 
@@ -147,7 +147,7 @@ pub fn prefetch_icons(scenes: &[Scene]) {
         }
         match fetch_icon_svg(icon, color, render_w, render_h) {
             Ok(svg_data) => {
-                let opt = usvg::Options::default();
+                let opt = sandboxed_svg_options();
                 match usvg::Tree::from_data(&svg_data, &opt) {
                     Ok(tree) => {
                         let svg_size = tree.size();

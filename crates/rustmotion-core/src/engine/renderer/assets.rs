@@ -129,10 +129,27 @@ pub fn icon_cache_dir() -> PathBuf {
 /// Deterministic on-disk file name for a given (icon, color, size). Icon ids
 /// contain `:` (`"lucide:home"`); replaced so the id survives as a legible
 /// file name instead of being hashed away.
-fn icon_cache_file(cache_dir: &Path, icon: &str, color: &str, width: u32, height: u32) -> PathBuf {
+fn icon_cache_file(
+    cache_dir: &Path,
+    icon: &str,
+    color: &str,
+    width: u32,
+    height: u32,
+) -> Result<PathBuf> {
     let slug = icon.replace(':', "_");
     let hex_color = color.trim_start_matches('#').to_lowercase();
-    cache_dir.join(format!("{slug}-{hex_color}-{width}x{height}.svg"))
+    let file_name = format!("{slug}-{hex_color}-{width}x{height}.svg");
+    if file_name_escapes_cache_dir(&file_name) {
+        return Err(RustmotionError::Generic(format!(
+            "icon '{icon}' (color '{color}') would resolve to cache file name '{file_name}', \
+             which escapes the icon cache directory — refusing"
+        )));
+    }
+    Ok(cache_dir.join(file_name))
+}
+
+fn file_name_escapes_cache_dir(file_name: &str) -> bool {
+    file_name.contains('/') || file_name.contains('\\') || file_name.contains('\0')
 }
 
 /// Fetch an icon's SVG bytes, checking the on-disk cache first and falling
@@ -162,7 +179,7 @@ pub fn fetch_icon_svg_in(
     let width = width.max(1);
     let height = height.max(1);
 
-    let cache_file = icon_cache_file(cache_dir, icon, color, width, height);
+    let cache_file = icon_cache_file(cache_dir, icon, color, width, height)?;
     if let Ok(data) = std::fs::read(&cache_file) {
         if !data.is_empty() {
             return Ok(data);
@@ -196,6 +213,17 @@ pub fn fetch_icon_svg_in(
     }
 
     Ok(body)
+}
+
+/// `usvg::Options` that never resolves a plain `<image href>` string against the local filesystem.
+pub fn sandboxed_svg_options() -> usvg::Options<'static> {
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_href, _opts| None),
+            ..usvg::ImageHrefResolver::default()
+        },
+        ..usvg::Options::default()
+    }
 }
 
 // ─── Video frame extraction ─────────────────────────────────────────────────
@@ -579,7 +607,7 @@ mod tests {
         let (w, h) = (48, 48);
         let svg_bytes = b"<svg>fake cached icon for the test suite</svg>".to_vec();
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h).unwrap();
         std::fs::write(&cache_file, &svg_bytes).unwrap();
 
         // If this ever fell through to the network, either the test host is
@@ -593,9 +621,9 @@ mod tests {
     #[test]
     fn disk_cache_is_keyed_by_icon_color_and_size() {
         let cache_dir = unique_temp_dir("cache-keying");
-        let a = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 80, 80);
-        let b = icon_cache_file(&cache_dir, "lucide:home", "#000000", 80, 80);
-        let c = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 40, 40);
+        let a = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 80, 80).unwrap();
+        let b = icon_cache_file(&cache_dir, "lucide:home", "#000000", 80, 80).unwrap();
+        let c = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 40, 40).unwrap();
         assert_ne!(a, b, "different colors must not share a cache file");
         assert_ne!(a, c, "different sizes must not share a cache file");
     }
@@ -608,6 +636,29 @@ mod tests {
             result,
             Err(RustmotionError::InvalidIconFormat { .. })
         ));
+    }
+
+    #[test]
+    fn icon_id_with_an_absolute_path_cannot_escape_the_cache_directory() {
+        let cache_dir = unique_temp_dir("escape-guard-cache");
+        let witness_dir = unique_temp_dir("escape-guard-witness");
+        let witness_dir_str = witness_dir.to_str().expect("utf8 tempdir path");
+
+        let icon = format!("{witness_dir_str}/planted:x");
+        let color = "#AB";
+        let (w, h) = (2, 3);
+
+        let witness_path = PathBuf::from(format!("{witness_dir_str}/planted_x-ab-{w}x{h}.svg"));
+        let witness_bytes = b"<svg>must never be reachable through the icon cache</svg>".to_vec();
+        std::fs::write(&witness_path, &witness_bytes).unwrap();
+
+        let result = fetch_icon_svg_in(&icon, color, w, h, &cache_dir);
+
+        assert!(
+            result.is_err(),
+            "an icon id that resolves outside cache_dir must be a named, refused error, \
+             not a silent read of {witness_path:?} — got {result:?}"
+        );
     }
 
     // Live network test — mirrors `google_fonts`'s `live_fetch_inter_400`:
@@ -623,7 +674,7 @@ mod tests {
         let first = fetch_icon_svg_in(icon, color, w, h, &cache_dir).expect("live fetch");
         assert!(!first.is_empty());
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h).unwrap();
         assert!(
             cache_file.exists(),
             "a successful live fetch must be persisted to disk"
