@@ -105,14 +105,13 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     style.border = border_widths(css.border.as_ref(), ctx);
 
     // Flex
-    if let Some(d) = css.flex_direction {
-        style.flex_direction = match d {
-            FlexDirection::Row => tf::FlexDirection::Row,
-            FlexDirection::RowReverse => tf::FlexDirection::RowReverse,
-            FlexDirection::Column => tf::FlexDirection::Column,
-            FlexDirection::ColumnReverse => tf::FlexDirection::ColumnReverse,
-        };
-    }
+    style.flex_direction = match css.flex_direction {
+        Some(FlexDirection::Row) => tf::FlexDirection::Row,
+        Some(FlexDirection::RowReverse) => tf::FlexDirection::RowReverse,
+        Some(FlexDirection::Column) => tf::FlexDirection::Column,
+        Some(FlexDirection::ColumnReverse) => tf::FlexDirection::ColumnReverse,
+        None => tf::FlexDirection::Column,
+    };
     if let Some(w) = css.flex_wrap {
         style.flex_wrap = match w {
             FlexWrap::Nowrap => tf::FlexWrap::NoWrap,
@@ -666,6 +665,22 @@ mod tests {
         assert_eq!(s.flex_direction, tf::FlexDirection::Column);
         assert_eq!(s.align_items, Some(tf::AlignItems::Center));
         assert_eq!(s.gap.height, tf::LengthPercentage::length(16.0));
+    }
+
+    #[test]
+    fn flex_display_without_explicit_direction_defaults_to_column() {
+        let css = CssStyle {
+            display: Some(Display::Flex),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(
+            s.flex_direction,
+            tf::FlexDirection::Column,
+            "a `display: flex` container with no `flex-direction` must default to \
+             Column, matching SKILL.md's documented default and the scene root's \
+             behavior — taffy's own default (Row) must not leak through"
+        );
     }
 
     #[test]
