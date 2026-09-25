@@ -3,14 +3,13 @@
 //! Order per node (top-down):
 //!   1. canvas.save()
 //!   2. apply transform (CSS `transform` → Skia matrix)
-//!   3. open opacity layer if `opacity < 1.0`
-//!   4. clip to padding-box if `overflow != visible`
-//!   5. paint outset box-shadow
-//!   6. paint background
-//!   7. paint border (border-radius aware)
-//!   8. delegate component-specific paint via `PaintDispatcher`
-//!   9. recurse children sorted by z-index
-//!  10. canvas.restore()
+//!   3. open opacity/`filter`/`mix-blend-mode` layer, if any is set
+//!   4. clip to `clip-path`, if set
+//!   5. clip to padding-box if `overflow != visible`
+//!   6. paint outset box-shadow, background, border, unless `visibility: hidden`
+//!   7. delegate component-specific paint via `PaintDispatcher`, unless `visibility: hidden`
+//!   8. recurse children sorted by z-index
+//!   9. canvas.restore()
 //!
 //! The dispatcher hook lets the higher-level crate plug component-specific
 //! paint without coupling `rustmotion-core` to all 51 component types.
@@ -19,17 +18,17 @@ use std::cell::RefCell;
 
 use skia_safe::gradient::{self, Colors as GradientColors, Gradient};
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, PathBuilder,
-    Point, RRect, Rect, M44, V3,
+    canvas::SaveLayerRec, BlendMode as SkBlendMode, Canvas, ClipOp, Color as SColor, Color4f,
+    Paint, PaintStyle, PathBuilder, Point, RRect, Rect, M44, V3,
 };
 
 use crate::css::style::{
-    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, Color,
-    CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
+    Background, BackgroundLayer, BlendMode, BorderEdges, BorderRadius, BorderStyle, BoxShadow,
+    ClipPath, Color, CssStyle, Edges, Overflow, TransformFn, TransformOrigin, Visibility,
 };
 use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
-use crate::engine::layout_pass::{BoxLayout, LayoutResult};
+use crate::engine::layout_pass::{BoxLayout, Insets, LayoutResult};
 
 /// Frame-level paint context (timing + viewport).
 #[derive(Debug, Clone, Copy)]
@@ -249,6 +248,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         ..length_ctx
     };
 
+    let hidden = matches!(node.css.visibility, Some(Visibility::Hidden));
+
     canvas.save();
 
     // 1.5 per-plane scene camera (issue #90): every direct child of the scene
@@ -339,20 +340,22 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     // hazard: a shared clip+layer would also have to stay open across
     // background/border painting, reintroducing the overflow/shadow bug
     // fixed below for those steps too).
-    if let Some(filters) = node.css.backdrop_filter.as_deref() {
-        if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
-            let radius = node
-                .css
-                .border_radius
-                .as_ref()
-                .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
-                .unwrap_or([0.0; 4]);
-            canvas.save();
-            canvas.clip_rrect(border_rrect(box_layout, radius), ClipOp::Intersect, true);
-            let rec = SaveLayerRec::default().backdrop(&backdrop);
-            canvas.save_layer(&rec);
-            canvas.restore();
-            canvas.restore();
+    if !hidden {
+        if let Some(filters) = node.css.backdrop_filter.as_deref() {
+            if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
+                let radius = node
+                    .css
+                    .border_radius
+                    .as_ref()
+                    .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
+                    .unwrap_or([0.0; 4]);
+                canvas.save();
+                canvas.clip_rrect(border_rrect(box_layout, radius), ClipOp::Intersect, true);
+                let rec = SaveLayerRec::default().backdrop(&backdrop);
+                canvas.save_layer(&rec);
+                canvas.restore();
+                canvas.restore();
+            }
         }
     }
 
@@ -384,13 +387,18 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         .filter
         .as_deref()
         .and_then(|list| filters_to_image_filter(list, &length_ctx));
-    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
+    let blend_mode = node.css.mix_blend_mode.filter(|m| *m != BlendMode::Normal);
+    let open_opacity_layer = opacity < 1.0 || content_filter.is_some() || blend_mode.is_some();
+    let opened_opacity_layer = if open_opacity_layer {
         let mut paint = Paint::default();
         if opacity < 1.0 {
             paint.set_alpha((opacity * 255.0) as u8);
         }
         if let Some(filter) = content_filter {
             paint.set_image_filter(filter);
+        }
+        if let Some(mode) = blend_mode {
+            paint.set_blend_mode(skia_blend_mode(mode));
         }
         let filter_bleed_px = node
             .css
@@ -423,6 +431,19 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         false
     };
 
+    let clip_path_shape = node
+        .css
+        .clip_path
+        .as_ref()
+        .and_then(|cp| build_clip_path(cp, box_layout, &length_ctx));
+    let opened_clip_path = if let Some(shape) = &clip_path_shape {
+        canvas.save();
+        canvas.clip_path(shape, ClipOp::Intersect, true);
+        true
+    } else {
+        false
+    };
+
     // 5. outset box-shadow, 6. background, 7. border — the box's own
     // decorations. Painted BEFORE any overflow clip (step 8): CSS `overflow`
     // clips a box's *descendants*, never the box's own border-box
@@ -431,30 +452,36 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     // their own and gain nothing from an extra clip). They still sit inside
     // the opacity/filter layer above so a faded node fades its whole
     // appearance uniformly, background included.
-    if let Some(shadows) = node.css.box_shadow.as_ref() {
-        for shadow in shadows {
-            if shadow.inset.unwrap_or(false) {
-                continue;
+    if !hidden {
+        if let Some(shadows) = node.css.box_shadow.as_ref() {
+            for shadow in shadows {
+                if shadow.inset.unwrap_or(false) {
+                    continue;
+                }
+                paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
             }
-            paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
         }
-    }
-    if let Some(bg) = node.css.background.as_ref() {
-        paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
-    }
-    // `gradient-border` replaces the standard border when present (a box
-    // has one border, not two stacked ones).
-    if let Some(gb) = node.css.gradient_border.as_ref() {
-        paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
-    } else if let Some(border) = node.css.border.as_ref() {
-        paint_border(canvas, box_layout, &node.css, border, &length_ctx);
+        if let Some(bg) = node.css.background.as_ref() {
+            paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
+        }
+        // `gradient-border` replaces the standard border when present (a box
+        // has one border, not two stacked ones).
+        if let Some(gb) = node.css.gradient_border.as_ref() {
+            paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
+        } else if let Some(border) = node.css.border.as_ref() {
+            paint_border(canvas, box_layout, &node.css, border, &length_ctx);
+        }
     }
 
     // 7.5. shimmer layer. The band composites against the pixels this node
     // paints, which do not exist yet — so an isolated layer is opened here,
     // filled by steps 9 and 10 below, and the band is stamped onto it with
     // `SrcATop` just before it closes.
-    let shimmer = active_shimmer(&node.css, ctx.frame.time);
+    let shimmer = if hidden {
+        None
+    } else {
+        active_shimmer(&node.css, ctx.frame.time)
+    };
     let opened_shimmer_layer = if shimmer.is_some() {
         let bounds = Rect::from_xywh(
             box_layout.x,
@@ -497,9 +524,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
         BoxKind::Container => None,
     };
-    if let Some(payload) = payload_opt {
-        ctx.dispatcher
-            .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
+    if !hidden {
+        if let Some(payload) = payload_opt {
+            ctx.dispatcher
+                .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
+        }
     }
 
     // 10. children (z-index ordered, then source order)
@@ -514,10 +543,12 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     }
 
     // inset shadows (after children so they overlay content)
-    if let Some(shadows) = node.css.box_shadow.as_ref() {
-        for shadow in shadows {
-            if shadow.inset.unwrap_or(false) {
-                paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, true);
+    if !hidden {
+        if let Some(shadows) = node.css.box_shadow.as_ref() {
+            for shadow in shadows {
+                if shadow.inset.unwrap_or(false) {
+                    paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, true);
+                }
             }
         }
     }
@@ -526,6 +557,10 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         paint_shimmer_band(canvas, box_layout, cfg, progress);
     }
     if opened_shimmer_layer {
+        canvas.restore();
+    }
+
+    if opened_clip_path {
         canvas.restore();
     }
 
@@ -1526,6 +1561,125 @@ fn resolve_border_radius(r: &BorderRadius, layout: &BoxLayout, ctx: &LengthConte
             bottom_right.resolve(&local_ctx),
             bottom_left.resolve(&local_ctx),
         ],
+    }
+}
+
+fn skia_blend_mode(mode: BlendMode) -> SkBlendMode {
+    match mode {
+        BlendMode::Normal => SkBlendMode::SrcOver,
+        BlendMode::Multiply => SkBlendMode::Multiply,
+        BlendMode::Screen => SkBlendMode::Screen,
+        BlendMode::Overlay => SkBlendMode::Overlay,
+        BlendMode::Darken => SkBlendMode::Darken,
+        BlendMode::Lighten => SkBlendMode::Lighten,
+        BlendMode::ColorDodge => SkBlendMode::ColorDodge,
+        BlendMode::ColorBurn => SkBlendMode::ColorBurn,
+        BlendMode::HardLight => SkBlendMode::HardLight,
+        BlendMode::SoftLight => SkBlendMode::SoftLight,
+        BlendMode::Difference => SkBlendMode::Difference,
+        BlendMode::Exclusion => SkBlendMode::Exclusion,
+        BlendMode::Hue => SkBlendMode::Hue,
+        BlendMode::Saturation => SkBlendMode::Saturation,
+        BlendMode::Color => SkBlendMode::Color,
+        BlendMode::Luminosity => SkBlendMode::Luminosity,
+        BlendMode::PlusLighter => SkBlendMode::Plus,
+    }
+}
+
+fn build_clip_path(
+    cp: &ClipPath,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> Option<skia_safe::Path> {
+    let ctx_x = LengthContext {
+        parent_size: layout.width,
+        ..*ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: layout.height,
+        ..*ctx
+    };
+    match cp {
+        ClipPath::None => None,
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            radius,
+        } => {
+            let t = top.resolve(&ctx_y);
+            let r = right.resolve(&ctx_x);
+            let b = bottom.resolve(&ctx_y);
+            let l = left.resolve(&ctx_x);
+            let rect = Rect::from_xywh(
+                layout.x + l,
+                layout.y + t,
+                (layout.width - l - r).max(0.0),
+                (layout.height - t - b).max(0.0),
+            );
+            let radii = match radius {
+                Some(radius) => {
+                    let synth = BoxLayout {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.width(),
+                        height: rect.height(),
+                        border: Insets::default(),
+                        padding: Insets::default(),
+                    };
+                    resolve_border_radius(radius, &synth, ctx)
+                }
+                None => [0.0; 4],
+            };
+            Some(skia_safe::Path::rrect(
+                rrect_from_corners(rect, radii),
+                None,
+            ))
+        }
+        ClipPath::Circle { radius, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let circle_radius_basis_ctx = LengthContext {
+                parent_size: ((layout.width.powi(2) + layout.height.powi(2)) / 2.0).sqrt(),
+                ..*ctx
+            };
+            let r = radius.resolve(&circle_radius_basis_ctx);
+            Some(skia_safe::Path::circle(Point::new(cx, cy), r, None))
+        }
+        ClipPath::Ellipse { rx, ry, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let rxp = rx.resolve(&ctx_x);
+            let ryp = ry.resolve(&ctx_y);
+            let rect = Rect::from_xywh(cx - rxp, cy - ryp, rxp * 2.0, ryp * 2.0);
+            Some(skia_safe::Path::oval(rect, None))
+        }
+        ClipPath::Polygon { points } => {
+            if points.is_empty() {
+                return None;
+            }
+            let mut pb = PathBuilder::new();
+            for (i, (x, y)) in points.iter().enumerate() {
+                let px = layout.x + x.resolve(&ctx_x);
+                let py = layout.y + y.resolve(&ctx_y);
+                if i == 0 {
+                    pb.move_to(Point::new(px, py));
+                } else {
+                    pb.line_to(Point::new(px, py));
+                }
+            }
+            pb.close();
+            Some(pb.detach())
+        }
+        ClipPath::Path { d } => {
+            let raw = skia_safe::Path::from_svg(d)?;
+            let src = raw.compute_tight_bounds();
+            if src.width() <= 0.0 || src.height() <= 0.0 {
+                return None;
+            }
+            let dst = Rect::from_xywh(layout.x, layout.y, layout.width, layout.height);
+            let matrix = skia_safe::Matrix::rect_2_rect(src, dst, None)?;
+            Some(raw.with_transform(&matrix))
+        }
     }
 }
 
@@ -3091,6 +3245,236 @@ mod paint_order_tests {
         // Far outside any plausible bleed radius: must stay black.
         let far = probe(20, 20);
         assert_eq!(far, 0, "far corner must stay untouched, got r={far}");
+    }
+}
+
+#[cfg(test)]
+mod inert_field_tests {
+    use super::*;
+    use crate::css::style::{
+        Background, BlendMode as CssBlendMode, ClipPath, Color as CssColor, CssStyle, Display,
+        FlexDirection, Position, Size as CSize, TransformOrigin, Visibility,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            scenario_time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+            camera: None,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn probe(buf: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+    }
+
+    fn root_node(w: f32, h: f32, background: Option<&str>, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: background.map(|c| Background::Color(CssColor::String(c.to_string()))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn absolute_box(x: f32, y: f32, w: f32, h: f32, background: &str, extra: CssStyle) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(x)),
+                top: Some(CLP::Px(y)),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: Some(Background::Color(CssColor::String(background.to_string()))),
+                ..extra
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    #[test]
+    fn visibility_hidden_paints_nothing_but_a_visible_child_still_does() {
+        let child = absolute_box(
+            10.0,
+            10.0,
+            20.0,
+            20.0,
+            "#0000ff",
+            CssStyle {
+                visibility: Some(Visibility::Visible),
+                ..Default::default()
+            },
+        );
+        let mut parent = absolute_box(
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            "#ff0000",
+            CssStyle {
+                visibility: Some(Visibility::Hidden),
+                ..Default::default()
+            },
+        );
+        parent.children = vec![child];
+
+        let mut root = root_node(120.0, 120.0, Some("#000000"), vec![parent]);
+        let buf = render_pixels(&mut root, 120, 120);
+
+        let point_covered_by_hidden_parent_only = probe(&buf, 120, 90, 90);
+        assert_eq!(
+            (
+                point_covered_by_hidden_parent_only.0,
+                point_covered_by_hidden_parent_only.1,
+                point_covered_by_hidden_parent_only.2
+            ),
+            (0, 0, 0),
+            "visibility:hidden must not paint its own background, got \
+             {point_covered_by_hidden_parent_only:?}"
+        );
+
+        let point_covered_by_visible_child = probe(&buf, 120, 20, 20);
+        assert!(
+            point_covered_by_visible_child.2 > 200 && point_covered_by_visible_child.0 < 50,
+            "a `visibility: visible` child under a hidden parent must still paint, got \
+             {point_covered_by_visible_child:?}"
+        );
+    }
+
+    #[test]
+    fn clip_path_circle_clips_the_box_to_a_disc() {
+        let node = absolute_box(
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            "#ff0000",
+            CssStyle {
+                clip_path: Some(ClipPath::Circle {
+                    radius: CLP::Px(40.0),
+                    origin: Some(TransformOrigin {
+                        x: Some(CLP::Px(50.0)),
+                        y: Some(CLP::Px(50.0)),
+                        ..Default::default()
+                    }),
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(100.0, 100.0, Some("#000000"), vec![node]);
+        let buf = render_pixels(&mut root, 100, 100);
+
+        let point_inside_the_disc = probe(&buf, 100, 50, 50);
+        assert!(
+            point_inside_the_disc.0 > 200 && point_inside_the_disc.1 < 50,
+            "inside the clip-path circle must still paint, got {point_inside_the_disc:?}"
+        );
+        let point_inside_the_box_but_outside_the_disc = probe(&buf, 100, 5, 5);
+        assert_eq!(
+            (
+                point_inside_the_box_but_outside_the_disc.0,
+                point_inside_the_box_but_outside_the_disc.1,
+                point_inside_the_box_but_outside_the_disc.2
+            ),
+            (0, 0, 0),
+            "outside the clip-path circle (but inside the box) must not paint, got \
+             {point_inside_the_box_but_outside_the_disc:?}"
+        );
+    }
+
+    #[test]
+    fn mix_blend_mode_multiply_darkens_against_the_backdrop_instead_of_overwriting_it() {
+        let overlay = |mode: Option<CssBlendMode>| {
+            absolute_box(
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+                "#ff0000",
+                CssStyle {
+                    mix_blend_mode: mode,
+                    ..Default::default()
+                },
+            )
+        };
+
+        let normal = {
+            let mut root = root_node(100.0, 100.0, Some("#808080"), vec![overlay(None)]);
+            render_pixels(&mut root, 100, 100)
+        };
+        let multiplied = {
+            let mut root = root_node(
+                100.0,
+                100.0,
+                Some("#808080"),
+                vec![overlay(Some(CssBlendMode::Multiply))],
+            );
+            render_pixels(&mut root, 100, 100)
+        };
+
+        let normal_px = probe(&normal, 100, 50, 50);
+        let multiplied_px = probe(&multiplied, 100, 50, 50);
+
+        assert!(
+            normal_px.0 > 240 && normal_px.1 < 20,
+            "sanity: an un-blended opaque overlay must fully overwrite the backdrop, got {normal_px:?}"
+        );
+        assert!(
+            multiplied_px.0 < 200,
+            "mix-blend-mode: multiply must darken against the backdrop, got {multiplied_px:?}"
+        );
+        assert_ne!(
+            multiplied_px.0, normal_px.0,
+            "multiply must differ from normal blending, both got r={}",
+            multiplied_px.0
+        );
     }
 }
 
