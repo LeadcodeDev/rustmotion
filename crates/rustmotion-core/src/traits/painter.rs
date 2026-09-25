@@ -26,7 +26,7 @@ pub struct PaintCtx {
     pub fps: u32,
     pub video_width: u32,
     pub video_height: u32,
-    /// Stagger offset accumulated by parent containers (seconds).
+    /// Stagger offset accumulated by parent containers (seconds); already folded into `props`/CSS, so no `Painter` impl should read or subtract it.
     pub stagger_offset: f64,
 }
 
@@ -45,10 +45,12 @@ pub struct MeasureCtx {
 
 /// Component paint contract.
 pub trait Painter {
-    /// Paint the component's *content* into the canvas. The canvas is
-    /// already translated to the content-box origin and clipped if
-    /// `overflow: hidden` was set. Generic decorations (bg, border,
-    /// shadow) are already painted by the engine.
+    /// Paint the component's *content* into the canvas. `layout` is
+    /// content-box-relative with a zero origin — a translation the
+    /// `PaintDispatcher` that calls this method is responsible for, not
+    /// `paint_tree` itself. The canvas, on the other hand, is already
+    /// clipped by `paint_tree` if `overflow: hidden` was set. Generic
+    /// decorations (bg, border, shadow) are already painted by the engine.
     ///
     /// `props` carries the per-component animation state at the current
     /// frame. Outer paint properties (transform / opacity / filter) have
