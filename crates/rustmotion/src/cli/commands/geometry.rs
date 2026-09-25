@@ -61,7 +61,7 @@ use rustmotion::components::intrinsic::{
 };
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
-    CssStyle, TransformFn, TransformOrigin, WhiteSpace, MIN_LEGIBLE_FONT_RATIO,
+    CssStyle, Position, TransformFn, TransformOrigin, WhiteSpace, MIN_LEGIBLE_FONT_RATIO,
     TEXT_AUTOFIT_MIN_FONT_PX,
 };
 use rustmotion::core::css::taffy_bridge::ConversionContext;
@@ -188,6 +188,11 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 .as_ref()
                 .filter(|_| !scene_uses_depth(&children));
 
+            let root_bound = layouts
+                .get(built.root.id)
+                .map(|l| l.content_box())
+                .map(|(_, _, w, h)| (w, h));
+
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             walk(
                 &children,
@@ -204,6 +209,7 @@ pub fn validate_geometry(scenario: &ResolvedScenario) -> Vec<GeometryViolation> 
                 /*parent_clips=*/
                 false,
                 camera,
+                root_bound,
                 &mut violations,
             );
         }
@@ -263,6 +269,11 @@ fn walk(
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
+    // The nearest containing block's own resolved content box (width,
+    // height) — see `check_content_overflows_box`'s doc comment for why an
+    // in-flow child's own post-layout box is no longer sufficient on its
+    // own (RM-34).
+    container_bound: Option<(f32, f32)>,
     out: &mut Vec<GeometryViolation>,
 ) {
     let viewport_f = (viewport.0 as f32, viewport.1 as f32);
@@ -274,6 +285,21 @@ fn walk(
             None => continue,
         };
         let raw_bbox = bbox_of(layout);
+        // `box_node.css.position` (not `ChildComponent::is_flow`, a
+        // different, looser predicate — false for any declared `position`
+        // shorthand, "absolute" or not, see its doc comment) is the exact
+        // condition `box_builder.rs` used to decide whether taffy treats
+        // this node as `Position::Absolute`. Only that actually takes a
+        // node out of flex flow: its own box is then sized purely from its
+        // own content/style, never shrunk or grown to fit a sibling slot,
+        // so the containing block's size is irrelevant to it (see
+        // `absolutely_positioned_*_spilling_past_a_visible_card_is_legal`,
+        // which depends on this staying unbound).
+        let own_bound = if box_node.css.position == Some(Position::Absolute) {
+            None
+        } else {
+            container_bound
+        };
 
         if !is_exempted(&child.component) {
             if !parent_clips && !bleeds(child) {
@@ -307,7 +333,16 @@ fn walk(
                     out,
                 );
             }
-            check_auto_scroll(&child.component, &child_path, layout, viewport, vi, si, out);
+            check_auto_scroll(
+                &child.component,
+                &child_path,
+                layout,
+                own_bound,
+                viewport,
+                vi,
+                si,
+                out,
+            );
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
@@ -318,6 +353,7 @@ fn walk(
                     &child.component,
                     &child_path,
                     layout,
+                    own_bound,
                     viewport,
                     vi,
                     si,
@@ -352,6 +388,7 @@ fn walk(
         }
 
         if let Some(grandchildren) = container_children(&child.component) {
+            let (_, _, cw, ch) = layout.content_box();
             walk(
                 grandchildren,
                 &box_node.children,
@@ -363,6 +400,7 @@ fn walk(
                 None,
                 parent_clips || container_clips(&child.component),
                 camera,
+                Some((cw, ch)),
                 out,
             );
         }
@@ -883,10 +921,30 @@ fn check_unwrappable_text(
 /// `line_height`, independent of any width constraint, so it's measured at
 /// `(MaxContent, Definite(ch))` and reported on `Axis::Y` only, leaving
 /// `Axis::X` to `check_unwrappable_text`.
+///
+/// RM-34: `layout.content_box()` is no longer trustworthy as the sole bound
+/// on its own. `fix(css): default flex-direction to column when unset`
+/// (8afc4c1) means a single in-flow child's MAIN axis (height, in the
+/// overwhelmingly common column case) is no longer clamped by `align-items:
+/// stretch` — that only ever clamped the CROSS axis. A node's own resolved
+/// box now legitimately grows past its container's declared size to match
+/// its content exactly (`min-height: auto`-style flex overflow, matching
+/// real CSS), which makes a self-vs-self comparison vacuous: the box IS the
+/// content, by construction. `container_bound` — the nearest containing
+/// block's own resolved content box, threaded down from `walk` — is the
+/// fix: an in-flow node's effective box is `min(own, container)` per axis,
+/// so a still-fixed-size ancestor (the ordinary case; card/flex/grid boxes
+/// are NOT subject to the same unclamped growth, since nothing above forces
+/// them to shrink-wrap their own children) keeps constraining what "fits"
+/// means, even though the leaf's post-layout box no longer does. `None`
+/// (absolutely positioned children, and the historical behavior for callers
+/// that don't have an ancestor to compare against) leaves `cw`/`ch`
+/// unchanged.
 fn check_content_overflows_box(
     component: &Component,
     path: &str,
     layout: &BoxLayout,
+    container_bound: Option<(f32, f32)>,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -897,6 +955,10 @@ fn check_content_overflows_box(
     };
 
     let (cx, cy, cw, ch) = layout.content_box();
+    let (cw, ch) = match container_bound {
+        Some((bw, bh)) => (cw.min(bw), ch.min(bh)),
+        None => (cw, ch),
+    };
     if cw <= 0.0 || ch <= 0.0 {
         return;
     }
@@ -1019,10 +1081,18 @@ fn check_content_overflows_box(
 /// painter, terminal included, is handed `layout.content_box()` instead —
 /// so the terminal arm compares against that, not the border box, or it
 /// under-reports by exactly the node's own padding.
+///
+/// RM-34: same `container_bound` clamp as `check_content_overflows_box`, and
+/// for the same reason — an in-flow codeblock/terminal that's the sole child
+/// of a fixed-height card now grows its own box to its natural (unscrolled)
+/// height instead of being shrunk to the card's declared size, which made
+/// this check's own-box-vs-own-content comparison vacuous. See that
+/// function's doc comment for the full explanation.
 fn check_auto_scroll(
     component: &Component,
     path: &str,
     layout: &BoxLayout,
+    container_bound: Option<(f32, f32)>,
     viewport: (u32, u32),
     vi: usize,
     si: usize,
@@ -1033,7 +1103,10 @@ fn check_auto_scroll(
         Component::Codeblock(cb) if !cb.auto_scroll => {
             let (_, natural_h) =
                 CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
-            let bbox = bbox_of(layout);
+            let mut bbox = bbox_of(layout);
+            if let Some((_, bh)) = container_bound {
+                bbox.h = bbox.h.min(bh);
+            }
             if natural_h > bbox.h + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -1055,6 +1128,10 @@ fn check_auto_scroll(
             let (_, natural_h) =
                 TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
             let (cx, cy, cw, ch) = layout.content_box();
+            let ch = match container_bound {
+                Some((_, bh)) => ch.min(bh),
+                None => ch,
+            };
             if natural_h > ch + 0.5 {
                 out.push(GeometryViolation {
                     view_index: vi,
@@ -2844,15 +2921,24 @@ mod tests {
     #[test]
     fn wrapped_text_taller_than_its_fixed_height_card_is_flagged() {
         // Exact repro from the audit: a card comfortably inside a 960x540
-        // frame (x=330,y=200,w=300,h=80 -> right/bottom edges 630/280, both
+        // frame (x=330,y=100,w=300,h=80 -> right/bottom edges 630/180, both
         // well inside frame) with a paragraph that, wrapped at the card's
         // ~300px content width, needs ~343px of height — but the card is
-        // fixed at 80px. No viewport check ever fires (card and text both
-        // report a resting bbox inside the frame); this is purely a
-        // content-vs-own-box mismatch.
+        // fixed at 80px.
+        //
+        // `y=100` (not the card's own bottom edge) leaves headroom for the
+        // text's own post-layout box, which — since `fix(css): default
+        // flex-direction to column when unset` — grows to that full ~343px
+        // instead of being clamped to the card's 80px: at `y=100` its
+        // bottom (~443) still lands well inside the 540px frame, so
+        // `check_viewport` stays quiet and this exercises `ContentOverflowsBox`
+        // in isolation. A shallower `y` would make the grown box cross the
+        // frame edge for real and pull `ViewportOverflow` into this fixture
+        // too — see `spilling_past_a_visible_card_is_still_caught_when_it_
+        // leaves_the_viewport` for that (intentional) case.
         let json = r##"{"video":{"width":960,"height":540,"fps":30,"background":"#0A0A12"},
  "scenes":[{"duration":1.0,"children":[
-   {"type":"card","position":"absolute","x":330,"y":200,
+   {"type":"card","position":"absolute","x":330,"y":100,
     "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
     "children":[{"type":"text",
       "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
@@ -2974,6 +3060,55 @@ mod tests {
                 .all(|v| v.kind != ViolationKind::ContentOverflowsBox),
             "content that fits its box must not be flagged: {:?}",
             violations
+        );
+    }
+
+    /// RM-34 regression: the exact repro that surfaced the hole opened by
+    /// `fix(css): default flex-direction to column when unset` (8afc4c1).
+    /// Before that commit, `align-items: stretch` clamped this lone child's
+    /// CROSS axis (height, under the old row default) to the card's
+    /// declared 80px, so `check_content_overflows_box`'s self-vs-self
+    /// comparison caught the mismatch as a side effect. After 8afc4c1 the
+    /// child's MAIN axis (height, under the new column default) isn't
+    /// clamped by `stretch` at all — its own post-layout box grows to match
+    /// its content exactly (343px), making the self-comparison vacuous and
+    /// this fixture validate clean. Distinct from
+    /// `wrapped_text_taller_than_its_fixed_height_card_is_flagged` only in
+    /// using the audit's own numbers (1920x1080, not 960x540) — kept
+    /// alongside it as the fixture actually quoted in the audit report.
+    #[test]
+    fn in_flow_text_grown_past_its_cards_declared_height_is_flagged() {
+        let json = r##"{"video":{"width":1920,"height":1080,"fps":30,"background":"#0A0A12"},
+ "scenes":[{"duration":1.0,"children":[
+   {"type":"card","position":"absolute","x":660,"y":50,
+    "style":{"width":300,"height":80,"background":"#1e2233","overflow":"visible"},
+    "children":[{"type":"text",
+      "content":"Ce paragraphe est beaucoup plus grand que la carte de 80px qui le contient.",
+      "style":{"font-size":44,"color":"#ffffff"}}]}]}]}"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.kind != ViolationKind::ViewportOverflow),
+            "fixture stays inside the 1080px-tall frame by construction — this is purely a \
+             content-vs-declared-box mismatch: {:?}",
+            violations
+        );
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::ContentOverflowsBox && v.component == "text")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected ContentOverflowsBox for text taller than its fixed-height card, got: {:?}",
+                    violations
+                )
+            });
+        assert_eq!(v.axis, Axis::Y);
+        assert!(
+            v.hint.contains("height"),
+            "hint should point at the height mismatch: {}",
+            v.hint
         );
     }
 
