@@ -40,6 +40,8 @@ use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 
+pub(crate) const MAX_NESTING_DEPTH: usize = 100;
+
 /// Errors from transpiling HTML to a scenario value.
 #[derive(Debug, thiserror::Error)]
 pub enum HtmlError {
@@ -127,7 +129,7 @@ pub enum HtmlError {
     /// string — a nested element with real content (a component, a shape, a
     /// child container) has nowhere to go and used to either bleed its raw
     /// source into the string or vanish outright.
-    #[error("<{tag}> cannot appear inside an inline text element (p/span/h1..h6/strong/em/label) — those flatten their content to a plain string, so <{tag}>'s own content would be silently lost; move it outside as a sibling, or wrap the text in a <div>/<rm-*> container instead")]
+    #[error("<{tag}> cannot appear inside an inline text element (p/span/h1..h6/strong/em/label/b/i/code/u/small/a) — those flatten their content to a plain string, so <{tag}>'s own content would be silently lost; move it outside as a sibling, or wrap the text in a <div>/<rm-*> container instead")]
     TextContentUnsupportedChild { tag: String },
     /// Emitted when the HTML serializer itself fails (I/O error into an
     /// in-memory buffer, or non-UTF-8 output) inside the studio write-back
@@ -135,6 +137,37 @@ pub enum HtmlError {
     /// hand the caller a partial or empty buffer to write to disk.
     #[error("failed to serialize the rewritten HTML: {0}")]
     SerializeFailed(String),
+    #[error("<{tag} {attr}=\"...\"> contains invalid JSON: {error}")]
+    InvalidAttributeJson {
+        tag: String,
+        attr: String,
+        error: String,
+    },
+    #[error("element nesting exceeds the maximum supported depth ({max}) — flatten the markup or split it across includes")]
+    NestingTooDeep { max: usize },
+    #[error("style property '{prop}' has value '{value}' which looks like JSON but fails to parse: {error}")]
+    InvalidStylePropertyJson {
+        prop: String,
+        value: String,
+        error: String,
+    },
+    #[error("style declaration '{decl}' has no ':' separating the property from its value")]
+    StyleDeclarationMissingColon { decl: String },
+    #[error("<{tag}> found as a direct child of <rustmotion> — only <scene> and <font> elements belong there; move it inside a <scene>, or remove it")]
+    UnsupportedRootChild { tag: String },
+    #[error("<rustmotion background=\"...\"> must be a plain color string — the video-level background has no object/gradient form (unlike <scene background=\"...\">); got '{0}'")]
+    VideoBackgroundMustBeString(String),
+    #[error("<{tag}> is not a tag the HTML dialect recognizes{}", .suggestion.as_ref().map(|s| format!(" (did you mean <{s}>?)")).unwrap_or_default())]
+    UnknownTag {
+        tag: String,
+        suggestion: Option<String>,
+    },
+    #[error("<br> is only meaningful inside inline text content (p/span/h1..h6/strong/em/label/b/i/code/u/small/a) — as a direct child here it has no line to break")]
+    BrOutsideTextContent,
+    #[error("<font weights=\"...\"> entry '{value}' is not a valid weight (expected an integer, e.g. 400)")]
+    InvalidFontWeight { value: String },
+    #[error("audio attribute contains invalid JSON: {0}")]
+    InvalidAudioJson(String),
 }
 
 /// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
@@ -149,7 +182,15 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
     check_known_attrs(
         "rustmotion",
         &attrs,
-        &["width", "height", "fps", "background", "codec", "crf"],
+        &[
+            "width",
+            "height",
+            "fps",
+            "background",
+            "codec",
+            "crf",
+            "audio",
+        ],
     )?;
 
     let width = get("width").ok_or(HtmlError::MissingDimensions)?;
@@ -162,7 +203,7 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
         video.insert("fps".into(), style::coerce_value(&fps));
     }
     if let Some(bg) = get("background") {
-        video.insert("background".into(), parse_background_attr(&bg)?);
+        video.insert("background".into(), parse_video_background_attr(&bg)?);
     }
     if let Some(codec) = get("codec") {
         video.insert("codec".into(), style::coerce_value(&codec));
@@ -180,6 +221,9 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
 
     let mut scenario = Map::new();
     scenario.insert("video".into(), Value::Object(video));
+    if let Some(audio) = get("audio") {
+        scenario.insert("audio".into(), parse_audio_attr(&audio)?);
+    }
     scenario.insert("scenes".into(), Value::Array(scenes));
     if !fonts.is_empty() {
         scenario.insert("fonts".into(), Value::Array(fonts));
@@ -196,6 +240,26 @@ pub(crate) fn parse_background_attr(raw: &str) -> Result<Value, HtmlError> {
     } else {
         Ok(Value::from(raw))
     }
+}
+
+fn parse_video_background_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Err(HtmlError::VideoBackgroundMustBeString(raw.to_string()));
+    }
+    Ok(Value::from(raw))
+}
+
+fn parse_audio_attr(raw: &str) -> Result<Value, HtmlError> {
+    let trimmed = raw.trim();
+    let parsed: Value =
+        serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidAudioJson(e.to_string()))?;
+    if !parsed.is_array() {
+        return Err(HtmlError::InvalidAudioJson(
+            "audio must be a JSON array of track objects".into(),
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Map a `<font>` element to a FontEntry JSON object.
@@ -225,11 +289,15 @@ fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
             if let Some(weights_raw) = get("weights") {
                 let parsed: Vec<u16> = weights_raw
                     .split(',')
-                    .filter_map(|w| w.trim().parse::<u16>().ok())
-                    .collect();
-                if !parsed.is_empty() {
-                    obj["weights"] = Value::Array(parsed.into_iter().map(Value::from).collect());
-                }
+                    .map(|w| {
+                        w.trim()
+                            .parse::<u16>()
+                            .map_err(|_| HtmlError::InvalidFontWeight {
+                                value: w.trim().to_string(),
+                            })
+                    })
+                    .collect::<Result<_, _>>()?;
+                obj["weights"] = Value::Array(parsed.into_iter().map(Value::from).collect());
             }
             Ok(obj)
         }
@@ -275,7 +343,13 @@ fn collect_scenes_and_fonts(
                     parent: other.to_string(),
                 });
             }
-            _ => {}
+            Some(other) if matches!(element::tag_kind(other), element::TagKind::Ignored) => {}
+            Some(other) => {
+                return Err(HtmlError::UnsupportedRootChild {
+                    tag: other.to_string(),
+                });
+            }
+            None => {}
         }
     }
     Ok(())
@@ -354,7 +428,7 @@ pub(crate) fn check_known_attrs(
 
 /// The closest entry in `known` to `name` (Levenshtein distance <= 2), or
 /// `None` when nothing is close enough to be worth suggesting.
-fn suggest<'a>(name: &str, known: &[&'a str]) -> Option<&'a str> {
+pub(crate) fn suggest<'a>(name: &str, known: &[&'a str]) -> Option<&'a str> {
     known
         .iter()
         .map(|k| (levenshtein(name, k), *k))
@@ -380,11 +454,18 @@ fn levenshtein(a: &str, b: &str) -> usize {
 
 /// Depth-first: the first descendant element with the given tag name.
 pub(crate) fn find_element(handle: &Handle, tag: &str) -> Option<Handle> {
+    find_element_at(handle, tag, 0)
+}
+
+fn find_element_at(handle: &Handle, tag: &str, depth: usize) -> Option<Handle> {
+    if depth > MAX_NESTING_DEPTH {
+        return None;
+    }
     for child in handle.children.borrow().iter() {
         if tag_name(child).as_deref() == Some(tag) {
             return Some(child.clone());
         }
-        if let Some(found) = find_element(child, tag) {
+        if let Some(found) = find_element_at(child, tag, depth + 1) {
             return Some(found);
         }
     }
@@ -613,8 +694,8 @@ fn upsert_decl(decls: &str, prop: &str, value: &str) -> String {
 /// located (no `<rustmotion>`/`</rustmotion>` literal in `original`, e.g. an
 /// unclosed root) or the serializer itself fails.
 fn splice_rustmotion_subtree(original: &str, root: &Handle) -> Option<String> {
-    let open_start = original.find("<rustmotion")?;
-    let close_start = original.rfind("</rustmotion")?;
+    let open_start = *find_all_outside_comments(original, "<rustmotion").first()?;
+    let close_start = *find_all_outside_comments(original, "</rustmotion").last()?;
     let close_end = close_start + original[close_start..].find('>')? + 1;
     if close_end <= open_start {
         return None;
@@ -625,6 +706,31 @@ fn splice_rustmotion_subtree(original: &str, root: &Handle) -> Option<String> {
     out.push_str(&serialized);
     out.push_str(&original[close_end..]);
     Some(out)
+}
+
+fn find_all_outside_comments(haystack: &str, needle: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < haystack.len() {
+        if haystack[i..].starts_with("<!--") {
+            match haystack[i..].find("-->") {
+                Some(end) => {
+                    i += end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if haystack[i..].starts_with(needle) {
+            out.push(i);
+        }
+        i += haystack[i..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+    }
+    out
 }
 
 fn serialize_element(handle: &Handle) -> Result<String, HtmlError> {
@@ -898,12 +1004,24 @@ mod lib_tests {
     // --- root-level background JSON ---
 
     #[test]
-    fn root_background_json_object_is_parsed() {
-        let html = r##"<rustmotion width="1920" height="1080" background='{"gradient":"linear","colors":["#0f172a","#1e3a5f"]}'>
+    fn root_background_plain_color_string_is_parsed() {
+        let html = r##"<rustmotion width="1920" height="1080" background="#0f172a">
             <scene duration="2"><h1>hi</h1></scene>
         </rustmotion>"##;
         let v = crate::html_to_scenario_value(html).unwrap();
-        assert_eq!(v["video"]["background"]["gradient"], json!("linear"));
+        assert_eq!(v["video"]["background"], json!("#0f172a"));
+    }
+
+    #[test]
+    fn root_background_json_object_is_refused_not_transpiled_dead() {
+        let html = r##"<rustmotion width="1920" height="1080" background='{"gradient":"linear","colors":["#0f172a","#1e3a5f"]}'>
+            <scene duration="2"><h1>hi</h1></scene>
+        </rustmotion>"##;
+        let err = crate::html_to_scenario_value(html).unwrap_err();
+        assert!(
+            matches!(err, crate::HtmlError::VideoBackgroundMustBeString(_)),
+            "expected VideoBackgroundMustBeString, got: {err:?}"
+        );
     }
 
     #[test]
@@ -913,8 +1031,8 @@ mod lib_tests {
         </rustmotion>"##;
         let err = crate::html_to_scenario_value(html).unwrap_err();
         assert!(
-            matches!(err, crate::HtmlError::InvalidBackgroundJson(_)),
-            "expected InvalidBackgroundJson, got: {err:?}"
+            matches!(err, crate::HtmlError::VideoBackgroundMustBeString(_)),
+            "expected VideoBackgroundMustBeString, got: {err:?}"
         );
     }
 }

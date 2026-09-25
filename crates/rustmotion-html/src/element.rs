@@ -2,11 +2,17 @@ use markup5ever_rcdom::{Handle, NodeData};
 use serde_json::{Map, Value};
 
 use crate::style::{coerce_value, parse_anim_attr, parse_inline_style};
-use crate::{check_known_attrs, element_attrs, tag_name, HtmlError};
+use crate::{check_known_attrs, element_attrs, suggest, tag_name, HtmlError, MAX_NESTING_DEPTH};
 
 const KNOWN_NATIVE_ATTRS: &[&str] = &["style", "anim"];
 
-enum TagKind {
+const KNOWN_TAG_NAMES: &[&str] = &[
+    "div", "section", "main", "header", "footer", "article", "p", "span", "h1", "h2", "h3", "h4",
+    "h5", "h6", "strong", "em", "label", "b", "i", "code", "u", "small", "a", "br", "img", "video",
+    "svg", "script", "title", "noscript", "template", "head",
+];
+
+pub(crate) enum TagKind {
     Container,
     Text,
     /// Tags that never visually render in real HTML either (`<script>`,
@@ -20,21 +26,54 @@ enum TagKind {
     /// the dialect's `rm-*` custom-element equivalent.
     UnsupportedNative(&'static str),
     Custom(String),
+    Unknown,
 }
 
-fn tag_kind(tag: &str) -> TagKind {
+pub(crate) fn tag_kind(tag: &str) -> TagKind {
     match tag {
         "div" | "section" | "main" | "header" | "footer" | "article" => TagKind::Container,
-        "p" | "span" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "strong" | "em" | "label" => {
-            TagKind::Text
-        }
+        "p" | "span" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "strong" | "em" | "label"
+        | "b" | "i" | "code" | "u" | "small" | "a" => TagKind::Text,
         "script" | "title" | "noscript" | "template" | "head" => TagKind::Ignored,
         "img" => TagKind::UnsupportedNative("rm-image"),
         "video" => TagKind::UnsupportedNative("rm-video"),
         "svg" => TagKind::UnsupportedNative("rm-svg"),
         t if t.starts_with("rm-") => TagKind::Custom(t["rm-".len()..].to_string()),
-        _ => TagKind::Container,
+        _ => TagKind::Unknown,
     }
+}
+
+fn unknown_tag_error(tag: &str) -> HtmlError {
+    HtmlError::UnknownTag {
+        tag: tag.to_string(),
+        suggestion: suggest(tag, KNOWN_TAG_NAMES).map(str::to_string),
+    }
+}
+
+fn declares_pre_whitespace(raw_style: &str) -> bool {
+    raw_style.split(';').any(|decl| {
+        matches!(
+            decl.split_once(':').map(|(k, v)| (k.trim(), v.trim())),
+            Some(("white-space", "pre")) | Some(("white-space", "pre-wrap"))
+        )
+    })
+}
+
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_space = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+            }
+            last_was_space = true;
+        } else {
+            out.push(c);
+            last_was_space = false;
+        }
+    }
+    out
 }
 
 /// Concatenated text of an element and all its descendants. Nested inline
@@ -45,20 +84,42 @@ fn tag_kind(tag: &str) -> TagKind {
 /// container) are refused rather than having their source painted or their
 /// content silently vanish — see [`HtmlError::TextContentUnsupportedChild`].
 pub(crate) fn inner_text(handle: &Handle) -> Result<String, HtmlError> {
+    let preserve_whitespace = element_attrs(handle)
+        .iter()
+        .find(|(k, _)| k == "style")
+        .is_some_and(|(_, v)| declares_pre_whitespace(v));
     let mut out = String::new();
-    collect_text(handle, &mut out)?;
+    collect_text(handle, &mut out, 0, preserve_whitespace)?;
     Ok(out.trim().to_string())
 }
 
-fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
+fn collect_text(
+    handle: &Handle,
+    out: &mut String,
+    depth: usize,
+    preserve_whitespace: bool,
+) -> Result<(), HtmlError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(HtmlError::NestingTooDeep {
+            max: MAX_NESTING_DEPTH,
+        });
+    }
     if let NodeData::Text { contents } = &handle.data {
-        out.push_str(&contents.borrow());
+        if preserve_whitespace {
+            out.push_str(&contents.borrow());
+        } else {
+            out.push_str(&collapse_whitespace(&contents.borrow()));
+        }
         return Ok(());
     }
     if matches!(handle.data, NodeData::Element { .. }) {
         if let Some(tag) = tag_name(handle) {
             if tag == "style" {
                 return Err(HtmlError::StyleElementUnsupported);
+            }
+            if tag == "br" {
+                out.push('\n');
+                return Ok(());
             }
             match tag_kind(&tag) {
                 TagKind::Ignored => return Ok(()),
@@ -68,6 +129,7 @@ fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
                         suggestion: suggestion.to_string(),
                     })
                 }
+                TagKind::Unknown => return Err(unknown_tag_error(&tag)),
                 TagKind::Container | TagKind::Custom(_) => {
                     return Err(HtmlError::TextContentUnsupportedChild { tag })
                 }
@@ -76,7 +138,7 @@ fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
         }
     }
     for child in handle.children.borrow().iter() {
-        collect_text(child, out)?;
+        collect_text(child, out, depth + 1, preserve_whitespace)?;
     }
     Ok(())
 }
@@ -100,8 +162,26 @@ fn style_object(attrs: &[(String, String)]) -> Result<Option<Value>, HtmlError> 
     }
 }
 
+fn coerce_attr_value(tag: &str, attr: &str, v: &str) -> Result<Value, HtmlError> {
+    let trimmed = v.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidAttributeJson {
+            tag: tag.to_string(),
+            attr: attr.to_string(),
+            error: e.to_string(),
+        })
+    } else {
+        Ok(coerce_value(v))
+    }
+}
+
 /// Map a single element handle to its component JSON value, or `None` to skip.
-pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlError> {
+pub(crate) fn element_to_value(handle: &Handle, depth: usize) -> Result<Option<Value>, HtmlError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(HtmlError::NestingTooDeep {
+            max: MAX_NESTING_DEPTH,
+        });
+    }
     let Some(tag) = tag_name(handle) else {
         return Ok(None);
     };
@@ -111,6 +191,9 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
     if tag == "style" {
         return Err(HtmlError::StyleElementUnsupported);
     }
+    if tag == "br" {
+        return Err(HtmlError::BrOutsideTextContent);
+    }
     let attrs = element_attrs(handle);
     match tag_kind(&tag) {
         TagKind::Ignored => Ok(None),
@@ -118,6 +201,7 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             tag,
             suggestion: suggestion.to_string(),
         }),
+        TagKind::Unknown => Err(unknown_tag_error(&tag)),
         TagKind::Text => {
             check_known_attrs(&tag, &attrs, KNOWN_NATIVE_ATTRS)?;
             let mut obj = Map::new();
@@ -135,7 +219,7 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
             if let Some(style) = style_object(&attrs)? {
                 obj.insert("style".into(), style);
             }
-            let children = children_to_values(handle)?;
+            let children = children_to_values(handle, depth + 1)?;
             if !children.is_empty() {
                 obj.insert("children".into(), Value::Array(children));
             }
@@ -160,14 +244,14 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
                 let value = if v.is_empty() {
                     Value::Bool(true)
                 } else {
-                    coerce_value(v)
+                    coerce_attr_value(&tag, k, v)?
                 };
                 obj.insert(k.clone(), value);
             }
             if let Some(style) = style_object(&attrs)? {
                 obj.insert("style".into(), style);
             }
-            let children = children_to_values(handle)?;
+            let children = children_to_values(handle, depth + 1)?;
             if !children.is_empty() {
                 obj.insert("children".into(), Value::Array(children));
             }
@@ -178,18 +262,23 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
 
 /// Map a container's children: element children via `element_to_value`, and
 /// non-whitespace bare text nodes into `text` components.
-pub(crate) fn children_to_values(handle: &Handle) -> Result<Vec<Value>, HtmlError> {
+pub(crate) fn children_to_values(handle: &Handle, depth: usize) -> Result<Vec<Value>, HtmlError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(HtmlError::NestingTooDeep {
+            max: MAX_NESTING_DEPTH,
+        });
+    }
     let mut out = Vec::new();
     for child in handle.children.borrow().iter() {
         match &child.data {
             NodeData::Element { .. } => {
-                if let Some(v) = element_to_value(child)? {
+                if let Some(v) = element_to_value(child, depth + 1)? {
                     out.push(v);
                 }
             }
             NodeData::Text { contents } => {
-                let text = contents.borrow();
-                let trimmed = text.trim();
+                let collapsed = collapse_whitespace(&contents.borrow());
+                let trimmed = collapsed.trim();
                 if !trimmed.is_empty() {
                     out.push(serde_json::json!({ "type": "text", "content": trimmed }));
                 }
@@ -208,7 +297,7 @@ mod tests {
     fn map_first(html: &str) -> Value {
         let dom = crate::parse_fragment_dom(html);
         let first = find_first_element(&dom.document).expect("an element");
-        element_to_value(&first)
+        element_to_value(&first, 0)
             .expect("no transpile error")
             .expect("maps to a value")
     }
@@ -216,7 +305,7 @@ mod tests {
     fn map_first_err(html: &str) -> crate::HtmlError {
         let dom = crate::parse_fragment_dom(html);
         let first = find_first_element(&dom.document).expect("an element");
-        element_to_value(&first).expect_err("expected a transpile error")
+        element_to_value(&first, 0).expect_err("expected a transpile error")
     }
 
     // Skips the html/head/body wrappers html5ever inserts around a fragment,
