@@ -34,8 +34,9 @@ pub struct LegacyPaintDispatcher<'a> {
     /// `components[id as usize]` is the component for `id`. Slot 0 is the
     /// synthetic root and is always `None`.
     components: &'a [Option<&'a ChildComponent>],
-    /// Per-node container-stagger delay (indexed like `components`); empty
-    /// when the caller doesn't carry stagger information.
+    /// Per-node animation delay — ancestor-stagger plus the node's own
+    /// `start_at` (indexed like `components`); empty when the caller doesn't
+    /// carry that information.
     stagger_delays: &'a [f64],
     /// Per-node accumulated affine time remap `(scale, shift)` from ancestor
     /// containers' `time_scale`/`time_offset` (indexed like `components`);
@@ -52,10 +53,11 @@ impl<'a> LegacyPaintDispatcher<'a> {
         }
     }
 
-    /// Build from a [`BuiltScene`], carrying its stagger delays so internal
-    /// animations shift by the same amount as the CSS overrides, and its
-    /// per-node time remaps so internal animations (counter, draw_in,
-    /// typewriter…) advance at the same local time as the CSS overrides.
+    /// Build from a [`BuiltScene`], carrying its per-node animation delays
+    /// (stagger plus `start_at`) so internal animations shift by the same
+    /// amount as the CSS overrides, and its per-node time remaps so internal
+    /// animations (counter, draw_in, typewriter…) advance at the same local
+    /// time as the CSS overrides.
     pub fn for_scene(built: &'a crate::box_builder::BuiltScene<'a>) -> Self {
         Self {
             components: &built.components,
@@ -97,9 +99,9 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         // the CSS overrides injected at box-tree build time, so we don't
         // wrap the canvas here. `props` is still needed for internal-only
         // fields like `draw_progress`, `stroke_width`, `visible_chars*`,
-        // and `char_animation`. Timeline steps and container-stagger delays
-        // are folded in so those internal animations shift exactly like the
-        // CSS overrides do.
+        // and `char_animation`. Timeline steps and the node's accumulated
+        // delay (ancestor stagger plus its own `start_at`) are folded in so
+        // those internal animations shift exactly like the CSS overrides do.
         let stagger_delay = self
             .stagger_delays
             .get(*node_id as usize)

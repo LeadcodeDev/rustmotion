@@ -574,14 +574,19 @@ fn paint_decorative_fullscreen(
     use rustmotion_core::traits::PaintCtx;
 
     let time = ctx.time.seconds();
+    // A `start_at` here rebases the animation clock the same way it does in
+    // `build_child` (`box_builder.rs`) — this leaf has no ancestor stagger of
+    // its own to fold in, so `start_at` alone is its `extra_delay`.
+    let mut start_at = 0.0;
     if let Some(timed) = child.component.as_timed() {
         let (start, end) = timed.timing();
         if !(PaintWindow { start, end }).contains(time) {
             return;
         }
+        start_at = start.unwrap_or(0.0);
     }
 
-    let props = match effective_effects(&child.component, 0.0, time) {
+    let props = match effective_effects(&child.component, start_at, time) {
         Some(effects) => resolve_props_for_effects(&effects, time, ctx.scene_duration),
         None => AnimatedProperties::default(),
     };
@@ -608,7 +613,7 @@ fn paint_decorative_fullscreen(
         fps: ctx.fps,
         video_width: ctx.video_width,
         video_height: ctx.video_height,
-        stagger_offset: 0.0,
+        stagger_offset: start_at,
     };
     canvas.save();
     painter.paint_content(canvas, &local, &props, &paint_ctx);

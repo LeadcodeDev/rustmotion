@@ -61,10 +61,12 @@ pub struct BuiltScene<'a> {
     /// Lookup table — `components[id as usize]` is the component for `id`.
     /// `None` for synthetic boxes (the root scene wrapper).
     pub components: Vec<Option<&'a ChildComponent>>,
-    /// Per-node animation delay accumulated from ancestor containers'
-    /// `stagger` (indexed like `components`). Consumed by the paint
-    /// dispatcher so internal animations shift by the same amount as the
-    /// CSS overrides resolved at build time.
+    /// Per-node animation delay: ancestor containers' `stagger` plus the
+    /// node's own `start_at` (indexed like `components`). Consumed by the
+    /// paint dispatcher so internal animations shift by the same amount as
+    /// the CSS overrides resolved at build time — and so an entrance/exit
+    /// animation on a `start_at`ed node plays from its own first keyframe
+    /// instead of one already resolved at the untouched scene clock.
     pub stagger_delays: Vec<f64>,
     /// Per-node affine time remap accumulated from ancestor containers'
     /// `time_scale`/`time_offset`. Entry `i` is `(scale, shift)` where
@@ -231,7 +233,7 @@ fn build_ghosts<'a>(
     time_params: &mut Vec<(f64, f64)>,
     next_id: &mut NodeId,
     actx: BuildAnimationCtx,
-    stagger_delay: f64,
+    extra_delay: f64,
     time_remap: (f64, f64),
     effects: &[AnimationEffect],
     parent_css: &CssStyle,
@@ -291,7 +293,7 @@ fn build_ghosts<'a>(
             let steps = animatable.timeline_steps();
             if steps.iter().any(|s| s.style.is_some()) {
                 let skip_opacity = css.transition.is_some();
-                apply_style_states(&mut css, steps, ghost_time - stagger_delay, skip_opacity);
+                apply_style_states(&mut css, steps, ghost_time - extra_delay, skip_opacity);
                 // Same `border-radius`/`background` smoothing as the
                 // principal path in `build_child`, sampled at `ghost_time`
                 // so a motion-blur/trail ghost mid-transition matches what
@@ -299,7 +301,7 @@ fn build_ghosts<'a>(
                 let overrides = resolve_transition_css_overrides(
                     child.component.as_styled().style_config(),
                     steps,
-                    ghost_time - stagger_delay,
+                    ghost_time - extra_delay,
                 );
                 if let Some(br) = overrides.border_radius {
                     css.border_radius = Some(br);
@@ -316,8 +318,7 @@ fn build_ghosts<'a>(
             scene_duration: actx.scene_duration,
             fps: actx.fps,
         };
-        if let Some(ghost_effects) = effective_effects(&child.component, stagger_delay, ghost_time)
-        {
+        if let Some(ghost_effects) = effective_effects(&child.component, extra_delay, ghost_time) {
             let props = resolve_props_for_effects(
                 &ghost_effects,
                 ghost_actx.time,
@@ -353,7 +354,7 @@ fn build_ghosts<'a>(
                 *next_id += 1;
                 // Register a slot so the dispatcher can look up the component.
                 components.push(Some(child));
-                stagger_delays.push(stagger_delay);
+                stagger_delays.push(extra_delay);
                 time_params.push(time_remap);
 
                 ghosts.push(BoxNode {
@@ -385,7 +386,7 @@ fn build_ghosts<'a>(
                 let ghost_id = *next_id;
                 *next_id += 1;
                 components.push(Some(child));
-                stagger_delays.push(stagger_delay);
+                stagger_delays.push(extra_delay);
                 time_params.push(time_remap);
 
                 trail_nodes.push(BoxNode {
@@ -448,12 +449,27 @@ fn build_child<'a>(
         }
     });
 
+    // A node's own `start_at` rebases its animation clock the same way an
+    // ancestor's `stagger` already does: both push out the instant the
+    // component's *own* first keyframe is considered reached. Without this,
+    // `start_at` only gated visibility — the effect list still resolved
+    // against the untouched scene clock, so an entrance already playing out
+    // by the time the node became visible snapped straight to its end state,
+    // and an exit whose own `delay` elapsed before `start_at` left the node
+    // painting nothing for its whole visible window.
+    let anim_delay = stagger_delay
+        + child
+            .component
+            .as_timed()
+            .and_then(|t| t.timing().0)
+            .unwrap_or(0.0);
+
     // ── Ghost generation (motion_blur / trail) ───────────────────────────────
     // Must happen before allocating the principal's id so that ghost ids are
     // lower (earlier in the slot table). The principal's id is allocated below.
     let mut ghosts: Vec<BoxNode> = Vec::new();
     if let Some(actx) = local_actx {
-        if let Some(effects) = effective_effects(&child.component, stagger_delay, actx.time) {
+        if let Some(effects) = effective_effects(&child.component, anim_delay, actx.time) {
             ghosts = build_ghosts(
                 child,
                 components,
@@ -461,7 +477,7 @@ fn build_child<'a>(
                 time_params,
                 next_id,
                 actx,
-                stagger_delay,
+                anim_delay,
                 time_remap,
                 &effects,
                 parent_css,
@@ -472,7 +488,7 @@ fn build_child<'a>(
     let id = *next_id;
     *next_id += 1;
     components.push(Some(child));
-    stagger_delays.push(stagger_delay);
+    stagger_delays.push(anim_delay);
     time_params.push(time_remap);
 
     let mut css = component_css(&child.component);
@@ -507,7 +523,7 @@ fn build_child<'a>(
         if steps.iter().any(|s| s.style.is_some()) {
             let t = local_actx.map(|a| a.time).unwrap_or(0.0);
             let skip_opacity = css.transition.is_some();
-            apply_style_states(&mut css, steps, t - stagger_delay, skip_opacity);
+            apply_style_states(&mut css, steps, t - anim_delay, skip_opacity);
             // `border-radius`/`background` (solid colour, uniform absolute
             // px only — see `resolve_transition_css_overrides`'s doc
             // comment) smooth the same way opacity does above, but land
@@ -517,7 +533,7 @@ fn build_child<'a>(
             let overrides = resolve_transition_css_overrides(
                 child.component.as_styled().style_config(),
                 steps,
-                t - stagger_delay,
+                t - anim_delay,
             );
             if let Some(br) = overrides.border_radius {
                 css.border_radius = Some(br);
@@ -535,7 +551,7 @@ fn build_child<'a>(
     // — internal animations like draw_progress or char_animation remain on the
     // `AnimatedProperties` legacy path.
     if let Some(actx) = local_actx {
-        if let Some(effects) = effective_effects(&child.component, stagger_delay, actx.time) {
+        if let Some(effects) = effective_effects(&child.component, anim_delay, actx.time) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
             if props_has_paint_overrides(&props) {
                 apply_animated_props(&mut css, &props);
@@ -658,9 +674,11 @@ fn build_child<'a>(
 /// The full effect list for a component at paint time: `style.animation`,
 /// plus the `timeline` steps whose `at` `t` has reached, shifted by their
 /// `at`, plus keyframes synthesized from timeline style-state changes
-/// (`style.transition`), plus the container-stagger delay applied to
-/// everything. Returns `None` when there is nothing to resolve,
-/// `Some(Cow::Borrowed)` on the no-merge fast path.
+/// (`style.transition`), plus `extra_delay` applied to everything — callers
+/// fold in both the ancestor-stagger delay and the node's own `start_at` here,
+/// so the effect list is agnostic to which one (or both) it's carrying.
+/// Returns `None` when there is nothing to resolve, `Some(Cow::Borrowed)` on
+/// the no-merge fast path.
 ///
 /// `t` is the component's own local time, the same clock
 /// `resolve_props_for_effects` is called with, and the same one
@@ -2245,6 +2263,113 @@ mod tests {
             tx(8.0).abs() < 1.0,
             "step two has ended and holds, got {}",
             tx(8.0)
+        );
+    }
+
+    /// A `start_at`ed entrance must play from its own first keyframe, not
+    /// from wherever the unrebased scene clock already landed it. Measured
+    /// bug: a `fade_in_down` (0.6s) on a `start_at: 2.0` node resolved at
+    /// t=2.0 (the instant it becomes visible) to the animation's value at
+    /// scene time 2.0 — long past the 0.6s duration — so it appeared already
+    /// fully faded in instead of animating.
+    #[test]
+    fn start_at_rebases_the_entrance_animation_clock() {
+        let scene = vec![ChildComponent {
+            component: serde_json::from_value(json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#1EA2C2",
+                "start_at": 2.0,
+                "style": {
+                    "width": 120, "height": 120,
+                    "animation": [{ "name": "fade_in_down", "duration": 0.6 }]
+                }
+            }))
+            .expect("component deserializes"),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+
+        let opacity_at = |t: f64| -> f32 {
+            let built = build_scene_at_time(
+                &scene,
+                (400.0, 400.0),
+                default_root_css((400.0, 400.0)),
+                BuildAnimationCtx {
+                    time: t,
+                    scenario_time: t,
+                    scene_duration: 6.0,
+                    fps: 30,
+                },
+            );
+            built.root.children[0].css.opacity.unwrap_or(1.0)
+        };
+
+        assert!(
+            opacity_at(2.0) < 0.3,
+            "at start_at (2.0) the fade_in_down entrance should just be beginning, got opacity {}",
+            opacity_at(2.0)
+        );
+        assert!(
+            opacity_at(2.6) > 0.9,
+            "0.6s after start_at (the entrance's own duration) it should have finished, got opacity {}",
+            opacity_at(2.6)
+        );
+    }
+
+    /// Companion to the entrance case above, mirroring the measured `badge`
+    /// bug: an exit declared after the entrance (so it alone owns `opacity`
+    /// under last-declared-wins) carries its own `delay`. Unrebased, that
+    /// delay is measured from scene time zero, so the exit can finish before
+    /// `start_at` is even reached — the component then renders zero pixels
+    /// for its entire visible window.
+    #[test]
+    fn start_at_rebases_an_exit_animation_declared_after_the_entrance() {
+        let scene = vec![ChildComponent {
+            component: serde_json::from_value(json!({
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#1EA2C2",
+                "start_at": 2.0,
+                "style": {
+                    "width": 120, "height": 120,
+                    "animation": [
+                        { "name": "fade_in_down", "duration": 0.6 },
+                        { "name": "fade_out_up", "delay": 0.85, "duration": 0.3 }
+                    ]
+                }
+            }))
+            .expect("component deserializes"),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+
+        let opacity_at = |t: f64| -> f32 {
+            let built = build_scene_at_time(
+                &scene,
+                (400.0, 400.0),
+                default_root_css((400.0, 400.0)),
+                BuildAnimationCtx {
+                    time: t,
+                    scenario_time: t,
+                    scene_duration: 6.0,
+                    fps: 30,
+                },
+            );
+            built.root.children[0].css.opacity.unwrap_or(1.0)
+        };
+
+        assert!(
+            opacity_at(2.5) > 0.5,
+            "the exit's own delay (0.85s) has not elapsed since start_at (2.0), the node should \
+             still be visible, got opacity {}",
+            opacity_at(2.5)
         );
     }
 
