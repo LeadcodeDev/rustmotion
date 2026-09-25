@@ -440,11 +440,10 @@ fn validate_camera_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
     if KNOWN_CAMERA_PROPERTIES.contains(&value) {
         return Ok(());
     }
-    let normalize = |s: &str| s.replace(['-', '_', ' '], ".").to_lowercase();
-    let normalized = normalize(value);
+    let normalized = super::fold_separators_and_camel_case_boundaries(value);
     if let Some(suggestion) = KNOWN_CAMERA_PROPERTIES
         .iter()
-        .find(|known| normalize(known) == normalized)
+        .find(|known| super::fold_separators_and_camel_case_boundaries(known) == normalized)
     {
         Err(E::custom(format!(
             "unknown camera keyframe property '{value}' — did you mean '{suggestion}'?"
@@ -1092,5 +1091,15 @@ mod camera_keyframe_property_tests {
             msg.contains("origin.x"),
             "expected a did-you-mean nudge toward origin.x, got: {msg}"
         );
+    }
+
+    #[test]
+    fn camel_case_origin_property_is_a_named_error_with_a_did_you_mean() {
+        let json = r#"{ "property": "originX", "values": [ { "time": 0.0, "value": 1.0 } ] }"#;
+        let err = serde_json::from_str::<CameraKeyframe>(json)
+            .expect_err("originX must be rejected — the real property is origin.x");
+        let msg = err.to_string();
+        assert!(msg.contains("originX"), "got: {msg}");
+        assert!(msg.contains("did you mean 'origin.x'"), "got: {msg}");
     }
 }

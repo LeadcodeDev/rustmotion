@@ -50,6 +50,7 @@ pub enum CardJustify {
 /// A single step in a component's animation timeline.
 /// Triggers a set of animations at a specific time within the scene.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TimelineStep {
     /// Time (in seconds, relative to component start) when this step begins.
     pub at: f64,
@@ -354,5 +355,34 @@ mod font_weight_tests {
             !json.to_string().contains("\"Weight\""),
             "the externally-tagged `Weight` shape must not leak into the exported schema, got: {json}"
         );
+    }
+}
+
+#[cfg(test)]
+mod timeline_step_tests {
+    use super::*;
+
+    #[test]
+    fn typo_d_key_is_a_named_error_not_a_silently_inert_step() {
+        let err = serde_json::from_value::<TimelineStep>(serde_json::json!({
+            "at": 0.2,
+            "styel": { "opacity": 0.0 }
+        }))
+        .expect_err("a typo'd `styel` must not parse into an accepted, inert step");
+        assert!(
+            err.to_string().contains("styel"),
+            "error must name the offending key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn well_formed_step_still_parses() {
+        let step: TimelineStep = serde_json::from_value(serde_json::json!({
+            "at": 0.2,
+            "style": { "opacity": 0.0 }
+        }))
+        .unwrap();
+        assert_eq!(step.at, 0.2);
+        assert!(step.style.is_some());
     }
 }

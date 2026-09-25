@@ -551,11 +551,10 @@ fn validate_motion_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
     if KNOWN_MOTION_PROPERTIES.contains(&value) {
         return Ok(());
     }
-    let normalize = |s: &str| s.replace(['-', ' '], "_").to_lowercase();
-    let normalized = normalize(value);
+    let normalized = crate::schema::fold_separators_and_camel_case_boundaries(value);
     if let Some(suggestion) = KNOWN_MOTION_PROPERTIES
         .iter()
-        .find(|known| normalize(known) == normalized)
+        .find(|known| crate::schema::fold_separators_and_camel_case_boundaries(known) == normalized)
     {
         Err(E::custom(format!(
             "unknown animation property '{value}' — did you mean '{suggestion}'?"
@@ -891,6 +890,7 @@ pub enum Fill {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Gradient {
     #[serde(rename = "type")]
     pub gradient_type: GradientType,
@@ -909,6 +909,7 @@ pub enum GradientType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Stroke {
     pub color: String,
     #[serde(default = "default_stroke_width")]
@@ -928,6 +929,7 @@ pub enum ImageFit {
 // --- Shape Text ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ShapeText {
     pub content: String,
     #[serde(default = "default_font_size")]
@@ -951,6 +953,7 @@ pub struct ShapeText {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CaptionWord {
     pub text: String,
     pub start: f64,
@@ -974,6 +977,7 @@ pub enum CaptionStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GradientBorder {
     pub colors: Vec<String>,
     #[serde(default = "default_gradient_border_width")]
@@ -988,6 +992,7 @@ fn default_gradient_border_width() -> f32 {
 
 /// Inner shadow configuration (inset shadow).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InnerShadow {
     pub color: String,
     #[serde(default)]
@@ -1003,6 +1008,7 @@ fn default_inner_shadow_blur() -> f32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TextShadow {
     #[serde(default = "default_shadow_color")]
     pub color: String,
@@ -1015,6 +1021,7 @@ pub struct TextShadow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TextBackground {
     pub color: String,
     #[serde(default = "default_text_bg_padding")]
@@ -1323,6 +1330,21 @@ mod motion_property_tests {
     }
 
     #[test]
+    fn wiggle_camel_case_property_gets_a_did_you_mean() {
+        let json = json!({
+            "name": "wiggle",
+            "property": "translateX",
+            "amplitude": 10.0,
+            "frequency": 1.0
+        });
+        let err = serde_json::from_value::<AnimationEffect>(json)
+            .expect_err("camelCase must not silently resolve to a snake_case no-op");
+        let msg = err.to_string();
+        assert!(msg.contains("translateX"), "got: {msg}");
+        assert!(msg.contains("did you mean 'translate_x'"), "got: {msg}");
+    }
+
+    #[test]
     fn keyframes_animation_known_property_still_works() {
         let json = json!({
             "name": "keyframes",
@@ -1354,7 +1376,9 @@ mod motion_property_tests {
         let err = serde_json::from_value::<AnimationEffect>(json).expect_err(
             "an unrecognised keyframe animation property must be rejected, not silently inert",
         );
-        assert!(err.to_string().contains("positionX"), "got: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("positionX"), "got: {msg}");
+        assert!(msg.contains("did you mean 'position.x'"), "got: {msg}");
     }
 
     #[test]

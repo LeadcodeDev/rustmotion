@@ -2376,7 +2376,7 @@ The `background` field on a scene accepts a color string, an animated background
 ```json
 {
   "backgrounds": {
-    "circles": { "preset": "concentric_circles", "colors": ["#0F0E2A", "#1a1145", "#0F0E2A"], "speed": 15, "element_size": 1.5, "count": 4, "gradient_type": "radial" }
+    "circles": { "preset": "concentric_circles", "colors": ["#0F0E2A", "#1a1145", "#0F0E2A"], "speed": 15, "element_size": 1.5, "count": 4 }
   },
   "scenes": [
     {
@@ -2399,7 +2399,7 @@ With `transition`, background properties (colors, speed, spacing, element_size, 
 | -------------- | ------ | ----------------- | --------------------------------------------- |
 | `colors`       | array  | `[]`              | Gradient colors (hex)                         |
 | `speed`        | f32    | `30.0`            | Animation speed (degrees/sec or pixels/sec)   |
-| `gradient_type`| enum   | `"linear"`        | `"linear"` or `"radial"`                      |
+| `gradient_type`| enum   | `"linear"`        | `gradient_shift` only — `"linear"` or `"radial"`. Declaring it on any other preset is refused by name. |
 | `preset`       | string | `null`            | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"halo"`, `"heropattern"`, `"pixel_grid"` |
 | `element_size` | f32    | `4.0`             | Dot/circle size for grid_dots; stroke width for concentric_circles |
 | `spacing`      | f32    | `60.0`            | Element spacing for grid_dots/concentric_circles |
