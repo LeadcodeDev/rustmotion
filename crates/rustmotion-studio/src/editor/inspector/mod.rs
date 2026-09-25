@@ -282,8 +282,17 @@ impl InspectorPanel {
         cx: &mut Context<Self>,
     ) -> CuratedRow {
         match field.ctrl {
-            Ctrl::Text | Ctrl::Number => {
-                let target = Target::Style(field.name.to_string());
+            Ctrl::Text => {
+                let target = Target::Style(field.name.to_string(), PropKind::String);
+                let widget = ScalarWidget::Text(self.build_text(value, None, target, window, cx));
+                CuratedRow::Stateful {
+                    field: *field,
+                    is_default,
+                    widget,
+                }
+            }
+            Ctrl::Number => {
+                let target = Target::Style(field.name.to_string(), PropKind::Integer);
                 let widget = ScalarWidget::Text(self.build_text(value, None, target, window, cx));
                 CuratedRow::Stateful {
                     field: *field,
@@ -297,7 +306,7 @@ impl InspectorPanel {
                 step,
                 unit,
             } => {
-                let target = Target::Style(field.name.to_string());
+                let target = Target::Style(field.name.to_string(), PropKind::String);
                 let (slider, text) =
                     self.build_slider(value, min, max, step, unit, target, window, cx);
                 CuratedRow::Stateful {
@@ -312,7 +321,7 @@ impl InspectorPanel {
                 }
             }
             Ctrl::Slider { min, max, step } => {
-                let target = Target::Style(field.name.to_string());
+                let target = Target::Style(field.name.to_string(), PropKind::Float);
                 let (slider, text) =
                     self.build_slider(value, min, max, step, "", target, window, cx);
                 CuratedRow::Stateful {
@@ -327,7 +336,7 @@ impl InspectorPanel {
                 }
             }
             Ctrl::Select(options) => {
-                let target = Target::Style(field.name.to_string());
+                let target = Target::Style(field.name.to_string(), PropKind::String);
                 let opts: Vec<String> = options.iter().map(|s| s.to_string()).collect();
                 let widget =
                     ScalarWidget::Select(self.build_select(opts, value, target, window, cx));
@@ -338,7 +347,7 @@ impl InspectorPanel {
                 }
             }
             Ctrl::Weight => {
-                let target = Target::Style("font-weight".to_string());
+                let target = Target::Style("font-weight".to_string(), PropKind::Integer);
                 let opts: Vec<String> = sections::WEIGHTS
                     .iter()
                     .map(|(v, _)| v.to_string())
@@ -352,7 +361,7 @@ impl InspectorPanel {
                 }
             }
             Ctrl::Color { .. } => {
-                let target = Target::Style(field.name.to_string());
+                let target = Target::Style(field.name.to_string(), PropKind::Color);
                 let widget = ScalarWidget::Color(self.build_color(value, target, window, cx));
                 CuratedRow::Stateful {
                     field: *field,
@@ -627,7 +636,7 @@ fn render_stateless_curated(
                         .xsmall()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.commit_text(
-                                &Target::Style("text-align".to_string()),
+                                &Target::Style("text-align".to_string(), PropKind::String),
                                 &value_owned,
                                 window,
                                 cx,
@@ -653,7 +662,7 @@ fn render_stateless_curated(
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = if is_bold { "400" } else { "700" };
                             this.commit_text(
-                                &Target::Style("font-weight".to_string()),
+                                &Target::Style("font-weight".to_string(), PropKind::Integer),
                                 next,
                                 window,
                                 cx,
@@ -669,7 +678,7 @@ fn render_stateless_curated(
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = if is_italic { "normal" } else { "italic" };
                             this.commit_text(
-                                &Target::Style("font-style".to_string()),
+                                &Target::Style("font-style".to_string(), PropKind::String),
                                 next,
                                 window,
                                 cx,
@@ -682,7 +691,7 @@ fn render_stateless_curated(
             let value = sections::prop_str(style, field.name);
             let checked = value == on;
             let id = SharedString::from(format!("switch-{}", field.name));
-            let target = Target::Style(field.name.to_string());
+            let target = Target::Style(field.name.to_string(), PropKind::String);
             let (on, off) = (on, off);
             gpui_component::switch::Switch::new(id)
                 .checked(checked)

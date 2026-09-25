@@ -906,7 +906,7 @@ impl InspectorPanel {
             }
             kind => {
                 let target = if is_style {
-                    Target::Style(spec.name.clone())
+                    Target::Style(spec.name.clone(), kind.clone())
                 } else {
                     Target::Root(spec.name.clone(), kind.clone())
                 };
@@ -925,7 +925,7 @@ impl InspectorPanel {
 
 fn row_prop_name(target: &Target) -> &str {
     match target {
-        Target::Style(n) => n,
+        Target::Style(n, _) => n,
         Target::Root(n, _) => n,
         Target::Nested(_, n, _) => n,
     }

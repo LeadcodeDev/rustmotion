@@ -113,16 +113,16 @@ pub fn baseline_arcs(
 
     let stale = !matches!(&*guard, Some(c) if c.path == path && c.source_hash == hash);
     if stale {
-        let scenario = if rustmotion::loader::is_html_path(path) {
-            let value = rustmotion::loader::html_to_scenario_json(source)
+        let value = if rustmotion::loader::is_html_path(path) {
+            let transpiled = rustmotion::loader::html_to_scenario_json(source)
                 .map_err(|e| format!("baseline transpile: {e}"))?;
-            let json = serde_json::to_string(&value).map_err(|e| format!("baseline json: {e}"))?;
-            rustmotion::loader::load_scenario_from_source(None, Some(&json))
-                .map_err(|e| format!("baseline load: {e}"))?
+            let annotations = crate::scenario::read_sidecar(path).unwrap_or_default();
+            crate::scenario::merge_annotations(transpiled, annotations)
         } else {
-            rustmotion::loader::load_scenario_from_source(None, Some(source))
-                .map_err(|e| format!("baseline load: {e}"))?
+            serde_json::from_str(source).map_err(|e| format!("baseline parse: {e}"))?
         };
+        let scenario = crate::scenario::resolve_for_render(&value, Some(path))
+            .map_err(|e| format!("baseline load: {e}"))?;
         let tasks = rustmotion::encode::build_frame_tasks(&scenario);
         *guard = Some(BaselineCache {
             path: path.to_path_buf(),
@@ -245,6 +245,30 @@ mod tests {
     use super::*;
 
     const SCENARIO: &str = r##"{ "video": { "width": 1280, "height": 720, "background": "#101418" }, "scenes": [ { "duration": 1.0 } ] }"##;
+
+    #[test]
+    fn baseline_resolves_relative_asset_paths_against_the_scenario_file() {
+        let dir = std::env::temp_dir().join(format!("rm_baseline_assets_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("logo.png"), b"x").unwrap();
+        let path = dir.join("scenario.json");
+        let source = r##"{ "video": { "width": 320, "height": 180 },
+            "scenes": [ { "duration": 1.0, "children": [
+                { "type": "image", "src": "logo.png", "style": { "width": "10px" } }
+            ] } ] }"##;
+
+        let (_, scenario, _) = baseline_arcs(&path, source).expect("baseline resolves");
+        let src = scenario.views[0].scenes[0].children[0]["src"]
+            .as_str()
+            .expect("src")
+            .to_string();
+        assert!(
+            std::path::Path::new(&src).is_absolute(),
+            "baseline_arcs must rebase asset paths against the scenario's own directory instead \
+             of discarding `path`: {src}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn renders_frame_to_nonempty_jpeg() {

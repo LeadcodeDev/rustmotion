@@ -39,11 +39,11 @@ pub fn apply_optimistic(shared: &Shared, mutation: &Mutation) -> Result<(), Stri
             .map_err(|e| format!("transpile: {e}"))?;
         let annotations = super::sidecar::read_sidecar(&path).unwrap_or_default();
         let new_raw = super::sidecar::merge_annotations(transpiled, annotations);
-        let scenario = rebuild_from_value(&new_raw)?;
+        let scenario = resolve_for_render(&new_raw, Some(&path))?;
         commit(&mut m, scenario, new_raw, Some(new_source));
     } else {
         let new_raw = apply_to_raw(m.raw.clone(), mutation).ok_or("mutation didn't apply")?;
-        let scenario = rebuild_from_value(&new_raw)?;
+        let scenario = resolve_for_render(&new_raw, Some(&path))?;
         commit(&mut m, scenario, new_raw, None);
     }
     Ok(())
@@ -56,11 +56,11 @@ pub fn adopt_source(shared: &Shared, path: &Path, source: &str) -> Result<(), St
             .map_err(|e| format!("transpile: {e}"))?;
         let annotations = super::sidecar::read_sidecar(path).unwrap_or_default();
         let new_raw = super::sidecar::merge_annotations(transpiled, annotations);
-        let scenario = rebuild_from_value(&new_raw)?;
+        let scenario = resolve_for_render(&new_raw, Some(path))?;
         commit(&mut m, scenario, new_raw, Some(source.to_string()));
     } else {
         let new_raw: Value = serde_json::from_str(source).map_err(|e| format!("parse: {e}"))?;
-        let scenario = rebuild_from_value(&new_raw)?;
+        let scenario = resolve_for_render(&new_raw, Some(path))?;
         commit(&mut m, scenario, new_raw, None);
     }
     Ok(())
@@ -215,9 +215,24 @@ pub fn resolve_flush(
     }
 }
 
-fn rebuild_from_value(raw: &Value) -> Result<ResolvedScenario, String> {
-    let json = serde_json::to_string(raw).map_err(|e| format!("serialize: {e}"))?;
-    rustmotion::loader::load_scenario_from_source(None, Some(&json)).map_err(|e| e.to_string())
+pub fn resolve_for_render(raw: &Value, path: Option<&Path>) -> Result<ResolvedScenario, String> {
+    let mut json_value = raw.clone();
+    let label = path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<inline>".to_string());
+    rustmotion::variables::apply_variables(&mut json_value, None, &label)
+        .map_err(|e| e.to_string())?;
+    rustmotion::expand::expand_directives(&mut json_value, &label).map_err(|e| e.to_string())?;
+    if let Some(dir) = path.and_then(Path::parent) {
+        rustmotion::assets::rebase_relative_paths(&mut json_value, dir);
+    }
+    let scenario: rustmotion::schema::Scenario =
+        serde_json::from_value(json_value).map_err(|e| format!("deserialize: {e}"))?;
+    let source = match path {
+        Some(p) => rustmotion::include::IncludeSource::File(p.to_path_buf()),
+        None => rustmotion::include::IncludeSource::Inline,
+    };
+    rustmotion::include::resolve_includes(scenario, &source).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -427,6 +442,76 @@ mod tests {
         assert_eq!(model.generation, gen_before, "no bump on failure");
         assert_eq!(model.raw, raw_before, "raw untouched on failure");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn apply_optimistic_no_longer_gates_on_component_type_correctness() {
+        let path = temp_json("bad_type", DOC);
+        let shared = model_for(&path);
+
+        let m = Mutation::Style {
+            pointer: "/scenes/0/children/0".into(),
+            prop: "opacity".into(),
+            value: json!("0.5"),
+        };
+        apply_optimistic(&shared, &m).expect(
+            "the optimistic layer no longer re-implements a narrower type check of its own: \
+             editor/inspector/write.rs::validate_before_write is the single, authoritative gate \
+             now, reusing rustmotion::cli::validation::run_checks (the same pipeline `rustmotion \
+             validate`/`render` already share) right before the debounced disk write — this \
+             optimistic step only needs the document to still parse and resolve",
+        );
+
+        let model = shared.lock().unwrap();
+        assert_eq!(
+            model.raw["scenes"][0]["children"][0]["style"]["opacity"],
+            json!("0.5"),
+            "committed in memory — the write-time validator is what refuses to persist it"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn optimistic_rebuild_rebases_relative_asset_paths_like_opening_the_file_does() {
+        let dir = std::env::temp_dir().join(format!("rm_opt_assets_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("logo.png"), b"x").unwrap();
+        let path = dir.join("scenario.json");
+        std::fs::write(
+            &path,
+            r##"{ "video": { "width": 640, "height": 360 },
+                "scenes": [ { "duration": 1.0, "children": [
+                    { "type": "image", "src": "logo.png", "style": { "width": "100px" } }
+                ] } ] }"##,
+        )
+        .unwrap();
+        let shared = model_for(&path);
+
+        let m = Mutation::Style {
+            pointer: "/scenes/0/children/0".into(),
+            prop: "opacity".into(),
+            value: json!(0.5),
+        };
+        apply_optimistic(&shared, &m).expect("valid mutation applies");
+
+        let model = shared.lock().unwrap();
+        let resolved_src = model.scenario.views[0].scenes[0].children[0]["src"]
+            .as_str()
+            .expect("src")
+            .to_string();
+        assert!(
+            std::path::Path::new(&resolved_src).is_absolute(),
+            "the optimistic rebuild must resolve the asset against the scenario file's own \
+             directory, exactly like opening the file does, not against the studio's working \
+             directory: {resolved_src}"
+        );
+        assert_eq!(
+            model.raw["scenes"][0]["children"][0]["src"],
+            json!("logo.png"),
+            "the persisted raw JSON must keep the author's relative path"
+        );
+        drop(model);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
