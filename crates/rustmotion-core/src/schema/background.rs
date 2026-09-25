@@ -351,12 +351,20 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
         let (preset, speed) = if is_new_format {
             // New format: config in sub-object
             let sub = map.get(preset_str).unwrap().clone();
-            let speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let speed = map
+                .get("speed")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or_else(default_bg_speed);
             let preset = deserialize_preset_config::<D::Error>(preset_str, sub)?;
             (preset, speed)
         } else {
             // Legacy flat format
-            let legacy_speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
+            let legacy_speed = map
+                .get("speed")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or_else(default_bg_speed);
             let preset = match preset_str {
                 "grid_dots" => {
                     let color = map
@@ -763,7 +771,6 @@ fn default_bg_spacing() -> f32 {
     60.0
 }
 
-#[allow(dead_code)]
 fn default_bg_speed() -> f32 {
     30.0
 }
@@ -950,6 +957,40 @@ mod halo_zone_opacity_tests {
             }
             _ => panic!("expected Halo preset"),
         }
+    }
+}
+
+#[cfg(test)]
+mod animated_background_speed_default_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nested_form_with_no_speed_key_defaults_to_thirty_like_the_legacy_form() {
+        let bg: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "grid_dots",
+            "grid_dots": { "color": "#FFFFFF15" }
+        }))
+        .unwrap();
+        assert_eq!(
+            bg.speed, 30.0,
+            "nested form must default `speed` the same as the legacy flat form"
+        );
+    }
+
+    #[test]
+    fn nested_form_with_explicit_speed_is_unaffected() {
+        let bg: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "grid_dots",
+            "grid_dots": { "color": "#FFFFFF15" },
+            "speed": 0
+        }))
+        .unwrap();
+        assert_eq!(
+            bg.speed, 0.0,
+            "an explicit `speed: 0` must still be honoured (static is a valid choice, \
+             just not a silent default)"
+        );
     }
 }
 

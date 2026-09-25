@@ -63,13 +63,59 @@ pub struct TimelineStep {
     pub style: Option<Box<crate::css::CssStyle>>,
 }
 
+const FONT_WEIGHT_MIN: u16 = 100;
+const FONT_WEIGHT_MAX: u16 = 900;
+
 /// Font weight — named ("normal"/"bold") or numeric (100-900)
-#[derive(Debug, Clone, JsonSchema, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum FontWeight {
     #[default]
     Normal,
     Bold,
     Weight(u16),
+}
+
+impl JsonSchema for FontWeight {
+    fn schema_name() -> String {
+        "FontWeight".to_string()
+    }
+
+    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        let keyword_schema: Schema = SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: Some(vec!["normal".into(), "bold".into()]),
+            ..Default::default()
+        }
+        .into();
+
+        let numeric_schema: Schema = SchemaObject {
+            instance_type: Some(InstanceType::Integer.into()),
+            number: Some(Box::new(NumberValidation {
+                minimum: Some(FONT_WEIGHT_MIN as f64),
+                maximum: Some(FONT_WEIGHT_MAX as f64),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into();
+
+        SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![keyword_schema, numeric_schema]),
+                ..Default::default()
+            })),
+            metadata: Some(Box::new(Metadata {
+                description: Some(format!(
+                    "\"normal\", \"bold\", or an integer {FONT_WEIGHT_MIN}-{FONT_WEIGHT_MAX}"
+                )),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
 }
 
 #[allow(dead_code)]
@@ -93,6 +139,16 @@ impl Serialize for FontWeight {
     }
 }
 
+fn font_weight_in_range_or_named_error<E: serde::de::Error>(v: f64) -> Result<FontWeight, E> {
+    if v.fract() != 0.0 || v < FONT_WEIGHT_MIN as f64 || v > FONT_WEIGHT_MAX as f64 {
+        return Err(E::custom(format!(
+            "font weight {v} out of range: expected \"normal\", \"bold\", or an integer \
+             {FONT_WEIGHT_MIN}-{FONT_WEIGHT_MAX}"
+        )));
+    }
+    Ok(FontWeight::Weight(v as u16))
+}
+
 impl<'de> Deserialize<'de> for FontWeight {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct FontWeightVisitor;
@@ -109,13 +165,13 @@ impl<'de> Deserialize<'de> for FontWeight {
                 }
             }
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<FontWeight, E> {
-                Ok(FontWeight::Weight(v as u16))
+                font_weight_in_range_or_named_error(v as f64)
             }
             fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<FontWeight, E> {
-                Ok(FontWeight::Weight(v as u16))
+                font_weight_in_range_or_named_error(v as f64)
             }
             fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<FontWeight, E> {
-                Ok(FontWeight::Weight(v as u16))
+                font_weight_in_range_or_named_error(v)
             }
         }
         deserializer.deserialize_any(FontWeightVisitor)
@@ -242,4 +298,61 @@ where
     }
 
     deserializer.deserialize_any(OneOrMany)
+}
+
+#[cfg(test)]
+mod font_weight_tests {
+    use super::*;
+
+    #[test]
+    fn out_of_range_integer_is_a_named_error_not_a_silent_wraparound() {
+        let err = serde_json::from_str::<FontWeight>("70000")
+            .expect_err("70000 must not silently wrap to 4464 via `as u16`");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("70000") && msg.contains("100") && msg.contains("900"),
+            "error must name the offending value and the valid range, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn fractional_value_is_a_named_error_not_a_silent_floor() {
+        let err = serde_json::from_str::<FontWeight>("0.5")
+            .expect_err("0.5 must not silently floor to FontWeight::Weight(0)");
+        assert!(
+            err.to_string().contains("0.5"),
+            "error must name the offending value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn in_range_integer_and_keywords_still_parse() {
+        assert!(matches!(
+            serde_json::from_str::<FontWeight>("700").unwrap(),
+            FontWeight::Weight(700)
+        ));
+        assert!(matches!(
+            serde_json::from_str::<FontWeight>(r#""bold""#).unwrap(),
+            FontWeight::Bold
+        ));
+        assert!(matches!(
+            serde_json::from_str::<FontWeight>(r#""normal""#).unwrap(),
+            FontWeight::Normal
+        ));
+    }
+
+    #[test]
+    fn exported_schema_accepts_the_shapes_the_parser_accepts() {
+        let mut generator = schemars::gen::SchemaGenerator::default();
+        let schema = <FontWeight as schemars::JsonSchema>::json_schema(&mut generator);
+        let json = serde_json::to_value(&schema).unwrap();
+        let one_of = json["oneOf"]
+            .as_array()
+            .expect("FontWeight's schema must be a `oneOf` of [keyword, number]");
+        assert_eq!(one_of.len(), 2, "expected exactly 2 branches, got: {json}");
+        assert!(
+            !json.to_string().contains("\"Weight\""),
+            "the externally-tagged `Weight` shape must not leak into the exported schema, got: {json}"
+        );
+    }
 }
