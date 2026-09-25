@@ -1,7 +1,7 @@
 //! Le binaire `rustmotion` : analyse des arguments et aiguillage vers
 //! `commands`.
 //!
-//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app Dioxus
+//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app gpui
 //! qui dépend de cette crate ; l'appeler depuis ce module ferait dépendre
 //! `rustmotion` de `rustmotion-studio`, donc d'elle-même, et cargo refuse le
 //! cycle. Le studio s'ouvre par son propre binaire, `rustmotion-studio -f

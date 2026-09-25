@@ -131,6 +131,7 @@ pub fn cmd_render(
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
         encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+        encode::check_transparent_codec(codec.as_deref().unwrap_or("h264"), transparent)?;
     }
 
     let start = std::time::Instant::now();
@@ -346,6 +347,7 @@ pub fn cmd_watch(
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
         encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+        encode::check_transparent_codec(codec.as_deref().unwrap_or("h264"), transparent)?;
     }
 
     // Determine if we can use incremental rendering (native h264 only).
