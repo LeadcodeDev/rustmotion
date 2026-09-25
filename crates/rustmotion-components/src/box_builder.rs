@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
+use rustmotion_core::css::style::{AlignItems, AlignSelf, CssStyle, Position, Size as CSize};
 use rustmotion_core::css::{apply_animated_props, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
@@ -152,6 +152,7 @@ where
             0.0,
             (1.0, 0.0),
             &root_css,
+            viewport,
         ));
     }
 
@@ -237,6 +238,8 @@ fn build_ghosts<'a>(
     time_remap: (f64, f64),
     effects: &[AnimationEffect],
     parent_css: &CssStyle,
+    window: Option<rustmotion_core::engine::box_tree::PaintWindow>,
+    viewport: (f32, f32),
 ) -> Vec<BoxNode> {
     let (mb, tr) = detect_ghost_effects(effects);
 
@@ -288,6 +291,7 @@ fn build_ghosts<'a>(
         // Cascade: a ghost is the same component as the principal, painted
         // at a different sampled time, so it inherits from the same parent.
         rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
+        apply_intrinsic_overrides(&child.component, &mut css, parent_css);
         // Apply timeline style states at the ghost time.
         if let Some(animatable) = child.component.as_animatable() {
             let steps = animatable.timeline_steps();
@@ -357,14 +361,15 @@ fn build_ghosts<'a>(
                 stagger_delays.push(extra_delay);
                 time_params.push(time_remap);
 
+                let ghost_intrinsic = component_intrinsic(&child.component, &ghost_css, viewport);
                 ghosts.push(BoxNode {
                     id: ghost_id,
                     kind: BoxKind::Ghost(Arc::new(ghost_id)),
                     css: ghost_css,
                     children: Vec::new(), // v1: no child recursion in ghosts
-                    intrinsic: None,      // v1: ghosts have no layout-measured content
+                    intrinsic: ghost_intrinsic,
                     source_path: None,
-                    window: None,
+                    window,
                 });
             }
         }
@@ -389,14 +394,15 @@ fn build_ghosts<'a>(
                 stagger_delays.push(extra_delay);
                 time_params.push(time_remap);
 
+                let ghost_intrinsic = component_intrinsic(&child.component, &ghost_css, viewport);
                 trail_nodes.push(BoxNode {
                     id: ghost_id,
                     kind: BoxKind::Ghost(Arc::new(ghost_id)),
                     css: ghost_css,
                     children: Vec::new(),
-                    intrinsic: None,
+                    intrinsic: ghost_intrinsic,
                     source_path: None,
-                    window: None,
+                    window,
                 });
             }
             // Oldest ghost (most-trailing) painted first → prepend in reverse.
@@ -431,6 +437,7 @@ fn build_child<'a>(
     stagger_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Vec<BoxNode> {
     // Compute the local animation context for this node — remapped by the
     // accumulated affine time transform from ancestor containers.
@@ -464,6 +471,31 @@ fn build_child<'a>(
             .and_then(|t| t.timing().0)
             .unwrap_or(0.0);
 
+    // Visibility window (start_at/end_at) — enforced by the paint pass.
+    // The stagger delay shifts the window too, so a hard-cut child appears
+    // in step with its staggered siblings.
+    // When there is an accumulated time remap, the window times (which are in
+    // local/remapped time) must be converted back to global time so the paint
+    // pass (which operates on global time) can apply them correctly.
+    // If `t_local = scale * t_global + shift`, then `t_global = (t_local - shift) / scale`.
+    let window = child.component.as_timed().and_then(|t| {
+        let (start, end) = t.timing();
+        (start.is_some() || end.is_some()).then_some({
+            let (scale, shift) = time_remap;
+            let to_global = |t_local: f64| -> f64 {
+                if scale.abs() < 1e-10 {
+                    t_local
+                } else {
+                    (t_local - shift) / scale
+                }
+            };
+            rustmotion_core::engine::box_tree::PaintWindow {
+                start: start.map(|s| to_global(s + stagger_delay)),
+                end: end.map(|e| to_global(e + stagger_delay)),
+            }
+        })
+    });
+
     // ── Ghost generation (motion_blur / trail) ───────────────────────────────
     // Must happen before allocating the principal's id so that ghost ids are
     // lower (earlier in the slot table). The principal's id is allocated below.
@@ -481,6 +513,8 @@ fn build_child<'a>(
                 time_remap,
                 &effects,
                 parent_css,
+                window,
+                viewport,
             );
         }
     }
@@ -511,6 +545,7 @@ fn build_child<'a>(
     // `crates/rustmotion-core/src/css/cascade.rs::inherit_from` existed but
     // nothing called it until this fix.
     rustmotion_core::css::cascade::inherit_from(parent_css, &mut css);
+    apply_intrinsic_overrides(&child.component, &mut css, parent_css);
 
     // Timeline style states: merge every state whose (at + stagger) <= t
     // into the box CSS. Opacity is excluded when a `transition` smooths it
@@ -616,31 +651,6 @@ fn build_child<'a>(
         }
     }
 
-    // Visibility window (start_at/end_at) — enforced by the paint pass.
-    // The stagger delay shifts the window too, so a hard-cut child appears
-    // in step with its staggered siblings.
-    // When there is an accumulated time remap, the window times (which are in
-    // local/remapped time) must be converted back to global time so the paint
-    // pass (which operates on global time) can apply them correctly.
-    // If `t_local = scale * t_global + shift`, then `t_global = (t_local - shift) / scale`.
-    let window = child.component.as_timed().and_then(|t| {
-        let (start, end) = t.timing();
-        (start.is_some() || end.is_some()).then_some({
-            let (scale, shift) = time_remap;
-            let to_global = |t_local: f64| -> f64 {
-                if scale.abs() < 1e-10 {
-                    t_local
-                } else {
-                    (t_local - shift) / scale
-                }
-            };
-            rustmotion_core::engine::box_tree::PaintWindow {
-                start: start.map(|s| to_global(s + stagger_delay)),
-                end: end.map(|e| to_global(e + stagger_delay)),
-            }
-        })
-    });
-
     let children_boxes = container_children(
         &child.component,
         components,
@@ -652,8 +662,9 @@ fn build_child<'a>(
         stagger_delay,
         time_remap,
         &css,
+        viewport,
     );
-    let intrinsic = component_intrinsic(&child.component, &css);
+    let intrinsic = component_intrinsic(&child.component, &css, viewport);
 
     let principal = BoxNode {
         id,
@@ -1168,39 +1179,48 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
 fn component_intrinsic(
     component: &Component,
     cascaded_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
     let cascaded_component = component.with_cascaded_style(cascaded_css);
     let component = cascaded_component.as_ref().unwrap_or(component);
 
     use Component::*;
     match component {
-        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
+        Text(t) => Some(Arc::new(
+            crate::intrinsic::TextIntrinsic::from_text_for_viewport(t, viewport),
+        )),
         GradientText(t) => Some(Arc::new(
-            crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
+            crate::intrinsic::GradientTextIntrinsic::from_gradient_text_for_viewport(t, viewport),
         )),
-        Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(
-            c,
-        ))),
-        Kbd(k) => Some(Arc::new(crate::intrinsic::KbdIntrinsic::from_kbd(k))),
-        Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(
-            c,
-        ))),
+        Caption(c) => Some(Arc::new(
+            crate::intrinsic::CaptionIntrinsic::from_caption_for_viewport(c, viewport),
+        )),
+        Kbd(k) => Some(Arc::new(
+            crate::intrinsic::KbdIntrinsic::from_kbd_for_viewport(k, viewport),
+        )),
+        Counter(c) => Some(Arc::new(
+            crate::intrinsic::CounterIntrinsic::from_counter_for_viewport(c, viewport),
+        )),
         NumberWheel(w) => Some(Arc::new(
-            crate::intrinsic::NumberWheelIntrinsic::from_number_wheel(w),
+            crate::intrinsic::NumberWheelIntrinsic::from_number_wheel_for_viewport(w, viewport),
         )),
-        Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
+        Badge(b) => Some(Arc::new(
+            crate::intrinsic::BadgeIntrinsic::from_badge_for_viewport(b, viewport),
+        )),
         Terminal(t) => Some(Arc::new(
-            crate::intrinsic::TerminalIntrinsic::from_terminal(t),
+            crate::intrinsic::TerminalIntrinsic::from_terminal_for_viewport(t, viewport),
         )),
-        Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
+        Table(t) => Some(Arc::new(
+            crate::intrinsic::TableIntrinsic::from_table_for_viewport(t, viewport),
+        )),
         Codeblock(c) => Some(Arc::new(
-            crate::intrinsic::CodeblockIntrinsic::from_codeblock(c),
+            crate::intrinsic::CodeblockIntrinsic::from_codeblock_for_viewport(c, viewport),
         )),
         // M2: rich_text had no intrinsic measurer at all, so it laid out
         // 0×0 and rendered nothing unless the author guessed an explicit
         // width/height.
         RichText(rt) => Some(Arc::new(
-            crate::intrinsic::RichTextIntrinsic::from_rich_text(rt),
+            crate::intrinsic::RichTextIntrinsic::from_rich_text_for_viewport(rt, viewport),
         )),
         _ => None,
     }
@@ -1224,6 +1244,7 @@ fn container_children<'a>(
     inherited_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Vec<BoxNode> {
     let (children, stagger, child_scale, child_offset): (&[ChildComponent], Option<f32>, f64, f64) =
         match component {
@@ -1290,17 +1311,16 @@ fn container_children<'a>(
             inherited_delay + j as f64 * step,
             child_remap,
             parent_css,
+            viewport,
         ));
     }
     result
 }
 
-/// Pull the component's `CssStyle`, augmented with intrinsic `width`/`height`
-/// for components that carry a fixed size.
+/// Pull the component's own `CssStyle`, pre-cascade and pre-intrinsic-overrides.
 fn component_css(component: &Component) -> CssStyle {
     let mut css = component_style(component).clone();
     apply_default_display(component, &mut css);
-    apply_intrinsic_overrides(component, &mut css);
     css
 }
 
@@ -1345,9 +1365,16 @@ fn measure_text_line_width(text: &str, font_size: f32, family: &str, bold: bool)
 /// Apply per-component CSS overrides for things that the legacy
 /// `Widget::measure` derived from constraints (e.g. divider stretching to its
 /// parent, line bounding box from its endpoints).
-fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
+fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle, parent_css: &CssStyle) {
     use Component::*;
     match component {
+        Badge(_) => {
+            if css.align_self.is_none()
+                && matches!(parent_css.align_items, None | Some(AlignItems::Stretch))
+            {
+                css.align_self = Some(AlignSelf::FlexStart);
+            }
+        }
         Text(t) => {
             // M1: `white-space: nowrap|pre` must style the *content*, not
             // silently resize the *box*. Without this, CSS's "automatic
@@ -1533,9 +1560,8 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                 css.width = Some(CSize::Length(CLP::Px(c.width)));
             }
             if css.height.is_none() {
-                let font_size = c
-                    .style
-                    .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
+                let font_size =
+                    css.font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
                 let line_height = font_size * 1.3;
                 let n = c.items.len() as f32;
                 let h = n * line_height + (n - 1.0).max(0.0) * c.gap;
@@ -1680,10 +1706,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // box is fit exactly to the unwrapped text width, the painter's
             // own `wrap_text(text, font, Some(text_area_w))` never has a
             // reason to wrap, so painted output matches this box exactly.
-            let font_size = t
-                .style
-                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
-            let family = t.style.font_family_or("Inter");
+            let font_size =
+                css.font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 16.0);
+            let family = css.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0; // callout.rs's own `let padding = 12.0;`
             let v_pad = 16.0; // breathing room around the line, same order of magnitude as h_pad
@@ -1702,11 +1727,11 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // Same shape as Callout above; padding value borrowed from
             // callout.rs since tooltip.rs's own paint() centers text in the
             // body with no defined constant of its own.
-            let font_size = t.style.font_size_px_ctx(
+            let font_size = css.font_size_px_ctx(
                 &crate::intrinsic::measure_time_font_size_ctx(0.0),
                 t.font_size,
             );
-            let family = t.style.font_family_or("Inter");
+            let family = css.font_family_or("Inter");
             let text_w = measure_text_line_width(&t.text, font_size, family, false);
             let h_pad = 12.0;
             let v_pad = 16.0;
@@ -1730,10 +1755,9 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // formula (h_pad = font_size*1.2 per side, `gap` before/after/
             // between every pill) using the same public fields and the same
             // `measure_text_with_fallback` call it makes internally.
-            let font_size = p
-                .style
-                .font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 14.0);
-            let family = p.style.font_family_or("Inter");
+            let font_size =
+                css.font_size_px_ctx(&crate::intrinsic::measure_time_font_size_ctx(0.0), 14.0);
+            let family = css.font_family_or("Inter");
             let h_pad = font_size * 1.2;
             let n = p.items.len() as f32;
             let labels_w: f32 = p
@@ -1760,7 +1784,7 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
             // height ratio both of those same real usages share:
             // `font_size: 24` paired with `style.height: 48`, i.e.
             // `2 × font_size`.
-            let font_size = m.style.font_size_px_ctx(
+            let font_size = css.font_size_px_ctx(
                 &crate::intrinsic::measure_time_font_size_ctx(0.0),
                 m.font_size,
             );
@@ -2450,6 +2474,135 @@ mod tests {
     }
 
     #[test]
+    fn trail_ghost_gets_a_real_intrinsic_size_on_a_text_component() {
+        let style = CssStyle {
+            animation: vec![AnimationEffect::Trail(TrailConfig {
+                copies: 2,
+                spacing: 0.05,
+                falloff: 0.6,
+            })],
+            ..Default::default()
+        };
+        let scene = vec![make_text("Hello ghost", style)];
+
+        let built = build_scene_with_anim(
+            &scene,
+            (400.0, 400.0),
+            BuildAnimationCtx {
+                time: 1.0,
+                scenario_time: 1.0,
+                scene_duration: 6.0,
+                fps: 30,
+            },
+        );
+
+        assert_eq!(built.root.children.len(), 3, "2 ghosts + 1 principal");
+        for (i, node) in built.root.children[..2].iter().enumerate() {
+            assert!(
+                matches!(node.kind, BoxKind::Ghost(_)),
+                "child {i} must be a ghost node"
+            );
+            assert!(
+                node.intrinsic.is_some(),
+                "trail ghost {i} on a content-measured component (text) must carry the same \
+                 kind of intrinsic measure as the principal, or taffy lays it out at 0x0 and it \
+                 never paints"
+            );
+        }
+    }
+
+    #[test]
+    fn trail_ghosts_share_the_principals_paint_window() {
+        let scene = vec![ChildComponent {
+            component: serde_json::from_value(json!({
+                "type": "text",
+                "content": "Hello",
+                "start_at": 2.0,
+                "style": {
+                    "animation": [
+                        { "name": "trail", "copies": 2, "spacing": 0.05, "falloff": 0.6 }
+                    ]
+                }
+            }))
+            .expect("component deserializes"),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+
+        let built = build_scene_at_time(
+            &scene,
+            (400.0, 400.0),
+            default_root_css((400.0, 400.0)),
+            BuildAnimationCtx {
+                time: 2.0,
+                scenario_time: 2.0,
+                scene_duration: 6.0,
+                fps: 30,
+            },
+        );
+
+        assert_eq!(built.root.children.len(), 3, "2 ghosts + 1 principal");
+        let principal_window = built.root.children[2].window;
+        assert!(
+            principal_window.is_some(),
+            "sanity: start_at must produce a PaintWindow on the principal"
+        );
+        for (i, ghost) in built.root.children[..2].iter().enumerate() {
+            assert_eq!(
+                ghost.window, principal_window,
+                "ghost {i} must share the principal's visibility window, or it keeps painting \
+                 outside the component's declared start_at/end_at"
+            );
+        }
+    }
+
+    #[test]
+    fn tooltip_intrinsic_size_uses_the_cascaded_font_size() {
+        let scene = vec![ChildComponent {
+            component: make_card(
+                vec![ChildComponent {
+                    component: serde_json::from_value(json!({
+                        "type": "tooltip",
+                        "text": "Hi"
+                    }))
+                    .expect("component deserializes"),
+                    position: None,
+                    x: None,
+                    y: None,
+                    z_index: None,
+                    bleed: false,
+                }],
+                CssStyle {
+                    font_size: Some(rustmotion_core::css::units::Length::Px(48.0)),
+                    width: Some(CSize::Length(CLP::Px(400.0))),
+                    height: Some(CSize::Length(CLP::Px(400.0))),
+                    ..Default::default()
+                },
+            ),
+            position: None,
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+
+        let built = build_scene(&scene, (500.0, 500.0));
+        let tooltip_node = &built.root.children[0].children[0];
+        let got_width =
+            fixed_px(tooltip_node.css.width.as_ref()).expect("tooltip gets a fixed px width");
+
+        let expected_width = measure_text_line_width("Hi", 48.0, "Inter", false) + 24.0;
+        assert!(
+            (got_width - expected_width).abs() < 0.5,
+            "tooltip must size itself off the CASCADED font-size (48px from the parent card), \
+             not its own pre-cascade default (13px): got width {got_width}, expected ~{expected_width}"
+        );
+    }
+
+    #[test]
     fn component_kind_labels() {
         assert_eq!(component_kind(&make_shape(100.0, 50.0).component), "shape");
     }
@@ -2557,6 +2710,54 @@ mod tests {
         assert_eq!(l.y, 30.0);
         assert_eq!(l.width, 100.0);
         assert_eq!(l.height, 80.0);
+    }
+
+    #[test]
+    fn text_intrinsic_measures_vw_against_the_real_viewport_not_1920x1080() {
+        use rustmotion_core::engine::box_tree::AvailableSpace;
+
+        let text = Component::Text(crate::text::Text {
+            content: "WWWWWWWWWW".into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(rustmotion_core::css::Length::String("5vw".into())),
+                white_space: Some(rustmotion_core::css::style::WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
+        });
+        let scene = vec![ChildComponent {
+            component: text,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (3840.0, 2160.0));
+        let node = &built.root.children[0];
+        let intrinsic = node
+            .intrinsic
+            .as_ref()
+            .expect("text carries an intrinsic measurer");
+        let (natural_w, _) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert!(
+            natural_w > 1000.0,
+            "expected 5vw on a 3840-wide viewport to resolve to a 192px font-size \
+             (natural width of ten 'W' glyphs > 1000px), got {natural_w} — intrinsic \
+             measurement is still using the hardcoded 1920x1080 fallback"
+        );
     }
 
     #[test]
@@ -2843,6 +3044,40 @@ mod tests {
             (l.height - 30.2).abs() < 2.0,
             "badge height should be ~30.2, got {}",
             l.height
+        );
+    }
+
+    fn flowing_badge() -> ChildComponent {
+        serde_json::from_value(serde_json::json!({
+            "type": "badge",
+            "text": "New"
+        }))
+        .expect("badge deserializes")
+    }
+
+    #[test]
+    fn badge_does_not_stretch_under_the_default_cross_axis() {
+        let scene = vec![flowing_badge()];
+        let built = build_scene_with_root(&scene, (400.0, 200.0), default_root_css((400.0, 200.0)));
+        assert_eq!(
+            built.root.children[0].css.align_self,
+            Some(AlignSelf::FlexStart),
+            "a badge under the default (stretch) cross-axis must opt out of \
+             stretching, or it grows to the parent's full width"
+        );
+    }
+
+    #[test]
+    fn badge_honours_an_explicit_center_from_its_parent() {
+        let mut root_css = default_root_css((400.0, 200.0));
+        root_css.align_items = Some(AlignItems::Center);
+        let scene = vec![flowing_badge()];
+        let built = build_scene_with_root(&scene, (400.0, 200.0), root_css);
+        assert_eq!(
+            built.root.children[0].css.align_self, None,
+            "a badge whose parent explicitly requests align-items: center \
+             must not override it with its own flex-start default — it \
+             should inherit the parent's alignment like any other child"
         );
     }
 

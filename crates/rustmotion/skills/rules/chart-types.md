@@ -13,7 +13,7 @@
 | `stacked_bar` | Multi-series comparison | `categories` + `series: [{ name, data, color }]` |
 | `radar` | Multi-axis comparison | `axes` + `radar_data: [{ values, color }]` |
 | `scatter` | Correlation between 2 variables | `points: [{ x, y, size, color }]` |
-| `radial_bar` | Progress of multiple items | `data: [{ value, label, color }]` (Apple Health style) |
+| `radial_bar` | Progress of multiple items | `data: [{ value, label, color }]` + `max` (default `100`) — each ring is `value/max`, not a share of the largest item (Apple Health style) |
 | `funnel` | Conversion pipeline | `data` (descending values) + `direction: "horizontal"/"vertical"` |
 | `waterfall` | Cumulative changes | `data` (positive = green, negative = red) |
 

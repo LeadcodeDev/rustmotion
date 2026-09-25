@@ -9,8 +9,8 @@ use gpui_kit::{
 
 use crate::app::state::EditorState;
 use crate::scenario::{
-    append_annotation, append_sidecar_annotation, history_slot, record_edit, remove_annotation,
-    remove_sidecar_annotation, Shared,
+    append_annotation, append_sidecar_annotation, history_slot, note_self_write, record_edit,
+    remove_annotation, remove_sidecar_annotation, self_write_slot, Shared,
 };
 
 const TOPBAR_HEIGHT: gpui_kit::Pixels = px(40.);
@@ -77,13 +77,18 @@ pub fn submit_annotation(
         let text = serde_json::to_string_pretty(&updated).map_err(|e| format!("json: {e}"))?;
         let snapshot = std::fs::read_to_string(&path).ok();
         let write_result = write_file(&path, &text);
+        if write_result.is_ok() {
+            note_self_write(&self_write_slot(), &path, &text);
+        }
         let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
         match write_result {
             Ok(()) => {
                 if let Some(s) = snapshot {
                     record_edit(&history_slot(), &path, s);
                 }
+                m.raw = updated;
                 m.write_error = None;
+                m.generation = m.generation.wrapping_add(1);
                 Ok(())
             }
             Err(e) => {
@@ -123,15 +128,22 @@ pub fn delete_annotation(shared: &Shared, id: &str) {
         let snapshot = std::fs::read_to_string(&path).ok();
         let write_result = serde_json::to_string_pretty(&updated)
             .map_err(|e| format!("json: {e}"))
-            .and_then(|t| write_file(&path, &t));
+            .and_then(|text| {
+                write_file(&path, &text)?;
+                note_self_write(&self_write_slot(), &path, &text);
+                Ok(())
+            });
+        let mut m = shared.lock().unwrap_or_else(|e| e.into_inner());
         match write_result {
             Ok(()) => {
                 if let Some(s) = snapshot {
                     record_edit(&history_slot(), &path, s);
                 }
+                m.raw = updated;
+                m.write_error = None;
+                m.generation = m.generation.wrapping_add(1);
             }
             Err(e) => {
-                let mut m = shared.lock().unwrap_or_else(|e2| e2.into_inner());
                 m.write_error = Some(e);
                 m.generation = m.generation.wrapping_add(1);
             }
@@ -339,7 +351,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use crate::scenario::StudioModel;
+    use crate::scenario::{is_self_write, StudioModel};
 
     const SCENARIO_JSON: &str = r##"{
         "video": { "width": 10, "height": 10, "fps": 10 },
@@ -394,6 +406,35 @@ mod tests {
         assert_eq!(annotations[0]["note"], "smaller");
         assert_eq!(annotations[0]["view"], 0);
         assert_eq!(annotations[0]["scene"], 0);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn submit_annotation_on_json_source_notes_the_self_write_and_updates_raw_immediately() {
+        let path = temp_path("submit_json_self_write", "json");
+        std::fs::write(&path, SCENARIO_JSON).unwrap();
+        let shared = shared_for_json_source(&path);
+
+        let result = submit_annotation(
+            &shared,
+            0,
+            "/scenes/0".to_string(),
+            "scene".to_string(),
+            "note".to_string(),
+        );
+        assert!(result.is_ok());
+
+        let disk_content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            is_self_write(&self_write_slot(), &path, &disk_content),
+            "the write must be noted, or the watcher treats it as an external change and \
+             reloads the whole model for a comment"
+        );
+
+        let m = shared.lock().unwrap();
+        assert_eq!(m.raw["annotations"].as_array().unwrap().len(), 1);
+        drop(m);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -463,6 +504,38 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert!(doc["annotations"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_annotation_on_json_source_notes_the_self_write_and_updates_raw_immediately() {
+        let path = temp_path("delete_json_self_write", "json");
+        let with_annotation = serde_json::json!({
+            "video": { "width": 10, "height": 10, "fps": 10 },
+            "scenes": [ { "duration": 1.0 } ],
+            "annotations": [ { "id": "an_1", "note": "n", "status": "open", "frame": 0,
+                "target": { "pointer": "/scenes/0", "kind": "scene" } } ]
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&with_annotation).unwrap(),
+        )
+        .unwrap();
+        let shared = shared_for_json_source(&path);
+
+        delete_annotation(&shared, "an_1");
+
+        let disk_content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            is_self_write(&self_write_slot(), &path, &disk_content),
+            "delete must note its own write too, exactly like submit"
+        );
+
+        let m = shared.lock().unwrap();
+        assert!(m.raw["annotations"].as_array().unwrap().is_empty());
+        assert!(m.write_error.is_none());
+        drop(m);
 
         let _ = std::fs::remove_file(&path);
     }

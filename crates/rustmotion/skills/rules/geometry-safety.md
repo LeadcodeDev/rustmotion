@@ -15,7 +15,7 @@ No textual content may bleed out of the device viewport. The renderer enforces t
 
 ## 2. Codeblock / Terminal `auto_scroll`
 
-When you give a `codeblock` or `terminal` a fixed `size` smaller than its natural content height, the renderer scrolls the content vertically (clip + translate) so the **last revealed line stays visible**. Font size is **never** reduced.
+When you give a `codeblock` or `terminal` a fixed `style.height` smaller than its natural content height, the renderer scrolls the content vertically (clip + translate) so the **last revealed line stays visible**. Font size is **never** reduced. There is no root `size` field on these components — dimensions come from `style.width`/`style.height`, like any other component.
 
 - Default: `auto_scroll: true`.
 - `auto_scroll: false` → validator fails with `auto_scroll_disabled_overflow` if content doesn't fit.
@@ -58,7 +58,7 @@ CSS-like semantics: `visible` (default) lets children bleed; `hidden` clips at t
 
 ## What the validator catches
 
-`rustmotion validate scenario.json` reports five geometry violation kinds:
+`rustmotion validate -f scenario.json` reports five geometry violation kinds:
 
 - `viewport_overflow` — absolute bbox crosses the device edge
 - `unwrappable_text_overflow` — `white-space: "nowrap"`/`"pre"` but natural width > available width
@@ -71,16 +71,17 @@ CSS-like semantics: `visible` (default) lets children bleed; `hidden` clips at t
 ## CLI usage
 
 ```bash
-rustmotion validate scenario.json                       # human-readable
-rustmotion validate scenario.json --report report.json  # JSON report
-rustmotion validate scenario.json --fix                 # safe auto-fixes
-rustmotion validate scenario.json --strict-anim         # per-frame check, adds animated_text_overflow
-rustmotion validate scenario.json --lenient             # warnings only
+rustmotion validate -f scenario.json                       # human-readable
+rustmotion validate -f scenario.json --report report.json  # JSON report
+rustmotion validate -f scenario.json --fix                 # safe auto-fixes
+rustmotion validate -f scenario.json --strict-anim         # per-frame check, adds animated_text_overflow
+rustmotion validate -f scenario.json --lenient              # warnings only
 ```
 
 `--fix` rewrites the file in place:
 - `auto_scroll_disabled_overflow` → sets `auto_scroll: true`. Safe.
 - `unwrappable_text_overflow` → removes `style.white-space`, so the text falls back to the `normal` default and wraps again. Non-destructive: it only ever deletes the property that caused the violation. If you want the line to stay unbroken, widen the box or lower `font-size` by hand instead of running `--fix`.
+- `content_overflows_box` on `text`/`gradient_text` only → sets `style.text-autofit: true`, shrinking the font until the content fits (down to a calibrated readability floor; if that's not enough, the violation is still reported). Every other component's `content_overflows_box` is left alone — growing the box, shrinking the font, and shortening the copy are all legitimate answers with different visual outcomes, so `--fix` doesn't pick one for you there.
 
 Position/size clamping (`viewport_overflow`) is never auto-applied — fix those by hand too.
 

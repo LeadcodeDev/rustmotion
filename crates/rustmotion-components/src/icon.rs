@@ -5,7 +5,9 @@ use skia_safe::{Canvas, ColorType, ImageInfo, Paint, Rect, SamplingOptions};
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{asset_cache, fetch_icon_svg, icon_cache_key};
+use rustmotion_core::engine::renderer::{
+    asset_cache, fetch_icon_svg, icon_cache_key, sandboxed_svg_options,
+};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -71,7 +73,7 @@ impl Painter for Icon {
                 return;
             };
 
-            let opt = usvg::Options::default();
+            let opt = sandboxed_svg_options();
             let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else {
                 return;
             };

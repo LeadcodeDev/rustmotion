@@ -11,7 +11,7 @@ use taffy::prelude as tf;
 use super::style::{
     AlignContent, AlignItems, AlignSelf, BoxSizing, CssStyle, Display, Edges, FlexDirection,
     FlexWrap, Gap, GridAutoFlow, GridLine, GridLineEnd, GridTrack, GridTrackKeyword,
-    JustifyContent, JustifyItems, JustifySelf, Overflow, Position, Size,
+    JustifyContent, JustifyItems, JustifySelf, Overflow, Position, Size, SizeKeyword,
 };
 use super::units::{LengthContext, LengthPercentage, ParsedLength};
 
@@ -50,12 +50,19 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
 
     // Display
     style.display = match css.display {
+        None => tf::Display::Block,
         Some(Display::None) => tf::Display::None,
         Some(Display::Block) => tf::Display::Block,
         Some(Display::Flex) => tf::Display::Flex,
         Some(Display::Grid) => tf::Display::Grid,
-        // inline-block / contents → fall back to block in our scope
-        _ => tf::Display::Block,
+        Some(Display::InlineBlock) => {
+            warn_unsupported_display_once("inline-block");
+            tf::Display::Block
+        }
+        Some(Display::Contents) => {
+            warn_unsupported_display_once("contents");
+            tf::Display::Block
+        }
     };
 
     // Position
@@ -237,6 +244,23 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     style
 }
 
+fn warn_unsupported_display_once(keyword: &'static str) {
+    static WARNED_INLINE_BLOCK: std::sync::Once = std::sync::Once::new();
+    static WARNED_CONTENTS: std::sync::Once = std::sync::Once::new();
+    let once = if keyword == "contents" {
+        &WARNED_CONTENTS
+    } else {
+        &WARNED_INLINE_BLOCK
+    };
+    once.call_once(|| {
+        eprintln!(
+            "Warning: `display: {keyword}` is not supported by the layout engine — falling back \
+             to `display: block`, which generates its own box and consumes a flex line, unlike \
+             the real `{keyword}` semantics."
+        );
+    });
+}
+
 /// Resolve `padding` + `border` width into a single content-box inset, in
 /// px, per axis: `(horizontal, vertical)` i.e. `(left + right, top +
 /// bottom)`.
@@ -264,6 +288,15 @@ pub(crate) fn content_box_inset(css: &CssStyle, ctx: &ConversionContext) -> (f32
     )
 }
 
+fn border_side_style(
+    b: &super::style::BorderEdges,
+    side: Option<&super::style::BorderSide>,
+) -> super::style::BorderStyle {
+    side.and_then(|s| s.style)
+        .or(b.style)
+        .unwrap_or(super::style::BorderStyle::Solid)
+}
+
 fn resolve_border_widths_px(
     b: Option<&super::style::BorderEdges>,
     ctx: &ConversionContext,
@@ -273,6 +306,9 @@ fn resolve_border_widths_px(
     };
     let uniform = b.width.as_ref().map(Edges::resolve);
     let pick_side = |side: Option<&super::style::BorderSide>, idx: usize| -> f32 {
+        if matches!(border_side_style(b, side), super::style::BorderStyle::None) {
+            return 0.0;
+        }
         if let Some(side) = side {
             if let Some(w) = side.width.as_ref() {
                 return w.resolve(&ctx.length);
@@ -403,6 +439,22 @@ fn lp_to_lp_auto(
     }
 }
 
+fn warn_unsupported_size_keyword_once(k: SizeKeyword) {
+    static WARNED_SIZE_KEYWORD: std::sync::Once = std::sync::Once::new();
+    let label = match k {
+        SizeKeyword::MaxContent => "max-content",
+        SizeKeyword::MinContent => "min-content",
+        SizeKeyword::FitContent => "fit-content",
+    };
+    WARNED_SIZE_KEYWORD.call_once(|| {
+        eprintln!(
+            "Warning: `{label}` is not supported for width/height/min-*/max-*/flex-basis — \
+             taffy's `Dimension` has no content-sizing keyword outside grid track sizing. \
+             Falling back to `auto`."
+        );
+    });
+}
+
 /// Convert `Size` → taffy `Dimension`.
 fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
     let Some(s) = s else {
@@ -420,9 +472,8 @@ fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
             ParsedLength::Vh(p) => tf::Dimension::length(p / 100.0 * ctx.length.viewport_height),
             ParsedLength::Fr(_) => tf::Dimension::auto(),
         },
-        Size::Keyword(_) => {
-            // taffy 0.10 supports max-content / min-content / fit-content via Dimension.
-            // We map them to `auto` for now; refine later if needed.
+        Size::Keyword(k) => {
+            warn_unsupported_size_keyword_once(*k);
             tf::Dimension::auto()
         }
     }
@@ -482,6 +533,9 @@ fn border_widths(
     // Per-side overrides take precedence over the uniform `width`.
     let uniform = b.width.as_ref().map(|e| e.resolve());
     let pick_side = |side: Option<&super::style::BorderSide>, idx: usize| -> tf::LengthPercentage {
+        if matches!(border_side_style(b, side), super::style::BorderStyle::None) {
+            return tf::LengthPercentage::length(0.0);
+        }
         if let Some(side) = side {
             if let Some(w) = side.width.as_ref() {
                 let lp = LengthPercentage::Px(w.resolve(&ctx.length));
@@ -948,5 +1002,76 @@ mod tests {
         };
         let s = to_taffy_style(&css, &ctx());
         assert_eq!(s.justify_self, None);
+    }
+
+    #[test]
+    fn border_style_none_zeroes_uniform_width_in_taffy() {
+        let css = CssStyle {
+            border: Some(BorderEdges {
+                width: Some(Edges::Uniform(LengthPercentage::Px(10.0))),
+                style: Some(BorderStyle::None),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.border.top, tf::LengthPercentage::length(0.0));
+        assert_eq!(s.border.right, tf::LengthPercentage::length(0.0));
+        assert_eq!(s.border.bottom, tf::LengthPercentage::length(0.0));
+        assert_eq!(s.border.left, tf::LengthPercentage::length(0.0));
+    }
+
+    #[test]
+    fn border_style_none_on_one_side_only_zeroes_that_side() {
+        let css = CssStyle {
+            border: Some(BorderEdges {
+                width: Some(Edges::Uniform(LengthPercentage::Px(10.0))),
+                style: Some(BorderStyle::Solid),
+                top: Some(BorderSide {
+                    style: Some(BorderStyle::None),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(s.border.top, tf::LengthPercentage::length(0.0));
+        assert_eq!(s.border.left, tf::LengthPercentage::length(10.0));
+    }
+
+    #[test]
+    fn content_box_inset_agrees_with_taffy_on_border_style_none() {
+        let css = CssStyle {
+            border: Some(BorderEdges {
+                width: Some(Edges::Uniform(LengthPercentage::Px(10.0))),
+                style: Some(BorderStyle::None),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (h, v) = content_box_inset(&css, &ctx());
+        assert_eq!(
+            h, 0.0,
+            "a border that never paints must not narrow content_box_inset either"
+        );
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn border_style_solid_default_keeps_width_when_style_unset() {
+        let css = CssStyle {
+            border: Some(BorderEdges {
+                width: Some(Edges::Uniform(LengthPercentage::Px(10.0))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = to_taffy_style(&css, &ctx());
+        assert_eq!(
+            s.border.top,
+            tf::LengthPercentage::length(10.0),
+            "an unset style defaults to Solid (paint_pass.rs's own default), not None"
+        );
     }
 }

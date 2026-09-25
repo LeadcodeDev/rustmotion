@@ -7,7 +7,7 @@ use skia_safe::{
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::asset_cache;
+use rustmotion_core::engine::renderer::{asset_cache, sandboxed_svg_options};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -438,7 +438,7 @@ impl Painter for Svg {
                 return;
             };
 
-            let opt = usvg::Options::default();
+            let opt = sandboxed_svg_options();
             let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else {
                 return;
             };
@@ -539,7 +539,7 @@ impl Svg {
             self.data.as_ref()?.as_bytes().to_vec()
         };
 
-        let opt = usvg::Options::default();
+        let opt = sandboxed_svg_options();
         let tree = usvg::Tree::from_data(&svg_data, &opt).ok()?;
 
         let svg_size = tree.size();
@@ -625,6 +625,7 @@ impl Svg {
 mod tests {
     use super::*;
     use rustmotion_core::engine::layout_pass::Insets;
+    use std::path::{Path, PathBuf};
 
     const W: i32 = 100;
     const H: i32 = 100;
@@ -748,5 +749,102 @@ mod tests {
             a < 50,
             "default stroke reveal must not fill the interior at partial progress, got alpha={a} at (50,50)"
         );
+    }
+
+    fn write_witness_png(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join("witness.png");
+        let img = image::RgbImage::from_pixel(4, 4, image::Rgb([0, 0, 255]));
+        img.save(&path).expect("write witness PNG");
+        path
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rm_svg_href_test_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn svg_with_embedded_href(data: String) -> Svg {
+        Svg {
+            src: None,
+            data: Some(data),
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            draw: false,
+            draw_stroke_width: default_draw_stroke_width(),
+            draw_overlap: 0.0,
+            reveal: SvgReveal::Stroke,
+        }
+    }
+
+    #[test]
+    fn embedded_image_href_cannot_read_an_arbitrary_local_file_via_static_render() {
+        let dir = scratch_dir("static");
+        let witness_path = write_witness_png(&dir);
+        let witness_path_str = witness_path.to_str().unwrap();
+
+        let svg = svg_with_embedded_href(format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                <image href="{witness_path_str}" x="0" y="0" width="100" height="100"/>
+            </svg>"##
+        ));
+        let layout = test_layout();
+        let props = AnimatedProperties::default();
+        let ctx = test_ctx();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            svg.paint_content(canvas, &layout, &props, &ctx);
+        }
+
+        let (r, g, b, a) = red_alpha_at(&mut surface, 50, 50);
+        assert!(
+            !(b > 200 && r < 50 && g < 50 && a > 200),
+            "inline svg.data must not read {witness_path_str} via <image href> and paint its \
+             pixels — got rgba=({r},{g},{b},{a}) at (50,50), which is the witness PNG's solid blue"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn embedded_image_href_cannot_read_an_arbitrary_local_file_via_draw_on_render() {
+        let dir = scratch_dir("draw-on");
+        let witness_path = write_witness_png(&dir);
+        let witness_path_str = witness_path.to_str().unwrap();
+
+        let mut svg = svg_with_embedded_href(format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                <image href="{witness_path_str}" x="0" y="0" width="100" height="100"/>
+            </svg>"##
+        ));
+        svg.draw = true;
+        let layout = test_layout();
+        let props = AnimatedProperties::default();
+        let ctx = test_ctx();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            svg.paint_content(canvas, &layout, &props, &ctx);
+        }
+
+        let (r, g, b, a) = red_alpha_at(&mut surface, 50, 50);
+        assert!(
+            !(b > 200 && r < 50 && g < 50 && a > 200),
+            "inline svg.data must not read {witness_path_str} via <image href> and paint its \
+             pixels — got rgba=({r},{g},{b},{a}) at (50,50), which is the witness PNG's solid blue"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

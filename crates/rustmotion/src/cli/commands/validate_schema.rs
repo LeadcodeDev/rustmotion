@@ -1,9 +1,11 @@
 //! Schema-level scenario checks (file existence, dimensions, durations, etc.).
 //! Returns (errors, warnings); errors block rendering, warnings are advisory only.
 
+use rustmotion::components::chart::ChartType;
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
-    Background, BackgroundLayer, BorderRadius, Color, CssStyle, Display as CssDisplay,
+    Background, BackgroundLayer, BorderRadius, Color, CssStyle, Display as CssDisplay, Size,
+    SizeKeyword,
 };
 use rustmotion::engine::animator::{motion_path_length, MOTION_PATH_MIN_LENGTH};
 use rustmotion::schema::{
@@ -30,9 +32,42 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
     }
 
     for (vi, view) in scenario.views.iter().enumerate() {
+        if !matches!(view.view_type, rustmotion::schema::ViewType::World) {
+            let camera_easing_differs_from_the_view_default =
+                view.camera_easing != rustmotion::schema::EasingType::EaseInOut;
+            if camera_easing_differs_from_the_view_default {
+                warnings.push(format!(
+                    "views[{}].camera_easing is set but has no effect outside a \"world\" view",
+                    vi
+                ));
+            }
+            if view.camera_pan_duration != 0.8 {
+                warnings.push(format!(
+                    "views[{}].camera_pan_duration is set but has no effect outside a \"world\" view",
+                    vi
+                ));
+            }
+        }
         for (si, scene) in view.scenes.iter().enumerate() {
             if scene.duration <= 0.0 {
                 errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
+            }
+
+            if !matches!(view.view_type, rustmotion::schema::ViewType::World) {
+                if scene.world_position.is_some() {
+                    warnings.push(format!(
+                        "views[{}].scenes[{}].world-position is set but has no effect outside \
+                         a \"world\" view",
+                        vi, si
+                    ));
+                }
+                if scene.persist {
+                    warnings.push(format!(
+                        "views[{}].scenes[{}].persist is set but has no effect outside a \
+                         \"world\" view",
+                        vi, si
+                    ));
+                }
             }
 
             let children = rustmotion::engine::render::deserialize_children(scene);
@@ -93,6 +128,43 @@ fn validate_children(
                  box-shadow with \"inset\": true",
                 p
             ));
+        }
+        if matches!(
+            style.display,
+            Some(CssDisplay::InlineBlock) | Some(CssDisplay::Contents)
+        ) {
+            let keyword = if matches!(style.display, Some(CssDisplay::Contents)) {
+                "contents"
+            } else {
+                "inline-block"
+            };
+            warnings.push(format!(
+                "{}: style.display is \"{}\", which the layout engine does not support — \
+                 falling back to \"block\"",
+                p, keyword
+            ));
+        }
+        for (field_name, size) in [
+            ("width", &style.width),
+            ("height", &style.height),
+            ("min-width", &style.min_width),
+            ("min-height", &style.min_height),
+            ("max-width", &style.max_width),
+            ("max-height", &style.max_height),
+            ("flex-basis", &style.flex_basis),
+        ] {
+            if let Some(Size::Keyword(k)) = size {
+                let keyword = match k {
+                    SizeKeyword::MaxContent => "max-content",
+                    SizeKeyword::MinContent => "min-content",
+                    SizeKeyword::FitContent => "fit-content",
+                };
+                warnings.push(format!(
+                    "{}: style.{} is \"{}\", which the layout engine does not support — \
+                     falling back to \"auto\"",
+                    p, field_name, keyword
+                ));
+            }
         }
 
         // C2 completion (issue #110 / #102): a colour that `parse_css_color`
@@ -255,6 +327,40 @@ fn validate_children(
                     ));
                 }
             }
+            Component::Chart(chart) => match chart.chart_type {
+                ChartType::Radar => {
+                    let n_axes = chart.axes.len();
+                    for (si, rd) in chart.radar_data.iter().enumerate() {
+                        if rd.values.len() != n_axes {
+                            errors.push(format!(
+                                "{}.radar_data[{}]: {} value(s) but axes has {} — a radar \
+                                 series needs exactly one value per axis",
+                                p,
+                                si,
+                                rd.values.len(),
+                                n_axes
+                            ));
+                        }
+                    }
+                }
+                ChartType::StackedBar => {
+                    let n_cats = chart.categories.len();
+                    for (si, s) in chart.series.iter().enumerate() {
+                        if s.data.len() != n_cats {
+                            errors.push(format!(
+                                "{}.series[{}] (\"{}\"): {} value(s) but categories has {} — a \
+                                 stacked_bar series needs exactly one value per category",
+                                p,
+                                si,
+                                s.name,
+                                s.data.len(),
+                                n_cats
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            },
             Component::Card(card) => {
                 if matches!(card.style.display, Some(CssDisplay::Grid))
                     && card.style.grid_template_columns.is_none()
@@ -461,7 +567,6 @@ fn classify_transition_property(name: &str) -> TransitionPropertyKind {
         | "white-space"
         | "overflow-wrap"
         | "text-overflow"
-        | "text-decoration"
         | "text-autofit"
         | "mix-blend-mode"
         | "clip-path"
@@ -933,6 +1038,89 @@ mod style_warning_tests {
     }
 
     #[test]
+    fn warns_on_display_inline_block_and_contents() {
+        let inline_block: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "div",
+            "style": { "display": "inline-block" }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[inline_block], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("inline-block")),
+            "missing inline-block warning: {warnings:?}"
+        );
+
+        let contents: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "div",
+            "style": { "display": "contents" }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[contents], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("contents")),
+            "missing contents warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn warns_on_max_content_min_content_and_fit_content_size_keywords() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "div",
+            "style": {
+                "width": "max-content",
+                "height": "min-content",
+                "flex-basis": "fit-content"
+            }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("width") && w.contains("max-content")),
+            "missing max-content warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("height") && w.contains("min-content")),
+            "missing min-content warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("flex-basis") && w.contains("fit-content")),
+            "missing fit-content warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn does_not_warn_on_an_ordinary_px_width_and_block_display() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "div",
+            "style": { "display": "block", "width": "100px" }
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.is_empty(),
+            "an ordinary block/px-width element must not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn warns_on_legacy_backdrop_blur_and_inner_shadow() {
         // Legacy glassmorphism fields are accepted for compat but never
         // rendered; validate must point at the working CSS equivalents.
@@ -1231,6 +1419,227 @@ mod style_warning_tests {
         assert!(
             errors.iter().all(|e| !e.contains("animation finishes")),
             "start_at must not be added to the completion budget: {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod chart_series_length_tests {
+    use super::*;
+
+    #[test]
+    fn radar_series_with_wrong_value_count_is_an_error_naming_both_numbers() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "chart",
+            "chart_type": "radar",
+            "axes": ["Speed", "Power", "Range", "Defense"],
+            "radar_data": [
+                { "values": [1.0, 2.0, 3.0] }
+            ]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(errors[0].contains("radar_data[0]"), "{}", errors[0]);
+        assert!(errors[0].contains('3'), "{}", errors[0]);
+        assert!(errors[0].contains('4'), "{}", errors[0]);
+    }
+
+    #[test]
+    fn radar_series_matching_axes_count_has_no_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "chart",
+            "chart_type": "radar",
+            "axes": ["Speed", "Power"],
+            "radar_data": [ { "values": [1.0, 2.0] } ]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn stacked_bar_series_with_wrong_value_count_is_an_error_naming_both_numbers() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "chart",
+            "chart_type": "stacked_bar",
+            "categories": ["Q1", "Q2", "Q3"],
+            "series": [
+                { "name": "Revenue", "data": [10.0, 20.0] }
+            ]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(errors[0].contains("Revenue"), "{}", errors[0]);
+        assert!(errors[0].contains('2'), "{}", errors[0]);
+        assert!(errors[0].contains('3'), "{}", errors[0]);
+    }
+
+    #[test]
+    fn stacked_bar_series_matching_categories_count_has_no_error() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "chart",
+            "chart_type": "stacked_bar",
+            "categories": ["Q1", "Q2"],
+            "series": [ { "name": "Revenue", "data": [10.0, 20.0] } ]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn a_bar_chart_is_unaffected_by_the_radar_and_stacked_bar_length_checks() {
+        let child: ChildComponent = serde_json::from_value(serde_json::json!({
+            "type": "chart",
+            "chart_type": "bar",
+            "data": [ { "value": 1.0 }, { "value": 2.0 } ]
+        }))
+        .unwrap();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod world_only_fields_on_a_non_world_view_tests {
+    use super::*;
+
+    fn parse(json: &str) -> ResolvedScenario {
+        rustmotion::loader::load_scenario_from_source(None, Some(json)).unwrap()
+    }
+
+    #[test]
+    fn world_position_on_the_implicit_slide_view_warns_by_name_and_position() {
+        let scenario = parse(
+            r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{
+                    "duration": 1.0,
+                    "world-position": { "x": 100, "y": 0 },
+                    "children": []
+                }]
+            }"##,
+        );
+        let (errors, warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.is_empty(),
+            "must be a warning, not an error: {errors:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("views[0].scenes[0].world-position")),
+            "missing world-position warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn persist_true_on_a_slide_view_warns() {
+        let scenario = parse(
+            r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "composition": [{
+                    "type": "slide",
+                    "scenes": [{ "duration": 1.0, "persist": true, "children": [] }]
+                }]
+            }"##,
+        );
+        let (errors, warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.is_empty(),
+            "must be a warning, not an error: {errors:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("views[0].scenes[0].persist")),
+            "missing persist warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn camera_easing_and_camera_pan_duration_on_a_slide_view_warn() {
+        let scenario = parse(
+            r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "composition": [{
+                    "type": "slide",
+                    "camera_easing": "linear",
+                    "camera_pan_duration": 1.5,
+                    "scenes": [{ "duration": 1.0, "children": [] }]
+                }]
+            }"##,
+        );
+        let (errors, warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.is_empty(),
+            "must be a warning, not an error: {errors:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("views[0].camera_easing")),
+            "missing camera_easing warning: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("views[0].camera_pan_duration")),
+            "missing camera_pan_duration warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_fields_on_a_world_view_do_not_warn() {
+        let scenario = parse(
+            r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "composition": [{
+                    "type": "world",
+                    "camera_easing": "linear",
+                    "camera_pan_duration": 1.5,
+                    "scenes": [{
+                        "duration": 1.0,
+                        "world-position": { "x": 0, "y": 0 },
+                        "persist": true,
+                        "children": []
+                    }]
+                }]
+            }"##,
+        );
+        let (errors, warnings) = validate_scenario(&scenario);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().all(|w| !w.contains("has no effect")),
+            "a world view must not warn about its own mechanism: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_slide_scenario_with_none_of_these_fields_does_not_warn() {
+        let scenario = parse(
+            r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{ "duration": 1.0, "children": [] }]
+            }"##,
+        );
+        let (errors, warnings) = validate_scenario(&scenario);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            warnings.iter().all(|w| !w.contains("has no effect")),
+            "an ordinary scenario must not warn: {warnings:?}"
         );
     }
 }

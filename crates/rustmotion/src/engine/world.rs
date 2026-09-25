@@ -1,6 +1,16 @@
 use crate::engine::animator::{ease, safe_div};
 use crate::schema::{EasingType, ResolvedView, Scene};
 
+fn boundary_pans_for(boundary_pan_duration: &[f64], i: usize) -> (f64, f64) {
+    let in_pan_dur = if i > 0 {
+        boundary_pan_duration.get(i - 1).copied().unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let out_pan_dur = boundary_pan_duration.get(i).copied().unwrap_or(0.0);
+    (in_pan_dur, out_pan_dur)
+}
+
 /// Timeline for a world view: scene time windows and camera waypoints.
 #[derive(Debug)]
 pub struct WorldTimeline {
@@ -107,14 +117,24 @@ impl WorldTimeline {
             t = end;
         }
 
-        let total_duration = t;
-
         // Per-boundary clamp — see the field doc on `boundary_pan_duration`
         // for why `min` of both neighbouring scene durations is what
         // guarantees non-overlapping pan windows.
         let boundary_pan_duration: Vec<f64> = (0..scenes.len().saturating_sub(1))
             .map(|i| pan_dur.min(scenes[i].duration).min(scenes[i + 1].duration))
             .collect();
+
+        let mut total_duration = t;
+        for (i, (start, end)) in windows.iter().enumerate() {
+            let (in_pan_dur, out_pan_dur) = boundary_pans_for(&boundary_pan_duration, i);
+            let in_pan_half = in_pan_dur / 2.0;
+            let out_pan_half = out_pan_dur / 2.0;
+            let anim_start = if i == 0 { *start } else { start + in_pan_half };
+            let own_animation_clock_end = anim_start + scenes[i].duration;
+            total_duration = total_duration
+                .max(own_animation_clock_end)
+                .max(*end + out_pan_half);
+        }
 
         WorldTimeline {
             scene_windows: windows,
@@ -221,16 +241,7 @@ impl WorldTimeline {
     /// (to `i + 1`). `0.0` at the timeline's own edges, where there is no
     /// neighbour to pan from/to.
     fn boundary_pans_for(&self, i: usize) -> (f64, f64) {
-        let in_pan_dur = if i > 0 {
-            self.boundary_pan_duration
-                .get(i - 1)
-                .copied()
-                .unwrap_or(0.0)
-        } else {
-            0.0
-        };
-        let out_pan_dur = self.boundary_pan_duration.get(i).copied().unwrap_or(0.0);
-        (in_pan_dur, out_pan_dur)
+        boundary_pans_for(&self.boundary_pan_duration, i)
     }
 
     /// Return all scenes that should be visible at the given time.
@@ -260,7 +271,8 @@ impl WorldTimeline {
 
             // Is this scene currently in its active window (including pan margins)?
             let visible_start = start - in_pan_half;
-            let visible_end = *end + out_pan_half;
+            let own_animation_clock_end = anim_start + scene.duration;
+            let visible_end = (*end + out_pan_half).max(own_animation_clock_end);
 
             let is_in_window = time >= visible_start.max(0.0) && time < visible_end;
             let is_persisted = scene.persist && time >= *end;
@@ -686,5 +698,64 @@ mod world_extent_tests {
     fn no_waypoints_falls_back_to_the_viewport() {
         let t = timeline_with(&[]);
         assert_eq!(t.world_extent(1920.0, 1080.0), (0.0, 0.0, 1920.0, 1080.0));
+    }
+}
+
+#[cfg(test)]
+mod world_animation_full_duration_tests {
+    use super::*;
+
+    fn view_from_json(json: &str) -> crate::schema::ResolvedView {
+        let scenario =
+            crate::loader::load_scenario_from_source(None, Some(json)).expect("scenario must load");
+        scenario
+            .views
+            .into_iter()
+            .next()
+            .expect("scenario must have at least one view")
+    }
+
+    const REPRO: &str = r#"{
+        "video": { "width": 320, "height": 180, "fps": 30 },
+        "composition": [
+            { "type": "world", "camera_pan_duration": 3.0, "camera_easing": "linear",
+              "scenes": [
+                { "duration": 10.0, "children": [] },
+                { "duration": 10.0, "children": [] },
+                { "duration": 1.0, "children": [] }
+              ] }
+        ]
+    }"#;
+
+    #[test]
+    fn a_scene_reaches_its_own_last_frame_before_its_window_closes() {
+        let view = view_from_json(REPRO);
+        let timeline = WorldTimeline::build(&view, 30, 320, 180);
+        let fps = 30u32;
+
+        assert_eq!(timeline.boundary_pan_duration[0], 3.0);
+        assert_eq!(timeline.boundary_pan_duration[1], 1.0);
+
+        let scene_total_frames = (view.scenes[1].duration * fps as f64).round() as u32;
+        let mut max_local_frame = 0u32;
+        let total_frames = timeline.total_frames(fps);
+        for f in 0..total_frames {
+            let t = f as f64 / fps as f64;
+            for v in timeline.visible_scenes_at(t, &view.scenes, fps) {
+                if v.scene_idx == 1 && !v.is_persisted {
+                    max_local_frame = max_local_frame.max(v.local_frame);
+                }
+            }
+        }
+
+        assert_eq!(
+            max_local_frame,
+            scene_total_frames - 1,
+            "scene 1 declares {} frames but its own animation clock never reached the last one \
+             (reached {}) before the scene left the visible window — an asymmetric incoming \
+             (3.0s) vs outgoing (1.0s) pan cuts the tail of its declared duration off",
+            scene_total_frames,
+            max_local_frame
+        );
     }
 }

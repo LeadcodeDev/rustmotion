@@ -4,8 +4,6 @@ mod library;
 pub mod scenario;
 mod theme;
 
-pub use app::{run_preview, run_preview_with_error};
-
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser};

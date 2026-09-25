@@ -69,7 +69,11 @@ Each element gets a different `seed`. Because seeds produce different noise curv
 [
   {
     "type": "shape",
+    "shape": "circle",
+    "fill": "#6366F1",
     "style": {
+      "width": 24,
+      "height": 24,
       "animation": [
         { "name": "fade_in", "duration": 0.6 },
         { "name": "wiggle", "property": "translate_y", "amplitude": 5, "frequency": 0.4, "seed": 7 },
@@ -88,6 +92,7 @@ Each element gets a different `seed`. Because seeds produce different noise curv
   },
   {
     "type": "badge",
+    "text": "New",
     "style": {
       "animation": [
         { "name": "scale_in", "delay": 0.3, "duration": 0.5 },
@@ -117,7 +122,7 @@ Each element gets a different `seed`. Because seeds produce different noise curv
     "border-radius": 28,
     "box-shadow": [{ "color": "#00000060", "offset-y": 40, "blur": 80 }],
     "animation": [
-      { "name": "scale_in", "duration": 0.7, "easing": "ease_out" },
+      { "name": "scale_in", "duration": 0.7 },
       { "name": "float_3d", "loop": true }
     ]
   }

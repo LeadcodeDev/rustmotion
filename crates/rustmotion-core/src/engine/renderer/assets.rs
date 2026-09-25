@@ -129,10 +129,27 @@ pub fn icon_cache_dir() -> PathBuf {
 /// Deterministic on-disk file name for a given (icon, color, size). Icon ids
 /// contain `:` (`"lucide:home"`); replaced so the id survives as a legible
 /// file name instead of being hashed away.
-fn icon_cache_file(cache_dir: &Path, icon: &str, color: &str, width: u32, height: u32) -> PathBuf {
+fn icon_cache_file(
+    cache_dir: &Path,
+    icon: &str,
+    color: &str,
+    width: u32,
+    height: u32,
+) -> Result<PathBuf> {
     let slug = icon.replace(':', "_");
     let hex_color = color.trim_start_matches('#').to_lowercase();
-    cache_dir.join(format!("{slug}-{hex_color}-{width}x{height}.svg"))
+    let file_name = format!("{slug}-{hex_color}-{width}x{height}.svg");
+    if file_name_escapes_cache_dir(&file_name) {
+        return Err(RustmotionError::Generic(format!(
+            "icon '{icon}' (color '{color}') would resolve to cache file name '{file_name}', \
+             which escapes the icon cache directory — refusing"
+        )));
+    }
+    Ok(cache_dir.join(file_name))
+}
+
+fn file_name_escapes_cache_dir(file_name: &str) -> bool {
+    file_name.contains('/') || file_name.contains('\\') || file_name.contains('\0')
 }
 
 /// Fetch an icon's SVG bytes, checking the on-disk cache first and falling
@@ -162,7 +179,7 @@ pub fn fetch_icon_svg_in(
     let width = width.max(1);
     let height = height.max(1);
 
-    let cache_file = icon_cache_file(cache_dir, icon, color, width, height);
+    let cache_file = icon_cache_file(cache_dir, icon, color, width, height)?;
     if let Ok(data) = std::fs::read(&cache_file) {
         if !data.is_empty() {
             return Ok(data);
@@ -196,6 +213,17 @@ pub fn fetch_icon_svg_in(
     }
 
     Ok(body)
+}
+
+/// `usvg::Options` that never resolves a plain `<image href>` string against the local filesystem.
+pub fn sandboxed_svg_options() -> usvg::Options<'static> {
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_string: Box::new(|_href, _opts| None),
+            ..usvg::ImageHrefResolver::default()
+        },
+        ..usvg::Options::default()
+    }
 }
 
 // ─── Video frame extraction ─────────────────────────────────────────────────
@@ -263,7 +291,7 @@ pub fn ffmpeg_available() -> bool {
 /// doc, a few functions below, and `rustmotion info`'s identical assumption
 /// both already treat every `src` as a local path — so this closes an
 /// accidental reach rather than opening an allowlist for one.
-fn reject_remote_video_src(src: &str) -> Result<()> {
+pub fn reject_remote_video_src(src: &str) -> Result<()> {
     let Some(scheme_end) = src.find("://") else {
         return Ok(());
     };
@@ -330,10 +358,13 @@ pub fn extract_video_frame(src: &str, time: f64, width: u32, height: u32) -> Res
 //    identified and reported by the *caller* as "remote, not probed" before
 //    any of these functions ever run — probing a remote asset could mean
 //    downloading an unbounded amount of data just to read a header (e.g. a
-//    large file whose metadata atom sits at the end). These functions are
-//    written and tested only against local paths on the assumption the
-//    caller has already filtered URLs out; they do not special-case `http(s)
-//    ://` themselves.
+//    large file whose metadata atom sits at the end). `probe_image_dimensions`
+//    is written and tested only against local paths on the assumption the
+//    caller has already filtered URLs out. `probe_video_metadata` no longer
+//    makes that assumption: it rejects a remote `src` itself via
+//    `reject_remote_video_src`, the same guard `extract_video_frame` uses,
+//    because it also has direct callers (`video.rs`'s duration probe) that
+//    never go through `rustmotion info`'s filter.
 // 2. Cheap when a cheap path exists, honest when it does not. Image
 //    dimensions come from the `image` crate's `into_dimensions()`, which
 //    parses only the header bytes the decoder needs — not a full raster
@@ -445,6 +476,8 @@ fn parse_frame_rate(s: &str) -> Option<f64> {
 /// the container's `format.duration` (some containers — notably ones
 /// produced by streaming muxers — only populate the latter).
 pub fn probe_video_metadata(src: &str) -> Result<VideoProbe> {
+    reject_remote_video_src(src)?;
+
     if !ffprobe_available() {
         return Err(RustmotionError::Generic(format!(
             "Cannot read metadata for '{src}': ffprobe not found on PATH. ffprobe ships with \
@@ -463,6 +496,7 @@ pub fn probe_video_metadata(src: &str) -> Result<VideoProbe> {
             "-show_format",
             "-of",
             "json",
+            "--",
             src,
         ])
         .output()
@@ -579,7 +613,7 @@ mod tests {
         let (w, h) = (48, 48);
         let svg_bytes = b"<svg>fake cached icon for the test suite</svg>".to_vec();
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h).unwrap();
         std::fs::write(&cache_file, &svg_bytes).unwrap();
 
         // If this ever fell through to the network, either the test host is
@@ -593,9 +627,9 @@ mod tests {
     #[test]
     fn disk_cache_is_keyed_by_icon_color_and_size() {
         let cache_dir = unique_temp_dir("cache-keying");
-        let a = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 80, 80);
-        let b = icon_cache_file(&cache_dir, "lucide:home", "#000000", 80, 80);
-        let c = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 40, 40);
+        let a = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 80, 80).unwrap();
+        let b = icon_cache_file(&cache_dir, "lucide:home", "#000000", 80, 80).unwrap();
+        let c = icon_cache_file(&cache_dir, "lucide:home", "#FFFFFF", 40, 40).unwrap();
         assert_ne!(a, b, "different colors must not share a cache file");
         assert_ne!(a, c, "different sizes must not share a cache file");
     }
@@ -608,6 +642,29 @@ mod tests {
             result,
             Err(RustmotionError::InvalidIconFormat { .. })
         ));
+    }
+
+    #[test]
+    fn icon_id_with_an_absolute_path_cannot_escape_the_cache_directory() {
+        let cache_dir = unique_temp_dir("escape-guard-cache");
+        let witness_dir = unique_temp_dir("escape-guard-witness");
+        let witness_dir_str = witness_dir.to_str().expect("utf8 tempdir path");
+
+        let icon = format!("{witness_dir_str}/planted:x");
+        let color = "#AB";
+        let (w, h) = (2, 3);
+
+        let witness_path = PathBuf::from(format!("{witness_dir_str}/planted_x-ab-{w}x{h}.svg"));
+        let witness_bytes = b"<svg>must never be reachable through the icon cache</svg>".to_vec();
+        std::fs::write(&witness_path, &witness_bytes).unwrap();
+
+        let result = fetch_icon_svg_in(&icon, color, w, h, &cache_dir);
+
+        assert!(
+            result.is_err(),
+            "an icon id that resolves outside cache_dir must be a named, refused error, \
+             not a silent read of {witness_path:?} — got {result:?}"
+        );
     }
 
     // Live network test — mirrors `google_fonts`'s `live_fetch_inter_400`:
@@ -623,7 +680,7 @@ mod tests {
         let first = fetch_icon_svg_in(icon, color, w, h, &cache_dir).expect("live fetch");
         assert!(!first.is_empty());
 
-        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h);
+        let cache_file = icon_cache_file(&cache_dir, icon, color, w, h).unwrap();
         assert!(
             cache_file.exists(),
             "a successful live fetch must be persisted to disk"
@@ -787,6 +844,44 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reject_remote_video_src_allows_local_paths_and_rejects_url_schemes() {
+        assert!(reject_remote_video_src("assets/clip.mp4").is_ok());
+        assert!(reject_remote_video_src("/tmp/clip.mp4").is_ok());
+        assert!(reject_remote_video_src("http://example.com/clip.mp4").is_err());
+        assert!(reject_remote_video_src("https://example.com/clip.mp4").is_err());
+        assert!(reject_remote_video_src("rtmp://example.com/live").is_err());
+    }
+
+    #[test]
+    fn probe_video_metadata_rejects_a_remote_src_before_shelling_out() {
+        let err = probe_video_metadata("http://127.0.0.1:1/nope.mp4")
+            .expect_err("a remote src must be rejected, not handed to ffprobe");
+        assert!(
+            err.to_string().contains("does not fetch video"),
+            "remote src must be rejected before any subprocess is spawned, got: {err}"
+        );
+    }
+
+    #[test]
+    fn probe_video_metadata_treats_a_dash_prefixed_src_as_a_filename_not_a_flag() {
+        if !ffprobe_available() {
+            eprintln!(
+                "probe_video_metadata_treats_a_dash_prefixed_src_as_a_filename_not_a_flag: \
+                 ffprobe not found on PATH — skipping"
+            );
+            return;
+        }
+        let err = probe_video_metadata("-version").expect_err(
+            "a dash-prefixed src must be reported as a missing file, not run as an ffprobe flag",
+        );
+        assert!(
+            err.to_string().contains("could not read"),
+            "src must reach ffprobe as a bare filename after '--', not be parsed as an ffprobe \
+             option — got: {err}"
+        );
     }
 
     #[test]

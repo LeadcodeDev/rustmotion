@@ -1643,7 +1643,7 @@
                         "font-size": 122,
                         "line-height": 1.0,
                         "letter-spacing": -2,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }
@@ -1656,7 +1656,7 @@
                         "font-size": 28,
                         "color": "#a1a1aa",
                         "letter-spacing": 3,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }
@@ -1692,7 +1692,7 @@
                         "font-size": 122,
                         "line-height": 1.0,
                         "letter-spacing": -2,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }
@@ -1705,7 +1705,7 @@
                         "font-size": 28,
                         "color": "#a1a1aa",
                         "letter-spacing": 3,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }
@@ -1741,7 +1741,7 @@
                         "font-size": 122,
                         "line-height": 1.0,
                         "letter-spacing": -2,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }
@@ -1754,7 +1754,7 @@
                         "font-size": 28,
                         "color": "#a1a1aa",
                         "letter-spacing": 3,
-                        "width": 400,
+                        "width": 420,
                         "text-align": "center",
                         "white-space": "nowrap"
                       }

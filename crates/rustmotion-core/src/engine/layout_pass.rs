@@ -60,11 +60,16 @@ impl BoxLayout {
 #[derive(Debug, Clone, Default)]
 pub struct LayoutResult {
     pub layouts: HashMap<NodeId, BoxLayout>,
+    pub resolved_font_sizes_px: HashMap<NodeId, f32>,
 }
 
 impl LayoutResult {
     pub fn get(&self, id: NodeId) -> Option<&BoxLayout> {
         self.layouts.get(&id)
+    }
+
+    pub fn font_size(&self, id: NodeId) -> Option<f32> {
+        self.resolved_font_sizes_px.get(&id).copied()
     }
 }
 
@@ -84,6 +89,7 @@ struct NodeData {
     intrinsic: Option<std::sync::Arc<dyn IntrinsicMeasure>>,
     inset_width: f32,
     inset_height: f32,
+    font_size: f32,
 }
 
 /// Run taffy on a [`BoxNode`] tree and return the resolved layouts.
@@ -129,9 +135,21 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
 
     // Walk the tree to collect absolute layouts.
     let mut layouts: HashMap<NodeId, BoxLayout> = HashMap::new();
-    collect(&tree, root, &node_map, 0.0, 0.0, &mut layouts);
+    let mut resolved_font_sizes_px: HashMap<NodeId, f32> = HashMap::new();
+    collect(
+        &tree,
+        root,
+        &node_map,
+        0.0,
+        0.0,
+        &mut layouts,
+        &mut resolved_font_sizes_px,
+    );
 
-    LayoutResult { layouts }
+    LayoutResult {
+        layouts,
+        resolved_font_sizes_px,
+    }
 }
 
 /// Build one taffy node and, recursively, its subtree.
@@ -174,6 +192,7 @@ fn build(
         intrinsic: node.intrinsic.clone(),
         inset_width,
         inset_height,
+        font_size: own_font_size,
     };
     let tf_id = if node.intrinsic.is_some() || node.children.is_empty() {
         tree.new_leaf_with_context(style, data)
@@ -200,6 +219,7 @@ fn collect(
     parent_x: f32,
     parent_y: f32,
     out: &mut HashMap<NodeId, BoxLayout>,
+    out_font_sizes: &mut HashMap<NodeId, f32>,
 ) {
     let Some(&tf_id) = map.get(&node.id) else {
         return;
@@ -229,9 +249,12 @@ fn collect(
         },
     };
     out.insert(node.id, bx);
+    if let Some(data) = tree.get_node_context(tf_id) {
+        out_font_sizes.insert(node.id, data.font_size);
+    }
 
     for c in &node.children {
-        collect(tree, c, map, abs_x, abs_y, out);
+        collect(tree, c, map, abs_x, abs_y, out, out_font_sizes);
     }
 }
 
@@ -239,7 +262,7 @@ fn collect(
 mod tests {
     use super::*;
     use crate::css::style::*;
-    use crate::css::units::LengthPercentage;
+    use crate::css::units::{Length, LengthPercentage};
 
     fn ctx() -> ConversionContext {
         ConversionContext::default()
@@ -380,5 +403,38 @@ mod tests {
         assert_eq!(child.y, 30.0);
         assert_eq!(child.width, 100.0);
         assert_eq!(child.height, 80.0);
+    }
+
+    #[test]
+    fn layout_result_exposes_each_nodes_resolved_font_size() {
+        let mut root = BoxNode::container(
+            CssStyle {
+                font_size: Some(Length::Px(40.0)),
+                ..Default::default()
+            },
+            vec![BoxNode::container(
+                CssStyle {
+                    font_size: Some(Length::String("1.5em".into())),
+                    ..Default::default()
+                },
+                vec![],
+            )],
+        );
+        root.assign_ids(1);
+        let res = run_layout(&root, (1920.0, 1080.0), &ctx());
+        assert_eq!(res.font_size(1), Some(40.0), "root's own font-size");
+        assert_eq!(
+            res.font_size(2),
+            Some(60.0),
+            "child's 1.5em must resolve against the parent's cascaded 40px, not the 16px default"
+        );
+    }
+
+    #[test]
+    fn layout_result_font_size_falls_back_to_inherited_default() {
+        let mut root = BoxNode::container(CssStyle::default(), vec![]);
+        root.assign_ids(1);
+        let res = run_layout(&root, (1920.0, 1080.0), &ctx());
+        assert_eq!(res.font_size(1), Some(16.0));
     }
 }

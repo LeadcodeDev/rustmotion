@@ -138,7 +138,7 @@ impl Treemap {
             .data
             .iter()
             .enumerate()
-            .map(|(i, item)| (item.value, i))
+            .map(|(i, item)| (item.value.max(0.0), i))
             .collect();
         sorted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -427,5 +427,47 @@ mod tests {
         assert_eq!(treemap.progress_at(2.0), 0.0);
         assert!(treemap.progress_at(2.75) < 1.0);
         assert_eq!(treemap.progress_at(3.5), 1.0);
+    }
+
+    #[test]
+    fn a_negative_item_does_not_push_the_others_past_the_box() {
+        const CANVAS_W: i32 = 400;
+        const LAYOUT_W: i32 = 300;
+        const H: i32 = 200;
+        let mut treemap = base_treemap(vec![
+            TreemapItem {
+                label: None,
+                value: 100.0,
+                color: None,
+            },
+            TreemapItem {
+                label: None,
+                value: -20.0,
+                color: None,
+            },
+        ]);
+        treemap.gap = 0.0;
+        treemap.animated = false;
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((CANVAS_W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            treemap.paint(canvas, LAYOUT_W as f32, H as f32, 0.0);
+        }
+        let buf = read_rgba(&mut surface, CANVAS_W, H);
+        let mid_y = H / 2;
+        let is_first_item_ink = |x: i32| {
+            let idx = ((mid_y * CANVAS_W + x) * 4) as usize;
+            let (r, g, b, a) = (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3]);
+            a > 40 && r < 100 && g > 100 && g < 160 && b > 200
+        };
+        for x in (LAYOUT_W + 5)..CANVAS_W {
+            assert!(
+                !is_first_item_ink(x),
+                "the 100-value rect must not extend past the component's own \
+                 layout width ({LAYOUT_W}px), found its color at x={x}"
+            );
+        }
     }
 }

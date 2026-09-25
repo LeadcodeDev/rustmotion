@@ -21,7 +21,7 @@ pub mod engine {
     pub mod preload;
     pub mod render;
     pub mod world;
-    pub use preload::{preextract_video_frames, prefetch_icons};
+    pub use preload::{preextract_video_frames, prefetch_icons, try_prefetch_icons};
 }
 
 // Local modules

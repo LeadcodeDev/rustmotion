@@ -1,7 +1,7 @@
 //! Le binaire `rustmotion` : analyse des arguments et aiguillage vers
 //! `commands`.
 //!
-//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app Dioxus
+//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app gpui
 //! qui dépend de cette crate ; l'appeler depuis ce module ferait dépendre
 //! `rustmotion` de `rustmotion-studio`, donc d'elle-même, et cargo refuse le
 //! cycle. Le studio s'ouvre par son propre binaire, `rustmotion-studio -f
@@ -11,6 +11,8 @@ mod claude_md;
 mod commands;
 mod skills;
 mod tui;
+
+pub use commands::validation;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use rustmotion::error::{Result, RustmotionError};
@@ -184,6 +186,16 @@ enum Commands {
         /// Set a single variable override as key=value (repeatable).
         #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
         var: Vec<String>,
+
+        /// Skip the implicit validation pass (schema + geometry + variables).
+        /// Use only when the scenario was validated upstream (e.g. CI).
+        #[arg(long)]
+        no_validate: bool,
+
+        /// Treat geometry violations as warnings instead of errors during the
+        /// implicit validation pass.
+        #[arg(long)]
+        lenient: bool,
     },
 
     /// Generate word-level caption timings from audio (whisper.cpp) or subtitles
@@ -232,8 +244,9 @@ enum Commands {
         #[arg(long)]
         report: Option<PathBuf>,
 
-        /// Auto-fix safe violations in place (clamp positions, set wrap=true,
-        /// enable auto_scroll). The original file is rewritten.
+        /// Auto-fix safe violations in place (enable auto_scroll, drop
+        /// style.white-space back to wrap, set text-autofit: true on
+        /// text/gradient_text). The original file is rewritten.
         #[arg(long)]
         fix: bool,
 
@@ -791,10 +804,20 @@ pub fn run() -> Result<()> {
             quality,
             props,
             var,
+            no_validate,
+            lenient,
         } => {
             let overrides = build_overrides(props.as_ref(), &var)?;
             let scenario = rustmotion::loader::load_input_with_vars(&file, overrides.as_ref())?;
-            commands::cmd_still(scenario, &output, time, format, quality)
+            commands::cmd_still(
+                scenario,
+                &output,
+                time,
+                format,
+                quality,
+                no_validate,
+                lenient,
+            )
         }
         Commands::Captions {
             audio,

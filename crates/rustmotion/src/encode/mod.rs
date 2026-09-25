@@ -5,6 +5,7 @@ pub mod video_audio;
 
 pub use video::build_frame_tasks;
 pub use video::check_codec_container;
+pub use video::check_transparent_codec;
 pub use video::encode_gif;
 pub use video::encode_png_sequence;
 pub use video::encode_raw_stdout;

@@ -3,14 +3,13 @@
 //! Order per node (top-down):
 //!   1. canvas.save()
 //!   2. apply transform (CSS `transform` → Skia matrix)
-//!   3. open opacity layer if `opacity < 1.0`
-//!   4. clip to padding-box if `overflow != visible`
-//!   5. paint outset box-shadow
-//!   6. paint background
-//!   7. paint border (border-radius aware)
-//!   8. delegate component-specific paint via `PaintDispatcher`
-//!   9. recurse children sorted by z-index
-//!  10. canvas.restore()
+//!   3. open opacity/`filter`/`mix-blend-mode` layer, if any is set
+//!   4. clip to `clip-path`, if set
+//!   5. clip to padding-box if `overflow != visible`
+//!   6. paint outset box-shadow, background, border, unless `visibility: hidden`
+//!   7. delegate component-specific paint via `PaintDispatcher`, unless `visibility: hidden`
+//!   8. recurse children sorted by z-index
+//!   9. canvas.restore()
 //!
 //! The dispatcher hook lets the higher-level crate plug component-specific
 //! paint without coupling `rustmotion-core` to all 51 component types.
@@ -19,17 +18,17 @@ use std::cell::RefCell;
 
 use skia_safe::gradient::{self, Colors as GradientColors, Gradient};
 use skia_safe::{
-    canvas::SaveLayerRec, Canvas, ClipOp, Color as SColor, Color4f, Paint, PaintStyle, PathBuilder,
-    Point, RRect, Rect, M44, V3,
+    canvas::SaveLayerRec, BlendMode as SkBlendMode, Canvas, ClipOp, Color as SColor, Color4f,
+    Paint, PaintStyle, PathBuilder, Point, RRect, Rect, M44, V3,
 };
 
 use crate::css::style::{
-    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, Color,
-    CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
+    Background, BackgroundLayer, BlendMode, BorderEdges, BorderRadius, BorderStyle, BoxShadow,
+    ClipPath, Color, CssStyle, Edges, Overflow, TransformFn, TransformOrigin, Visibility,
 };
 use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
-use crate::engine::layout_pass::{BoxLayout, LayoutResult};
+use crate::engine::layout_pass::{BoxLayout, Insets, LayoutResult};
 
 /// Frame-level paint context (timing + viewport).
 #[derive(Debug, Clone, Copy)]
@@ -134,8 +133,10 @@ pub struct EnrichedHit {
 pub trait PaintDispatcher {
     /// Called for `BoxKind::Component(payload)`. Implementations downcast
     /// `payload` to the concrete component type and paint into `canvas`.
-    /// The canvas is already translated to the content-box origin and
-    /// clipped if `overflow: hidden`.
+    /// `layout` is untranslated (absolute, viewport-space x/y); the canvas
+    /// is clipped to `overflow: hidden` if set, but `paint_tree` does not
+    /// translate it to the content-box origin — that translation, if the
+    /// implementation wants one, is its own responsibility.
     fn dispatch(
         &self,
         canvas: &Canvas,
@@ -144,6 +145,11 @@ pub trait PaintDispatcher {
         layout: &BoxLayout,
         frame: &PaintFrame,
     );
+
+    /// Whether `dispatch` paints `css.background` itself, so the generic background step must skip it. Default `false`.
+    fn paints_own_background(&self, _payload: &(dyn std::any::Any + Send + Sync)) -> bool {
+        false
+    }
 }
 
 /// No-op dispatcher (useful for tests where only generic box decoration is exercised).
@@ -222,15 +228,20 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     let Some(box_layout) = ctx.layout.get(node.id) else {
         return;
     };
-    if box_layout.width <= 0.0 || box_layout.height <= 0.0 {
-        return;
-    }
+    let zero_area_box = box_layout.width <= 0.0 || box_layout.height <= 0.0;
+
+    let payload_opt = match &node.kind {
+        BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
+        BoxKind::Container => None,
+    };
+    let self_painted_background =
+        payload_opt.is_some_and(|p| ctx.dispatcher.paints_own_background(p.as_ref()));
 
     let length_ctx = LengthContext {
         viewport_width: ctx.viewport_size.0,
         viewport_height: ctx.viewport_size.1,
         parent_size: box_layout.width.max(box_layout.height),
-        font_size: node.css.font_size_px_or(16.0),
+        font_size: ctx.layout.font_size(node.id).unwrap_or(16.0),
         root_font_size: 16.0,
     };
     // Per-axis contexts for `transform`'s translate percentages: CSS
@@ -248,6 +259,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         parent_size: box_layout.height,
         ..length_ctx
     };
+
+    let hidden = matches!(node.css.visibility, Some(Visibility::Hidden));
 
     canvas.save();
 
@@ -339,20 +352,22 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     // hazard: a shared clip+layer would also have to stay open across
     // background/border painting, reintroducing the overflow/shadow bug
     // fixed below for those steps too).
-    if let Some(filters) = node.css.backdrop_filter.as_deref() {
-        if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
-            let radius = node
-                .css
-                .border_radius
-                .as_ref()
-                .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
-                .unwrap_or([0.0; 4]);
-            canvas.save();
-            canvas.clip_rrect(border_rrect(box_layout, radius), ClipOp::Intersect, true);
-            let rec = SaveLayerRec::default().backdrop(&backdrop);
-            canvas.save_layer(&rec);
-            canvas.restore();
-            canvas.restore();
+    if !hidden {
+        if let Some(filters) = node.css.backdrop_filter.as_deref() {
+            if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
+                let radius = node
+                    .css
+                    .border_radius
+                    .as_ref()
+                    .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
+                    .unwrap_or([(0.0, 0.0); 4]);
+                canvas.save();
+                canvas.clip_rrect(border_rrect(box_layout, radius), ClipOp::Intersect, true);
+                let rec = SaveLayerRec::default().backdrop(&backdrop);
+                canvas.save_layer(&rec);
+                canvas.restore();
+                canvas.restore();
+            }
         }
     }
 
@@ -384,13 +399,18 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         .filter
         .as_deref()
         .and_then(|list| filters_to_image_filter(list, &length_ctx));
-    let opened_opacity_layer = if opacity < 1.0 || content_filter.is_some() {
+    let blend_mode = node.css.mix_blend_mode.filter(|m| *m != BlendMode::Normal);
+    let open_opacity_layer = opacity < 1.0 || content_filter.is_some() || blend_mode.is_some();
+    let opened_opacity_layer = if open_opacity_layer {
         let mut paint = Paint::default();
         if opacity < 1.0 {
             paint.set_alpha((opacity * 255.0) as u8);
         }
         if let Some(filter) = content_filter {
             paint.set_image_filter(filter);
+        }
+        if let Some(mode) = blend_mode {
+            paint.set_blend_mode(skia_blend_mode(mode));
         }
         let filter_bleed_px = node
             .css
@@ -411,13 +431,32 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             box_layout.width + bleed * 2.0,
             box_layout.height + bleed * 2.0,
         );
+        let mut bounded = true;
         if overflow == Overflow::Visible {
-            if let Some(descendants) = subtree_layout_bounds(node, ctx.layout) {
+            if subtree_has_transform(node) {
+                bounded = false;
+            } else if let Some(descendants) = subtree_layout_bounds(node, ctx.layout) {
                 bounds = Rect::join2(bounds, descendants);
             }
         }
-        let rec = SaveLayerRec::default().paint(&paint).bounds(&bounds);
+        let mut rec = SaveLayerRec::default().paint(&paint);
+        if bounded {
+            rec = rec.bounds(&bounds);
+        }
         canvas.save_layer(&rec);
+        true
+    } else {
+        false
+    };
+
+    let clip_path_shape = node
+        .css
+        .clip_path
+        .as_ref()
+        .and_then(|cp| build_clip_path(cp, box_layout, &length_ctx));
+    let opened_clip_path = if let Some(shape) = &clip_path_shape {
+        canvas.save();
+        canvas.clip_path(shape, ClipOp::Intersect, true);
         true
     } else {
         false
@@ -431,30 +470,38 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     // their own and gain nothing from an extra clip). They still sit inside
     // the opacity/filter layer above so a faded node fades its whole
     // appearance uniformly, background included.
-    if let Some(shadows) = node.css.box_shadow.as_ref() {
-        for shadow in shadows {
-            if shadow.inset.unwrap_or(false) {
-                continue;
+    if !hidden && !zero_area_box {
+        if let Some(shadows) = node.css.box_shadow.as_ref() {
+            for shadow in shadows {
+                if shadow.inset.unwrap_or(false) {
+                    continue;
+                }
+                paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
             }
-            paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, false);
         }
-    }
-    if let Some(bg) = node.css.background.as_ref() {
-        paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
-    }
-    // `gradient-border` replaces the standard border when present (a box
-    // has one border, not two stacked ones).
-    if let Some(gb) = node.css.gradient_border.as_ref() {
-        paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
-    } else if let Some(border) = node.css.border.as_ref() {
-        paint_border(canvas, box_layout, &node.css, border, &length_ctx);
+        if !self_painted_background {
+            if let Some(bg) = node.css.background.as_ref() {
+                paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
+            }
+        }
+        // `gradient-border` replaces the standard border when present (a box
+        // has one border, not two stacked ones).
+        if let Some(gb) = node.css.gradient_border.as_ref() {
+            paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
+        } else if let Some(border) = node.css.border.as_ref() {
+            paint_border(canvas, box_layout, &node.css, border, &length_ctx);
+        }
     }
 
     // 7.5. shimmer layer. The band composites against the pixels this node
     // paints, which do not exist yet — so an isolated layer is opened here,
     // filled by steps 9 and 10 below, and the band is stamped onto it with
     // `SrcATop` just before it closes.
-    let shimmer = active_shimmer(&node.css, ctx.frame.time);
+    let shimmer = if hidden {
+        None
+    } else {
+        active_shimmer(&node.css, ctx.frame.time)
+    };
     let opened_shimmer_layer = if shimmer.is_some() {
         let bounds = Rect::from_xywh(
             box_layout.x,
@@ -482,7 +529,7 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .border_radius
             .as_ref()
             .map(|r| resolve_border_radius(r, box_layout, &length_ctx))
-            .unwrap_or([0.0; 4]);
+            .unwrap_or([(0.0, 0.0); 4]);
         let rrect = padding_rrect(box_layout, radius);
         canvas.save();
         canvas.clip_rrect(rrect, ClipOp::Intersect, true);
@@ -493,13 +540,11 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
 
     // 9. component-specific content (Ghost is painted identically to Component;
     // the only difference is that Ghost is excluded from the hit-map above).
-    let payload_opt = match &node.kind {
-        BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
-        BoxKind::Container => None,
-    };
-    if let Some(payload) = payload_opt {
-        ctx.dispatcher
-            .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
+    if !hidden && !zero_area_box {
+        if let Some(payload) = payload_opt {
+            ctx.dispatcher
+                .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
+        }
     }
 
     // 10. children (z-index ordered, then source order)
@@ -514,10 +559,12 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     }
 
     // inset shadows (after children so they overlay content)
-    if let Some(shadows) = node.css.box_shadow.as_ref() {
-        for shadow in shadows {
-            if shadow.inset.unwrap_or(false) {
-                paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, true);
+    if !hidden && !zero_area_box {
+        if let Some(shadows) = node.css.box_shadow.as_ref() {
+            for shadow in shadows {
+                if shadow.inset.unwrap_or(false) {
+                    paint_box_shadow(canvas, box_layout, &node.css, shadow, &length_ctx, true);
+                }
             }
         }
     }
@@ -526,6 +573,10 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         paint_shimmer_band(canvas, box_layout, cfg, progress);
     }
     if opened_shimmer_layer {
+        canvas.restore();
+    }
+
+    if opened_clip_path {
         canvas.restore();
     }
 
@@ -712,6 +763,17 @@ fn subtree_layout_bounds(node: &BoxNode, layout: &LayoutResult) -> Option<Rect> 
         }
     }
     bounds
+}
+
+fn subtree_has_transform(node: &BoxNode) -> bool {
+    node.children.iter().any(|child| {
+        child
+            .css
+            .transform
+            .as_deref()
+            .is_some_and(|t| !t.is_empty())
+            || subtree_has_transform(child)
+    })
 }
 
 // ---- CSS filters ----
@@ -1242,7 +1304,7 @@ fn paint_background(
         .border_radius
         .as_ref()
         .map(|r| resolve_border_radius(r, layout, ctx))
-        .unwrap_or([0.0; 4]);
+        .unwrap_or([(0.0, 0.0); 4]);
     let rrect = padding_rrect(layout, radius);
 
     match bg {
@@ -1389,7 +1451,7 @@ fn paint_border(
         .border_radius
         .as_ref()
         .map(|r| resolve_border_radius(r, layout, ctx))
-        .unwrap_or([0.0; 4]);
+        .unwrap_or([(0.0, 0.0); 4]);
 
     // Outer rrect (border box) and inner rrect (padding box).
     let outer = border_rrect(layout, radius);
@@ -1430,7 +1492,7 @@ fn paint_gradient_border(
         .border_radius
         .as_ref()
         .map(|r| resolve_border_radius(r, layout, ctx))
-        .unwrap_or([0.0; 4]);
+        .unwrap_or([(0.0, 0.0); 4]);
 
     // Outer ring edge = border box; inner edge = inset by the border width.
     let outer = border_rrect(layout, radius);
@@ -1440,12 +1502,7 @@ fn paint_gradient_border(
         (layout.width - width * 2.0).max(0.0),
         (layout.height - width * 2.0).max(0.0),
     );
-    let inner_radius = [
-        (radius[0] - width).max(0.0),
-        (radius[1] - width).max(0.0),
-        (radius[2] - width).max(0.0),
-        (radius[3] - width).max(0.0),
-    ];
+    let inner_radius = radius.map(|(rx, ry)| ((rx - width).max(0.0), (ry - width).max(0.0)));
     let inner = rrect_from_corners(inner_rect, inner_radius);
 
     let colors: Vec<Color4f> = gb
@@ -1474,45 +1531,67 @@ fn paint_gradient_border(
     canvas.draw_drrect(outer, inner, &paint);
 }
 
-fn border_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
+fn border_rrect(layout: &BoxLayout, radius: [(f32, f32); 4]) -> RRect {
     let rect = Rect::from_xywh(layout.x, layout.y, layout.width, layout.height);
     rrect_from_corners(rect, radius)
 }
 
-fn padding_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
+fn padding_rrect(layout: &BoxLayout, radius: [(f32, f32); 4]) -> RRect {
     let (x, y, w, h) = layout.padding_box();
     let rect = Rect::from_xywh(x, y, w, h);
-    // Inner radius: max(0, outer_radius - border_width).
+    // Inner radius: max(0, outer_radius - border_width), per axis.
     let r = [
-        (radius[0] - layout.border.left.max(layout.border.top)).max(0.0),
-        (radius[1] - layout.border.right.max(layout.border.top)).max(0.0),
-        (radius[2] - layout.border.right.max(layout.border.bottom)).max(0.0),
-        (radius[3] - layout.border.left.max(layout.border.bottom)).max(0.0),
+        (
+            (radius[0].0 - layout.border.left).max(0.0),
+            (radius[0].1 - layout.border.top).max(0.0),
+        ),
+        (
+            (radius[1].0 - layout.border.right).max(0.0),
+            (radius[1].1 - layout.border.top).max(0.0),
+        ),
+        (
+            (radius[2].0 - layout.border.right).max(0.0),
+            (radius[2].1 - layout.border.bottom).max(0.0),
+        ),
+        (
+            (radius[3].0 - layout.border.left).max(0.0),
+            (radius[3].1 - layout.border.bottom).max(0.0),
+        ),
     ];
     rrect_from_corners(rect, r)
 }
 
-fn inner_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
+fn inner_rrect(layout: &BoxLayout, radius: [(f32, f32); 4]) -> RRect {
     padding_rrect(layout, radius)
 }
 
-fn rrect_from_corners(rect: Rect, radius: [f32; 4]) -> RRect {
+fn rrect_from_corners(rect: Rect, radius: [(f32, f32); 4]) -> RRect {
     // Order: top-left, top-right, bottom-right, bottom-left.
     let radii = [
-        Point::new(radius[0], radius[0]),
-        Point::new(radius[1], radius[1]),
-        Point::new(radius[2], radius[2]),
-        Point::new(radius[3], radius[3]),
+        Point::new(radius[0].0, radius[0].1),
+        Point::new(radius[1].0, radius[1].1),
+        Point::new(radius[2].0, radius[2].1),
+        Point::new(radius[3].0, radius[3].1),
     ];
     RRect::new_rect_radii(rect, &radii)
 }
 
-fn resolve_border_radius(r: &BorderRadius, layout: &BoxLayout, ctx: &LengthContext) -> [f32; 4] {
-    let mut local_ctx = *ctx;
-    local_ctx.parent_size = layout.width.min(layout.height);
+fn resolve_border_radius(
+    r: &BorderRadius,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> [(f32, f32); 4] {
+    let ctx_x = LengthContext {
+        parent_size: layout.width,
+        ..*ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: layout.height,
+        ..*ctx
+    };
     match r {
         BorderRadius::Uniform(v) => {
-            let p = v.resolve(&local_ctx);
+            let p = (v.resolve(&ctx_x), v.resolve(&ctx_y));
             [p, p, p, p]
         }
         BorderRadius::Corners {
@@ -1521,11 +1600,130 @@ fn resolve_border_radius(r: &BorderRadius, layout: &BoxLayout, ctx: &LengthConte
             bottom_right,
             bottom_left,
         } => [
-            top_left.resolve(&local_ctx),
-            top_right.resolve(&local_ctx),
-            bottom_right.resolve(&local_ctx),
-            bottom_left.resolve(&local_ctx),
+            (top_left.resolve(&ctx_x), top_left.resolve(&ctx_y)),
+            (top_right.resolve(&ctx_x), top_right.resolve(&ctx_y)),
+            (bottom_right.resolve(&ctx_x), bottom_right.resolve(&ctx_y)),
+            (bottom_left.resolve(&ctx_x), bottom_left.resolve(&ctx_y)),
         ],
+    }
+}
+
+fn skia_blend_mode(mode: BlendMode) -> SkBlendMode {
+    match mode {
+        BlendMode::Normal => SkBlendMode::SrcOver,
+        BlendMode::Multiply => SkBlendMode::Multiply,
+        BlendMode::Screen => SkBlendMode::Screen,
+        BlendMode::Overlay => SkBlendMode::Overlay,
+        BlendMode::Darken => SkBlendMode::Darken,
+        BlendMode::Lighten => SkBlendMode::Lighten,
+        BlendMode::ColorDodge => SkBlendMode::ColorDodge,
+        BlendMode::ColorBurn => SkBlendMode::ColorBurn,
+        BlendMode::HardLight => SkBlendMode::HardLight,
+        BlendMode::SoftLight => SkBlendMode::SoftLight,
+        BlendMode::Difference => SkBlendMode::Difference,
+        BlendMode::Exclusion => SkBlendMode::Exclusion,
+        BlendMode::Hue => SkBlendMode::Hue,
+        BlendMode::Saturation => SkBlendMode::Saturation,
+        BlendMode::Color => SkBlendMode::Color,
+        BlendMode::Luminosity => SkBlendMode::Luminosity,
+        BlendMode::PlusLighter => SkBlendMode::Plus,
+    }
+}
+
+fn build_clip_path(
+    cp: &ClipPath,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> Option<skia_safe::Path> {
+    let ctx_x = LengthContext {
+        parent_size: layout.width,
+        ..*ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: layout.height,
+        ..*ctx
+    };
+    match cp {
+        ClipPath::None => None,
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            radius,
+        } => {
+            let t = top.resolve(&ctx_y);
+            let r = right.resolve(&ctx_x);
+            let b = bottom.resolve(&ctx_y);
+            let l = left.resolve(&ctx_x);
+            let rect = Rect::from_xywh(
+                layout.x + l,
+                layout.y + t,
+                (layout.width - l - r).max(0.0),
+                (layout.height - t - b).max(0.0),
+            );
+            let radii = match radius {
+                Some(radius) => {
+                    let synth = BoxLayout {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.width(),
+                        height: rect.height(),
+                        border: Insets::default(),
+                        padding: Insets::default(),
+                    };
+                    resolve_border_radius(radius, &synth, ctx)
+                }
+                None => [(0.0, 0.0); 4],
+            };
+            Some(skia_safe::Path::rrect(
+                rrect_from_corners(rect, radii),
+                None,
+            ))
+        }
+        ClipPath::Circle { radius, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let circle_radius_basis_ctx = LengthContext {
+                parent_size: ((layout.width.powi(2) + layout.height.powi(2)) / 2.0).sqrt(),
+                ..*ctx
+            };
+            let r = radius.resolve(&circle_radius_basis_ctx);
+            Some(skia_safe::Path::circle(Point::new(cx, cy), r, None))
+        }
+        ClipPath::Ellipse { rx, ry, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let rxp = rx.resolve(&ctx_x);
+            let ryp = ry.resolve(&ctx_y);
+            let rect = Rect::from_xywh(cx - rxp, cy - ryp, rxp * 2.0, ryp * 2.0);
+            Some(skia_safe::Path::oval(rect, None))
+        }
+        ClipPath::Polygon { points } => {
+            if points.is_empty() {
+                return None;
+            }
+            let mut pb = PathBuilder::new();
+            for (i, (x, y)) in points.iter().enumerate() {
+                let px = layout.x + x.resolve(&ctx_x);
+                let py = layout.y + y.resolve(&ctx_y);
+                if i == 0 {
+                    pb.move_to(Point::new(px, py));
+                } else {
+                    pb.line_to(Point::new(px, py));
+                }
+            }
+            pb.close();
+            Some(pb.detach())
+        }
+        ClipPath::Path { d } => {
+            let raw = skia_safe::Path::from_svg(d)?;
+            let src = raw.compute_tight_bounds();
+            if src.width() <= 0.0 || src.height() <= 0.0 {
+                return None;
+            }
+            let dst = Rect::from_xywh(layout.x, layout.y, layout.width, layout.height);
+            let matrix = skia_safe::Matrix::rect_2_rect(src, dst, None)?;
+            Some(raw.with_transform(&matrix))
+        }
     }
 }
 
@@ -1557,7 +1755,7 @@ fn paint_box_shadow(
         .border_radius
         .as_ref()
         .map(|r| resolve_border_radius(r, layout, ctx))
-        .unwrap_or([0.0; 4]);
+        .unwrap_or([(0.0, 0.0); 4]);
 
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
@@ -2662,6 +2860,31 @@ mod glassmorphism_tests {
     }
 
     #[test]
+    fn border_radius_percent_resolves_per_axis() {
+        use crate::css::style::BorderRadius;
+        let node = abs_box(
+            100.0,
+            100.0,
+            400.0,
+            120.0,
+            CssStyle {
+                border_radius: Some(BorderRadius::Uniform(CLP::String("50%".into()))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(600.0, 300.0, Some("#ffffff"), vec![node]);
+        let buf = render_pixels(&mut root, 600, 300);
+
+        let just_below_top_edge_off_center = px(&buf, 600, 200, 101);
+        assert_eq!(
+            just_below_top_edge_off_center,
+            (255, 255, 255, 255),
+            "50% border-radius on a non-square box must inscribe an ellipse (per-axis radius), not a circle sized off min(w,h)"
+        );
+    }
+
+    #[test]
     fn gradient_border_replaces_standard_border() {
         use crate::css::style::{BorderEdges, BorderStyle, Edges};
         // A node with BOTH border (solid green) and gradient-border (red/blue):
@@ -2883,7 +3106,7 @@ mod paint_order_tests {
 
     use crate::css::style::{
         Background, BoxShadow, Color as CssColor, CssStyle, Display, FilterFn, FlexDirection,
-        Overflow, Position, Size as CSize,
+        Overflow, Position, Size as CSize, TransformFn,
     };
     use crate::css::taffy_bridge::ConversionContext;
     use crate::css::units::{Length, LengthPercentage as CLP};
@@ -3091,6 +3314,413 @@ mod paint_order_tests {
         // Far outside any plausible bleed radius: must stay black.
         let far = probe(20, 20);
         assert_eq!(far, 0, "far corner must stay untouched, got r={far}");
+    }
+
+    fn parent_with_translated_child(opacity: Option<f32>) -> BoxNode {
+        let child = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                width: Some(CSize::Length(CLP::Px(40.0))),
+                height: Some(CSize::Length(CLP::Px(40.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                transform: Some(vec![TransformFn::TranslateX { x: CLP::Px(200.0) }]),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(50.0)),
+                top: Some(CLP::Px(50.0)),
+                width: Some(CSize::Length(CLP::Px(60.0))),
+                height: Some(CSize::Length(CLP::Px(60.0))),
+                display: Some(Display::Flex),
+                opacity,
+                ..Default::default()
+            },
+            children: vec![child],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    #[test]
+    fn opacity_layer_bounds_do_not_clip_a_transformed_descendant() {
+        let probe = |buf: &[u8], x: usize, y: usize| -> (u8, u8, u8) {
+            let i = (y * 400 + x) * 4;
+            (buf[i], buf[i + 1], buf[i + 2])
+        };
+
+        let mut plain_root = root_node(
+            400.0,
+            200.0,
+            "#000000",
+            vec![parent_with_translated_child(None)],
+        );
+        let plain = render_pixels(&mut plain_root, 400, 200);
+        let plain_px = probe(&plain, 270, 70);
+        assert!(
+            plain_px.0 > 200 && plain_px.1 < 50,
+            "sanity: the translated child must land at (270,70) with no opacity layer at all, got {plain_px:?}"
+        );
+
+        let mut faded_root = root_node(
+            400.0,
+            200.0,
+            "#000000",
+            vec![parent_with_translated_child(Some(0.999))],
+        );
+        let faded = render_pixels(&mut faded_root, 400, 200);
+        let faded_px = probe(&faded, 270, 70);
+        assert!(
+            faded_px.0 > 200 && faded_px.1 < 50,
+            "the parent's opacity SaveLayerRec must not clip a child moved outside its own \
+             untransformed layout box, got {faded_px:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod zero_area_tests {
+    use super::*;
+
+    use crate::css::style::{
+        Background, Color as CssColor, CssStyle, Display, FlexDirection, Position, Size as CSize,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            scenario_time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+            camera: None,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    #[test]
+    fn auto_height_zero_wrapper_still_paints_its_absolute_child() {
+        let absolute_child = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(20.0)),
+                top: Some(CLP::Px(20.0)),
+                width: Some(CSize::Length(CLP::Px(50.0))),
+                height: Some(CSize::Length(CLP::Px(50.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let zero_height_wrapper = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                width: Some(CSize::Length(CLP::Px(200.0))),
+                ..Default::default()
+            },
+            children: vec![absolute_child],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let mut root = BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(300.0))),
+                height: Some(CSize::Length(CLP::Px(300.0))),
+                background: Some(Background::Color(CssColor::String("#000000".into()))),
+                ..Default::default()
+            },
+            children: vec![zero_height_wrapper],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        };
+        let buf = render_pixels(&mut root, 300, 300);
+
+        let i = ((45 * 300 + 45) * 4) as usize;
+        let sample = (buf[i], buf[i + 1], buf[i + 2]);
+        assert!(
+            sample.0 > 200 && sample.1 < 50,
+            "an auto-height wrapper collapsed to 0 by its own layout must still paint an \
+             absolutely-positioned child that has its own real size, got {sample:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod inert_field_tests {
+    use super::*;
+    use crate::css::style::{
+        Background, BlendMode as CssBlendMode, ClipPath, Color as CssColor, CssStyle, Display,
+        FlexDirection, Position, Size as CSize, TransformOrigin, Visibility,
+    };
+    use crate::css::taffy_bridge::ConversionContext;
+    use crate::css::units::LengthPercentage as CLP;
+    use crate::engine::box_tree::{BoxKind, BoxNode};
+    use crate::engine::layout_pass::run_layout;
+
+    fn test_frame(w: u32, h: u32) -> PaintFrame {
+        PaintFrame {
+            time: 0.0,
+            scenario_time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: w,
+            video_height: h,
+            scene_duration: 1.0,
+            camera: None,
+        }
+    }
+
+    fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
+        root.assign_ids(0);
+        let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w as i32, h as i32)).unwrap();
+        paint_tree(
+            surface.canvas(),
+            root,
+            &layout,
+            &test_frame(w, h),
+            &NoopDispatcher,
+        );
+        let info = skia_safe::ImageInfo::new(
+            (w as i32, h as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        surface.read_pixels(&info, &mut buf, (w * 4) as usize, (0, 0));
+        buf
+    }
+
+    fn probe(buf: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * w + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+    }
+
+    fn root_node(w: f32, h: f32, background: Option<&str>, children: Vec<BoxNode>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                display: Some(Display::Flex),
+                flex_direction: Some(FlexDirection::Column),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: background.map(|c| Background::Color(CssColor::String(c.to_string()))),
+                ..Default::default()
+            },
+            children,
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn absolute_box(x: f32, y: f32, w: f32, h: f32, background: &str, extra: CssStyle) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(x)),
+                top: Some(CLP::Px(y)),
+                width: Some(CSize::Length(CLP::Px(w))),
+                height: Some(CSize::Length(CLP::Px(h))),
+                background: Some(Background::Color(CssColor::String(background.to_string()))),
+                ..extra
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    #[test]
+    fn visibility_hidden_paints_nothing_but_a_visible_child_still_does() {
+        let child = absolute_box(
+            10.0,
+            10.0,
+            20.0,
+            20.0,
+            "#0000ff",
+            CssStyle {
+                visibility: Some(Visibility::Visible),
+                ..Default::default()
+            },
+        );
+        let mut parent = absolute_box(
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            "#ff0000",
+            CssStyle {
+                visibility: Some(Visibility::Hidden),
+                ..Default::default()
+            },
+        );
+        parent.children = vec![child];
+
+        let mut root = root_node(120.0, 120.0, Some("#000000"), vec![parent]);
+        let buf = render_pixels(&mut root, 120, 120);
+
+        let point_covered_by_hidden_parent_only = probe(&buf, 120, 90, 90);
+        assert_eq!(
+            (
+                point_covered_by_hidden_parent_only.0,
+                point_covered_by_hidden_parent_only.1,
+                point_covered_by_hidden_parent_only.2
+            ),
+            (0, 0, 0),
+            "visibility:hidden must not paint its own background, got \
+             {point_covered_by_hidden_parent_only:?}"
+        );
+
+        let point_covered_by_visible_child = probe(&buf, 120, 20, 20);
+        assert!(
+            point_covered_by_visible_child.2 > 200 && point_covered_by_visible_child.0 < 50,
+            "a `visibility: visible` child under a hidden parent must still paint, got \
+             {point_covered_by_visible_child:?}"
+        );
+    }
+
+    #[test]
+    fn clip_path_circle_clips_the_box_to_a_disc() {
+        let node = absolute_box(
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            "#ff0000",
+            CssStyle {
+                clip_path: Some(ClipPath::Circle {
+                    radius: CLP::Px(40.0),
+                    origin: Some(TransformOrigin {
+                        x: Some(CLP::Px(50.0)),
+                        y: Some(CLP::Px(50.0)),
+                        ..Default::default()
+                    }),
+                }),
+                ..Default::default()
+            },
+        );
+        let mut root = root_node(100.0, 100.0, Some("#000000"), vec![node]);
+        let buf = render_pixels(&mut root, 100, 100);
+
+        let point_inside_the_disc = probe(&buf, 100, 50, 50);
+        assert!(
+            point_inside_the_disc.0 > 200 && point_inside_the_disc.1 < 50,
+            "inside the clip-path circle must still paint, got {point_inside_the_disc:?}"
+        );
+        let point_inside_the_box_but_outside_the_disc = probe(&buf, 100, 5, 5);
+        assert_eq!(
+            (
+                point_inside_the_box_but_outside_the_disc.0,
+                point_inside_the_box_but_outside_the_disc.1,
+                point_inside_the_box_but_outside_the_disc.2
+            ),
+            (0, 0, 0),
+            "outside the clip-path circle (but inside the box) must not paint, got \
+             {point_inside_the_box_but_outside_the_disc:?}"
+        );
+    }
+
+    #[test]
+    fn mix_blend_mode_multiply_darkens_against_the_backdrop_instead_of_overwriting_it() {
+        let overlay = |mode: Option<CssBlendMode>| {
+            absolute_box(
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+                "#ff0000",
+                CssStyle {
+                    mix_blend_mode: mode,
+                    ..Default::default()
+                },
+            )
+        };
+
+        let normal = {
+            let mut root = root_node(100.0, 100.0, Some("#808080"), vec![overlay(None)]);
+            render_pixels(&mut root, 100, 100)
+        };
+        let multiplied = {
+            let mut root = root_node(
+                100.0,
+                100.0,
+                Some("#808080"),
+                vec![overlay(Some(CssBlendMode::Multiply))],
+            );
+            render_pixels(&mut root, 100, 100)
+        };
+
+        let normal_px = probe(&normal, 100, 50, 50);
+        let multiplied_px = probe(&multiplied, 100, 50, 50);
+
+        assert!(
+            normal_px.0 > 240 && normal_px.1 < 20,
+            "sanity: an un-blended opaque overlay must fully overwrite the backdrop, got {normal_px:?}"
+        );
+        assert!(
+            multiplied_px.0 < 200,
+            "mix-blend-mode: multiply must darken against the backdrop, got {multiplied_px:?}"
+        );
+        assert_ne!(
+            multiplied_px.0, normal_px.0,
+            "multiply must differ from normal blending, both got r={}",
+            multiplied_px.0
+        );
     }
 }
 

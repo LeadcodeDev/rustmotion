@@ -4,6 +4,56 @@ use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
 
+use super::validation::{self, LoadedScenario};
+
+const MAX_STILL_RENDER_BUDGET: u64 = 2_000_000_000_000;
+
+fn estimated_total_frames_overestimate(scenario: &ResolvedScenario) -> u64 {
+    let fps = scenario.video.fps as f64;
+    scenario
+        .all_scenes()
+        .map(|scene| (scene.duration.max(0.0) * fps).round() as u64)
+        .sum()
+}
+
+fn reject_oversized_render(scenario: &ResolvedScenario) -> Result<()> {
+    let frames = estimated_total_frames_overestimate(scenario);
+    let width = scenario.video.width as u64;
+    let height = scenario.video.height as u64;
+    let budget = width
+        .checked_mul(height)
+        .and_then(|wh| wh.checked_mul(frames));
+    match budget {
+        Some(b) if b <= MAX_STILL_RENDER_BUDGET => Ok(()),
+        Some(b) => Err(RustmotionError::Generic(format!(
+            "scenario needs an estimated {frames} frame(s) at {width}x{height} ({b} \
+             pixel-frames total), over this command's render budget of \
+             {MAX_STILL_RENDER_BUDGET} — reduce video.width/video.height or scene durations"
+        ))),
+        None => Err(RustmotionError::Generic(format!(
+            "scenario's width ({width}) x height ({height}) x estimated frame count ({frames}) \
+             overflows — reduce video.width/video.height or scene durations"
+        ))),
+    }
+}
+
+fn ensure_scenario_is_valid(scenario: ResolvedScenario, lenient: bool) -> Result<ResolvedScenario> {
+    let no_raw_json_carried_by_cmd_still = serde_json::Value::Null;
+    let loaded = LoadedScenario {
+        raw: no_raw_json_carried_by_cmd_still,
+        scenario,
+        source_path: None,
+    };
+    let report = validation::run_checks(&loaded, false);
+    if !report.is_clean() {
+        validation::print_report(&report, "<still>");
+    }
+    if report.is_blocking(lenient) {
+        return Err(report.to_error());
+    }
+    Ok(loaded.scenario)
+}
+
 /// A scratch path in the same directory as `output`, carrying the same
 /// extension so extension-sniffing encoders (the `image::save` fallback arm)
 /// still resolve the codec they would have resolved for `output` itself.
@@ -53,11 +103,15 @@ pub fn cmd_still(
     time: f64,
     format: Option<String>,
     quality: u8,
+    no_validate: bool,
+    lenient: bool,
 ) -> Result<()> {
-    // Load custom fonts if defined
-    if !scenario.fonts.is_empty() {
-        engine::renderer::load_custom_fonts(&scenario.fonts);
-    }
+    reject_oversized_render(&scenario)?;
+    let scenario = if no_validate {
+        scenario
+    } else {
+        ensure_scenario_is_valid(scenario, lenient)?
+    };
 
     let config = &scenario.video;
     let fps = config.fps;
@@ -200,7 +254,7 @@ mod tests {
         let out = scratch_path("jpeg_ok.jpg");
         let _ = std::fs::remove_file(&out);
 
-        cmd_still(scenario, &out, 0.0, None, 90).expect("jpeg still must succeed");
+        cmd_still(scenario, &out, 0.0, None, 90, false, false).expect("jpeg still must succeed");
 
         let meta = std::fs::metadata(&out).expect("output file must exist");
         assert!(meta.len() > 0, "jpeg output must not be empty");
@@ -219,12 +273,94 @@ mod tests {
         let out = scratch_path("forced.png");
         let _ = std::fs::remove_file(&out);
 
-        cmd_still(scenario, &out, 0.0, Some("jpeg".to_string()), 90)
-            .expect("forced jpeg still must succeed");
+        cmd_still(
+            scenario,
+            &out,
+            0.0,
+            Some("jpeg".to_string()),
+            90,
+            false,
+            false,
+        )
+        .expect("forced jpeg still must succeed");
 
         let meta = std::fs::metadata(&out).expect("output file must exist");
         assert!(meta.len() > 0, "forced jpeg output must not be empty");
 
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn cmd_still_refuses_a_scenario_with_an_unknown_component_attribute() {
+        let json = r##"{"video": {"width": 16, "height": 16, "fps": 10},
+             "scenes": [{"duration": 1.0, "children": [
+                {"type": "shape", "shape": "rect", "fill": "#ff0000",
+                 "position": "absolute", "x": 0, "y": 0,
+                 "style": {"width": 16, "height": 16},
+                 "this_attribute_does_not_exist": true}
+             ]}]}"##;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let out = scratch_path("unknown_attr.png");
+        let _ = std::fs::remove_file(&out);
+
+        let result = cmd_still(scenario, &out, 0.0, None, 90, false, false);
+
+        assert!(
+            result.is_err(),
+            "an unknown component attribute must block `still`, the same way it blocks \
+             `render`'s implicit validation pass — got {result:?}"
+        );
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn cmd_still_no_validate_skips_the_validation_pass_but_not_the_budget_guard() {
+        let json = r##"{"video": {"width": 16, "height": 16, "fps": 10},
+             "scenes": [{"duration": 1.0, "children": [
+                {"type": "shape", "shape": "rect", "fill": "#ff0000",
+                 "position": "absolute", "x": 0, "y": 0,
+                 "style": {"width": 16, "height": 16},
+                 "this_attribute_does_not_exist": true}
+             ]}]}"##;
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let out = scratch_path("no_validate_unknown_attr.png");
+        let _ = std::fs::remove_file(&out);
+
+        let result = cmd_still(scenario, &out, 0.0, None, 90, true, false);
+
+        assert!(
+            result.is_ok(),
+            "--no-validate must skip the validation pass — got {result:?}"
+        );
+        let _ = std::fs::remove_file(&out);
+
+        let oversized = minimal_scenario(1920, 1080, 30, 40_000.0);
+        let out2 = scratch_path("no_validate_oversized.png");
+        let _ = std::fs::remove_file(&out2);
+
+        let result2 = cmd_still(oversized, &out2, 0.0, None, 90, true, false);
+
+        assert!(
+            result2.is_err(),
+            "--no-validate must not open the frame-budget guard, which is a resource ceiling, \
+             not a validation check — got {result2:?}"
+        );
+        let _ = std::fs::remove_file(&out2);
+    }
+
+    #[test]
+    fn cmd_still_refuses_a_scenario_whose_frame_budget_is_unbounded() {
+        let scenario = minimal_scenario(1920, 1080, 30, 40_000.0);
+        let out = scratch_path("oversized.png");
+        let _ = std::fs::remove_file(&out);
+
+        let result = cmd_still(scenario, &out, 0.0, None, 90, false, false);
+
+        assert!(
+            result.is_err(),
+            "width x height x estimated-frame-count must be refused before build_frame_tasks \
+             allocates a task per frame — got {result:?}"
+        );
         let _ = std::fs::remove_file(&out);
     }
 
@@ -287,7 +423,7 @@ mod tests {
 
         let out = scratch_path("transition.png");
         let _ = std::fs::remove_file(&out);
-        cmd_still(scenario, &out, 2.5, None, 90).expect("still must succeed");
+        cmd_still(scenario, &out, 2.5, None, 90, false, false).expect("still must succeed");
         let still_img = image::open(&out).expect("decode still").to_rgba8();
 
         let tasks = encode::build_frame_tasks(&scenario_for_expected);

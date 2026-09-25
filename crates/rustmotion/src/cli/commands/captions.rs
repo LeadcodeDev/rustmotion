@@ -15,8 +15,10 @@
 
 use rustmotion::error::{Result, RustmotionError};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// A single timed word, as emitted in the output JSON.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -178,6 +180,33 @@ fn words_to_json(words: &[TimedWord]) -> String {
 // whisper.cpp subprocess
 // ---------------------------------------------------------------------------
 
+fn captions_tmp_base_dir() -> PathBuf {
+    let base = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("rustmotion");
+    let _ = std::fs::create_dir_all(&base);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    }
+    base
+}
+
+fn captions_tmp_file_stem() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("rustmotion_captions_{}_{:x}", std::process::id(), nanos)
+}
+
+fn is_trustworthy_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false)
+}
+
 /// Actionable error when no whisper.cpp binary is found in PATH.
 fn missing_binary_error() -> RustmotionError {
     RustmotionError::Generic(
@@ -204,12 +233,70 @@ fn missing_model_error(name: &str, searched: &[PathBuf]) -> RustmotionError {
     ))
 }
 
+fn is_executable_regular_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn find_executable_in_dirs(dirs: impl Iterator<Item = PathBuf>, name: &str) -> Option<PathBuf> {
+    dirs.filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable_regular_file(candidate))
+}
+
 /// Searches PATH for an executable file with the given name.
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_var)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
+    find_executable_in_dirs(std::env::split_paths(&path_var), name)
+}
+
+const WHISPER_HELP_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<std::process::Output> {
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            if let Some(mut out) = child.stdout.take() {
+                let _ = out.read_to_end(&mut stdout);
+            }
+            if let Some(mut err) = child.stderr.take() {
+                let _ = err.read_to_end(&mut stderr);
+            }
+            return Ok(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("{:?} did not exit within {:?}", cmd.get_program(), timeout),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Looks for a whisper.cpp binary in PATH (`whisper-cli`, `whisper-cpp`,
@@ -220,9 +307,9 @@ fn detect_whisper_binary() -> Option<PathBuf> {
         .iter()
         .filter_map(|name| find_in_path(name))
         .find(|path| {
-            Command::new(path)
-                .arg("--help")
-                .output()
+            let mut cmd = Command::new(path);
+            cmd.arg("--help");
+            run_with_timeout(cmd, WHISPER_HELP_PROBE_TIMEOUT)
                 .map(|out| {
                     let help = format!(
                         "{}{}",
@@ -338,7 +425,7 @@ fn transcribe(
     let binary = detect_whisper_binary().ok_or_else(missing_binary_error)?;
     let model_path = resolve_model(model, &binary)?;
 
-    let out_base = std::env::temp_dir().join(format!("rustmotion-captions-{}", std::process::id()));
+    let out_base = captions_tmp_base_dir().join(captions_tmp_file_stem());
     let mut cmd = Command::new(&binary);
     cmd.arg("-m")
         .arg(&model_path)
@@ -373,6 +460,12 @@ fn transcribe(
             "whisper.cpp failed (exit code {:?}):\n{}",
             output.status.code(),
             String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    if !is_trustworthy_regular_file(&json_path) {
+        return Err(RustmotionError::Generic(format!(
+            "whisper.cpp did not produce a regular file at {}",
+            json_path.display()
         )));
     }
     let json = std::fs::read_to_string(&json_path).map_err(|e| {
@@ -663,5 +756,145 @@ mod tests {
             }
             None => eprintln!("skipping: no whisper.cpp binary in PATH"),
         }
+    }
+
+    #[test]
+    fn is_trustworthy_regular_file_refuses_a_symlink_even_to_a_real_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_captions_symlink_test_{}_{}",
+            std::process::id(),
+            captions_tmp_file_stem()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let witness = dir.join("witness.json");
+        std::fs::write(&witness, r#"{"secret":true}"#).expect("write witness");
+        let link = dir.join("out.json");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&witness, &link).expect("create symlink");
+
+        #[cfg(unix)]
+        {
+            assert!(
+                !is_trustworthy_regular_file(&link),
+                "a symlink, even to a genuine file, must not be treated as whisper's own output"
+            );
+        }
+        assert!(
+            is_trustworthy_regular_file(&witness),
+            "a genuine regular file must be trusted"
+        );
+        assert!(
+            !is_trustworthy_regular_file(&dir.join("does_not_exist.json")),
+            "a missing path must not be trusted"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn captions_tmp_file_stem_is_unpredictable_across_calls() {
+        let a = captions_tmp_file_stem();
+        let b = captions_tmp_file_stem();
+        assert_ne!(
+            a, b,
+            "two stems minted in the same process must differ, or the output path is guessable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captions_tmp_base_dir_is_private_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = captions_tmp_base_dir();
+        let mode = std::fs::metadata(&dir)
+            .expect("stat base dir")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "a shared temp/cache directory that a scenario's own output lands in must not be \
+             group/other accessible"
+        );
+    }
+
+    #[test]
+    fn find_executable_in_dirs_filters_out_empty_path_components_before_ever_joining_them() {
+        let dirs = vec![
+            PathBuf::new(),
+            PathBuf::from("/definitely/does/not/exist/rm_captions"),
+        ];
+        let found = find_executable_in_dirs(dirs.into_iter(), "sh");
+        assert!(
+            found.is_none(),
+            "an empty PATH component must never be joined into a bare relative candidate: {found:?}"
+        );
+    }
+
+    #[test]
+    fn find_executable_in_dirs_finds_a_real_executable_in_a_real_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_captions_real_dir_{}_{}",
+            std::process::id(),
+            captions_tmp_file_stem()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let name = "rm_captions_test_binary_2";
+        let path = dir.join(name);
+        std::fs::write(&path, b"#!/bin/sh\necho hi\n").expect("write fake binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod +x");
+        }
+
+        let found = find_executable_in_dirs(std::iter::once(dir.clone()), name);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(found, Some(path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_executable_regular_file_rejects_a_non_executable_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_captions_non_exec_{}_{}",
+            std::process::id(),
+            captions_tmp_file_stem()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("not_a_binary");
+        std::fs::write(&path, b"just text, not marked executable").expect("write");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let result = is_executable_regular_file(&path);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            !result,
+            "is_file() alone would accept this; the executable bit must be checked too"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_kills_a_process_that_outlives_the_deadline() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let start = Instant::now();
+        let result = run_with_timeout(cmd, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a process past its deadline must be reported as failed"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the caller must not block for anywhere near the process's own runtime: {elapsed:?}"
+        );
     }
 }

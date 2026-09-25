@@ -68,7 +68,7 @@ use rustmotion::core::css::taffy_bridge::ConversionContext;
 use rustmotion::core::css::units::{parse_origin_component, LengthContext, ParsedLength};
 use rustmotion::core::engine::box_tree::{AvailableSpace, BoxKind, BoxNode, IntrinsicMeasure};
 use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult};
-use rustmotion::engine::animator::{resolve_props_for_effects, AnimatedProperties};
+use rustmotion::engine::animator::{ease, resolve_props_for_effects, AnimatedProperties};
 use rustmotion::engine::render;
 use rustmotion::schema::{Camera, ResolvedScenario, Scene, ViewType};
 use serde::Serialize;
@@ -245,7 +245,7 @@ fn deserialize_children_indexed(scene: &Scene) -> Vec<(usize, ChildComponent)> {
 /// `engine/render/scene.rs`, reimplemented here since that one isn't `pub`).
 /// When depth planes are in play the renderer applies a per-plane,
 /// depth-scaled camera instead of the single global transform
-/// `fold_static_camera` models, so callers skip camera folding entirely in
+/// `fold_camera` models, so callers skip camera folding entirely in
 /// that case rather than risk a wrong correction.
 fn scene_uses_depth(children: &[ChildComponent]) -> bool {
     children
@@ -305,7 +305,7 @@ fn walk(
             if !parent_clips && !bleeds(child) {
                 let mut vbbox = apply_static_node_transform(&raw_bbox, &box_node.css, viewport_f);
                 if let Some(cam) = camera {
-                    vbbox = fold_static_camera(&vbbox, cam, viewport_f);
+                    vbbox = fold_camera(&vbbox, cam, viewport_f, 0.0);
                 }
                 check_viewport(&child.component, &child_path, &vbbox, viewport, vi, si, out);
             }
@@ -681,28 +681,106 @@ fn apply_transform_chain(
     (x, y)
 }
 
-/// Static (non-keyframed) global scene-camera fold (H5, partial) — mirrors
-/// `apply_camera_transform` in `engine/render/scene.rs` for the
-/// non-rotated case: `device = zoom*p + (1-zoom)*origin - zoom*pan`.
-/// Rotation and keyframed camera motion are ignored. Callers only pass a
-/// camera here when the scene isn't using per-plane depth parallax (see
-/// `scene_uses_depth`) — that path applies a *different*, depth-scaled
-/// camera per top-level plane, and folding the global formula there would
-/// be wrong.
-fn fold_static_camera(bbox: &BBox, camera: &Camera, viewport: (f32, f32)) -> BBox {
-    let zoom = camera.zoom;
-    let (cx, cy) = camera
-        .origin
-        .as_ref()
-        .map(|o| (o.x, o.y))
-        .unwrap_or((viewport.0 / 2.0, viewport.1 / 2.0));
-    let new_x = zoom * bbox.x + (1.0 - zoom) * cx - zoom * camera.x;
-    let new_y = zoom * bbox.y + (1.0 - zoom) * cy - zoom * camera.y;
+fn interpolate_camera_track(camera: &Camera, property: &str, time: f64, default: f32) -> f32 {
+    let Some(track) = camera
+        .keyframes
+        .iter()
+        .find(|k| k.property == property && !k.values.is_empty())
+    else {
+        return default;
+    };
+    let points = &track.values;
+    if time <= points[0].time {
+        return points[0].value;
+    }
+    let last = points.len() - 1;
+    if time >= points[last].time {
+        return points[last].value;
+    }
+    for w in points.windows(2) {
+        let (p0, p1) = (&w[0], &w[1]);
+        if time >= p0.time && time <= p1.time {
+            let segment_t = if (p1.time - p0.time).abs() < 1e-9 {
+                1.0
+            } else {
+                (time - p0.time) / (p1.time - p0.time)
+            };
+            let eased = ease(segment_t, &track.easing) as f32;
+            return p0.value + (p1.value - p0.value) * eased;
+        }
+    }
+    points[last].value
+}
+
+fn resolve_camera_origin_2d(camera: &Camera, time: f64, viewport: (f32, f32)) -> (f32, f32) {
+    let has_track = |p: &str| {
+        camera
+            .keyframes
+            .iter()
+            .any(|k| k.property == p && !k.values.is_empty())
+    };
+    let ox = if camera.origin.is_some() || has_track("origin.x") {
+        interpolate_camera_track(
+            camera,
+            "origin.x",
+            time,
+            camera.origin.as_ref().map(|o| o.x).unwrap_or(0.0),
+        )
+    } else {
+        viewport.0 / 2.0
+    };
+    let oy = if camera.origin.is_some() || has_track("origin.y") {
+        interpolate_camera_track(
+            camera,
+            "origin.y",
+            time,
+            camera.origin.as_ref().map(|o| o.y).unwrap_or(0.0),
+        )
+    } else {
+        viewport.1 / 2.0
+    };
+    (ox, oy)
+}
+
+/// Global scene-camera fold (H5) — mirrors `apply_camera_transform` in
+/// `engine/render/scene.rs`. Callers only pass a camera here when the scene
+/// isn't using per-plane depth parallax (see `scene_uses_depth`) — that path
+/// applies a *different*, depth-scaled camera per top-level plane, and
+/// folding the global formula there would be wrong.
+fn fold_camera(bbox: &BBox, camera: &Camera, viewport: (f32, f32), time: f64) -> BBox {
+    let x = interpolate_camera_track(camera, "x", time, camera.x);
+    let y = interpolate_camera_track(camera, "y", time, camera.y);
+    let zoom = interpolate_camera_track(camera, "zoom", time, camera.zoom);
+    let rotation = interpolate_camera_track(camera, "rotation", time, camera.rotation);
+    let (cx, cy) = resolve_camera_origin_2d(camera, time, viewport);
+
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let corners = [
+        (bbox.x, bbox.y),
+        (bbox.x + bbox.w, bbox.y),
+        (bbox.x, bbox.y + bbox.h),
+        (bbox.x + bbox.w, bbox.y + bbox.h),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (px, py) in corners {
+        let lx = zoom * (px - cx - x);
+        let ly = zoom * (py - cy - y);
+        let rx = lx * cos - ly * sin;
+        let ry = lx * sin + ly * cos;
+        let (wx, wy) = (cx + rx, cy + ry);
+        min_x = min_x.min(wx);
+        max_x = max_x.max(wx);
+        min_y = min_y.min(wy);
+        max_y = max_y.max(wy);
+    }
     BBox {
-        x: new_x,
-        y: new_y,
-        w: bbox.w * zoom,
-        h: bbox.h * zoom,
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x,
+        h: max_y - min_y,
     }
 }
 
@@ -798,25 +876,36 @@ fn hint_for_viewport(component: &Component, axis: Axis, bbox: &BBox, vp: (u32, u
 /// that's deliberately given a smaller-than-natural box to scroll within.
 /// Also excludes atomic single-line components (`badge`/`kbd`/`counter`) —
 /// out of scope for this pass, see the workstream report.
-fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasure>, bool)> {
+fn measurer_and_nowrap(
+    component: &Component,
+    viewport: (f32, f32),
+) -> Option<(Box<dyn IntrinsicMeasure>, bool)> {
     fn is_nowrap(ws: &Option<WhiteSpace>) -> bool {
         matches!(ws, Some(WhiteSpace::Nowrap | WhiteSpace::Pre))
     }
     match component {
         Component::Text(t) => Some((
-            Box::new(TextIntrinsic::from_text(t)),
+            Box::new(TextIntrinsic::from_text_for_viewport(t, viewport)),
             is_nowrap(&t.style.white_space),
         )),
         Component::GradientText(t) => Some((
-            Box::new(GradientTextIntrinsic::from_gradient_text(t)),
+            Box::new(GradientTextIntrinsic::from_gradient_text_for_viewport(
+                t, viewport,
+            )),
             is_nowrap(&t.style.white_space),
         )),
         Component::Caption(c) => Some((
-            Box::new(CaptionIntrinsic::from_caption(c)),
+            Box::new(CaptionIntrinsic::from_caption_for_viewport(c, viewport)),
             is_nowrap(&c.style.white_space),
         )),
-        Component::RichText(rt) => Some((Box::new(RichTextIntrinsic::from_rich_text(rt)), false)),
-        Component::Table(t) => Some((Box::new(TableIntrinsic::from_table(t)), false)),
+        Component::RichText(rt) => Some((
+            Box::new(RichTextIntrinsic::from_rich_text_for_viewport(rt, viewport)),
+            false,
+        )),
+        Component::Table(t) => Some((
+            Box::new(TableIntrinsic::from_table_for_viewport(t, viewport)),
+            false,
+        )),
         _ => None,
     }
 }
@@ -852,7 +941,9 @@ fn check_unwrappable_text(
     si: usize,
     out: &mut Vec<GeometryViolation>,
 ) {
-    let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
+    let Some((intrinsic, nowrap)) =
+        measurer_and_nowrap(component, (viewport.0 as f32, viewport.1 as f32))
+    else {
         return;
     };
     if !nowrap {
@@ -950,7 +1041,9 @@ fn check_content_overflows_box(
     si: usize,
     out: &mut Vec<GeometryViolation>,
 ) {
-    let Some((intrinsic, nowrap)) = measurer_and_nowrap(component) else {
+    let Some((intrinsic, nowrap)) =
+        measurer_and_nowrap(component, (viewport.0 as f32, viewport.1 as f32))
+    else {
         return;
     };
 
@@ -1101,8 +1194,11 @@ fn check_auto_scroll(
     let max_content = (AvailableSpace::MaxContent, AvailableSpace::MaxContent);
     match component {
         Component::Codeblock(cb) if !cb.auto_scroll => {
-            let (_, natural_h) =
-                CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
+            let (_, natural_h) = CodeblockIntrinsic::from_codeblock_for_viewport(
+                cb,
+                (viewport.0 as f32, viewport.1 as f32),
+            )
+            .measure((None, None), max_content);
             let mut bbox = bbox_of(layout);
             if let Some((_, bh)) = container_bound {
                 bbox.h = bbox.h.min(bh);
@@ -1125,8 +1221,11 @@ fn check_auto_scroll(
             }
         }
         Component::Terminal(t) if !t.auto_scroll => {
-            let (_, natural_h) =
-                TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
+            let (_, natural_h) = TerminalIntrinsic::from_terminal_for_viewport(
+                t,
+                (viewport.0 as f32, viewport.1 as f32),
+            )
+            .measure((None, None), max_content);
             let (cx, cy, cw, ch) = layout.content_box();
             let ch = match container_bound {
                 Some((_, bh)) => ch.min(bh),
@@ -1192,11 +1291,13 @@ fn check_auto_scroll(
 /// workstream report for the full list.
 pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
     let mut warnings = Vec::new();
+    let video_w = scenario.video.width as f32;
     let video_h = scenario.video.height as f32;
     if video_h <= 0.0 {
         return warnings;
     }
     let min_px = MIN_LEGIBLE_FONT_RATIO * video_h;
+    let length_ctx = ConversionContext::for_viewport(video_w, video_h).length;
 
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
@@ -1204,7 +1305,14 @@ pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             for (json_idx, child) in &indexed {
                 let path = format!("{}.children[{}]", path_root, json_idx);
-                walk_legibility(&child.component, &path, min_px, video_h, &mut warnings);
+                walk_legibility(
+                    &child.component,
+                    &path,
+                    min_px,
+                    video_h,
+                    &length_ctx,
+                    &mut warnings,
+                );
             }
         }
     }
@@ -1216,9 +1324,10 @@ fn walk_legibility(
     path: &str,
     min_px: f32,
     video_h: f32,
+    length_ctx: &LengthContext,
     out: &mut Vec<String>,
 ) {
-    for (label, effective_px) in text_sizes(component) {
+    for (label, effective_px) in text_sizes(component, length_ctx) {
         // 0.05px tolerance for float rounding; not a meaningful visual gap.
         if effective_px < min_px - 0.05 {
             out.push(format!(
@@ -1262,6 +1371,7 @@ fn walk_legibility(
                 &format!("{path}.children[{i}]"),
                 min_px,
                 video_h,
+                length_ctx,
                 out,
             );
         }
@@ -1286,24 +1396,34 @@ fn declares_text_autofit(component: &Component) -> bool {
     }
 }
 
-fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
+fn font_size_ctx_or(style: &CssStyle, ctx: &LengthContext, default: f32) -> f32 {
+    style
+        .font_size
+        .as_ref()
+        .map(|l| l.resolve(ctx))
+        .unwrap_or(default)
+}
+
+fn text_sizes(component: &Component, ctx: &LengthContext) -> Vec<(&'static str, f32)> {
     match component {
         // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
-        Component::Text(t) => vec![("text", t.style.font_size_px_or(48.0))],
-        Component::RichText(t) => vec![("rich_text", t.style.font_size_px_or(48.0))],
-        Component::GradientText(t) => vec![("gradient_text", t.style.font_size_px_or(48.0))],
-        Component::Caption(t) => vec![("caption", t.style.font_size_px_or(48.0))],
-        Component::Counter(c) => vec![("counter", c.style.font_size_px_or(48.0))],
+        Component::Text(t) => vec![("text", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::RichText(t) => vec![("rich_text", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::GradientText(t) => {
+            vec![("gradient_text", font_size_ctx_or(&t.style, ctx, 48.0))]
+        }
+        Component::Caption(t) => vec![("caption", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::Counter(c) => vec![("counter", font_size_ctx_or(&c.style, ctx, 48.0))],
         // table.rs, terminal.rs, codeblock/{dimensions,render}.rs, pill_nav.rs: 14.0
-        Component::Table(t) => vec![("table", t.style.font_size_px_or(14.0))],
-        Component::Terminal(t) => vec![("terminal", t.style.font_size_px_or(14.0))],
-        Component::Codeblock(c) => vec![("codeblock", c.style.font_size_px_or(14.0))],
-        Component::PillNav(p) => vec![("pill_nav", p.style.font_size_px_or(14.0))],
+        Component::Table(t) => vec![("table", font_size_ctx_or(&t.style, ctx, 14.0))],
+        Component::Terminal(t) => vec![("terminal", font_size_ctx_or(&t.style, ctx, 14.0))],
+        Component::Codeblock(c) => vec![("codeblock", font_size_ctx_or(&c.style, ctx, 14.0))],
+        Component::PillNav(p) => vec![("pill_nav", font_size_ctx_or(&p.style, ctx, 14.0))],
         // callout.rs, list.rs, notification.rs (title): 16.0
-        Component::Callout(c) => vec![("callout", c.style.font_size_px_or(16.0))],
-        Component::List(l) => vec![("list", l.style.font_size_px_or(16.0))],
+        Component::Callout(c) => vec![("callout", font_size_ctx_or(&c.style, ctx, 16.0))],
+        Component::List(l) => vec![("list", font_size_ctx_or(&l.style, ctx, 16.0))],
         Component::Notification(n) => {
-            let title = n.style.font_size_px_or(16.0);
+            let title = font_size_ctx_or(&n.style, ctx, 16.0);
             let mut sizes = vec![("notification title", title)];
             if n.message.is_some() {
                 // notification.rs: message_font_size() = title_font_size() * 0.85
@@ -1315,9 +1435,9 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
         // to its component default when absent from JSON), overridable by
         // `style.font-size` exactly like the rest — kbd.rs, tooltip.rs,
         // marquee.rs.
-        Component::Kbd(k) => vec![("kbd", k.style.font_size_px_or(k.font_size))],
-        Component::Tooltip(t) => vec![("tooltip", t.style.font_size_px_or(t.font_size))],
-        Component::Marquee(m) => vec![("marquee", m.style.font_size_px_or(m.font_size))],
+        Component::Kbd(k) => vec![("kbd", font_size_ctx_or(&k.style, ctx, k.font_size))],
+        Component::Tooltip(t) => vec![("tooltip", font_size_ctx_or(&t.style, ctx, t.font_size))],
+        Component::Marquee(m) => vec![("marquee", font_size_ctx_or(&m.style, ctx, m.font_size))],
         // badge.rs: BadgeSize::{Sm,Md,Lg}.params().0 = {12.0, 14.0, 18.0}.
         // `params()` is private to badge.rs, so the table is duplicated here.
         Component::Badge(b) => {
@@ -1326,7 +1446,7 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
                 rustmotion::components::badge::BadgeSize::Md => 14.0,
                 rustmotion::components::badge::BadgeSize::Lg => 18.0,
             };
-            vec![("badge", b.style.font_size_px_or(default_fs))]
+            vec![("badge", font_size_ctx_or(&b.style, ctx, default_fs))]
         }
         _ => vec![],
     }
@@ -1362,14 +1482,15 @@ const ANIM_MIN_SAMPLES: usize = 5;
 const ANIM_MAX_SAMPLES: usize = 480;
 
 /// Sample times (seconds, scene-relative) for `--strict-anim`, spaced evenly
-/// across `[0, scene_duration]`. Count scales with `scene_duration` (H6) —
-/// more samples for longer scenes — and is clamped to keep validation time
-/// bounded.
-fn anim_sample_times(scene_duration: f64) -> Vec<f64> {
+/// across `[0, scene_duration]`. Count scales with `scene_duration` (H6) and
+/// with the scenario's own `fps` — more samples for longer or faster scenes
+/// — and is clamped to keep validation time bounded.
+fn anim_sample_times(scene_duration: f64, fps: u32) -> Vec<f64> {
     if scene_duration <= 0.0 {
         return vec![0.0];
     }
-    let raw = (scene_duration * ANIM_SAMPLES_PER_SECOND).ceil() as usize;
+    let frame_rate = (fps.max(1) as f64).max(ANIM_SAMPLES_PER_SECOND);
+    let raw = (scene_duration * frame_rate).ceil() as usize;
     let n = raw.clamp(ANIM_MIN_SAMPLES, ANIM_MAX_SAMPLES);
     if n <= 1 {
         return vec![0.0];
@@ -1402,17 +1523,43 @@ fn anim_sample_times(scene_duration: f64) -> Vec<f64> {
 ///     used for static `style.transform`, already handling rotation/skew
 ///     via a four-corner AABB) picks up animated rotation too, with no
 ///     separate rotation-aware fold needed (constat 9).
+fn scenario_time_bases_by_view_and_scene(
+    views: &[rustmotion::schema::ResolvedView],
+) -> Vec<Vec<f64>> {
+    let mut scenario_elapsed = 0.0;
+    let mut bases = Vec::with_capacity(views.len());
+    for view in views {
+        let is_world_view_with_its_own_clock = matches!(view.view_type, ViewType::World);
+        let view_start_in_scenario_time = if is_world_view_with_its_own_clock {
+            0.0
+        } else {
+            scenario_elapsed
+        };
+        let mut view_elapsed = 0.0;
+        let mut view_bases = Vec::with_capacity(view.scenes.len());
+        for scene in &view.scenes {
+            view_bases.push(view_start_in_scenario_time + view_elapsed);
+            view_elapsed += scene.duration;
+        }
+        scenario_elapsed += view_elapsed;
+        bases.push(view_bases);
+    }
+    bases
+}
+
 pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
     let mut violations = Vec::new();
     let mut seen: HashSet<(usize, usize, String)> = HashSet::new();
     let fps = scenario.video.fps;
+    let scenario_time_bases = scenario_time_bases_by_view_and_scene(&scenario.views);
     for (vi, view) in scenario.views.iter().enumerate() {
+        let is_world_view_with_its_own_clock = matches!(view.view_type, ViewType::World);
         for (si, scene) in view.scenes.iter().enumerate() {
+            let scenario_time_base = scenario_time_bases[vi][si];
             // Constat 4: same decorative-child filtering as `validate_geometry`
             // — see that call site's comment for why.
-            let is_world = matches!(view.view_type, ViewType::World);
             let indexed = deserialize_children_indexed(scene);
-            let indexed: Vec<(usize, ChildComponent)> = if is_world {
+            let indexed: Vec<(usize, ChildComponent)> = if is_world_view_with_its_own_clock {
                 indexed
                     .into_iter()
                     .filter(|(_, c)| !c.is_decorative())
@@ -1447,11 +1594,11 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                 .freeze_at
                 .map_or(scene_duration, |f| f.clamp(0.0, scene_duration));
 
-            for time in anim_sample_times(sample_until) {
+            for time in anim_sample_times(sample_until, fps) {
                 let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
                 let anim = Some(BuildAnimationCtx {
                     time,
-                    scenario_time: time,
+                    scenario_time: scenario_time_base + time,
                     scene_duration,
                     fps,
                 });
@@ -1609,7 +1756,7 @@ fn walk_anim(
                 transformed = scale_bbox_from_own_center(&transformed, 1.0 + overshoot);
             }
             if let Some(cam) = camera {
-                transformed = fold_static_camera(&transformed, cam, viewport_f);
+                transformed = fold_camera(&transformed, cam, viewport_f, time);
             }
             let vw = viewport.0 as f32;
             let vh = viewport.1 as f32;
@@ -1722,7 +1869,7 @@ pub fn format_violation(v: &GeometryViolation) -> String {
     };
     let kind_str = match v.kind {
         ViolationKind::ViewportOverflow => "viewport overflow",
-        ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
+        ViolationKind::UnwrappableTextOverflow => "white-space: nowrap but text too wide",
         ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
         ViolationKind::ContentOverflowsBox => "wrapped content exceeds its own box",
         ViolationKind::ContentOverflowsCard => "component extends past its containing card",
@@ -1830,6 +1977,32 @@ mod tests {
             "expected the shape centred at x=-100 (world root), got bbox.x={}: {:?}",
             v.bbox.x,
             v
+        );
+    }
+
+    #[test]
+    fn unwrappable_text_overflow_uses_the_real_viewport_for_vw_font_size() {
+        let json = r##"{
+            "video": { "width": 3840, "height": 2160 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+                    "style": { "font-size": "5vw", "white-space": "nowrap" }
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::UnwrappableTextOverflow);
+        assert!(
+            v.is_some(),
+            "expected an UnwrappableTextOverflow (5vw on a 3840-wide viewport is a 192px font, \
+             too wide for the box even though the 1920-assumed 96px font would fit), got: {:?}",
+            violations
         );
     }
 
@@ -2427,10 +2600,45 @@ mod tests {
     }
 
     #[test]
+    fn strict_anim_folds_a_keyframed_camera_zoom_not_just_its_static_value() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 2.0,
+                "camera": {
+                    "keyframes": [{
+                        "property": "zoom",
+                        "values": [{ "time": 0.0, "value": 1.0 }, { "time": 2.0, "value": 3.0 }]
+                    }]
+                },
+                "children": [{
+                    "type": "shape",
+                    "shape": "rect",
+                    "position": "absolute",
+                    "x": 1400, "y": 490,
+                    "style": { "width": "100px", "height": "100px" },
+                    "fill": "#ff0000"
+                }]
+            }]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry_animated(&scenario);
+        let v = violations
+            .iter()
+            .find(|v| v.kind == ViolationKind::AnimatedTextOverflow);
+        assert!(
+            v.is_some(),
+            "expected the keyframed camera zoom to push the shape out of the viewport: {:?}",
+            violations
+        );
+        assert_eq!(v.unwrap().axis, Axis::X);
+    }
+
+    #[test]
     fn camera_fold_is_skipped_when_scene_uses_per_plane_depth() {
         // With a `style.depth` plane, the renderer applies a *different*,
         // depth-scaled camera per plane instead of the single global
-        // transform `fold_static_camera` models. Applying the global formula
+        // transform `fold_camera` models. Applying the global formula
         // there would be wrong, so geometry must not fold `scene.camera` in
         // this mode.
         let json = r##"{
@@ -2595,7 +2803,7 @@ mod tests {
 
     #[test]
     fn strict_anim_respects_start_at_gate_before_visibility() {
-        // A short slide-in (delay=0, duration=0.3s) settles well before
+        // A short fade-in (delay=0, duration=0.3s) settles well before
         // start_at=1.5s makes the component visible in a 2s scene. Once
         // visible, effects resolve at absolute time — by t=1.5 the preset
         // finished at t=0.3, so props are already at rest. Nothing should
@@ -2612,7 +2820,7 @@ mod tests {
                     "start_at": 1.5,
                     "style": {
                         "width": "100px", "height": "100px",
-                        "animation": [{ "name": "slide_in_left", "delay": 0, "duration": 0.3 }]
+                        "animation": [{ "name": "fade_in", "delay": 0, "duration": 0.3 }]
                     },
                     "fill": "#ff0000"
                 }]
@@ -2833,9 +3041,19 @@ mod tests {
     }
 
     #[test]
+    fn anim_sample_times_does_not_undersample_a_real_frame_rate() {
+        let samples = anim_sample_times(1.0, 30);
+        assert!(
+            samples.len() >= 30,
+            "a 1s scene at 30fps must sample at least one point per rendered frame, got {} samples",
+            samples.len()
+        );
+    }
+
+    #[test]
     fn anim_sample_times_scale_with_scene_duration() {
-        let short = anim_sample_times(0.5);
-        let long = anim_sample_times(4.0);
+        let short = anim_sample_times(0.5, 30);
+        let long = anim_sample_times(4.0, 30);
         assert!(
             long.len() > short.len(),
             "longer scenes should get more samples: {} vs {}",
@@ -2857,7 +3075,7 @@ mod tests {
     }
 
     #[test]
-    fn anim_sample_times_keeps_the_8_per_second_cadence_up_to_60s() {
+    fn anim_sample_times_keeps_a_low_fps_scene_at_the_8_per_second_cadence_up_to_60s() {
         // Round 4 audit, constat 8: with the old ANIM_MAX_SAMPLES=40 cap,
         // the step between samples grew linearly past a 5s scene —
         // 20s/39 ≈ 0.513s at 20s, 40s/39 ≈ 1.026s at 40s, 60s/39 ≈ 1.538s
@@ -2865,12 +3083,32 @@ mod tests {
         // (480), the step stays pinned near the promised 1/8s = 0.125s
         // resolution across the same range.
         for duration in [20.0, 40.0, 60.0] {
-            let samples = anim_sample_times(duration);
+            let samples = anim_sample_times(duration, 8);
             let step = duration / (samples.len() - 1) as f64;
             assert!(
                 (step - 0.125).abs() < 0.001,
                 "duration={duration}s: expected ~0.125s step, got {step}s ({} samples)",
                 samples.len()
+            );
+        }
+    }
+
+    #[test]
+    fn anim_sample_times_matches_a_real_fps_below_the_cost_cap_then_degrades() {
+        let short = anim_sample_times(5.0, 30);
+        let step = 5.0 / (short.len() - 1) as f64;
+        assert!(
+            (step - 1.0 / 30.0).abs() < 0.001,
+            "expected a ~1/30s step at 30fps under the cost cap, got {step}s ({} samples)",
+            short.len()
+        );
+
+        for duration in [20.0, 40.0, 60.0] {
+            let samples = anim_sample_times(duration, 30);
+            assert_eq!(
+                samples.len(),
+                ANIM_MAX_SAMPLES,
+                "duration={duration}s at 30fps should hit the cost cap"
             );
         }
     }
@@ -2896,7 +3134,7 @@ mod tests {
                 "scenes":[{{"duration":60.0,"children":[{children}]}}]}}"##
         );
         let scenario = parse(&json);
-        let n = anim_sample_times(60.0).len();
+        let n = anim_sample_times(60.0, 30).len();
         let start = std::time::Instant::now();
         let violations = validate_geometry_animated(&scenario);
         let elapsed = start.elapsed();
@@ -2906,6 +3144,59 @@ mod tests {
             elapsed,
             elapsed / n.max(1) as u32,
             violations.len()
+        );
+    }
+
+    #[test]
+    fn scenario_time_bases_accumulate_prior_scene_durations_in_a_slide_view() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [
+                { "duration": 4.0, "children": [] },
+                { "duration": 6.0, "children": [] },
+                { "duration": 2.0, "children": [] }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let bases = scenario_time_bases_by_view_and_scene(&scenario.views);
+        assert_eq!(
+            bases,
+            vec![vec![0.0, 4.0, 10.0]],
+            "each scene's base must be the sum of every earlier scene's duration \
+             in the same view, not 0.0 for every scene"
+        );
+    }
+
+    #[test]
+    fn scenario_time_bases_restart_at_zero_inside_a_world_view_but_keep_accumulating_after_it() {
+        let json = r##"{
+            "composition": [
+                {
+                    "type": "slide",
+                    "scenes": [{ "duration": 3.0, "children": [] }]
+                },
+                {
+                    "type": "world",
+                    "scenes": [
+                        { "duration": 5.0, "world-position": { "x": 0, "y": 0 }, "children": [] },
+                        { "duration": 7.0, "world-position": { "x": 800, "y": 0 }, "children": [] }
+                    ]
+                },
+                {
+                    "type": "slide",
+                    "scenes": [{ "duration": 1.0, "children": [] }]
+                }
+            ],
+            "video": { "width": 1920, "height": 1080 }
+        }"##;
+        let scenario = parse(json);
+        let bases = scenario_time_bases_by_view_and_scene(&scenario.views);
+        assert_eq!(
+            bases,
+            vec![vec![0.0], vec![0.0, 5.0], vec![15.0]],
+            "a world view's own scenes restart at 0.0, but the slide view after it \
+             must resume counting from the scenario's real elapsed time (3 + 5 + 7 = 15, \
+             not 3.0 as if the world view had taken no time): {bases:?}"
         );
     }
 
@@ -4126,6 +4417,46 @@ mod legibility_tests {
             warnings[0].contains("views[0].scenes[0].children[0]"),
             "got: {}",
             warnings[0]
+        );
+    }
+
+    #[test]
+    fn vw_font_size_resolves_against_the_real_viewport_instead_of_reporting_0px() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "headline",
+                    "style": { "color": "#ffffff", "font-size": "5vw" }
+                }]
+            }]
+        }"##;
+        let warnings = check_legibility(&parse(json));
+        assert!(
+            warnings.is_empty(),
+            "5vw is 96px on a 1920-wide frame, well above the legibility floor: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn rem_font_size_resolves_instead_of_reporting_0px() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "headline",
+                    "style": { "color": "#ffffff", "font-size": "3rem" }
+                }]
+            }]
+        }"##;
+        let warnings = check_legibility(&parse(json));
+        assert!(
+            warnings.is_empty(),
+            "3rem is 48px against the 16px root font-size: {warnings:?}"
         );
     }
 

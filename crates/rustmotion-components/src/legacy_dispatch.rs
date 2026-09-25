@@ -187,6 +187,26 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
 
         canvas.restore();
     }
+
+    fn paints_own_background(&self, payload: &(dyn std::any::Any + Send + Sync)) -> bool {
+        let Some(node_id) = payload.downcast_ref::<NodeId>() else {
+            return false;
+        };
+        let Some(child) = self.lookup(*node_id) else {
+            return false;
+        };
+        matches!(
+            child.component,
+            Component::Codeblock(_)
+                | Component::Badge(_)
+                | Component::Callout(_)
+                | Component::Notification(_)
+                | Component::Stat(_)
+                | Component::Tooltip(_)
+                | Component::Kbd(_)
+                | Component::Caption(_)
+        )
+    }
 }
 
 fn is_container(c: &Component) -> bool {
@@ -372,6 +392,76 @@ mod tests {
         assert!(buf[0] > 200, "expected red, got rgba {:?}", buf);
         assert!(buf[1] < 50, "green should be low, got rgba {:?}", buf);
         assert!(buf[2] < 50, "blue should be low, got rgba {:?}", buf);
+    }
+
+    #[test]
+    fn badge_background_is_not_composited_twice() {
+        let scene = vec![ChildComponent {
+            component: serde_json::from_value(serde_json::json!({
+                "type": "badge",
+                "text": "X",
+                "style": {
+                    "width": 100,
+                    "height": 40,
+                    "background": "rgba(255,0,0,0.5)"
+                }
+            }))
+            .expect("component deserializes"),
+            position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (200.0, 200.0));
+        let layout = run_layout(&built.root, (200.0, 200.0), &ConversionContext::default());
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((200, 200)).expect("raster surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let dispatcher = LegacyPaintDispatcher::new(&built.components);
+        let frame = PaintFrame {
+            time: 0.0,
+            scenario_time: 0.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 200,
+            video_height: 200,
+            scene_duration: 1.0,
+            camera: None,
+        };
+        rustmotion_core::engine::paint_pass::paint_tree(
+            canvas,
+            &built.root,
+            &layout,
+            &frame,
+            &dispatcher,
+        );
+
+        let snapshot = surface.image_snapshot();
+        let mut buf = [0u8; 4];
+        let info = skia_safe::ImageInfo::new(
+            (1, 1),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let read_ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            4,
+            skia_safe::IPoint::new(5, 20),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(read_ok, "pixel read should succeed");
+        let green_channel_expected_from_a_single_composite_not_a_double_one = buf[1];
+        assert!(
+            green_channel_expected_from_a_single_composite_not_a_double_one > 100,
+            "50% red-over-white background must be composited once (green ~127), not twice \
+             (green ~63): got rgba {:?}",
+            buf
+        );
     }
 
     #[test]

@@ -45,7 +45,9 @@ pub fn parse_inline_style(decls: &str) -> Result<Map<String, Value>, HtmlError> 
             continue;
         }
         let Some((prop, value)) = decl.split_once(':') else {
-            continue;
+            return Err(HtmlError::StyleDeclarationMissingColon {
+                decl: decl.to_string(),
+            });
         };
         let prop = prop.trim().to_string();
         let value = value.trim();
@@ -91,13 +93,24 @@ pub fn parse_inline_style(decls: &str) -> Result<Map<String, Value>, HtmlError> 
                 }
             }
             _ => {
-                if split_top_level_tokens(value).len() > 1 {
+                let trimmed = value.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                    let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
+                        HtmlError::InvalidStylePropertyJson {
+                            prop: prop.clone(),
+                            value: value.to_string(),
+                            error: e.to_string(),
+                        }
+                    })?;
+                    map.insert(prop, parsed);
+                } else if split_top_level_tokens(value).len() > 1 {
                     return Err(HtmlError::UnsupportedStyleShorthand {
                         prop,
                         value: value.to_string(),
                     });
+                } else {
+                    map.insert(prop, coerce_value(value));
                 }
-                map.insert(prop, coerce_value(value));
             }
         }
     }

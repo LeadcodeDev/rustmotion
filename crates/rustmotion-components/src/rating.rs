@@ -105,6 +105,12 @@ impl Rating {
 }
 
 impl Rating {
+    fn natural_size(&self) -> (f32, f32) {
+        let count = self.max as f32;
+        let w = count * self.size + (count - 1.0).max(0.0) * self.gap;
+        (w.max(1.0), self.size.max(1.0))
+    }
+
     fn paint(&self, canvas: &Canvas, time: f64) {
         let displayed = self.displayed_value_at(time);
         let outer_radius = self.size / 2.0;
@@ -155,10 +161,106 @@ impl Painter for Rating {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
+        let (natural_w, natural_h) = self.natural_size();
+        let scale_x = layout.width / natural_w;
+        let scale_y = layout.height / natural_h;
+        canvas.save();
+        canvas.scale((scale_x, scale_y));
         self.paint(canvas, ctx.time);
+        canvas.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::css::CssStyle;
+
+    fn rating(max: u32, size: f32, gap: f32, value: f64) -> Rating {
+        Rating {
+            value,
+            max,
+            size,
+            gap,
+            filled_color: default_filled_color(),
+            empty_color: default_empty_color(),
+            animated: false,
+            animation_duration: default_animation_duration(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    fn ink_max_xy(surface: &mut skia_safe::Surface, w: i32, h: i32) -> (i32, i32) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let (mut maxx, mut maxy) = (0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (maxx, maxy)
+    }
+
+    #[test]
+    fn paint_content_scales_to_the_layout_box_not_its_own_size_field() {
+        let r = rating(5, 32.0, 4.0, 5.0);
+        const W: i32 = 200;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+                ..Default::default()
+            };
+            r.paint_content(
+                canvas,
+                &layout,
+                &AnimatedProperties::default(),
+                &PaintCtx {
+                    time: 1.0,
+                    scenario_time: 1.0,
+                    scene_duration: 1.0,
+                    frame_index: 0,
+                    fps: 30,
+                    video_width: W as u32,
+                    video_height: H as u32,
+                    stagger_offset: 0.0,
+                },
+            );
+        }
+        let (maxx, maxy) = ink_max_xy(&mut surface, W, H);
+        assert!(
+            maxx < 60 && maxy < 30,
+            "expected ink within the 60x30 layout box, got ink up to ({maxx}, {maxy})"
+        );
     }
 }

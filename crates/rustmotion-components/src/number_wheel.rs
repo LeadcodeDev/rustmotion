@@ -125,6 +125,8 @@ impl NumberWheel {
     /// and stops exactly on `revolutions * 10 + target` so that the landing
     /// is on the requested digit rather than near it.
     pub(crate) fn reel_position(&self, column: usize, target: u32, time: f64) -> f32 {
+        let start_at = self.timing.start_at.unwrap_or(0.0);
+        let time = (time - start_at).max(0.0);
         let start = self.delay + column as f64 * self.stagger_per_column;
         let raw = if self.duration <= 0.0 {
             1.0
@@ -334,6 +336,23 @@ mod tests {
             (single.reel_position(0, 3, 9.0) % 10.0 - 3.0).abs() < 1e-4
                 && (triple.reel_position(0, 3, 9.0) % 10.0 - 3.0).abs() < 1e-4,
             "both must land on 3"
+        );
+    }
+
+    #[test]
+    fn reel_position_is_measured_from_start_at_not_scene_time_zero() {
+        let w = wheel(serde_json::json!({
+            "value": "7", "duration": 1.0, "stagger_per_column": 0.0,
+            "delay": 0.0, "start_at": 1.0
+        }));
+        assert_eq!(
+            w.reel_position(0, 7, 1.0),
+            0.0,
+            "no time has elapsed since start_at yet, the reel must not have moved"
+        );
+        assert!(
+            (w.reel_position(0, 7, 2.0) % 10.0 - 7.0).abs() < 1e-4,
+            "one full duration after start_at, the reel should have landed on 7"
         );
     }
 

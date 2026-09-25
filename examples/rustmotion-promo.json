@@ -16,8 +16,7 @@
       ],
       "speed": 12,
       "element_size": 1.5,
-      "count": 5,
-      "gradient_type": "radial"
+      "count": 5
     },
     "dots": {
       "preset": "grid_dots",
@@ -73,6 +72,7 @@
       "children": [
         {
           "type": "particle",
+          "bleed": true,
           "particle_type": "halo",
           "count": 10,
           "colors": [

@@ -16,10 +16,63 @@ use crate::cli::commands::validation::{self, ValidationSource};
 /// `video_frame_cache()` already return, rather than adding new functions to
 /// `rustmotion-core`'s `engine::renderer::assets` (owned by a sibling
 /// workstream in this chantier).
+fn check_native_fallback(
+    codec: Option<&str>,
+    transparent: bool,
+    container: &str,
+    crf: Option<u8>,
+) -> Result<Vec<String>> {
+    if let Some(c) = codec {
+        if c != "h264" {
+            return Err(RustmotionError::Generic(format!(
+                "--codec {c} requires ffmpeg, which was not found on PATH — the bundled \
+                 fallback encoder only produces h264. Install ffmpeg, or drop --codec."
+            )));
+        }
+    }
+    if transparent {
+        return Err(RustmotionError::Generic(
+            "--transparent requires ffmpeg, which was not found on PATH — the bundled \
+             fallback encoder has no alpha channel support. Install ffmpeg, or drop \
+             --transparent."
+                .to_string(),
+        ));
+    }
+
+    let mut warnings = Vec::new();
+    if container != "mp4" {
+        warnings.push(format!(
+            "ffmpeg was not found on PATH; the bundled fallback encoder always writes an \
+             actual MP4 byte stream, regardless of the requested '.{container}' extension."
+        ));
+    }
+    if crf.is_some() {
+        warnings.push(
+            "--crf has no effect without ffmpeg; the bundled fallback encoder picks its own \
+             bitrate."
+                .to_string(),
+        );
+    }
+    Ok(warnings)
+}
+
 fn clear_all_media_caches() {
     engine::clear_asset_cache();
     engine::gif_cache().clear();
     engine::video_frame_cache().clear();
+}
+
+fn incremental_quality_tradeoff_warning(
+    can_incremental: bool,
+    ffmpeg_available: bool,
+) -> Option<&'static str> {
+    (can_incremental && ffmpeg_available).then_some(
+        "--watch is re-rendering with the bundled incremental encoder (h264, 8-bit, larger \
+         files, no hardware acceleration) for fast turnaround on change, even though ffmpeg is \
+         on PATH — incremental re-encoding only exists for that bundled encoder today. `render` \
+         without --watch uses ffmpeg and produces a smaller, higher-quality 10-bit file; re-run \
+         it once you are done iterating.",
+    )
 }
 
 /// Load + validate a scenario for watch mode. On validation failure prints the
@@ -78,6 +131,7 @@ pub fn cmd_render(
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
         encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+        encode::check_transparent_codec(codec.as_deref().unwrap_or("h264"), transparent)?;
     }
 
     let start = std::time::Instant::now();
@@ -223,6 +277,13 @@ pub fn cmd_render(
                              bundled software encoder."
                         );
                     }
+                    let fallback_warnings =
+                        check_native_fallback(codec.as_deref(), transparent, fmt, crf)?;
+                    if !quiet {
+                        for warning in &fallback_warnings {
+                            eprintln!("Warning: {warning}");
+                        }
+                    }
                     let mut tui = make_tui("h264");
                     let mut cb = |p: encode::EncodeProgress| {
                         if let Some(ref mut t) = tui {
@@ -286,6 +347,7 @@ pub fn cmd_watch(
             .as_deref()
             .unwrap_or_else(|| output.extension().and_then(|e| e.to_str()).unwrap_or("mp4"));
         encode::check_codec_container(codec.as_deref().unwrap_or("h264"), container)?;
+        encode::check_transparent_codec(codec.as_deref().unwrap_or("h264"), transparent)?;
     }
 
     // Determine if we can use incremental rendering (native h264 only).
@@ -304,6 +366,21 @@ pub fn cmd_watch(
         || hardware_acceleration;
     let can_incremental =
         frame.is_none() && !matches!(fmt, "png-seq" | "gif" | "raw") && !use_ffmpeg;
+
+    let ffmpeg_available = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !quiet {
+        if let Some(warning) =
+            incremental_quality_tradeoff_warning(can_incremental, ffmpeg_available)
+        {
+            eprintln!("Warning: {warning}");
+        }
+    }
 
     let output_str = output
         .to_str()
@@ -663,5 +740,80 @@ mod tests {
             !video_frame_cache().contains_key(&marker),
             "video frame cache must be cleared too, not just the asset cache"
         );
+    }
+
+    #[test]
+    fn check_native_fallback_refuses_a_non_h264_codec() {
+        let err = check_native_fallback(Some("prores"), false, "mov", None)
+            .expect_err("a codec the fallback cannot produce must be refused, not ignored");
+        let msg = err.to_string();
+        assert!(msg.contains("prores"), "{msg}");
+        assert!(msg.contains("ffmpeg"), "{msg}");
+    }
+
+    #[test]
+    fn check_native_fallback_refuses_transparent() {
+        let err = check_native_fallback(None, true, "mp4", None)
+            .expect_err("no alpha support in the fallback encoder must be refused, not ignored");
+        let msg = err.to_string();
+        assert!(msg.contains("--transparent"), "{msg}");
+        assert!(msg.contains("ffmpeg"), "{msg}");
+    }
+
+    #[test]
+    fn check_native_fallback_warns_but_allows_a_non_mp4_container() {
+        let warnings = check_native_fallback(None, false, "mov", None)
+            .expect("a container name is cosmetic, not a hard refusal");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("mov") && w.contains("MP4")),
+            "must warn that the actual bytes are MP4 regardless of the .mov name: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn check_native_fallback_warns_but_allows_crf() {
+        let warnings = check_native_fallback(None, false, "mp4", Some(23))
+            .expect("an inert --crf is not a hard refusal");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("crf") || w.contains("--crf")),
+            "must warn --crf has no effect: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn check_native_fallback_is_silent_for_the_plain_h264_mp4_default() {
+        let warnings = check_native_fallback(None, false, "mp4", None)
+            .expect("h264/mp4/no-transparent/no-crf is exactly what the fallback natively does");
+        assert!(
+            warnings.is_empty(),
+            "nothing to warn about for the default combination: {warnings:?}"
+        );
+        let warnings_explicit_h264 = check_native_fallback(Some("h264"), false, "mp4", None)
+            .expect("an explicit --codec h264 must be accepted identically to the default");
+        assert!(warnings_explicit_h264.is_empty());
+    }
+
+    #[test]
+    fn incremental_quality_tradeoff_warning_fires_only_when_ffmpeg_goes_unused() {
+        assert!(
+            incremental_quality_tradeoff_warning(true, true).is_some(),
+            "the default --watch combination takes the bundled encoder even when ffmpeg is on \
+             PATH — that gap must not stay silent (F-PERF-ENC-4)"
+        );
+        assert!(
+            incremental_quality_tradeoff_warning(true, false).is_none(),
+            "no ffmpeg on PATH at all: the bundled encoder is not a tradeoff, it is the only \
+             option, same as a plain `render` without --watch"
+        );
+        assert!(
+            incremental_quality_tradeoff_warning(false, true).is_none(),
+            "a flag already routed this render through ffmpeg (e.g. --codec prores, --transparent): \
+             no tradeoff to warn about"
+        );
+        assert!(incremental_quality_tradeoff_warning(false, false).is_none());
     }
 }

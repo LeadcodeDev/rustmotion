@@ -181,6 +181,14 @@ impl Switch {
 }
 
 impl Switch {
+    fn natural_size(&self) -> (f32, f32) {
+        let w = match &self.label {
+            Some(label) => self.width + switch_label_extra_width(label, self.height).unwrap_or(0.0),
+            None => self.width,
+        };
+        (w.max(1.0), self.height.max(1.0))
+    }
+
     fn paint(&self, canvas: &Canvas, time: f64) {
         let w = self.width;
         let h = self.height;
@@ -251,11 +259,17 @@ impl Painter for Switch {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
+        let (natural_w, natural_h) = self.natural_size();
+        let scale_x = layout.width / natural_w;
+        let scale_y = layout.height / natural_h;
+        canvas.save();
+        canvas.scale((scale_x, scale_y));
         self.paint(canvas, ctx.time);
+        canvas.restore();
     }
 }
 
@@ -306,5 +320,68 @@ mod tests {
             panic!("expected an explicit px width");
         };
         assert_eq!(w, 500.0, "author's explicit style.width must win");
+    }
+
+    #[test]
+    fn paint_content_scales_to_the_layout_box_not_its_own_fields() {
+        let s = parse(r#"{"type":"switch","width":150,"height":80}"#);
+        const W: i32 = 200;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+                ..Default::default()
+            };
+            s.paint_content(
+                canvas,
+                &layout,
+                &AnimatedProperties::default(),
+                &PaintCtx {
+                    time: 0.0,
+                    scenario_time: 0.0,
+                    scene_duration: 1.0,
+                    frame_index: 0,
+                    fps: 30,
+                    video_width: W as u32,
+                    video_height: H as u32,
+                    stagger_offset: 0.0,
+                },
+            );
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let mut maxx = 0;
+        let mut maxy = 0;
+        for y in 0..H {
+            for x in 0..W {
+                if buf[((y * W + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        assert!(
+            maxx < 60 && maxy < 30,
+            "expected ink within the 60x30 layout box, got ink up to ({maxx}, {maxy})"
+        );
     }
 }

@@ -8,6 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   fmt:
     runs-on: ubuntu-latest
@@ -56,42 +59,48 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable channel, 2026-09-22
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
       # Blocking on any advisory not listed below — a newly introduced
       # vulnerability fails this job. Every `--ignore` is a pre-existing
       # transitive-dependency advisory tolerated today because the fix is a
       # dependency version bump, and version bumps for the published
       # `rustmotion` crate are being handled separately from this workstream
       # (crates/rustmotion/Cargo.toml, orchestrator-owned). Unmaintained/
-      # unsound/yanked advisories (17 as of 2026-09-22) print but do not fail
+      # unsound/yanked advisories (13 as of 2026-09-25) print but do not fail
       # the job — that's `cargo audit`'s own default, left unchanged here.
       #
+      # rustls/rustls-webpki (RUSTSEC-2026-0285, -0104, -0098, -0099, -0049) and
+      # crossbeam-epoch (RUSTSEC-2026-0204) were closed 2026-09-25 by a plain
+      # `cargo update -p <crate>` — their consumers (ureq; rayon-core <- exr <-
+      # image) already accepted the patched semver range, so no Cargo.toml edit
+      # was needed. Only the two advisories below have no such path today:
+      #
       # Review by 2026-12-22, or sooner once the dependency bumps land:
-      #   RUSTSEC-2025-0008 — openh264-sys2 0.6.6, heap overflow in decoding.
-      #     Direct dependency of the published `rustmotion` crate. Fix: openh264 >=0.8.0.
-      #   RUSTSEC-2026-0204 — crossbeam-epoch 0.9.18, invalid pointer deref in `fmt::Pointer`.
-      #     Via rayon-core <- exr <- image, reaches rustmotion-core/-components. Fix: >=0.9.20.
+      #   RUSTSEC-2025-0008 — openh264-sys2 0.6.6, heap overflow in the DECODING path.
+      #     `h264.rs` only imports Encoder/YUVBuffer/OpenH264API — no decoder type is ever
+      #     constructed, and Cargo.lock's openh264-sys2 pulls in cc/nasm-rs/walkdir, not
+      #     libloading, so it is the source-compiled build the advisory itself calls safe at
+      #     >=0.6.6 ("if you rely on our `source` feature only, >=0.6.6 should be safe").
+      #     `cargo audit` still flags it because its patched-version range (>=0.8.0) only
+      #     covers the libloading/prebuilt-DLL path we don't use. Bumping past 0.8.0 would
+      #     touch `h264.rs`'s API usage for no reachable fix; left ignored on that basis.
       #   RUSTSEC-2026-0195, RUSTSEC-2026-0194 — quick-xml 0.38.4 / 0.39.4, DoS + quadratic runtime.
-      #     0.38.4 via syntect reaches the published crates; 0.39.4 via dioxus-desktop/rfd is
-      #     rustmotion-studio-only (Linux/Wayland file dialogs). Fix: >=0.41.0.
-      #   RUSTSEC-2026-0285 — rustls 0.23.37, TLS 1.3 handshake level-boundary bug.
-      #     Via ureq, used by rustmotion/rustmotion-core for Google Fonts + Iconify fetches. Fix: >=0.23.45.
-      #   RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0049 — rustls-webpki
-      #     0.103.9, four CRL/name-constraint parsing bugs. Same ureq path as rustls above.
-      #     Fix: >=0.103.13,<0.104.0-alpha.1 (or the matching 0.104 alpha per advisory).
+      #     0.38.4 reaches the published crates via syntect -> plist. 0.39.4 is
+      #     rustmotion-studio-only (Linux/Wayland), via wayland-client/wayland-protocols* ->
+      #     wayland-scanner, themselves pulled in by rfd (file dialogs) and gpui-pre-linux
+      #     (window backend) — not dioxus-desktop, which is no longer a dependency since the
+      #     gpui-kit migration. Fix: >=0.41.0. `cargo update -p quick-xml` has no candidate
+      #     today — syntect/plist and wayland-scanner both pin narrower ranges than that, so
+      #     closing this needs a Cargo.toml bump in those third-party crates, not just a lock
+      #     update (a third, already-fixed instance is in the tree today via `xcb`).
       #   RUSTSEC-2026-0257 — webbrowser 1.2.1, BROWSER env argument injection on Unix.
-      #     Via dioxus-desktop, rustmotion-studio only (`publish = false`, never reaches a published
-      #     crate). Fix: >=1.2.2.
+      #     `webbrowser` is no longer in Cargo.lock at all (it left with dioxus-desktop during the
+      #     gpui-kit migration) — this --ignore is currently inert. Left in rather than dropped
+      #     silently: re-verify before removing, in case something reintroduces the crate.
       - name: Audit dependencies
         run: >
           cargo audit
           --ignore RUSTSEC-2025-0008
-          --ignore RUSTSEC-2026-0204
           --ignore RUSTSEC-2026-0195
           --ignore RUSTSEC-2026-0194
-          --ignore RUSTSEC-2026-0285
-          --ignore RUSTSEC-2026-0104
-          --ignore RUSTSEC-2026-0098
-          --ignore RUSTSEC-2026-0099
-          --ignore RUSTSEC-2026-0049
           --ignore RUSTSEC-2026-0257

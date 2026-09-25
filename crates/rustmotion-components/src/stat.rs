@@ -10,7 +10,8 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg,
-    measure_text_with_fallback, paint_from_hex, parse_hex_color, typeface_with_fallback,
+    measure_text_with_fallback, paint_from_hex, parse_hex_color, sandboxed_svg_options,
+    typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -249,7 +250,7 @@ impl Stat {
                     } else if let Ok(svg_data) =
                         fetch_icon_svg(icon_id, trend_color, icon_sz, icon_sz)
                     {
-                        let opt = usvg::Options::default();
+                        let opt = sandboxed_svg_options();
                         if let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) {
                             let svg_size = tree.size();
                             if let Some(mut pixmap) = tiny_skia::Pixmap::new(icon_sz, icon_sz) {

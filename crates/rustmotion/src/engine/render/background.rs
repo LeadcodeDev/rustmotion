@@ -5,7 +5,7 @@ use crate::schema::{
     GradientType, GridDotsConfig, GridLinesConfig, HaloConfig, HaloZone, HeropatternConfig,
     PixelDensityRamp, PixelGridConfig, PixelGridMotion, ScrollDirection,
 };
-use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex};
+use rustmotion_core::engine::renderer::{color4f_from_hex, paint_from_hex, sandboxed_svg_options};
 
 /// Draw an animated background (gradient, concentric circles, grid dots, halo, or heropattern).
 pub(super) fn draw_animated_background(
@@ -27,7 +27,12 @@ pub(super) fn draw_animated_background(
     let phase_origin = (raw_x - scroll_x, raw_y - scroll_y);
 
     canvas.save();
-    canvas.translate((bg.x + scroll_x, bg.y + scroll_y));
+    let (translate_x, translate_y) = if preset_uses_scroll_wrap(&bg.preset) {
+        (bg.x + scroll_x, bg.y + scroll_y)
+    } else {
+        (bg.x, bg.y)
+    };
+    canvas.translate((translate_x, translate_y));
 
     match &bg.preset {
         BackgroundPreset::GradientShift(cfg) => draw_bg_gradient_shift(
@@ -48,7 +53,12 @@ pub(super) fn draw_animated_background(
         }
         BackgroundPreset::Halo(cfg) => draw_bg_halo(canvas, cfg, bg.speed, time, width, height),
         BackgroundPreset::PixelGrid(cfg) => {
-            draw_bg_pixel_grid(canvas, cfg, bg.speed, time, width, height)
+            let (spacing_x, spacing_y) = tile_spacing(&bg.preset);
+            let cell_offset = (
+                (raw_x / spacing_x).floor() as i32,
+                (raw_y / spacing_y).floor() as i32,
+            );
+            draw_bg_pixel_grid(canvas, cfg, bg.speed, time, width, height, cell_offset)
         }
         BackgroundPreset::Heropattern(cfg) => draw_bg_heropattern(canvas, cfg, time, width, height),
     }
@@ -83,6 +93,9 @@ pub(super) fn draw_world_bg_with_parallax(
             canvas.translate((world_x - cam_x, world_y - cam_y));
             draw_bg_halo(canvas, cfg, bg.speed, time, world_w, world_h);
             canvas.restore();
+        }
+        BackgroundPreset::GradientShift(_) => {
+            draw_animated_background(canvas, bg, time, width, height);
         }
         _ => {
             // Grid-based backgrounds: modulo offset for seamless tiling.
@@ -494,6 +507,7 @@ fn draw_bg_pixel_grid(
     time: f32,
     width: f32,
     height: f32,
+    cell_offset: (i32, i32),
 ) {
     if cfg.colors.is_empty() {
         return;
@@ -522,6 +536,7 @@ fn draw_bg_pixel_grid(
         for col in 0..cols {
             let x = col as f32 * spacing;
             let y = row as f32 * spacing;
+            let (abs_col, abs_row) = (col + cell_offset.0, row + cell_offset.1);
 
             let mut threshold = density * ramp_at(cfg.density_ramp, x, y, width, height);
             if cfg.motion == PixelGridMotion::Sweep {
@@ -532,11 +547,11 @@ fn draw_bg_pixel_grid(
                 threshold += (0.35 - d).max(0.0);
             }
 
-            if cell_hash(col, row, cfg.seed, 0) >= threshold.clamp(0.0, 1.0) {
+            if cell_hash(abs_col, abs_row, cfg.seed, 0) >= threshold.clamp(0.0, 1.0) {
                 continue;
             }
 
-            let idx = ((col + row).rem_euclid(paints.len() as i32)) as usize;
+            let idx = ((abs_col + abs_row).rem_euclid(paints.len() as i32)) as usize;
             let paint = &mut paints[idx];
 
             if cfg.motion == PixelGridMotion::Twinkle {
@@ -544,7 +559,7 @@ fn draw_bg_pixel_grid(
                 // 10 % still reads as a permanent dot, so the lattice looks
                 // fixed and merely dimmer. Each cell gets its own phase from
                 // its own hash, or the whole field blinks in unison.
-                let phase = cell_hash(col, row, cfg.seed, 1) * std::f32::consts::TAU;
+                let phase = cell_hash(abs_col, abs_row, cfg.seed, 1) * std::f32::consts::TAU;
                 let a = 0.5 + 0.5 * (t * 1.6 + phase).sin();
                 paint.set_alpha_f(paint.alpha_f() * a);
             }
@@ -588,26 +603,6 @@ fn canonical_hero_color(color: &str) -> String {
     )
 }
 
-/// `usvg::Options` for parsing a generated heropattern tile.
-///
-/// Neutralises the default `image_href_resolver`'s string resolver, which
-/// reads arbitrary files from disk for any `<image href="...">` it
-/// encounters (usvg-0.44.0's `ImageHrefResolver::default_string_resolver`).
-/// A heropattern tile never legitimately references an external image, so
-/// an `<image>` element reaching this parser can only be an injection —
-/// `canonical_hero_color` closes the splice that could put one there in the
-/// first place; this is the defence-in-depth half, for any other way one
-/// could arrive.
-fn heropattern_svg_options() -> usvg::Options<'static> {
-    usvg::Options {
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_string: Box::new(|_, _| None),
-            ..usvg::ImageHrefResolver::default()
-        },
-        ..usvg::Options::default()
-    }
-}
-
 /// Tiled heropattern background.
 ///
 /// The tile is rasterized once at `cfg.scale`, using `heropattern_raster_size`
@@ -643,7 +638,7 @@ fn draw_bg_heropattern(
             .replace("{{opacity}}", &cfg.opacity.to_string()),
     );
 
-    let opt = heropattern_svg_options();
+    let opt = sandboxed_svg_options();
     let Ok(tree) = usvg::Tree::from_data(svg_content.as_bytes(), &opt) else {
         eprintln!(
             "warning: heropattern '{}' (colour '{}') failed to parse as SVG — background not rendered",
@@ -851,6 +846,13 @@ pub(super) fn interpolate_animated_bg(
     }
 }
 
+fn preset_uses_scroll_wrap(preset: &BackgroundPreset) -> bool {
+    !matches!(
+        preset,
+        BackgroundPreset::GradientShift(_) | BackgroundPreset::Halo(_)
+    )
+}
+
 /// Per-axis tile period (px) a preset's own draw loop repeats on — the
 /// amount by which a scroll offset can be wrapped, independently per axis,
 /// without changing the rendered pattern. Shared by `compute_scroll_offset`
@@ -869,7 +871,7 @@ fn tile_spacing(preset: &BackgroundPreset) -> (f32, f32) {
             (s, s)
         }
         BackgroundPreset::GridLines(cfg) => {
-            let s = cfg.cell.max(4.0);
+            let s = cfg.cell.max(4.0) * cfg.major_every.max(1) as f32;
             (s, s)
         }
         BackgroundPreset::PixelGrid(cfg) => {
@@ -1200,6 +1202,119 @@ mod scroll_offset_wrap_tests {
 }
 
 #[cfg(test)]
+mod tile_period_mismatch_tests {
+    use super::*;
+    use crate::schema::{GradientShiftConfig, GradientType, GridLinesConfig, HaloConfig, HaloZone};
+    use skia_safe::{surfaces, AlphaType, ColorType as SkColorType};
+
+    fn corner_alpha(bg: &AnimatedBackground, time: f32, w: f32, h: f32) -> u8 {
+        let info = ImageInfo::new(
+            (w as i32, h as i32),
+            SkColorType::RGBA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface = surfaces::raster(&info, None, None).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+        draw_animated_background(canvas, bg, time, w, h);
+        let dst_info = ImageInfo::new((1, 1), SkColorType::RGBA8888, AlphaType::Premul, None);
+        let mut pixel = [0u8; 4];
+        surface
+            .read_pixels(&dst_info, &mut pixel, 4, (0, 0))
+            .then_some(())
+            .unwrap();
+        pixel[3]
+    }
+
+    fn center_is_white(bg: &AnimatedBackground, time: f32, w: f32, h: f32) -> bool {
+        let info = ImageInfo::new(
+            (w as i32, h as i32),
+            SkColorType::RGBA8888,
+            AlphaType::Premul,
+            None,
+        );
+        let mut surface = surfaces::raster(&info, None, None).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0));
+        draw_animated_background(canvas, bg, time, w, h);
+        let dst_info = ImageInfo::new((1, 1), SkColorType::RGBA8888, AlphaType::Premul, None);
+        let mut pixel = [0u8; 4];
+        surface
+            .read_pixels(
+                &dst_info,
+                &mut pixel,
+                4,
+                ((w / 2.0) as i32, (h / 2.0) as i32),
+            )
+            .then_some(())
+            .unwrap();
+        pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200
+    }
+
+    #[test]
+    fn grid_lines_tile_period_matches_the_major_every_cycle_not_just_one_cell() {
+        let cfg = GridLinesConfig {
+            color: "#ffffff".into(),
+            cell: 20.0,
+            weight: 1.0,
+            major_every: 5,
+            major_weight: 2.0,
+        };
+        let (sx, sy) = tile_spacing(&BackgroundPreset::GridLines(cfg));
+        assert_eq!((sx, sy), (100.0, 100.0));
+    }
+
+    #[test]
+    fn gradient_shift_paints_the_full_viewport_regardless_of_scroll_wrap_phase() {
+        let bg = AnimatedBackground {
+            preset: BackgroundPreset::GradientShift(GradientShiftConfig {
+                colors: vec!["#FF0000".into(), "#0000FF".into()],
+                gradient_type: GradientType::Linear,
+            }),
+            x: 0.0,
+            y: 0.0,
+            speed: 60.0,
+            direction: Some(ScrollDirection::Right),
+        };
+        for t in [0.0_f32, 0.3, 0.5, 0.98, 1.0, 1.5] {
+            let alpha = corner_alpha(&bg, t, 100.0, 100.0);
+            assert!(
+                alpha > 0,
+                "t={t}: corner pixel is unpainted (alpha={alpha}) — the scroll wrap is \
+                 shifting a preset that has no tiling concept"
+            );
+        }
+    }
+
+    #[test]
+    fn halo_zone_position_does_not_drift_with_the_scroll_wrap() {
+        let bg = AnimatedBackground {
+            preset: BackgroundPreset::Halo(HaloConfig {
+                zones: vec![HaloZone {
+                    color: "#ffffff".into(),
+                    x: 0.5,
+                    y: 0.5,
+                    radius: 0.2,
+                    opacity: 1.0,
+                }],
+            }),
+            x: 0.0,
+            y: 0.0,
+            speed: 90.0,
+            direction: Some(ScrollDirection::Right),
+        };
+        for t in [0.0_f32, 0.5, 1.0, 1.5] {
+            assert!(
+                center_is_white(&bg, t, 200.0, 200.0),
+                "t={t}: the halo zone at its documented fractional position must stay under \
+                 the surface's own center regardless of the wrapped scroll offset"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod gradient_linear_space_tests {
     //! TDD tests for paint.md finding #7: the "linear color space
     //! interpolation" and "subdivided stops" banding mitigations were both
@@ -1315,6 +1430,53 @@ mod pixel_grid_tests {
     }
 
     #[test]
+    fn same_absolute_cell_renders_identically_regardless_of_the_wrap_phase() {
+        let c = PixelGridConfig {
+            colors: vec!["#FFFFFF".into(), "#FF0000".into()],
+            size: 10.0,
+            spacing: 20.0,
+            density: 1.0,
+            density_ramp: PixelDensityRamp::None,
+            radius: 0.0,
+            seed: 7,
+            motion: PixelGridMotion::None,
+        };
+        let sample = |cell_offset: (i32, i32), local_col: i32| -> [u8; 4] {
+            let (w, h) = (80.0_f32, 20.0_f32);
+            let info = skia_safe::ImageInfo::new(
+                (w as i32, h as i32),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+            draw_bg_pixel_grid(canvas, &c, 0.0, 0.0, w, h, cell_offset);
+            let x = local_col * 20 + 5;
+            let dst = skia_safe::ImageInfo::new(
+                (1, 1),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let mut px = [0u8; 4];
+            surface
+                .read_pixels(&dst, &mut px, 4, (x, 10))
+                .then_some(())
+                .unwrap();
+            px
+        };
+        let absolute_cell_3_via_offset_0 = sample((0, 0), 3);
+        let absolute_cell_3_via_offset_1 = sample((1, 0), 2);
+        assert_eq!(
+            absolute_cell_3_via_offset_0, absolute_cell_3_via_offset_1,
+            "the same absolute cell must render identically regardless of how a wrap has split \
+             its position between cell_offset and the local loop column"
+        );
+    }
+
+    #[test]
     fn density_ramps_run_the_direction_they_name() {
         let (w, h) = (100.0, 100.0);
         assert!(ramp_at(PixelDensityRamp::Right, 90.0, 50.0, w, h) > 0.8);
@@ -1374,16 +1536,16 @@ mod pixel_grid_tests {
 
         let mut empty = cfg();
         empty.colors.clear();
-        draw_bg_pixel_grid(canvas, &empty, 1.0, 0.0, 32.0, 32.0);
+        draw_bg_pixel_grid(canvas, &empty, 1.0, 0.0, 32.0, 32.0, (0, 0));
 
         let mut zero = cfg();
         zero.size = 0.0;
         zero.spacing = 0.0;
-        draw_bg_pixel_grid(canvas, &zero, 1.0, 0.0, 32.0, 32.0);
+        draw_bg_pixel_grid(canvas, &zero, 1.0, 0.0, 32.0, 32.0, (0, 0));
 
         let mut over = cfg();
         over.density = 5.0;
-        draw_bg_pixel_grid(canvas, &over, 1.0, 0.0, 32.0, 32.0);
+        draw_bg_pixel_grid(canvas, &over, 1.0, 0.0, 32.0, 32.0, (0, 0));
     }
 }
 
@@ -1681,7 +1843,7 @@ mod heropattern_svg_injection_tests {
         )
         .expect("scratch SVG written");
 
-        let opt = heropattern_svg_options();
+        let opt = sandboxed_svg_options();
         let resolved =
             (opt.image_href_resolver.resolve_string)(scratch_path.to_str().unwrap(), &opt);
 

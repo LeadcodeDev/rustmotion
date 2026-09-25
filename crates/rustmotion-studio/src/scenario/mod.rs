@@ -15,10 +15,13 @@ pub use edit::{
 pub use history::{history_slot, record_edit, redo, set_saving, undo, SharedHistory};
 pub use model::{empty_scenario, Shared, StudioModel};
 pub use optimistic::{
-    apply_optimistic, is_self_write, note_self_write, pending_write_slot, queue_mutation,
-    resolve_flush, self_write_slot, take_pending, Mutation, PendingWrites,
+    apply_optimistic, clear_self_write, is_self_write, note_self_write, pending_write_slot,
+    queue_mutation, resolve_flush, resolve_for_render, self_write_slot, take_pending, Mutation,
+    PendingWrites,
 };
-pub use sidecar::{append_sidecar_annotation, remove_sidecar_annotation};
+pub use sidecar::{
+    append_sidecar_annotation, merge_annotations, read_sidecar, remove_sidecar_annotation,
+};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum View {

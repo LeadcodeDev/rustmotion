@@ -72,20 +72,22 @@ pub fn font_size_ctx(viewport_width: f32, viewport_height: f32, parent_size: f32
     }
 }
 
-/// Same as [`font_size_ctx`], for the `Intrinsic` measurers in this module:
-/// they run at `box_builder`/`geometry` construction time, before layout, so
-/// there is no real per-frame viewport to hand (see the pre-existing note on
-/// `TextIntrinsic::from_parts`, which has the same limitation for
-/// `letter-spacing`/`line-height`). Falls back to the engine-wide default
-/// 1920×1080 (same as `LengthContext::default()`) so `rem` — which does not
-/// depend on the viewport at all — still resolves exactly, and `vw`/`vh` get
-/// a reasonable non-zero approximation instead of silently dropping to 0.
-/// This can diverge from what `Painter::paint_content` resolves via
-/// [`font_size_ctx`] for `vw`/`vh` specifically, on videos that aren't
-/// 1920×1080 — closing that fully needs the real `VideoConfig` threaded
-/// through `box_builder.rs`/`geometry.rs`, both outside this workstream.
+/// Same as [`font_size_ctx`], falling back to the engine-wide default
+/// 1920×1080 (same as `LengthContext::default()`) so `rem` still resolves
+/// exactly, and `vw`/`vh` get a reasonable non-zero approximation instead of
+/// silently dropping to 0. See [`measure_time_font_size_ctx_for_viewport`]
+/// for callers that have the scenario's real `VideoConfig` dimensions.
 pub fn measure_time_font_size_ctx(parent_size: f32) -> LengthContext {
-    font_size_ctx(1920.0, 1080.0, parent_size)
+    measure_time_font_size_ctx_for_viewport((1920.0, 1080.0), parent_size)
+}
+
+/// Same as [`measure_time_font_size_ctx`], resolving `vw`/`vh` against
+/// `viewport` instead of the 1920×1080 default.
+pub fn measure_time_font_size_ctx_for_viewport(
+    viewport: (f32, f32),
+    parent_size: f32,
+) -> LengthContext {
+    font_size_ctx(viewport.0, viewport.1, parent_size)
 }
 
 /// Skia-backed intrinsic measurer for [`Text`] (audit #10: despite the name
@@ -122,6 +124,12 @@ impl TextIntrinsic {
     /// or the validator's assumption about what the renderer produces is
     /// false.
     pub fn from_text(text: &Text) -> Self {
+        Self::from_text_for_viewport(text, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_text`], resolving `vw`/`vh` `font-size` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_text_for_viewport(text: &Text, viewport: (f32, f32)) -> Self {
         let wrap = !matches!(
             text.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
@@ -135,7 +143,7 @@ impl TextIntrinsic {
             .all_labels()
             .max_by_key(|label| label.chars().count())
             .unwrap_or(&text.content);
-        Self::from_parts_with_wrap(widest, &text.style, text.max_width, wrap)
+        Self::from_parts_with_wrap_for_viewport(widest, &text.style, text.max_width, wrap, viewport)
             .with_autofit(matches!(text.style.text_autofit, Some(true)))
     }
 
@@ -161,30 +169,18 @@ impl TextIntrinsic {
     /// wrap:true unconditionally so their measured size still matches what
     /// those painters actually draw.
     pub fn from_parts(content: &str, style: &CssStyle, max_width: Option<f32>) -> Self {
-        // No *real* `LengthContext` (real viewport, real parent width) is
-        // reachable here without changing this constructor's signature —
-        // its only callers are `box_builder.rs` and
-        // `rustmotion/src/cli/commands/geometry.rs`, both outside this
-        // workstream's scope (box_builder.rs is a sibling's live file this
-        // wave; the geometry validator re-measures via this exact type and
-        // must keep agreeing with it byte-for-byte, so changing what it
-        // needs to pass in is not a call to make unilaterally here).
-        // `measure_time_font_size_ctx` falls back to the engine-wide default
-        // viewport (1920×1080) for this reason — see its doc comment.
-        //
-        // `font-size` itself, and `letter-spacing`/`line-height`'s `em`/`%`
-        // (relative to this element's *own*, just-resolved font-size — CSS
-        // spec, also documented on `CssStyle::letter_spacing_px_ctx`/
-        // `line_height_for_ctx`) are resolved together by
-        // `typography_px_ctx`, which re-derives the right context between
-        // the two steps. `Text`/`Caption`'s painters resolve the same three
-        // properties with the real `PaintCtx`'s viewport (lot B, wave S), so
-        // `rem` (viewport-independent) always agrees between measure and
-        // paint; `vw`/`vh` can diverge on videos that aren't 1920×1080 —
-        // closing that fully needs the real `VideoConfig` plumbed through
-        // `box_builder.rs`/`geometry.rs`, still out of scope for the reasons
-        // above.
-        let base_ctx = measure_time_font_size_ctx(0.0);
+        Self::from_parts_for_viewport(content, style, max_width, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_parts`], resolving `vw`/`vh` `font-size` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_parts_for_viewport(
+        content: &str,
+        style: &CssStyle,
+        max_width: Option<f32>,
+        viewport: (f32, f32),
+    ) -> Self {
+        let base_ctx = measure_time_font_size_ctx_for_viewport(viewport, 0.0);
         let (font_size, letter_spacing, line_height_resolved) =
             style.typography_px_ctx(&base_ctx, 48.0);
         Self {
@@ -209,7 +205,19 @@ impl TextIntrinsic {
         max_width: Option<f32>,
         wrap: bool,
     ) -> Self {
-        let mut t = Self::from_parts(content, style, max_width);
+        Self::from_parts_with_wrap_for_viewport(content, style, max_width, wrap, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_parts_with_wrap`], resolving `vw`/`vh`
+    /// `font-size` against `viewport` instead of the 1920×1080 default.
+    pub fn from_parts_with_wrap_for_viewport(
+        content: &str,
+        style: &CssStyle,
+        max_width: Option<f32>,
+        wrap: bool,
+        viewport: (f32, f32),
+    ) -> Self {
+        let mut t = Self::from_parts_for_viewport(content, style, max_width, viewport);
         t.wrap = wrap;
         t
     }
@@ -510,6 +518,12 @@ pub struct GradientTextIntrinsic(TextIntrinsic);
 
 impl GradientTextIntrinsic {
     pub fn from_gradient_text(t: &GradientText) -> Self {
+        Self::from_gradient_text_for_viewport(t, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_gradient_text`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_gradient_text_for_viewport(t: &GradientText, viewport: (f32, f32)) -> Self {
         // max_width comes from CSS style.width if set as a fixed pixel value
         use rustmotion_core::css::style::Size as CSize;
         use rustmotion_core::css::units::LengthPercentage;
@@ -525,8 +539,10 @@ impl GradientTextIntrinsic {
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
         Self(
-            TextIntrinsic::from_parts_with_wrap(&t.content, &t.style, max_width, wrap)
-                .with_autofit(matches!(t.style.text_autofit, Some(true))),
+            TextIntrinsic::from_parts_with_wrap_for_viewport(
+                &t.content, &t.style, max_width, wrap, viewport,
+            )
+            .with_autofit(matches!(t.style.text_autofit, Some(true))),
         )
     }
 }
@@ -547,6 +563,12 @@ pub struct CaptionIntrinsic(TextIntrinsic);
 
 impl CaptionIntrinsic {
     pub fn from_caption(c: &Caption) -> Self {
+        Self::from_caption_for_viewport(c, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_caption`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_caption_for_viewport(c: &Caption, viewport: (f32, f32)) -> Self {
         let joined = c
             .words
             .iter()
@@ -563,11 +585,12 @@ impl CaptionIntrinsic {
             c.style.white_space,
             Some(WhiteSpace::Nowrap | WhiteSpace::Pre)
         );
-        Self(TextIntrinsic::from_parts_with_wrap(
+        Self(TextIntrinsic::from_parts_with_wrap_for_viewport(
             &joined,
             &c.style,
             c.max_width,
             wrap,
+            viewport,
         ))
     }
 }
@@ -594,12 +617,25 @@ pub struct KbdIntrinsic {
 
 impl KbdIntrinsic {
     pub fn from_kbd(k: &Kbd) -> Self {
-        let fs = k
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), k.font_size);
+        Self::from_kbd_for_viewport(k, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_kbd`], resolving `vw`/`vh` `font-size` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_kbd_for_viewport(k: &Kbd, viewport: (f32, f32)) -> Self {
+        let fs = k.style.font_size_px_ctx(
+            &measure_time_font_size_ctx_for_viewport(viewport, 0.0),
+            k.font_size,
+        );
         let synthetic_style = synthesize_text_style(&k.style, fs, "SF Mono");
         Self {
-            text: TextIntrinsic::from_parts_with_wrap(&k.key, &synthetic_style, None, false),
+            text: TextIntrinsic::from_parts_with_wrap_for_viewport(
+                &k.key,
+                &synthetic_style,
+                None,
+                false,
+                viewport,
+            ),
             h_padding: fs * 0.7,
             v_padding: fs * 0.4,
             min_width: fs * 1.8,
@@ -626,6 +662,12 @@ pub struct CounterIntrinsic(TextIntrinsic);
 
 impl CounterIntrinsic {
     pub fn from_counter(c: &Counter) -> Self {
+        Self::from_counter_for_viewport(c, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_counter`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_counter_for_viewport(c: &Counter, viewport: (f32, f32)) -> Self {
         let absmax = c.from.abs().max(c.to.abs());
         let signed = if c.from < 0.0 || c.to < 0.0 {
             -absmax
@@ -634,8 +676,8 @@ impl CounterIntrinsic {
         };
         let display = format_counter_value(signed, c.decimals, &c.separator, &c.prefix, &c.suffix);
         // Counter is atomic: it never wraps.
-        Self(TextIntrinsic::from_parts_with_wrap(
-            &display, &c.style, None, false,
+        Self(TextIntrinsic::from_parts_with_wrap_for_viewport(
+            &display, &c.style, None, false, viewport,
         ))
     }
 }
@@ -662,6 +704,15 @@ pub struct NumberWheelIntrinsic(TextIntrinsic);
 
 impl NumberWheelIntrinsic {
     pub fn from_number_wheel(w: &crate::number_wheel::NumberWheel) -> Self {
+        Self::from_number_wheel_for_viewport(w, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_number_wheel`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_number_wheel_for_viewport(
+        w: &crate::number_wheel::NumberWheel,
+        viewport: (f32, f32),
+    ) -> Self {
         let widest = (0..10)
             .map(|d| {
                 let ch = char::from_digit(d, 10).expect("0..10 is a digit");
@@ -672,12 +723,14 @@ impl NumberWheelIntrinsic {
             })
             .max_by(|a, b| {
                 let measure = |s: &str| {
-                    TextIntrinsic::from_parts_with_wrap(s, &w.style, None, false)
-                        .measure(
-                            (None, None),
-                            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
-                        )
-                        .0
+                    TextIntrinsic::from_parts_with_wrap_for_viewport(
+                        s, &w.style, None, false, viewport,
+                    )
+                    .measure(
+                        (None, None),
+                        (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                    )
+                    .0
                 };
                 measure(a)
                     .partial_cmp(&measure(b))
@@ -685,8 +738,8 @@ impl NumberWheelIntrinsic {
             })
             .unwrap_or_else(|| w.value.clone());
         // A wheel is atomic: it never wraps.
-        Self(TextIntrinsic::from_parts_with_wrap(
-            &widest, &w.style, None, false,
+        Self(TextIntrinsic::from_parts_with_wrap_for_viewport(
+            &widest, &w.style, None, false, viewport,
         ))
     }
 }
@@ -713,10 +766,17 @@ pub struct BadgeIntrinsic {
 
 impl BadgeIntrinsic {
     pub fn from_badge(b: &Badge) -> Self {
+        Self::from_badge_for_viewport(b, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_badge`], resolving `vw`/`vh` `font-size` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_badge_for_viewport(b: &Badge, viewport: (f32, f32)) -> Self {
         let (default_fs, h_pad, v_pad, icon_size) = badge_size_params(&b.badge_size);
-        let font_size = b
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), default_fs);
+        let font_size = b.style.font_size_px_ctx(
+            &measure_time_font_size_ctx_for_viewport(viewport, 0.0),
+            default_fs,
+        );
         let ratio = font_size / default_fs;
         let h_padding = h_pad * ratio;
         let v_padding = v_pad * ratio;
@@ -729,7 +789,13 @@ impl BadgeIntrinsic {
         let synthetic_style = synthesize_text_style(&b.style, font_size, "Inter");
 
         Self {
-            text: TextIntrinsic::from_parts_with_wrap(&b.text, &synthetic_style, None, false),
+            text: TextIntrinsic::from_parts_with_wrap_for_viewport(
+                &b.text,
+                &synthetic_style,
+                None,
+                false,
+                viewport,
+            ),
             h_padding,
             v_padding,
             icon_extra,
@@ -813,9 +879,16 @@ pub struct TerminalIntrinsic {
 
 impl TerminalIntrinsic {
     pub fn from_terminal(t: &Terminal) -> Self {
-        let font_size = t
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), TERM_FONT_SIZE);
+        Self::from_terminal_for_viewport(t, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_terminal`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_terminal_for_viewport(t: &Terminal, viewport: (f32, f32)) -> Self {
+        let font_size = t.style.font_size_px_ctx(
+            &measure_time_font_size_ctx_for_viewport(viewport, 0.0),
+            TERM_FONT_SIZE,
+        );
         let line_height = (font_size * TERM_LINE_HEIGHT / TERM_FONT_SIZE).ceil();
         let chrome_height = if t.show_chrome { CHROME_HEIGHT } else { 0.0 };
 
@@ -895,9 +968,16 @@ pub struct TableIntrinsic {
 
 impl TableIntrinsic {
     pub fn from_table(t: &Table) -> Self {
-        let font_size = t
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), TABLE_FONT_SIZE);
+        Self::from_table_for_viewport(t, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_table`], resolving `vw`/`vh` `font-size` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_table_for_viewport(t: &Table, viewport: (f32, f32)) -> Self {
+        let font_size = t.style.font_size_px_ctx(
+            &measure_time_font_size_ctx_for_viewport(viewport, 0.0),
+            TABLE_FONT_SIZE,
+        );
         let row_height = font_size * DEFAULT_ROW_HEIGHT_RATIO;
 
         let total_width = Self::compute_width(t, font_size);
@@ -959,10 +1039,17 @@ pub struct CodeblockIntrinsic {
 
 impl CodeblockIntrinsic {
     pub fn from_codeblock(c: &Codeblock) -> Self {
+        Self::from_codeblock_for_viewport(c, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_codeblock`], resolving `vw`/`vh` `font-size`
+    /// against `viewport` instead of the 1920×1080 default.
+    pub fn from_codeblock_for_viewport(c: &Codeblock, viewport: (f32, f32)) -> Self {
         let font_family = c.style.font_family_or("JetBrains Mono");
-        let font_size = c
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), 14.0);
+        let font_size = c.style.font_size_px_ctx(
+            &measure_time_font_size_ctx_for_viewport(viewport, 0.0),
+            14.0,
+        );
         let font_weight = match &c.style.font_weight {
             Some(CssFontWeight2::Keyword(CssFontWeightKw2::Bold | CssFontWeightKw2::Bolder)) => {
                 FontWeight::Bold
@@ -1036,14 +1123,22 @@ pub struct RichTextIntrinsic {
     spans: Vec<RichTextSpan>,
     style: CssStyle,
     max_width: Option<f32>,
+    viewport: (f32, f32),
 }
 
 impl RichTextIntrinsic {
     pub fn from_rich_text(rt: &RichText) -> Self {
+        Self::from_rich_text_for_viewport(rt, (1920.0, 1080.0))
+    }
+
+    /// Same as [`Self::from_rich_text`], resolving `vw`/`vh` against
+    /// `viewport` instead of the 1920×1080 default.
+    pub fn from_rich_text_for_viewport(rt: &RichText, viewport: (f32, f32)) -> Self {
         Self {
             spans: rt.spans.clone(),
             style: rt.style.clone(),
             max_width: rt.max_width,
+            viewport,
         }
     }
 }
@@ -1070,8 +1165,14 @@ impl IntrinsicMeasure for RichTextIntrinsic {
             }
         };
 
-        let layout =
-            RichText::compute_layout(&self.spans, &self.style, 1920.0, 1080.0, max_width, -1.0);
+        let layout = RichText::compute_layout(
+            &self.spans,
+            &self.style,
+            self.viewport.0,
+            self.viewport.1,
+            max_width,
+            -1.0,
+        );
         let line_count = layout.lines.len().max(1) as f32;
         (layout.max_width, line_count * layout.line_height)
     }
@@ -1298,6 +1399,7 @@ mod tests {
             spans,
             style,
             max_width: None,
+            viewport: (1920.0, 1080.0),
         };
         let (w, h) = intrinsic.measure(
             (None, None),
@@ -1322,6 +1424,7 @@ mod tests {
             spans,
             style,
             max_width: None,
+            viewport: (1920.0, 1080.0),
         };
         let (_w_unconstrained, h_unconstrained) = intrinsic.measure(
             (None, None),
@@ -1355,6 +1458,7 @@ mod tests {
             spans: spans.clone(),
             style: style.clone(),
             max_width: None,
+            viewport: (1920.0, 1080.0),
         };
         let (w, h) = intrinsic.measure(
             (None, None),

@@ -147,7 +147,7 @@ Le glassmorphisme n'a d'intérêt que s'il y a quelque chose à voir derrière. 
 - Opacity blobs : **≥ 50% (`80` en hex)** sur fond sombre — sinon invisibles à travers le flou.
 - Minimum 2 blobs de couleurs différentes, positions opposées.
 - Amplitudes wiggle plus grandes que d'habitude (le flou masque les micro-mouvements).
-- Positionner les blobs de sorte que `x >= 0` et `x + width <= viewport_width` — le validateur rejette tout débordement, même pour les décoratifs.
+- Positionner les blobs de sorte que `x >= 0`, `x + width <= viewport_width`, `y >= 0` et `y + height <= viewport_height` — le validateur rejette tout débordement, même pour les décoratifs, sur les deux axes. L'exemple ci-dessus (`y: 600`, `height: 700`) suppose un canvas d'au moins 1300px de haut (portrait 1080×1920 typique) ; sur un format paysage 1080p, réduire `y` et/ou `height` en conséquence.
 
 ---
 

@@ -188,6 +188,14 @@ pub enum RustmotionError {
         path: String,
     },
 
+    #[error("Parameter '{param}' of component '{component}' at '{path}' {detail}")]
+    ComponentParamTypeMismatch {
+        component: String,
+        param: String,
+        path: String,
+        detail: String,
+    },
+
     #[error("Component instantiation cycle at '{path}': {chain}")]
     ComponentCycle { chain: String, path: String },
 

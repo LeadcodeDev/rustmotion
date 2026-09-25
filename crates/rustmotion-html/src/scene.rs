@@ -147,7 +147,10 @@ pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
         );
     }
 
-    obj.insert("children".into(), Value::Array(children_to_values(handle)?));
+    obj.insert(
+        "children".into(),
+        Value::Array(children_to_values(handle, 0)?),
+    );
     Ok(Value::Object(obj))
 }
 

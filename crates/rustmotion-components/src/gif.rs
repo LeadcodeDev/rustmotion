@@ -279,10 +279,49 @@ impl Painter for Gif {
         let row_bytes = gif_width as usize * 4;
         let data = skia_safe::Data::new_copy(frame_data);
         if let Some(img) = skia_safe::images::raster_from_data(&img_info, data, row_bytes) {
-            let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-            let paint = Paint::default();
-            canvas.draw_image_rect(img, None, dst, &paint);
+            draw_fitted(canvas, img, &self.fit, layout);
         }
+    }
+}
+
+fn fit_rect(fit: &ImageFit, gif_w: f32, gif_h: f32, target_w: f32, target_h: f32) -> Rect {
+    match fit {
+        ImageFit::Fill => Rect::from_xywh(0.0, 0.0, target_w, target_h),
+        ImageFit::Contain => {
+            let scale = (target_w / gif_w).min(target_h / gif_h);
+            let w = gif_w * scale;
+            let h = gif_h * scale;
+            Rect::from_xywh((target_w - w) / 2.0, (target_h - h) / 2.0, w, h)
+        }
+        ImageFit::Cover => {
+            let scale = (target_w / gif_w).max(target_h / gif_h);
+            let w = gif_w * scale;
+            let h = gif_h * scale;
+            Rect::from_xywh((target_w - w) / 2.0, (target_h - h) / 2.0, w, h)
+        }
+    }
+}
+
+fn draw_fitted(canvas: &Canvas, img: skia_safe::Image, fit: &ImageFit, layout: &BoxLayout) {
+    let dst = fit_rect(
+        fit,
+        img.width() as f32,
+        img.height() as f32,
+        layout.width,
+        layout.height,
+    );
+    let paint = Paint::default();
+    if matches!(fit, ImageFit::Cover) {
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, 0.0, layout.width, layout.height),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
+        canvas.draw_image_rect(img, None, dst, &paint);
+        canvas.restore();
+    } else {
+        canvas.draw_image_rect(img, None, dst, &paint);
     }
 }
 
@@ -371,6 +410,83 @@ mod tests {
         frame.left = 3;
         frame.top = 3;
         assert_eq!(frame_rect(4, 4, &frame), (3, 3, 1, 1));
+    }
+
+    #[test]
+    fn fit_contain_letterboxes_instead_of_stretching_to_fill() {
+        let path = std::env::temp_dir().join(format!(
+            "rustmotion_gif_fit_{}_{}.gif",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_two_frame_gif(&path);
+
+        let gif = Gif {
+            src: path.to_str().expect("utf-8 path").to_string(),
+            fit: ImageFit::Contain,
+            loop_gif: true,
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+
+        const W: i32 = 100;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: W as f32,
+                height: H as f32,
+                ..Default::default()
+            };
+            let ctx = PaintCtx {
+                time: 0.0,
+                scenario_time: 0.0,
+                scene_duration: 1.0,
+                frame_index: 0,
+                fps: 30,
+                video_width: W as u32,
+                video_height: H as u32,
+                stagger_offset: 0.0,
+            };
+            gif.paint_content(canvas, &layout, &AnimatedProperties::default(), &ctx);
+        }
+        std::fs::remove_file(&path).ok();
+
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+
+        let row_has_ink = |y: i32| (0..W).any(|x| buf[((y * W + x) * 4 + 3) as usize] > 0);
+        assert!(
+            !row_has_ink(0) && !row_has_ink(H - 1),
+            "fit: contain on a 2:1 source in a 1:1 box must letterbox — the top and bottom \
+             rows must stay empty, not be stretched over by the source image"
+        );
+        assert!(
+            row_has_ink(H / 2),
+            "the middle row must still carry the letterboxed image"
+        );
     }
 
     /// Releases `DECODE_STALL_MS` back to zero even if the test body

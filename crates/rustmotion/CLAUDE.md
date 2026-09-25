@@ -12,7 +12,7 @@ Tout JSON de scénario généré doit être validé avec `rustmotion validate` a
 Aucun contenu textuel ne doit dépasser du device. Quatre propriétés contrôlent ce comportement :
 
 - `style.white-space` (default `normal`, donc wrap actif) sur `text` : le texte wrap sur la largeur du parent par défaut. `white-space: "nowrap"` (ou `"pre"`) est légitime uniquement si un `max-width` fini + `font-size` raisonnable garantissent que la ligne tient. Le validateur émet `unwrappable_text_overflow` sinon. Il n'existe pas de champ `style.wrap` — c'est un vocabulaire hérité de l'ancien modèle de style, supprimé de `CssStyle`. Voir [rules/geometry-safety.md](.claude/skills/rustmotion/rules/geometry-safety.md).
-- `auto_scroll` (default `true`) sur `codeblock` et `terminal` : quand le contenu dépasse la hauteur du `size`, le moteur scrolle (clip + translate) sans réduire la `font-size`. `auto_scroll: false` → `auto_scroll_disabled_overflow`.
+- `auto_scroll` (default `true`) sur `codeblock` et `terminal` : quand le contenu dépasse la hauteur déclarée en `style.height`, le moteur scrolle (clip + translate) sans réduire la `font-size`. Il n'existe pas de champ racine `size` sur ces composants — la boîte se dimensionne via `style.width`/`style.height`, comme les autres composants. `auto_scroll: false` → `auto_scroll_disabled_overflow`.
 - `style.text-autofit` (default absent) sur `text` et `gradient_text` : réduit la `font-size` jusqu'à ce que le contenu tienne dans sa boîte. À réserver au texte piloté par des données, dont on ne peut pas connaître la longueur à l'avance — pas pour compenser une mise en page qu'on peut simplement dimensionner. Le rétrécissement s'arrête à un plancher de lisibilité calibré ; si ça ne suffit pas, **la violation est toujours signalée**. Seuls ces deux composants l'implémentent : le déclarer ailleurs est inerte.
 - `style.overflow` (default `visible`) sur les conteneurs : sémantique CSS. `hidden` clippe au bord du parent. Le validateur ne se plaint que si le contenu sort du **viewport**, pas d'un parent `visible`.
 
@@ -23,7 +23,7 @@ CLI :
 - `--fix` — auto-fix sûr : `auto_scroll: true` sur `auto_scroll_disabled_overflow`, retrait de `style.white-space` sur `unwrappable_text_overflow` (retour au wrapping), et `text-autofit: true` sur `content_overflows_box` pour `text`/`gradient_text`. Les débordements de viewport restent non corrigés : ils demandent un arbitrage de mise en page. `--fix` **refuse** d'écrire sur un scénario templaté, utilisant `include`, ou utilisant `for-each`/`use` — les index de chemin ne correspondraient plus à la source.
 - `--report r.json` — rapport JSON
 - `--strict-anim` — vérification frame par frame ; ajoute la détection `animated_text_overflow` (transform animé qui sort du viewport à un instant échantillonné). L'échantillonnage s'arrête à `scene.freeze_at`, puisque rien n'est rendu au-delà.
-- `--strict-attrs` — promeut en erreurs les attributs inconnus (détection schéma + did-you-mean, activée par défaut en warnings)
+- `--strict-attrs` — **dépréciée, no-op.** Les attributs de composant inconnus (détection schéma + did-you-mean) sont des erreurs **par défaut** depuis que ce flag existait ; il ne change plus rien et se contente d'imprimer un avis, conservé pour ne pas casser les scripts existants.
 - `--lenient` — warnings au lieu d'errors
 
 ## Encodage
@@ -46,7 +46,7 @@ Ne duplique pas un sous-arbre. Si dix cartes ne diffèrent que par leurs donnée
 }]
 ```
 
-Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$index` et `$item`. `params` a la forme de `config` ; omettre `default` rend le paramètre requis. La clé d'overrides est **`props`**, pas `config` — ce nom-là est réservé et serait sauté par la substitution.
+Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$index` et `$item`. `params` a la forme de `config` ; omettre `default` rend le paramètre requis. La clé d'overrides est **`props`**, pas `config` — ce nom-là est réservé : un `use` portant une clé `config` échoue au chargement sur un champ inconnu. Ce n'est pas un saut silencieux.
 
 `components` est local au fichier qui le déclare. On peut itérer sur un tableau venu d'une variable ; on ne peut pas instancier un composant défini dans un fichier inclus. Toute erreur — cycle, tableau manquant, composant inconnu, paramètre absent — est nommée et située. Voir [rules/templates-and-iteration.md](.claude/skills/rustmotion/rules/templates-and-iteration.md).
 
@@ -54,7 +54,7 @@ Chaque élément du `for-each` lie ses champs directement (`$label`), plus `$ind
 
 ## Composition : `scenes` vs `composition` (vues `slide` / `world`)
 
-Un scénario est soit une liste plate `scenes` (racine) — implicitement enveloppée dans une seule vue `slide` — soit un `composition: [...]` explicite, un tableau de **vues** typées `"slide"` ou `"world"`. Les deux sont mutuellement exclusifs (`CompositionAndScenesConflict` si les deux sont présents).
+Un scénario est soit une liste plate `scenes` (racine) — implicitement enveloppée dans une seule vue `slide` — soit un `composition: [...]` explicite, un tableau de **vues** typées `"slide"` ou `"world"`. Les deux sont mutuellement exclusifs (`CompositionAndScenesConflict` si les deux sont présents). Le top-level `scenes` reste pleinement supporté mais `render` (pas `validate`) émet un avertissement le qualifiant de legacy et recommandant `composition: [{ type: "slide", scenes: [...] }]` — les exemples de ce fichier utilisent volontairement la forme `scenes` pour sa concision.
 
 Dans une vue `slide`, les `transition` entre scènes sont des **composites pixel de deux frame-buffers déjà rendus** (fade, wipe, zoom, flip, iris, slide, chromatic_wipe…) : aucun élément ne survit à la coupe, seuls les pixels sont mélangés.
 
@@ -63,6 +63,8 @@ Dans une vue `slide`, les `transition` entre scènes sont des **composites pixel
 La vue **`world`** est le seul mécanisme qui produit une continuité réelle entre beats : une caméra virtuelle se déplace en continu à travers un espace 2D où chaque scène occupe une position (`world-position`), avec un fondu de recouvrement pendant le pan au lieu d'une coupe. C'est la brique à utiliser pour une vidéo qui doit se lire comme un plan continu, sans limite de scène perceptible. Voir [rules/world-view.md](.claude/skills/rustmotion/rules/world-view.md) pour le modèle de coordonnées (le piège `world-position` = waypoint caméra, pas origine de scène), la recette du halo ambiant en `view.background`, et un exemple multi-beat validé.
 
 **Piège de casing à connaître :** `world-position` (scène) est en kebab-case, alors que son voisin `freeze_at` (même struct `Scene`) est en snake_case. Vraie inconsistance du schéma, pas une faute de frappe — copier la casse telle quelle.
+
+**Piège plus sérieux :** `world-position` et `persist` (champs de `Scene`, donc acceptés même sur le `scenes` top-level implicite) sont validés sans jamais produire d'effet ni d'avertissement tant qu'on n'est pas dans une vue `composition: [{ "type": "world", ... }]` — `rustmotion validate` répond « Valid ». `camera_easing`/`camera_pan_duration` (champs de `View`, uniquement accessibles via `composition`) sont pareillement inertes sur une vue `"type": "slide"`. Dans tous les cas c'est un no-op silencieux, pas une erreur — vérifier qu'on est bien dans une vue `world` avant de les utiliser.
 
 ## Animated backgrounds
 
@@ -165,7 +167,7 @@ pub trait Painter {
 }
 ```
 
-`PaintCtx` contient : `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
+`PaintCtx` contient : `time`, `scenario_time` (temps depuis le début du scénario/de la vue — c'est celui qu'indexent les painters audio-réactifs, pas `time` qui repart à zéro à chaque scène), `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
 
 ### Structure des crates
 
@@ -193,11 +195,12 @@ crates/
 │   │   ├── animation.rs        # EasingType, AnimationPreset, PresetConfig
 │   │   ├── codeblock_types.rs  # CodeblockChrome, CodeblockState
 │   │   └── video.rs            # AnimationEffect, Size, ShapeType, Stroke
-│   └── traits/
+│   └── traits/                 # 11 fichiers
 │       ├── painter.rs          # Painter trait + PaintCtx + AvailableSize + MeasureCtx
 │       ├── animatable.rs       # Animatable trait
 │       ├── timed.rs            # Timed trait + TimingConfig
-│       └── styled.rs           # Styled trait
+│       ├── styled.rs           # Styled trait
+│       └── backgrounded.rs, bordered.rs, clipped.rs, container.rs, rounded.rs, shadowed.rs
 │
 ├── rustmotion-components/src/
 │   ├── lib.rs                  # Enum Component + dispatch (as_painter, as_animatable, etc.)
@@ -205,11 +208,13 @@ crates/
 │   ├── intrinsic.rs            # TextIntrinsic, BadgeIntrinsic, CounterIntrinsic, etc.
 │   ├── legacy_dispatch.rs      # LegacyPaintDispatcher (bridge NodeId → Painter)
 │   ├── chart/                  # 10 fichiers (mod + bar/line/pie/radar/scatter/radial/funnel/waterfall/axes)
+│   ├── codeblock/              # 7 fichiers (mod, render, dimensions, chrome, highlight, diff, reveal)
 │   └── *.rs                    # Un fichier par composant (impl Painter)
 │
 └── rustmotion/src/
     ├── cli/                    # Le binaire `rustmotion` (clap + sous-commandes)
-    │   └── commands/           # validate, render, schema, info
+    │   └── commands/           # render, validate(+validate_attrs, validate_schema, validation),
+    │                           # schema, info, still, batch, captions, geometry
     ├── encode/                 # Encodeurs vidéo/audio, mux
     └── loader.rs               # Chargement JSON/HTML → ResolvedScenario
 ```
@@ -248,7 +253,7 @@ description de PR ou l'issue.
 ### Tests
 
 ```bash
-cargo test --workspace        # ~200 tests (layout + serde round-trip + pixel regressions + smoke)
-cargo check                   # Vérification compilation
-rustmotion validate file.json # Validation scénario
+cargo test --workspace           # 1400+ tests (layout + serde round-trip + pixel regressions + smoke)
+cargo check                      # Vérification compilation
+rustmotion validate -f file.json # Validation scénario
 ```

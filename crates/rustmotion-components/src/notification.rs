@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, paint_from_hex,
-    typeface_with_fallback,
+    sandboxed_svg_options, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -180,7 +180,7 @@ impl Notification {
         let img = if let Some(cached) = cache.get(&cache_key) {
             cached.clone()
         } else if let Ok(svg_data) = fetch_icon_svg(icon_id, color, icon_w, icon_h) {
-            let opt = usvg::Options::default();
+            let opt = sandboxed_svg_options();
             if let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) {
                 let svg_size = tree.size();
                 if let Some(mut pixmap) = tiny_skia::Pixmap::new(icon_w, icon_h) {

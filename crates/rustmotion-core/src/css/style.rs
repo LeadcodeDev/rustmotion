@@ -118,7 +118,6 @@ pub struct CssStyle {
     pub white_space: Option<WhiteSpace>,
     pub overflow_wrap: Option<OverflowWrap>,
     pub text_overflow: Option<TextOverflow>,
-    pub text_decoration: Option<TextDecoration>,
     /// When `true` on `text`/`gradient_text`, the effective `font-size` is
     /// shrunk (never grown) until the content fits the box it was assigned,
     /// instead of overflowing it. This is what lets an author declare "this
@@ -1009,34 +1008,6 @@ pub enum TextOverflow {
     Ellipsis,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
-pub struct TextDecoration {
-    pub line: Option<TextDecorationLine>,
-    pub style: Option<TextDecorationStyle>,
-    pub color: Option<Color>,
-    pub thickness: Option<Length>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum TextDecorationLine {
-    None,
-    Underline,
-    Overline,
-    LineThrough,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum TextDecorationStyle {
-    Solid,
-    Double,
-    Dotted,
-    Dashed,
-    Wavy,
-}
-
 // ---- Color ----
 
 /// Typed color. Strings are parsed lazily ("#rgb", "rgba(..)", named colors).
@@ -1856,6 +1827,21 @@ mod tests {
         assert!(
             br.get("top_left").is_none(),
             "must not emit the legacy snake_case key any more"
+        );
+    }
+
+    #[test]
+    fn text_decoration_is_a_named_unknown_field_not_a_silent_no_op() {
+        let err =
+            serde_json::from_str::<CssStyle>(r#"{ "text-decoration": { "line": "underline" } }"#)
+                .expect_err(
+                    "text-decoration must be rejected now that it carries no rendering effect, \
+             instead of parsing to a value nothing paints",
+                );
+        assert!(
+            err.to_string().contains("text-decoration")
+                || err.to_string().contains("text_decoration"),
+            "the deny_unknown_fields error must name the field, got: {err}"
         );
     }
 }

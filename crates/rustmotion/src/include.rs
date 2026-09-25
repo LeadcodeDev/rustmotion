@@ -12,6 +12,8 @@ use crate::schema::{
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
 
+const MAX_EXPANDED_SCENES: usize = 5_000;
+
 /// Response-size cap for a remote `include` fetch (RM-46). Scenario JSON is
 /// not expected to be large; this is deliberately far below ureq's own 10 MB
 /// default for `read_to_vec`/`read_to_string`.
@@ -64,6 +66,8 @@ pub fn resolve_includes_with_policy(
 ) -> Result<ResolvedScenario> {
     let mut audio = scenario.audio;
     let mut included_paths = Vec::new();
+    let root_dir = local_include_root(source);
+    let mut expanded_scenes: usize = 0;
     let has_scenes = !scenario.scenes.is_empty();
     let has_composition = scenario.composition.is_some();
 
@@ -84,6 +88,8 @@ pub fn resolve_includes_with_policy(
                 &mut audio,
                 &mut included_paths,
                 remote_policy,
+                root_dir.as_deref(),
+                &mut expanded_scenes,
             )?;
             for scene in &mut scenes {
                 resolve_scene_background(scene, templates)?;
@@ -112,6 +118,8 @@ pub fn resolve_includes_with_policy(
             &mut audio,
             &mut included_paths,
             remote_policy,
+            root_dir.as_deref(),
+            &mut expanded_scenes,
         )?;
         for scene in &mut scenes {
             resolve_scene_background(scene, templates)?;
@@ -142,12 +150,21 @@ fn resolve_entries(
     audio: &mut Vec<crate::schema::AudioTrack>,
     included_paths: &mut Vec<PathBuf>,
     remote_policy: RemoteIncludePolicy,
+    root_dir: Option<&Path>,
+    expanded_scenes: &mut usize,
 ) -> Result<Vec<Scene>> {
     let mut result = Vec::new();
 
     for entry in entries {
         match entry {
             SceneEntry::Scene(scene) => {
+                *expanded_scenes += 1;
+                if *expanded_scenes > MAX_EXPANDED_SCENES {
+                    return Err(RustmotionError::Generic(format!(
+                        "scenario expands to more than {MAX_EXPANDED_SCENES} scenes via \
+                         'include' — refusing to keep expanding"
+                    )));
+                }
                 result.push(scene);
             }
             SceneEntry::Include(directive) => {
@@ -164,6 +181,8 @@ fn resolve_entries(
                     audio,
                     included_paths,
                     remote_policy,
+                    root_dir,
+                    expanded_scenes,
                 )?;
                 result.extend(scenes);
             }
@@ -180,7 +199,17 @@ fn fetch_and_resolve(
     audio: &mut Vec<crate::schema::AudioTrack>,
     included_paths: &mut Vec<PathBuf>,
     remote_policy: RemoteIncludePolicy,
+    root_dir: Option<&Path>,
+    expanded_scenes: &mut usize,
 ) -> Result<Vec<Scene>> {
+    *expanded_scenes += 1;
+    if *expanded_scenes > MAX_EXPANDED_SCENES {
+        return Err(RustmotionError::Generic(format!(
+            "scenario expands to more than {MAX_EXPANDED_SCENES} scenes via 'include' — \
+             refusing to keep expanding"
+        )));
+    }
+
     let is_remote =
         directive.include.starts_with("http://") || directive.include.starts_with("https://");
 
@@ -198,7 +227,7 @@ fn fetch_and_resolve(
         let child_source = IncludeSource::File(PathBuf::from(&directive.include));
         (body, child_source)
     } else {
-        let path = resolve_local_path(&directive.include, parent_source)?;
+        let path = resolve_local_path(&directive.include, parent_source, root_dir)?;
         let body =
             std::fs::read_to_string(&path).map_err(|_| RustmotionError::IncludeFileNotFound {
                 path: path.display().to_string(),
@@ -218,6 +247,13 @@ fn fetch_and_resolve(
         directive.config.as_ref(),
         &directive.include,
     )?;
+    // `components` (and any `for-each`/`use` inside this file's own scenes)
+    // is scoped to this document: expanded here, per included file, using
+    // ONLY this file's own `components` block — never the parent's, and
+    // never visible to the parent's own `use` sites. See
+    // `rustmotion_core::expand`'s module doc for why that scoping was
+    // chosen over a cross-file component registry.
+    crate::expand::expand_directives(&mut json_value, &directive.include)?;
 
     // An included file's assets are relative to *that* file, not to the parent
     // that pulled it in — otherwise moving an include would silently break
@@ -227,13 +263,6 @@ fn fetch_and_resolve(
             crate::assets::rebase_relative_paths(&mut json_value, dir);
         }
     }
-    // `components` (and any `for-each`/`use` inside this file's own scenes)
-    // is scoped to this document: expanded here, per included file, using
-    // ONLY this file's own `components` block — never the parent's, and
-    // never visible to the parent's own `use` sites. See
-    // `rustmotion_core::expand`'s module doc for why that scoping was
-    // chosen over a cross-file component registry.
-    crate::expand::expand_directives(&mut json_value, &directive.include)?;
 
     let child_scenario: Scenario =
         serde_json::from_value(json_value).map_err(RustmotionError::from)?;
@@ -249,6 +278,8 @@ fn fetch_and_resolve(
         audio,
         included_paths,
         remote_policy,
+        root_dir,
+        expanded_scenes,
     )?;
 
     // Apply scene index filter if specified
@@ -263,12 +294,9 @@ fn fetch_and_resolve(
                 });
             }
         }
-        let mut slots: Vec<Option<Scene>> = scenes.into_iter().map(Some).collect();
         let mut filtered = Vec::with_capacity(indices.len());
         for &idx in indices {
-            if let Some(scene) = slots[idx].take() {
-                filtered.push(scene);
-            }
+            filtered.push(clone_scene_via_json(&scenes[idx])?);
         }
         scenes = filtered;
     }
@@ -276,11 +304,48 @@ fn fetch_and_resolve(
     Ok(scenes)
 }
 
-fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf> {
+fn clone_scene_via_json(scene: &Scene) -> Result<Scene> {
+    let value = serde_json::to_value(scene).map_err(RustmotionError::from)?;
+    serde_json::from_value(value).map_err(RustmotionError::from)
+}
+
+fn local_include_root(source: &IncludeSource) -> Option<PathBuf> {
+    match source {
+        IncludeSource::File(path) => {
+            let dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let dir = if dir.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                dir
+            };
+            Some(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+        }
+        IncludeSource::Inline => None,
+    }
+}
+
+fn resolve_local_path(
+    relative: &str,
+    source: &IncludeSource,
+    root_dir: Option<&Path>,
+) -> Result<PathBuf> {
     match source {
         IncludeSource::File(parent_path) => {
             let parent_dir = parent_path.parent().unwrap_or_else(|| Path::new("."));
-            Ok(parent_dir.join(relative))
+            let candidate = parent_dir.join(relative);
+            if let Some(root) = root_dir {
+                let effective =
+                    std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+                if !effective.starts_with(root) {
+                    return Err(RustmotionError::Generic(format!(
+                        "include '{relative}' resolves to '{}', which is outside the scenario's \
+                         own directory '{}' — refusing",
+                        effective.display(),
+                        root.display()
+                    )));
+                }
+            }
+            Ok(candidate)
         }
         IncludeSource::Inline => Err(RustmotionError::IncludeInlinePath {
             path: relative.to_string(),
@@ -519,5 +584,249 @@ fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rm_include_test_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn scenario_from_file(path: &Path) -> Scenario {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn local_include_with_an_absolute_path_cannot_escape_the_scenario_directory() {
+        let scenario_dir = scratch_dir("escape-abs-scenario");
+        std::fs::create_dir_all(&scenario_dir).unwrap();
+        let witness_dir = scratch_dir("escape-abs-witness");
+        std::fs::create_dir_all(&witness_dir).unwrap();
+        let witness_path = witness_dir.join("witness.json");
+        std::fs::write(
+            &witness_path,
+            r#"{"video": {"width": 10, "height": 10}, "scenes": [{"duration": 1.0, "children": []}]}"#,
+        )
+        .unwrap();
+
+        let top_path = scenario_dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": {"width": 10, "height": 10},
+            "scenes": [{"include": witness_path.to_str().unwrap()}]
+        });
+        std::fs::write(&top_path, serde_json::to_string(&top_body).unwrap()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let result = resolve_includes(scenario, &IncludeSource::File(top_path.clone()));
+
+        assert!(
+            result.is_err(),
+            "an absolute include path outside the scenario's own directory must be a named, \
+             refused error, not a silent read — got {:?}",
+            result.map(|r| r.all_scenes().count())
+        );
+
+        let _ = std::fs::remove_dir_all(&scenario_dir);
+        let _ = std::fs::remove_dir_all(&witness_dir);
+    }
+
+    #[test]
+    fn local_include_with_dot_dot_cannot_escape_the_scenario_directory() {
+        let base = scratch_dir("escape-dotdot");
+        let scenario_dir = base.join("project");
+        std::fs::create_dir_all(&scenario_dir).unwrap();
+        let witness_path = base.join("witness.json");
+        std::fs::write(
+            &witness_path,
+            r#"{"video": {"width": 10, "height": 10}, "scenes": [{"duration": 1.0, "children": []}]}"#,
+        )
+        .unwrap();
+
+        let top_path = scenario_dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": {"width": 10, "height": 10},
+            "scenes": [{"include": "../witness.json"}]
+        });
+        std::fs::write(&top_path, serde_json::to_string(&top_body).unwrap()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let result = resolve_includes(scenario, &IncludeSource::File(top_path.clone()));
+
+        assert!(
+            result.is_err(),
+            "a '..' include path escaping the scenario's own directory must be a named, \
+             refused error, not a silent read — got {:?}",
+            result.map(|r| r.all_scenes().count())
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_include_within_the_scenario_directory_still_resolves() {
+        let base = scratch_dir("include-legit");
+        let scenario_dir = base.join("project");
+        let sub_dir = scenario_dir.join("shared");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+
+        let included_path = sub_dir.join("header.json");
+        std::fs::write(
+            &included_path,
+            r#"{"video": {"width": 10, "height": 10}, "scenes": [{"duration": 1.0, "children": []}]}"#,
+        )
+        .unwrap();
+
+        let top_path = scenario_dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": {"width": 10, "height": 10},
+            "scenes": [{"include": "shared/header.json"}]
+        });
+        std::fs::write(&top_path, serde_json::to_string(&top_body).unwrap()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let result = resolve_includes(scenario, &IncludeSource::File(top_path.clone()));
+
+        let resolved = result.expect("an include within the scenario's own directory must resolve");
+        assert_eq!(resolved.all_scenes().count(), 1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_for_each_bound_src_inside_an_included_file_is_still_rebased_against_that_file() {
+        let dir = scratch_dir("foreach-src-rebase");
+        let child_dir = dir.join("child");
+        std::fs::create_dir_all(&child_dir).unwrap();
+        std::fs::write(child_dir.join("logo.png"), b"x").unwrap();
+
+        let child = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "path": "logo.png" } ],
+                    "template": { "type": "image", "src": "$path" }
+                }]
+            }]
+        });
+        std::fs::write(child_dir.join("child.json"), child.to_string()).unwrap();
+
+        let top_path = dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [ { "include": "child/child.json" } ]
+        });
+        std::fs::write(&top_path, top_body.to_string()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let resolved = resolve_includes(scenario, &IncludeSource::File(top_path.clone()))
+            .expect("include resolves");
+
+        let src = resolved.views[0].scenes[0].children[0]["src"]
+            .as_str()
+            .expect("src")
+            .to_string();
+        assert!(
+            Path::new(&src).is_absolute() && Path::new(&src).is_file(),
+            "a for-each-bound src inside an included file must still be rebased against that \
+             file's own directory, got: {src}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_repeated_include_scene_index_produces_one_scene_per_occurrence() {
+        let dir = scratch_dir("include-repeat-index");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let child = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 2.0, "children": [] }
+            ]
+        });
+        let child_path = dir.join("child.json");
+        std::fs::write(&child_path, child.to_string()).unwrap();
+
+        let top_path = dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [ { "include": "child.json", "scenes": [0, 0, 1] } ]
+        });
+        std::fs::write(&top_path, top_body.to_string()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let resolved = resolve_includes(scenario, &IncludeSource::File(top_path.clone()))
+            .expect("include resolves");
+
+        assert_eq!(
+            resolved.all_scenes().count(),
+            3,
+            "'scenes': [0, 0, 1] must produce 3 scenes (the repeated index reused twice), not \
+             silently drop the second occurrence"
+        );
+        let durations: Vec<f64> = resolved.all_scenes().map(|s| s.duration).collect();
+        assert_eq!(durations, vec![1.0, 1.0, 2.0]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn include_fan_out_across_depth_is_bounded() {
+        let dir = scratch_dir("fanout");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let leaf_path = dir.join("leaf.json");
+        std::fs::write(
+            &leaf_path,
+            r#"{"video": {"width": 10, "height": 10}, "scenes": [{"duration": 1.0, "children": []}]}"#,
+        )
+        .unwrap();
+
+        const BRANCHING: usize = 10;
+        let mut current = "leaf.json".to_string();
+        for level in 1..=4 {
+            let includes: Vec<serde_json::Value> = (0..BRANCHING)
+                .map(|_| serde_json::json!({ "include": current.clone() }))
+                .collect();
+            let body = serde_json::json!({
+                "video": {"width": 10, "height": 10},
+                "scenes": includes
+            });
+            let file_name = format!("level{level}.json");
+            std::fs::write(dir.join(&file_name), serde_json::to_string(&body).unwrap()).unwrap();
+            current = file_name;
+        }
+
+        let top_path = dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": {"width": 10, "height": 10},
+            "scenes": [{"include": current}]
+        });
+        std::fs::write(&top_path, serde_json::to_string(&top_body).unwrap()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let result = resolve_includes(scenario, &IncludeSource::File(top_path.clone()));
+
+        assert!(
+            result.is_err(),
+            "10^4 fan-out through 4 include levels (all within MAX_INCLUDE_DEPTH) must be \
+             refused by a total-expansion bound — got {:?} scenes",
+            result.map(|r| r.all_scenes().count())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

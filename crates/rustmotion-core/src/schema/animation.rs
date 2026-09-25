@@ -11,11 +11,33 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Animation {
     pub property: String,
+    #[serde(deserialize_with = "deserialize_nonempty_sorted_keyframes")]
     pub keyframes: Vec<Keyframe>,
     #[serde(default = "default_easing")]
     pub easing: EasingType,
     #[serde(default)]
     pub spring: Option<SpringConfig>,
+}
+
+fn deserialize_nonempty_sorted_keyframes<'de, D>(deserializer: D) -> Result<Vec<Keyframe>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let keyframes = Vec::<Keyframe>::deserialize(deserializer)?;
+    if keyframes.is_empty() {
+        return Err(serde::de::Error::custom(
+            "`keyframes` must have at least one entry",
+        ));
+    }
+    for pair in keyframes.windows(2) {
+        if pair[1].time < pair[0].time {
+            return Err(serde::de::Error::custom(format!(
+                "keyframes must be sorted by non-decreasing time: {} is followed by {}",
+                pair[0].time, pair[1].time
+            )));
+        }
+    }
+    Ok(keyframes)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -44,7 +66,7 @@ impl KeyframeValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EasingType {
     #[default]
@@ -76,6 +98,65 @@ pub enum EasingType {
 
 fn default_easing() -> EasingType {
     EasingType::EaseOut
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EasingTypeWire {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    EaseInQuad,
+    EaseOutQuad,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInExpo,
+    EaseOutExpo,
+    EaseInOutQuad,
+    EaseInOutExpo,
+    EaseInBack,
+    EaseOutBack,
+    EaseOutElastic,
+    Bounce,
+    Spring,
+    CubicBezier { x1: f64, y1: f64, x2: f64, y2: f64 },
+}
+
+impl<'de> Deserialize<'de> for EasingType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match EasingTypeWire::deserialize(deserializer)? {
+            EasingTypeWire::Linear => EasingType::Linear,
+            EasingTypeWire::EaseIn => EasingType::EaseIn,
+            EasingTypeWire::EaseOut => EasingType::EaseOut,
+            EasingTypeWire::EaseInOut => EasingType::EaseInOut,
+            EasingTypeWire::EaseInQuad => EasingType::EaseInQuad,
+            EasingTypeWire::EaseOutQuad => EasingType::EaseOutQuad,
+            EasingTypeWire::EaseInCubic => EasingType::EaseInCubic,
+            EasingTypeWire::EaseOutCubic => EasingType::EaseOutCubic,
+            EasingTypeWire::EaseInExpo => EasingType::EaseInExpo,
+            EasingTypeWire::EaseOutExpo => EasingType::EaseOutExpo,
+            EasingTypeWire::EaseInOutQuad => EasingType::EaseInOutQuad,
+            EasingTypeWire::EaseInOutExpo => EasingType::EaseInOutExpo,
+            EasingTypeWire::EaseInBack => EasingType::EaseInBack,
+            EasingTypeWire::EaseOutBack => EasingType::EaseOutBack,
+            EasingTypeWire::EaseOutElastic => EasingType::EaseOutElastic,
+            EasingTypeWire::Bounce => EasingType::Bounce,
+            EasingTypeWire::Spring => EasingType::Spring,
+            EasingTypeWire::CubicBezier { x1, y1, x2, y2 } => {
+                if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) {
+                    return Err(serde::de::Error::custom(format!(
+                        "cubic_bezier x1/x2 must stay within 0.0..=1.0 (got x1={x1}, x2={x2}); \
+                         y1/y2 may overshoot freely"
+                    )));
+                }
+                EasingType::CubicBezier { x1, y1, x2, y2 }
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -293,5 +374,85 @@ mod deny_unknown_fields_tests {
         let k: Keyframe = serde_json::from_value(json).unwrap();
         assert_eq!(k.time, 0.5);
         assert!(k.easing.is_some());
+    }
+
+    #[test]
+    fn an_empty_keyframe_list_is_rejected() {
+        let json = json!({ "property": "opacity", "keyframes": [] });
+        let err = serde_json::from_value::<Animation>(json)
+            .expect_err("an empty keyframes list must be rejected, not silently resolve to 0.0");
+        assert!(err.to_string().contains("at least one"), "got: {err}");
+    }
+
+    #[test]
+    fn unsorted_keyframe_times_are_rejected() {
+        let json = json!({
+            "property": "opacity",
+            "keyframes": [
+                { "time": 1.0, "value": 1.0 },
+                { "time": 0.5, "value": 0.0 }
+            ]
+        });
+        let err = serde_json::from_value::<Animation>(json).expect_err(
+            "keyframes out of time order must be rejected, not silently pin the wrong end",
+        );
+        assert!(err.to_string().contains("sorted"), "got: {err}");
+    }
+
+    #[test]
+    fn a_single_keyframe_is_still_accepted() {
+        let json = json!({ "property": "opacity", "keyframes": [{ "time": 0.0, "value": 1.0 }] });
+        let a: Animation = serde_json::from_value(json).unwrap();
+        assert_eq!(a.keyframes.len(), 1);
+    }
+
+    #[test]
+    fn equal_consecutive_keyframe_times_are_still_accepted() {
+        let json = json!({
+            "property": "opacity",
+            "keyframes": [
+                { "time": 0.0, "value": 0.0 },
+                { "time": 0.0, "value": 1.0 },
+                { "time": 1.0, "value": 1.0 }
+            ]
+        });
+        let a: Animation = serde_json::from_value(json).unwrap();
+        assert_eq!(a.keyframes.len(), 3);
+    }
+
+    #[test]
+    fn cubic_bezier_x_control_points_outside_0_1_are_rejected() {
+        let json = json!({
+            "property": "opacity",
+            "keyframes": [{ "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }],
+            "easing": { "cubic_bezier": { "x1": 3.0, "y1": 0.0, "x2": -2.0, "y2": 1.0 } }
+        });
+        let err = serde_json::from_value::<Animation>(json).expect_err(
+            "cubic_bezier x1/x2 outside 0.0..=1.0 must be rejected: Newton's method assumes \
+             a monotonic curve there, same as the CSS spec constrains",
+        );
+        assert!(
+            err.to_string().contains("0.0..=1.0") || err.to_string().contains("x1"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn cubic_bezier_y_control_points_may_overshoot() {
+        let json = json!({
+            "property": "scale",
+            "keyframes": [{ "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 1.0 }],
+            "easing": { "cubic_bezier": { "x1": 0.34, "y1": 1.56, "x2": 0.64, "y2": 1.0 } }
+        });
+        let a: Animation = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            a.easing,
+            EasingType::CubicBezier {
+                x1: 0.34,
+                y1: 1.56,
+                x2: 0.64,
+                y2: 1.0
+            }
+        );
     }
 }

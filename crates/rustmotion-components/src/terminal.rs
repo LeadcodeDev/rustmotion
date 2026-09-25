@@ -195,7 +195,9 @@ impl Terminal {
                 let total_chars: usize = self
                     .lines
                     .iter()
-                    .map(|l| Self::line_prefix(&l.line_type).len() + l.text.len())
+                    .map(|l| {
+                        Self::line_prefix(&l.line_type).chars().count() + l.text.chars().count()
+                    })
                     .sum();
 
                 let visible_chars = (total_chars as f64 * progress).round() as usize;
@@ -204,7 +206,8 @@ impl Terminal {
                 let mut partial_chars = None;
 
                 for line in &self.lines {
-                    let line_chars = Self::line_prefix(&line.line_type).len() + line.text.len();
+                    let line_chars = Self::line_prefix(&line.line_type).chars().count()
+                        + line.text.chars().count();
                     if chars_remaining >= line_chars {
                         chars_remaining -= line_chars;
                         visible_lines += 1;
@@ -544,6 +547,48 @@ mod tests {
         assert!(
             text_ink > 20,
             "terminal at font-size: 2rem must paint visible text ink, got {text_ink} pixels"
+        );
+    }
+
+    fn terminal_with_reveal(text: &str, duration: f64) -> Terminal {
+        Terminal {
+            lines: vec![TerminalLine {
+                text: text.to_string(),
+                line_type: TerminalLineType::Output,
+                color: None,
+            }],
+            theme: TerminalTheme::default(),
+            title: None,
+            show_chrome: false,
+            reveal: Some(CodeblockReveal {
+                mode: RevealMode::Typewriter,
+                start: 0.0,
+                duration,
+                easing: Default::default(),
+            }),
+            auto_scroll: true,
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn typewriter_budget_is_spent_in_characters_not_bytes() {
+        let accented = "éééééééééé"; // 10 chars, 20 UTF-8 bytes
+        assert_eq!(accented.chars().count(), 10);
+        assert_eq!(accented.len(), 20);
+        let terminal = terminal_with_reveal(accented, 4.0);
+
+        let (visible_lines, partial_chars, _) = terminal.compute_reveal(2.0);
+
+        assert_eq!(visible_lines, 1);
+        assert_eq!(
+            partial_chars,
+            Some(5),
+            "half a 4s reveal (t=2.0) over 10 characters must budget 5 CHARACTERS, not 10 bytes \
+             worth of budget spent as if it were 10 characters"
         );
     }
 }

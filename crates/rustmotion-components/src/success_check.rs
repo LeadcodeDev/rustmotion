@@ -135,7 +135,7 @@ impl Painter for SuccessCheck {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
@@ -152,7 +152,11 @@ impl Painter for SuccessCheck {
         let scale = 0.72 + 0.28 * phase.arrival;
         let angle = -18.0 * self.spin * (1.0 - phase.arrival);
 
+        let layout_scale_x = layout.width / size.max(1.0);
+        let layout_scale_y = layout.height / size.max(1.0);
+
         canvas.save();
+        canvas.scale((layout_scale_x, layout_scale_y));
         canvas.translate((centre, centre));
         canvas.scale((scale, scale));
         canvas.rotate(angle, None);
@@ -262,5 +266,68 @@ mod tests {
                 "spin={spin} left the settled mark rotated by {angle}°"
             );
         }
+    }
+
+    #[test]
+    fn paint_content_scales_to_the_layout_box_not_its_own_size_field() {
+        let c = check(serde_json::json!({ "size": 200.0, "duration": 0.0 }));
+        const W: i32 = 100;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 60.0,
+                ..Default::default()
+            };
+            c.paint_content(
+                canvas,
+                &layout,
+                &AnimatedProperties::default(),
+                &PaintCtx {
+                    time: 1.0,
+                    scenario_time: 1.0,
+                    scene_duration: 1.0,
+                    frame_index: 0,
+                    fps: 30,
+                    video_width: W as u32,
+                    video_height: H as u32,
+                    stagger_offset: 0.0,
+                },
+            );
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let mut maxx = 0;
+        let mut maxy = 0;
+        for y in 0..H {
+            for x in 0..W {
+                if buf[((y * W + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        assert!(
+            maxx < 60 && maxy < 60,
+            "expected ink within the 60x60 layout box, got ink up to ({maxx}, {maxy})"
+        );
     }
 }

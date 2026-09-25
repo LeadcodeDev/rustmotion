@@ -25,6 +25,7 @@ pub struct TransitionOptions {
     pub direction: TransitionDirection,
     /// `chromatic_wipe`: channel-split multiplier.
     pub aberration: f32,
+    pub clear_color: [f32; 4],
 }
 
 impl Default for TransitionOptions {
@@ -36,6 +37,7 @@ impl Default for TransitionOptions {
             order: PixelDissolveOrder::default(),
             direction: TransitionDirection::default(),
             aberration: 1.0,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -49,6 +51,7 @@ impl From<&Transition> for TransitionOptions {
             order: t.order,
             direction: t.direction,
             aberration: t.aberration,
+            clear_color: TransitionOptions::default().clear_color,
         }
     }
 }
@@ -72,6 +75,7 @@ pub fn apply_transition(
         order,
         direction,
         aberration,
+        clear_color,
     } = *opts;
 
     match transition_type {
@@ -90,7 +94,9 @@ pub fn apply_transition(
         TransitionType::ZoomOut => {
             zoom_transition(frame_a, frame_b, width, height, progress, false)
         }
-        TransitionType::Flip => flip_transition(frame_a, frame_b, width, height, progress),
+        TransitionType::Flip => {
+            flip_transition(frame_a, frame_b, width, height, progress, clear_color)
+        }
         TransitionType::ClockWipe => clock_wipe(frame_a, frame_b, width, height, progress),
         TransitionType::Iris => iris_transition(frame_a, frame_b, width, height, progress),
         TransitionType::Slide => slide_transition(frame_a, frame_b, width, height, progress),
@@ -452,6 +458,7 @@ fn flip_transition(
     width: u32,
     height: u32,
     progress: f32,
+    clear_color: [f32; 4],
 ) -> Vec<u8> {
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
@@ -468,12 +475,18 @@ fn flip_transition(
 
     let canvas = surface.canvas();
     let w = width as f32;
+    let clear = Color4f::new(
+        clear_color[0],
+        clear_color[1],
+        clear_color[2],
+        clear_color[3],
+    );
 
     // Simulate 3D flip by scaling X axis
     // First half: frame_a shrinks on X. Second half: frame_b grows on X.
     if progress < 0.5 {
         let scale_x = 1.0 - progress * 2.0; // 1.0 -> 0.0
-        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        canvas.clear(clear);
         canvas.save();
         canvas.translate((w / 2.0, 0.0));
         canvas.scale((scale_x.max(0.01), 1.0));
@@ -482,7 +495,7 @@ fn flip_transition(
         canvas.restore();
     } else {
         let scale_x = (progress - 0.5) * 2.0; // 0.0 -> 1.0
-        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        canvas.clear(clear);
         canvas.save();
         canvas.translate((w / 2.0, 0.0));
         canvas.scale((scale_x.max(0.01), 1.0));
@@ -495,6 +508,9 @@ fn flip_transition(
 }
 
 fn clock_wipe(frame_a: &[u8], frame_b: &[u8], width: u32, height: u32, progress: f32) -> Vec<u8> {
+    if progress >= 1.0 {
+        return frame_b.to_vec();
+    }
     let mut surface = match create_skia_surface(width, height) {
         Some(s) => s,
         None => return blend_fade(frame_a, frame_b, progress),
@@ -862,6 +878,65 @@ fn render_layer(img: &skia_safe::Image, dest: Rect, width: u32, height: u32) -> 
         .canvas()
         .draw_image_rect(img, None, dest, &Paint::default());
     Some(surface_to_pixels(surface, width, height))
+}
+
+#[cfg(test)]
+mod flip_tests {
+    use super::*;
+
+    fn solid(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
+        (0..width * height).flat_map(|_| [r, g, b, a]).collect()
+    }
+
+    #[test]
+    fn the_clear_behind_the_edge_on_frame_follows_the_configured_color() {
+        let (w, h) = (16u32, 16u32);
+        let frame_a = solid(w, h, 255, 0, 0, 255);
+        let frame_b = solid(w, h, 0, 0, 255, 255);
+        let white = [1.0, 1.0, 1.0, 1.0];
+
+        let out = flip_transition(&frame_a, &frame_b, w, h, 0.49, white);
+        let white_pixels = out
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] > 250 && px[1] > 250 && px[2] > 250)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            white_pixels as f32 / total as f32 > 0.9,
+            "a near-edge-on frame should mostly show the configured clear colour: \
+             {white_pixels}/{total} white"
+        );
+    }
+
+    #[test]
+    fn the_default_clear_stays_black() {
+        let (w, h) = (16u32, 16u32);
+        let frame_a = solid(w, h, 255, 0, 0, 255);
+        let frame_b = solid(w, h, 0, 0, 255, 255);
+
+        let out = flip_transition(
+            &frame_a,
+            &frame_b,
+            w,
+            h,
+            0.49,
+            TransitionOptions::default().clear_color,
+        );
+        let black_pixels = out
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] < 5 && px[1] < 5 && px[2] < 5)
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            black_pixels as f32 / total as f32 > 0.9,
+            "the default clear colour must stay black (unchanged behaviour): \
+             {black_pixels}/{total} black"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1254,5 +1329,57 @@ mod pixel_dissolve_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod clock_wipe_tests {
+    use super::*;
+
+    fn solid(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
+        (0..width * height).flat_map(|_| [r, g, b, a]).collect()
+    }
+
+    #[test]
+    fn the_last_frame_is_pure_frame_b_not_a_flash_of_frame_a() {
+        let (w, h) = (8u32, 8u32);
+        let frame_a = solid(w, h, 255, 0, 0, 255);
+        let frame_b = solid(w, h, 0, 0, 255, 255);
+
+        let out = clock_wipe(&frame_a, &frame_b, w, h, 1.0);
+        assert_eq!(
+            out, frame_b,
+            "progress=1.0 must land exactly on frame_b, not revert to frame_a"
+        );
+    }
+
+    #[test]
+    fn a_near_complete_sweep_is_mostly_frame_b() {
+        let (w, h) = (32u32, 32u32);
+        let frame_a = solid(w, h, 255, 0, 0, 255);
+        let frame_b = solid(w, h, 0, 0, 255, 255);
+
+        let out = clock_wipe(&frame_a, &frame_b, w, h, 0.97);
+        let blue_pixels = out
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[2] > px[0])
+            .count();
+        let total = (w * h) as usize;
+        assert!(
+            blue_pixels as f32 / total as f32 > 0.8,
+            "a 349-degree sweep should already cover most of the frame: {blue_pixels}/{total}"
+        );
+    }
+
+    #[test]
+    fn the_first_frame_is_pure_frame_a() {
+        let (w, h) = (8u32, 8u32);
+        let frame_a = solid(w, h, 255, 0, 0, 255);
+        let frame_b = solid(w, h, 0, 0, 255, 255);
+
+        let out = clock_wipe(&frame_a, &frame_b, w, h, 0.0);
+        assert_eq!(out, frame_a);
     }
 }

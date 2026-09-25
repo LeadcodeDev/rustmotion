@@ -16,7 +16,6 @@
 //! - `white-space`
 //! - `overflow-wrap`
 //! - `visibility`
-//! - `text-decoration` (not strictly inheritable but used as such here)
 //!
 //! All other properties (background, padding, border, transform, etc.) are
 //! NOT inherited.
@@ -58,9 +57,6 @@ pub fn inherit_from(parent: &CssStyle, child: &mut CssStyle) {
     }
     if child.visibility.is_none() {
         child.visibility = parent.visibility;
-    }
-    if child.text_decoration.is_none() {
-        child.text_decoration = parent.text_decoration.clone();
     }
 }
 

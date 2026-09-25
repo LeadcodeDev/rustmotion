@@ -25,6 +25,7 @@ pub enum ScrollDirection {
 
 /// Config for the `gradient_shift` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GradientShiftConfig {
     pub colors: Vec<String>,
     #[serde(default = "default_bg_type")]
@@ -33,6 +34,7 @@ pub struct GradientShiftConfig {
 
 /// Config for the `grid_dots` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GridDotsConfig {
     #[serde(default = "default_grid_dots_color")]
     pub color: String,
@@ -53,6 +55,7 @@ fn default_grid_dots_color() -> String {
 /// code panel. Same scroll machinery (`x`/`y`/`speed`/`direction`) as the
 /// other tiled presets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GridLinesConfig {
     /// Line colour (hex, alpha welcome).
     #[serde(default = "default_grid_lines_color")]
@@ -91,6 +94,7 @@ fn default_grid_lines_major_weight() -> f32 {
 
 /// Config for the `concentric_circles` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ConcentricCirclesConfig {
     #[serde(default = "default_concentric_color")]
     pub color: String,
@@ -108,6 +112,7 @@ fn default_concentric_color() -> String {
 
 /// Config for the `halo` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HaloConfig {
     pub zones: Vec<HaloZone>,
 }
@@ -119,6 +124,7 @@ pub struct HaloConfig {
 /// below 1 with one colour gives the sparse tile field the reference piece
 /// uses — squares on a ground, some cells simply absent.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PixelGridConfig {
     /// Cell colours. One colour fills every drawn cell; several alternate by
     /// `(row + col)`, which is what makes a checkerboard rather than a field.
@@ -211,6 +217,7 @@ fn default_pixel_seed() -> u32 {
 
 /// Config for the `heropattern` preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HeropatternConfig {
     /// Name of the heropattern (e.g. "plus", "topography", "jigsaw").
     pub pattern: String,
@@ -319,6 +326,46 @@ const KNOWN_BACKGROUND_PRESETS: &[&str] = &[
     "heropattern",
 ];
 
+const COMMON_BACKGROUND_KEYS_EVERY_PRESET_ACCEPTS: &[&str] =
+    &["preset", "x", "y", "speed", "direction"];
+
+fn legacy_flat_form_keys_with_no_new_format_equivalent(
+    preset_str: &str,
+) -> &'static [&'static str] {
+    match preset_str {
+        "grid_dots" => &["colors", "element_size", "spacing"],
+        "concentric_circles" => &["colors", "element_size", "spacing", "count"],
+        "halo" => &["zones"],
+        "heropattern" => &["pattern", "color", "opacity", "scale"],
+        "gradient_shift" => &["colors", "gradient_type"],
+        _ => &[],
+    }
+}
+
+fn reject_background_keys_outside_the_accepted_set<E: serde::de::Error>(
+    map: &serde_json::Map<String, serde_json::Value>,
+    preset_str: &str,
+    is_new_format: bool,
+) -> Result<(), E> {
+    let mut allowed: Vec<&str> = COMMON_BACKGROUND_KEYS_EVERY_PRESET_ACCEPTS.to_vec();
+    if is_new_format {
+        allowed.push(preset_str);
+    } else {
+        allowed.extend_from_slice(legacy_flat_form_keys_with_no_new_format_equivalent(
+            preset_str,
+        ));
+    }
+    for key in map.keys() {
+        if !allowed.iter().any(|k| k == key) {
+            return Err(E::custom(format!(
+                "unknown animated-background key '{key}' for preset '{preset_str}': expected one of {}",
+                allowed.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for AnimatedBackground {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let map: serde_json::Map<String, serde_json::Value> =
@@ -348,15 +395,29 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
         // Detect new vs legacy format: new format has a sub-object keyed by preset name
         let is_new_format = map.get(preset_str).is_some_and(|v| v.is_object());
 
+        reject_background_keys_outside_the_accepted_set::<D::Error>(
+            &map,
+            preset_str,
+            is_new_format,
+        )?;
+
         let (preset, speed) = if is_new_format {
             // New format: config in sub-object
             let sub = map.get(preset_str).unwrap().clone();
-            let speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let speed = map
+                .get("speed")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or_else(default_bg_speed);
             let preset = deserialize_preset_config::<D::Error>(preset_str, sub)?;
             (preset, speed)
         } else {
             // Legacy flat format
-            let legacy_speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
+            let legacy_speed = map
+                .get("speed")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or_else(default_bg_speed);
             let preset = match preset_str {
                 "grid_dots" => {
                     let color = map
@@ -463,13 +524,13 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
                         })?;
                     BackgroundPreset::GradientShift(cfg)
                 }
-                // Unreachable: `preset_str` was already checked against
-                // `KNOWN_BACKGROUND_PRESETS` above.
-                other => {
+                "grid_lines" | "pixel_grid" => {
                     return Err(serde::de::Error::custom(format!(
-                        "internal error: unhandled animated-background preset '{other}'"
+                        "animated-background preset '{preset_str}' has no legacy flat form — \
+                         nest its config: {{\"preset\": \"{preset_str}\", \"{preset_str}\": {{...}}}}"
                     )))
                 }
+                other => unreachable!("unhandled known animated-background preset '{other}'"),
             };
             (preset, legacy_speed)
         };
@@ -590,6 +651,7 @@ impl JsonSchema for AnimatedBackground {
 
 /// A single glow zone for the "halo" animated-background preset.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HaloZone {
     /// Zone color (hex string). May itself carry an alpha channel
     /// (`#rrggbbaa`); see [`HaloZone::opacity`] for how the two combine.
@@ -619,6 +681,7 @@ pub struct HaloZone {
 
 /// Transition configuration for background interpolation between scenes.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BackgroundTransition {
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -763,7 +826,6 @@ fn default_bg_spacing() -> f32 {
     60.0
 }
 
-#[allow(dead_code)]
 fn default_bg_speed() -> f32 {
     30.0
 }
@@ -953,6 +1015,40 @@ mod halo_zone_opacity_tests {
     }
 }
 
+#[cfg(test)]
+mod animated_background_speed_default_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nested_form_with_no_speed_key_defaults_to_thirty_like_the_legacy_form() {
+        let bg: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "grid_dots",
+            "grid_dots": { "color": "#FFFFFF15" }
+        }))
+        .unwrap();
+        assert_eq!(
+            bg.speed, 30.0,
+            "nested form must default `speed` the same as the legacy flat form"
+        );
+    }
+
+    #[test]
+    fn nested_form_with_explicit_speed_is_unaffected() {
+        let bg: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "grid_dots",
+            "grid_dots": { "color": "#FFFFFF15" },
+            "speed": 0
+        }))
+        .unwrap();
+        assert_eq!(
+            bg.speed, 0.0,
+            "an explicit `speed: 0` must still be honoured (static is a valid choice, \
+             just not a silent default)"
+        );
+    }
+}
+
 /// Constat #3: `AnimatedBackground::deserialize` had (at least) three silent
 /// sinks — an unknown `preset` name silently became `gradient_shift` with
 /// `colors: []`; a malformed/mistyped `zones` array in the legacy `halo`
@@ -1109,5 +1205,106 @@ mod animated_background_silent_sink_tests {
         }))
         .unwrap();
         assert!(matches!(bg.direction, Some(ScrollDirection::Up)));
+    }
+}
+
+#[cfg(test)]
+mod animated_background_unknown_key_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn typo_d_top_level_key_on_new_format_is_a_named_error() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({
+            "preset": "grid_dots",
+            "grid_dots": { "color": "#fff" },
+            "spede": 10
+        }))
+        .expect_err("a typo'd top-level key must not be silently ignored");
+        assert!(err.to_string().contains("spede"), "got: {err}");
+    }
+
+    #[test]
+    fn typo_d_top_level_key_on_legacy_format_is_a_named_error() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({
+            "preset": "grid_dots",
+            "colours": ["#fff"]
+        }))
+        .expect_err("a typo'd legacy-form key must not be silently ignored");
+        assert!(err.to_string().contains("colours"), "got: {err}");
+    }
+
+    #[test]
+    fn typo_d_key_inside_nested_preset_config_is_a_named_error() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({
+            "preset": "grid_lines",
+            "grid_lines": { "colr": "#fff" }
+        }))
+        .expect_err("a typo'd key inside the nested config must not be silently dropped");
+        assert!(err.to_string().contains("colr"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_key_from_another_preset_is_rejected() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({
+            "preset": "grid_dots",
+            "colors": ["#fff"],
+            "count": 5
+        }))
+        .expect_err("a legacy key belonging to a different preset must be rejected");
+        assert!(err.to_string().contains("count"), "got: {err}");
+    }
+
+    #[test]
+    fn grid_lines_without_nesting_is_a_named_no_legacy_form_error() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({
+            "preset": "grid_lines",
+            "speed": 10
+        }))
+        .expect_err("grid_lines has no legacy flat form and must say so, not \"internal error\"");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("internal error"),
+            "must not read as an implementation bug, got: {msg}"
+        );
+        assert!(msg.contains("grid_lines"), "got: {msg}");
+    }
+
+    #[test]
+    fn pixel_grid_without_nesting_is_a_named_no_legacy_form_error() {
+        let err = serde_json::from_value::<AnimatedBackground>(json!({ "preset": "pixel_grid" }))
+            .expect_err("pixel_grid has no legacy flat form and must say so");
+        assert!(err.to_string().contains("pixel_grid"), "got: {}", err);
+    }
+
+    #[test]
+    fn well_formed_new_and_legacy_forms_still_parse() {
+        let new_form: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "grid_lines",
+            "grid_lines": { "cell": 50.0 }
+        }))
+        .unwrap();
+        assert!(matches!(new_form.preset, BackgroundPreset::GridLines(_)));
+
+        let legacy_form: AnimatedBackground = serde_json::from_value(json!({
+            "preset": "concentric_circles",
+            "colors": ["#fff"],
+            "count": 5
+        }))
+        .unwrap();
+        assert!(matches!(
+            legacy_form.preset,
+            BackgroundPreset::ConcentricCircles(_)
+        ));
+    }
+
+    #[test]
+    fn background_transition_typo_d_key_is_a_named_error() {
+        let err = serde_json::from_value::<BackgroundTransition>(json!({
+            "duration": 1.0,
+            "esaing": "ease_in_out"
+        }))
+        .expect_err("a typo'd `esaing` must not silently keep the default easing");
+        assert!(err.to_string().contains("esaing"), "got: {err}");
     }
 }
