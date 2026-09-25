@@ -11,6 +11,18 @@ use rustmotion_core::engine::renderer::asset_cache;
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum SvgReveal {
+    /// Trace each path's outline progressively (current/legacy behavior).
+    #[default]
+    Stroke,
+    /// Sweep a mask across each path's full, already-painted shape (fills,
+    /// gradients included) instead of tracing a contour.
+    Fill,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Svg {
     #[serde(default)]
@@ -35,6 +47,10 @@ pub struct Svg {
     /// 0.0 = strictly sequential (default); 1.0 = all paths drawn in parallel.
     #[serde(default)]
     pub draw_overlap: f32,
+    /// How draw-on animation reveals paths: `stroke` traces contours (default,
+    /// unchanged), `fill` sweeps a mask across each path's full painted shape.
+    #[serde(default)]
+    pub reveal: SvgReveal,
 }
 
 fn default_draw_stroke_width() -> f32 {
@@ -139,6 +155,127 @@ fn collect_paths(
             // Image, Text and other node kinds are skipped in draw-on mode.
             _ => {}
         }
+    }
+}
+
+/// Recursively collect each visible path's geometry (with its SVG fill rule
+/// applied), for use as a reveal mask in `reveal: fill` mode. Color/stroke
+/// don't matter here: the mask only gates which pixels of the already
+/// fully-painted raster (gradients included) get copied to the canvas.
+fn collect_paths_for_fill(group: &usvg::Group, out: &mut Vec<Path>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(g) => {
+                collect_paths_for_fill(g, out);
+            }
+            usvg::Node::Path(p) => {
+                if !p.is_visible() {
+                    continue;
+                }
+                let mut skia_path = tiny_path_to_skia(p.data(), p.abs_transform());
+                let fill_type = match p.fill().map(|f| f.rule()) {
+                    Some(usvg::FillRule::EvenOdd) => skia_safe::PathFillType::EvenOdd,
+                    _ => skia_safe::PathFillType::Winding,
+                };
+                skia_path.set_fill_type(fill_type);
+                out.push(skia_path);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Reveal the SVG progressively at `draw_progress` (0..=1) by sweeping a clip
+/// mask across each path's full, already fully-painted shape (`full_image`,
+/// gradients and all) instead of tracing a stroked contour. Paths are
+/// revealed one after another (or with overlap), using the same per-path
+/// length-weighted windowing as `paint_draw_on` so the sequential ordering
+/// matches the stroke mode.
+fn paint_fill_reveal(
+    canvas: &Canvas,
+    group: &usvg::Group,
+    svg_size: usvg::Size,
+    layout: &BoxLayout,
+    progress: f32,
+    draw_overlap: f32,
+    full_image: &skia_safe::Image,
+) {
+    let progress = progress.clamp(0.0, 1.0);
+
+    let mut paths: Vec<Path> = Vec::new();
+    collect_paths_for_fill(group, &mut paths);
+
+    if paths.is_empty() {
+        return;
+    }
+
+    let scale_x = if svg_size.width() > 0.0 {
+        layout.width / svg_size.width()
+    } else {
+        1.0
+    };
+    let scale_y = if svg_size.height() > 0.0 {
+        layout.height / svg_size.height()
+    } else {
+        1.0
+    };
+
+    let lengths: Vec<f32> = paths
+        .iter()
+        .map(|path| {
+            let mut pm = PathMeasure::new(path, false, None);
+            pm.length()
+        })
+        .collect();
+
+    let total_length: f32 = lengths.iter().sum();
+    if total_length <= 0.0 {
+        return;
+    }
+
+    let overlap = draw_overlap.clamp(0.0, 1.0);
+    let image_dst = Rect::from_xywh(0.0, 0.0, svg_size.width(), svg_size.height());
+    let paint = Paint::default();
+
+    let mut cumulative = 0.0f32;
+    for (path, length) in paths.iter().zip(lengths.iter()) {
+        let base_frac = length / total_length;
+        let window_size = base_frac * (1.0 - overlap) + overlap;
+        let start_frac = cumulative * (1.0 - overlap);
+        cumulative += base_frac;
+
+        let local_t = if window_size > 0.0 {
+            ((progress - start_frac) / window_size).clamp(0.0, 1.0)
+        } else if progress >= start_frac {
+            1.0
+        } else {
+            0.0
+        };
+
+        if local_t <= 0.0 {
+            continue;
+        }
+
+        canvas.save();
+        canvas.scale((scale_x, scale_y));
+        canvas.clip_path(path, None, true);
+
+        if local_t < 1.0 {
+            // Sweep left-to-right: reveal a growing slice of this path's own
+            // bounding box, intersected with the path shape itself above.
+            let bounds = path.bounds();
+            let revealed_w = bounds.width() * local_t;
+            let sweep = Rect::from_ltrb(
+                bounds.left,
+                bounds.top - 1.0,
+                bounds.left + revealed_w,
+                bounds.bottom + 1.0,
+            );
+            canvas.clip_rect(sweep, None, true);
+        }
+
+        canvas.draw_image_rect(full_image, None, image_dst, &paint);
+        canvas.restore();
     }
 }
 
@@ -311,6 +448,19 @@ impl Painter for Svg {
             if progress >= 1.0 {
                 // At completion, fall through to normal resvg render so fills are shown.
                 self.paint_resvg(canvas, layout, &svg_data, &tree, svg_size);
+            } else if self.reveal == SvgReveal::Fill {
+                let Some(full_image) = self.cached_full_image(layout) else {
+                    return;
+                };
+                paint_fill_reveal(
+                    canvas,
+                    tree.root(),
+                    svg_size,
+                    layout,
+                    progress,
+                    self.draw_overlap,
+                    &full_image,
+                );
             } else {
                 paint_draw_on(
                     canvas,
@@ -332,6 +482,20 @@ impl Painter for Svg {
 impl Svg {
     /// Normal static render via cached resvg bitmap.
     fn paint_static(&self, canvas: &Canvas, layout: &BoxLayout) {
+        let Some(img) = self.cached_full_image(layout) else {
+            return;
+        };
+
+        let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
+        let paint = Paint::default();
+        canvas.draw_image_rect(img, None, dst, &paint);
+    }
+
+    /// Resolve (and cache) the fully rasterized SVG — fills, gradients and
+    /// all — at the layout's pixel size. Shared by `paint_static` and the
+    /// `reveal: fill` draw-on mode, which clips this same raster per path
+    /// instead of re-deriving flat per-path colors.
+    fn cached_full_image(&self, layout: &BoxLayout) -> Option<skia_safe::Image> {
         let target_w_opt: Option<u32> = if layout.width > 0.0 {
             Some(layout.width as u32)
         } else {
@@ -350,7 +514,8 @@ impl Svg {
                 target_w_opt.unwrap_or(0),
                 target_h_opt.unwrap_or(0)
             )
-        } else if let Some(ref data) = self.data {
+        } else {
+            let data = self.data.as_ref()?;
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
             let mut hasher = DefaultHasher::new();
@@ -361,61 +526,45 @@ impl Svg {
                 target_w_opt.unwrap_or(0),
                 target_h_opt.unwrap_or(0)
             )
-        } else {
-            return;
         };
 
         let cache = asset_cache();
-        let img = if let Some(cached) = cache.get(&cache_key) {
-            cached.clone()
+        if let Some(cached) = cache.get(&cache_key) {
+            return Some(cached.clone());
+        }
+
+        let svg_data = if let Some(ref src) = self.src {
+            std::fs::read(src).ok()?
         } else {
-            let svg_data = if let Some(ref src) = self.src {
-                let Ok(data) = std::fs::read(src) else { return };
-                data
-            } else if let Some(ref data) = self.data {
-                data.as_bytes().to_vec()
-            } else {
-                return;
-            };
-
-            let opt = usvg::Options::default();
-            let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) else {
-                return;
-            };
-
-            let svg_size = tree.size();
-            let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
-            let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
-
-            let Some(mut pixmap) = tiny_skia::Pixmap::new(target_w, target_h) else {
-                return;
-            };
-
-            let scale_x = target_w as f32 / svg_size.width();
-            let scale_y = target_h as f32 / svg_size.height();
-            let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
-
-            resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-            let img_data = skia_safe::Data::new_copy(pixmap.data());
-            let img_info = ImageInfo::new(
-                (target_w as i32, target_h as i32),
-                ColorType::RGBA8888,
-                skia_safe::AlphaType::Premul,
-                None,
-            );
-            let Some(decoded) =
-                skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)
-            else {
-                return;
-            };
-            cache.insert(cache_key, decoded.clone());
-            decoded
+            self.data.as_ref()?.as_bytes().to_vec()
         };
 
-        let dst = Rect::from_xywh(0.0, 0.0, layout.width, layout.height);
-        let paint = Paint::default();
-        canvas.draw_image_rect(img, None, dst, &paint);
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_data(&svg_data, &opt).ok()?;
+
+        let svg_size = tree.size();
+        let target_w = target_w_opt.unwrap_or(svg_size.width() as u32);
+        let target_h = target_h_opt.unwrap_or(svg_size.height() as u32);
+
+        let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)?;
+
+        let scale_x = target_w as f32 / svg_size.width();
+        let scale_y = target_h as f32 / svg_size.height();
+        let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        let img_data = skia_safe::Data::new_copy(pixmap.data());
+        let img_info = ImageInfo::new(
+            (target_w as i32, target_h as i32),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let decoded =
+            skia_safe::images::raster_from_data(&img_info, img_data, target_w as usize * 4)?;
+        cache.insert(cache_key, decoded.clone());
+        Some(decoded)
     }
 
     /// Render via resvg when draw-on completes (progress == 1.0).
@@ -469,5 +618,135 @@ impl Svg {
         canvas.draw_image_rect(img, None, dst, &paint);
 
         let _ = svg_data; // only used to accept the lifetime; tree holds the parsed data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustmotion_core::engine::layout_pass::Insets;
+
+    const W: i32 = 100;
+    const H: i32 = 100;
+
+    fn filled_square_svg() -> Svg {
+        Svg {
+            src: None,
+            data: Some(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                    <rect x="10" y="10" width="80" height="80" fill="#ff0000"/>
+                </svg>"##
+                    .to_string(),
+            ),
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            draw: false,
+            draw_stroke_width: default_draw_stroke_width(),
+            draw_overlap: 0.0,
+            reveal: SvgReveal::Fill,
+        }
+    }
+
+    fn test_layout() -> BoxLayout {
+        BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: W as f32,
+            height: H as f32,
+            border: Insets::default(),
+            padding: Insets::default(),
+        }
+    }
+
+    fn test_ctx() -> PaintCtx {
+        PaintCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 1920,
+            video_height: 1080,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn red_alpha_at(surface: &mut skia_safe::Surface, x: i32, y: i32) -> (u8, u8, u8, u8) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let idx = ((y * W + x) * 4) as usize;
+        (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3])
+    }
+
+    #[test]
+    fn fill_reveal_paints_interior_pixels_at_partial_progress() {
+        // A fully-filled 80x80 rect with no stroke. At draw_progress = 0.5 the
+        // `fill` reveal mode must show painted interior pixels (a swept solid
+        // region), not just a thin traced outline.
+        let svg = filled_square_svg();
+        let layout = test_layout();
+        let props = AnimatedProperties {
+            draw_progress: 0.5,
+            ..Default::default()
+        };
+        let ctx = test_ctx();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            svg.paint_content(canvas, &layout, &props, &ctx);
+        }
+
+        // x=30 is well inside the rect's left half (revealed at progress 0.5
+        // under a left-to-right sweep) and far from the outline; a stroke-only
+        // trace would leave it fully transparent.
+        let (r, g, b, a) = red_alpha_at(&mut surface, 30, 50);
+        assert!(
+            a > 200 && r > 200 && g < 50 && b < 50,
+            "fill reveal at draw_progress=0.5 must paint filled interior pixels, got rgba=({r},{g},{b},{a}) at (30,50)"
+        );
+    }
+
+    #[test]
+    fn stroke_reveal_default_leaves_interior_unfilled_at_partial_progress() {
+        // The default `reveal: stroke` behavior must be unchanged: at partial
+        // draw_progress, only a thin traced outline is visible, so a deep
+        // interior pixel stays unpainted.
+        let mut svg = filled_square_svg();
+        svg.reveal = SvgReveal::Stroke;
+        let layout = test_layout();
+        let props = AnimatedProperties {
+            draw_progress: 0.5,
+            ..Default::default()
+        };
+        let ctx = test_ctx();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            svg.paint_content(canvas, &layout, &props, &ctx);
+        }
+
+        let (_, _, _, a) = red_alpha_at(&mut surface, 50, 50);
+        assert!(
+            a < 50,
+            "default stroke reveal must not fill the interior at partial progress, got alpha={a} at (50,50)"
+        );
     }
 }
