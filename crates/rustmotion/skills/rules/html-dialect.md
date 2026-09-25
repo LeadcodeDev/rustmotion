@@ -35,7 +35,7 @@
 | `p`, `span`, `h1`–`h6`, `strong`, `em`, `label` | `{"type": "text", "content": "<flattened text>"}` |
 | `img`, `video`, `svg` | **Refused outright**, naming the real tag to use: `rm-image`, `rm-video`, `rm-svg` |
 | `rm-<name>` | `{"type": "<name>"}` — any of the 60 component types |
-| anything else unrecognized | **Silently becomes a `div`.** A typo'd tag (`<h7>`, `<dvi>`) does not error — `validate` sees a legal `div`, so there is nothing to catch the mistake on. The visible effect: a `div`'s children each become their own block-level component (column flex by default), where a real `h1`–`h6`/`p`/`span` would have flattened its descendants into one inline text run. Demonstrated: `<h7>Hello <strong>World</strong></h7>` renders **"Hello" and "World" on two separate lines** — under the intended tag it would have been a single line reading "Hello World". Double-check tag spelling. |
+| anything else unrecognized | **Refused by name.** An unrecognized tag (`<h7>`, `<dvi>`, a typo) raises `UnknownTag`, naming it and suggesting the closest known tag when there is one. |
 
 `<style>` is refused (not ignored) — it would have a real visual effect the transpiler cannot honor. `<script>`, `<title>`, `<noscript>`, `<template>`, `<head>` are skipped like real HTML.
 
@@ -75,6 +75,8 @@ Two forms, on the same attribute:
 - **Compact DSL**: `preset-name key:value key:value` (kebab preset names, converted to `snake_case`), multiple effects separated by `;`. `spring` only accepts `spring:true` (all-default `SpringConfig`) or `spring:false` (absent) in this form — fine-grained damping/stiffness/mass needs the JSON form.
 - **JSON escape hatch**: a value starting with `{` or `[` is parsed as raw JSON and placed into `style.animation` directly (wrapped in an array if it was a single object). This is the one field-level escape hatch that exists for `anim`.
 
+**Every** non-`style`/`class`/`anim` attribute on an `rm-*` element now takes a JSON value the same way: start it with `{` or `[` and it parses as that shape, which is what makes `data`, `rows`, `items`, `steps`, `words` and the per-component `timeline` reachable. Inline `style=` takes it too, written as one whitespace-free token — that is how `box-shadow`, `text-shadow`, `transform`, `filter`, `border` as an object, `clip-path` and the gradients get through. `font-family` is a plain string, not an array: write the stack without a space after the comma (`Inter,sans-serif`) so it stays one token. What still has no escape is a scalar string that happens to look numeric — `<rm-text content="2024">` is still a hard error, the dialect has no quoting convention yet. `<rustmotion background="…">` must be a plain colour string, unlike `<scene background="…">`: the video-level background has no object form and a JSON-looking value is refused rather than transpiled into something that always fails downstream.
+
 `background`, `effects`, `world-position`, and `animated-background` on `<scene>` get the **same kind of escape hatch** — each accepts a value starting with `{`/`[` as inline JSON matching that field's real schema shape (`background='{"preset":"halo","halo":{...},"speed":0}'`, as in the shipped example below). `world-position` additionally accepts a `"x,y"` CSV shorthand. **These five are the only attributes with a JSON-string escape hatch.** No other component field — not `chart.data`, not `table.rows`, not a `timeline` step list — has one; those need JSON authoring, full stop.
 
 ---
@@ -83,15 +85,15 @@ Two forms, on the same attribute:
 
 - Any array/object **component field** beyond `style`/`anim`/the five scene attributes above: `chart` (all 12 types), `table`, `list`, `stepper`, the `timeline` *component*, `tag_cloud`, `avatar_group`, `pill_nav`, and the per-component `timeline` field (state-transition steps) on any of the 60 components.
 - The structured half of `style` listed above (shadows, transforms, filters, gradients, clip-path, font stacks, grid spans, transitions).
-- `audio` tracks at all — so `waveform`, `audio_spectrum`, and `style.audio-reactive` have nothing to bind to.
-- `composition`/`world` views. `world-position` is accepted and validated but never read: the dialect only ever emits a flat `scenes` list, i.e. one implicit `slide` view. A world-view video (the one mechanism for beat-to-beat continuity — see [rules/world-view.md](world-view.md)) cannot be written in HTML.
+- ~~`audio` tracks~~ — `<rustmotion audio='[{"src":"track.mp3","volume":0.8}]'>` reaches `Scenario.audio` (a JSON array is required), and `style="audio-reactive:{...}"` is reachable through the style escape hatch. Root-level `config`/variables, named `backgrounds` templates and `version` remain out of reach.
+- `composition`/`world` views: the dialect emits only a flat `scenes` list, so a `world` view — the one mechanism for continuous beat-to-beat camera movement — cannot be written in HTML. `world-position` on a `<scene>` is **not** dead syntax, though: paired with `transition="camera_pan"` on the following scene, the renderer pans between the two scenes' values inside the flat view HTML does emit. Verified by rendering two otherwise-identical files with different `world-position` values: the pixels differ. It is inert only without that transition.
 - Root-level `config`/variables, named `backgrounds` templates, `version`.
 
 ## Footguns worth knowing even when everything above is in scope
 
-- **Whitespace is not collapsed.** Indenting the HTML source changes the rendered output — a pretty-printed document can render with the source's leading spaces as literal content under `nowrap`. Keep text content on one line inside its tag.
-- **No inline text formatting.** `<b>`, `<i>`, `<br>`, `<code>`, `<a>`, `<u>`, `<small>` are all refused inside `p`/`span`/`h1`–`h6`/etc. — there is no way to bold a word mid-sentence or force a line break inside one text component. Split into separate elements (or a `\n` in a JSON `content` string, which isn't available here either — use two stacked elements instead).
-- **Don't nest hundreds of levels deep.** There is no recursion depth guard; pathological nesting can abort the process rather than produce a validate-able error. Ordinary generated markup never gets close to this, but it's not caught and turned into a message if something goes wrong upstream and produces runaway nesting.
+- **Whitespace collapses like CSS `normal`**, except on an element declaring `style="white-space:pre"` or `pre-wrap`, where source newlines and indentation are kept. Two inline elements separated only by whitespace still render flush when their flex parent sets no `gap` — real CSS does the same, a whitespace-only run between two flex children generates no box.
+- **Inline text tags flatten.** `<b>`, `<i>`, `<code>`, `<u>`, `<small>` and `<a>` merge into the parent text run exactly as `<strong>`/`<em>` do, losing their own emphasis and any attribute of their own — `<a href>` keeps its text, not its link. `<br>` becomes a real line break inside text content and is refused anywhere else.
+- **Nesting deeper than 100 levels is refused** (`NestingTooDeep`) rather than risking a process abort. Ordinary markup never approaches it.
 
 ## Worked reference
 
