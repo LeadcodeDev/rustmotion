@@ -247,6 +247,13 @@ fn fetch_and_resolve(
         directive.config.as_ref(),
         &directive.include,
     )?;
+    // `components` (and any `for-each`/`use` inside this file's own scenes)
+    // is scoped to this document: expanded here, per included file, using
+    // ONLY this file's own `components` block — never the parent's, and
+    // never visible to the parent's own `use` sites. See
+    // `rustmotion_core::expand`'s module doc for why that scoping was
+    // chosen over a cross-file component registry.
+    crate::expand::expand_directives(&mut json_value, &directive.include)?;
 
     // An included file's assets are relative to *that* file, not to the parent
     // that pulled it in — otherwise moving an include would silently break
@@ -256,13 +263,6 @@ fn fetch_and_resolve(
             crate::assets::rebase_relative_paths(&mut json_value, dir);
         }
     }
-    // `components` (and any `for-each`/`use` inside this file's own scenes)
-    // is scoped to this document: expanded here, per included file, using
-    // ONLY this file's own `components` block — never the parent's, and
-    // never visible to the parent's own `use` sites. See
-    // `rustmotion_core::expand`'s module doc for why that scoping was
-    // chosen over a cross-file component registry.
-    crate::expand::expand_directives(&mut json_value, &directive.include)?;
 
     let child_scenario: Scenario =
         serde_json::from_value(json_value).map_err(RustmotionError::from)?;
@@ -294,17 +294,19 @@ fn fetch_and_resolve(
                 });
             }
         }
-        let mut slots: Vec<Option<Scene>> = scenes.into_iter().map(Some).collect();
         let mut filtered = Vec::with_capacity(indices.len());
         for &idx in indices {
-            if let Some(scene) = slots[idx].take() {
-                filtered.push(scene);
-            }
+            filtered.push(clone_scene_via_json(&scenes[idx])?);
         }
         scenes = filtered;
     }
 
     Ok(scenes)
+}
+
+fn clone_scene_via_json(scene: &Scene) -> Result<Scene> {
+    let value = serde_json::to_value(scene).map_err(RustmotionError::from)?;
+    serde_json::from_value(value).map_err(RustmotionError::from)
 }
 
 fn local_include_root(source: &IncludeSource) -> Option<PathBuf> {
@@ -698,6 +700,87 @@ mod tests {
         assert_eq!(resolved.all_scenes().count(), 1);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_for_each_bound_src_inside_an_included_file_is_still_rebased_against_that_file() {
+        let dir = scratch_dir("foreach-src-rebase");
+        let child_dir = dir.join("child");
+        std::fs::create_dir_all(&child_dir).unwrap();
+        std::fs::write(child_dir.join("logo.png"), b"x").unwrap();
+
+        let child = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [ { "path": "logo.png" } ],
+                    "template": { "type": "image", "src": "$path" }
+                }]
+            }]
+        });
+        std::fs::write(child_dir.join("child.json"), child.to_string()).unwrap();
+
+        let top_path = dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [ { "include": "child/child.json" } ]
+        });
+        std::fs::write(&top_path, top_body.to_string()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let resolved = resolve_includes(scenario, &IncludeSource::File(top_path.clone()))
+            .expect("include resolves");
+
+        let src = resolved.views[0].scenes[0].children[0]["src"]
+            .as_str()
+            .expect("src")
+            .to_string();
+        assert!(
+            Path::new(&src).is_absolute() && Path::new(&src).is_file(),
+            "a for-each-bound src inside an included file must still be rebased against that \
+             file's own directory, got: {src}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_repeated_include_scene_index_produces_one_scene_per_occurrence() {
+        let dir = scratch_dir("include-repeat-index");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let child = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 2.0, "children": [] }
+            ]
+        });
+        let child_path = dir.join("child.json");
+        std::fs::write(&child_path, child.to_string()).unwrap();
+
+        let top_path = dir.join("top.json");
+        let top_body = serde_json::json!({
+            "video": { "width": 10, "height": 10 },
+            "scenes": [ { "include": "child.json", "scenes": [0, 0, 1] } ]
+        });
+        std::fs::write(&top_path, top_body.to_string()).unwrap();
+
+        let scenario = scenario_from_file(&top_path);
+        let resolved = resolve_includes(scenario, &IncludeSource::File(top_path.clone()))
+            .expect("include resolves");
+
+        assert_eq!(
+            resolved.all_scenes().count(),
+            3,
+            "'scenes': [0, 0, 1] must produce 3 scenes (the repeated index reused twice), not \
+             silently drop the second occurrence"
+        );
+        let durations: Vec<f64> = resolved.all_scenes().map(|s| s.duration).collect();
+        assert_eq!(durations, vec![1.0, 1.0, 2.0]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
