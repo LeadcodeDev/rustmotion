@@ -65,6 +65,19 @@ rustmotion_core::impl_traits!(AvatarGroup {
 });
 
 impl AvatarGroup {
+    fn natural_size(&self) -> (f32, f32) {
+        let visible = self.visible_count() as f32;
+        let extra = if self.overflow_count() > 0 { 1.0 } else { 0.0 };
+        let total = visible + extra;
+        let step = (self.size - self.overlap).max(0.0);
+        let w = if total <= 0.0 {
+            0.0
+        } else {
+            self.size + (total - 1.0) * step
+        };
+        (w.max(1.0), self.size.max(1.0))
+    }
+
     pub fn visible_count(&self) -> usize {
         match self.max_display {
             Some(max) => max.min(self.avatars.len()),
@@ -200,10 +213,104 @@ impl Painter for AvatarGroup {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
+        let (natural_w, natural_h) = self.natural_size();
+        let scale_x = layout.width / natural_w;
+        let scale_y = layout.height / natural_h;
+        canvas.save();
+        canvas.scale((scale_x, scale_y));
         let _ = self.paint(canvas);
+        canvas.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(size: f32, overlap: f32, count: usize, max_display: Option<usize>) -> AvatarGroup {
+        AvatarGroup {
+            avatars: (0..count)
+                .map(|_| AvatarGroupItem {
+                    src: "/nonexistent.png".to_string(),
+                })
+                .collect(),
+            max_display,
+            size,
+            overlap,
+            border_width: default_border_width(),
+            border_color: default_border_color(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn paint_content_scales_to_the_layout_box_not_its_own_size_field() {
+        let g = group(48.0, 16.0, 6, Some(0));
+        assert!(g.overflow_count() > 0, "fixture must trigger the +N path");
+        const W: i32 = 200;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 30.0,
+                ..Default::default()
+            };
+            g.paint_content(
+                canvas,
+                &layout,
+                &AnimatedProperties::default(),
+                &PaintCtx {
+                    time: 0.0,
+                    scenario_time: 0.0,
+                    scene_duration: 1.0,
+                    frame_index: 0,
+                    fps: 30,
+                    video_width: W as u32,
+                    video_height: H as u32,
+                    stagger_offset: 0.0,
+                },
+            );
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let mut maxx = 0;
+        let mut maxy = 0;
+        for y in 0..H {
+            for x in 0..W {
+                if buf[((y * W + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        assert!(
+            maxx < 60 && maxy < 30,
+            "expected ink within the 60x30 layout box, got ink up to ({maxx}, {maxy})"
+        );
     }
 }

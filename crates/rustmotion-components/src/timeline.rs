@@ -118,7 +118,7 @@ rustmotion_core::impl_traits!(Timeline {
 });
 
 impl Timeline {
-    fn paint(&self, canvas: &Canvas, props: &AnimatedProperties) {
+    fn paint(&self, canvas: &Canvas, props: &AnimatedProperties, layout_size: (f32, f32)) {
         let n = self.steps.len();
         if n == 0 {
             return;
@@ -141,12 +141,14 @@ impl Timeline {
             self.fill_progress
         };
 
+        let (w, h) = layout_size;
         match self.direction {
             TimelineDirection::Horizontal => {
                 self.render_horizontal(
                     canvas,
                     n,
                     r,
+                    w,
                     fill_progress,
                     &font,
                     &icon_font,
@@ -160,6 +162,7 @@ impl Timeline {
                     canvas,
                     n,
                     r,
+                    h,
                     fill_progress,
                     &font,
                     &icon_font,
@@ -178,6 +181,7 @@ impl Timeline {
         canvas: &Canvas,
         n: usize,
         r: f32,
+        total_w: f32,
         fill_progress: f32,
         font: &Font,
         icon_font: &Font,
@@ -185,7 +189,6 @@ impl Timeline {
         sublabel_font: &Font,
         ascent: f32,
     ) {
-        let total_w = self.width;
         let bar_y = r; // Center of nodes
 
         // Node 0 used to sit at local x=0 and node n-1 at x=total_w, so
@@ -327,6 +330,7 @@ impl Timeline {
         canvas: &Canvas,
         n: usize,
         r: f32,
+        layout_h: f32,
         fill_progress: f32,
         font: &Font,
         icon_font: &Font,
@@ -334,9 +338,9 @@ impl Timeline {
         _sublabel_font: &Font,
         _ascent: f32,
     ) {
-        let spacing = 80.0;
         let bar_x = r;
-        let total_h = if n > 1 { (n - 1) as f32 * spacing } else { 0.0 };
+        let total_h = (layout_h - 2.0 * r).max(0.0);
+        let spacing = if n > 1 { total_h / (n - 1) as f32 } else { 0.0 };
         // Node 0 used to sit at local y=0, so its circle (radius `r`) bled
         // `r` px above the assigned box's top edge — same class of bug as
         // the horizontal direction's left/right overflow. Insetting every
@@ -437,11 +441,11 @@ impl Painter for Timeline {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        self.paint(canvas, props);
+        self.paint(canvas, props, (layout.width, layout.height));
     }
 }
 
@@ -528,7 +532,7 @@ mod tests {
         {
             let canvas = surface.canvas();
             let props = AnimatedProperties::default();
-            tl.paint(canvas, &props);
+            tl.paint(canvas, &props, (tl.width, H as f32));
         }
         let (minx, maxx, _miny, _maxy) =
             ink_bounds(&mut surface, W, H).expect("timeline must paint something");
@@ -564,10 +568,66 @@ mod tests {
         {
             let canvas = surface.canvas();
             let props = AnimatedProperties::default();
-            tl.paint(canvas, &props);
+            tl.paint(canvas, &props, (tl.width, H as f32));
         }
         let (minx, maxx, _miny, _maxy) =
             ink_bounds(&mut surface, W, H).expect("timeline must paint something");
         assert!(minx >= 0 && maxx < W);
+    }
+
+    #[test]
+    fn paint_content_honours_the_layout_box_not_its_own_width_field() {
+        let tl = Timeline {
+            steps: vec![step("A"), step("B"), step("C")],
+            width: default_timeline_width(),
+            direction: TimelineDirection::Horizontal,
+            node_radius: default_node_radius(),
+            bar_color: default_bar_color(),
+            bar_fill_color: default_bar_fill_color(),
+            bar_height: default_bar_height(),
+            fill_progress: default_fill_progress(),
+            font_size: default_label_font_size(),
+            label_color: default_label_color(),
+            sublabel_color: default_sublabel_color(),
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 200;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 100.0,
+                ..Default::default()
+            };
+            tl.paint_content(
+                canvas,
+                &layout,
+                &AnimatedProperties::default(),
+                &PaintCtx {
+                    time: 0.0,
+                    scenario_time: 0.0,
+                    scene_duration: 1.0,
+                    frame_index: 0,
+                    fps: 30,
+                    video_width: W as u32,
+                    video_height: H as u32,
+                    stagger_offset: 0.0,
+                },
+            );
+        }
+        let (minx, maxx, _miny, _maxy) =
+            ink_bounds(&mut surface, W, H).expect("timeline must paint something");
+        assert!(minx >= 0, "ink starts left of the box at x={minx}");
+        assert!(
+            maxx < 120,
+            "expected ink within the 120px-wide layout box, got ink up to x={maxx}"
+        );
     }
 }

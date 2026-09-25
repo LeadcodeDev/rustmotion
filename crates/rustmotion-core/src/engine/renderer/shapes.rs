@@ -85,8 +85,19 @@ pub fn build_shape_path(
             path.close();
             Some(path.detach())
         }
-        ShapeType::Path { data } => skia_safe::Path::from_svg(data),
+        ShapeType::Path { data } => fit_svg_path_to_box(data, x, y, w, h),
     }
+}
+
+fn fit_svg_path_to_box(data: &str, x: f32, y: f32, w: f32, h: f32) -> Option<skia_safe::Path> {
+    let raw = skia_safe::Path::from_svg(data)?;
+    let src = raw.compute_tight_bounds();
+    if src.width() <= 0.0 || src.height() <= 0.0 {
+        return None;
+    }
+    let dst = Rect::from_xywh(x, y, w, h);
+    let matrix = skia_safe::Matrix::rect_2_rect(src, dst, None)?;
+    Some(raw.with_transform(&matrix))
 }
 
 pub fn draw_shape_path(
@@ -167,9 +178,48 @@ pub fn draw_shape_path(
             canvas.draw_path(&path.detach(), paint);
         }
         ShapeType::Path { data } => {
-            if let Some(path) = skia_safe::Path::from_svg(data) {
+            if let Some(path) = fit_svg_path_to_box(data, x, y, w, h) {
                 canvas.draw_path(&path, paint);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_shape_is_fit_to_its_declared_box_not_drawn_at_raw_svg_coordinates() {
+        let data = "M300 200 L399 200 L399 269 L300 269 Z";
+        let path = build_shape_path(
+            &ShapeType::Path { data: data.into() },
+            10.0,
+            10.0,
+            40.0,
+            20.0,
+            None,
+        )
+        .expect("a well-formed SVG path must parse");
+        let b = path.compute_tight_bounds();
+        assert!(
+            b.left >= 9.5 && b.top >= 9.5 && b.right <= 50.5 && b.bottom <= 30.5,
+            "expected the path fit inside (10,10)-(50,30), got {:?}",
+            b
+        );
+    }
+
+    #[test]
+    fn a_degenerate_path_returns_none_instead_of_panicking() {
+        let data = "M5 5 L5 5 Z";
+        let path = build_shape_path(
+            &ShapeType::Path { data: data.into() },
+            0.0,
+            0.0,
+            40.0,
+            20.0,
+            None,
+        );
+        assert!(path.is_none());
     }
 }

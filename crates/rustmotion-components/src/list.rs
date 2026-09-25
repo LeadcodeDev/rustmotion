@@ -8,7 +8,7 @@ use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
 use rustmotion_core::engine::renderer::{
     asset_cache, draw_text_with_fallback, emoji_typeface, fetch_icon_svg, paint_from_hex,
-    typeface_with_fallback,
+    sandboxed_svg_options, typeface_with_fallback,
 };
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
@@ -117,7 +117,7 @@ impl List {
         let img = if let Some(cached) = cache.get(&cache_key) {
             cached.clone()
         } else if let Ok(svg_data) = fetch_icon_svg(icon_id, color, icon_w, icon_h) {
-            let opt = usvg::Options::default();
+            let opt = sandboxed_svg_options();
             if let Ok(tree) = usvg::Tree::from_data(&svg_data, &opt) {
                 let svg_size = tree.size();
                 if let Some(mut pixmap) = tiny_skia::Pixmap::new(icon_w, icon_h) {
@@ -256,11 +256,18 @@ impl Painter for List {
     fn paint_content(
         &self,
         canvas: &Canvas,
-        _layout: &BoxLayout,
+        layout: &BoxLayout,
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, 0.0, layout.width.max(0.0), layout.height.max(0.0)),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
         let _ = self.paint(canvas, ctx);
+        canvas.restore();
     }
 }
 
@@ -337,6 +344,73 @@ mod tests {
         assert!(
             lit > 20,
             "list at font-size: 2rem must paint visible ink, got {lit} lit pixels"
+        );
+    }
+
+    #[test]
+    fn paint_content_clips_to_the_layout_box() {
+        let list = List {
+            items: vec![ListItem {
+                text: "a label far too long to fit in a narrow box".to_string(),
+                icon: None,
+                checked: None,
+            }],
+            variant: ListVariant::Bullet,
+            gap: default_gap(),
+            icon_size: default_icon_size(),
+            icon_color: default_icon_color(),
+            unchecked_color: default_unchecked_color(),
+            width: default_width(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(20.0)),
+                color: Some(rustmotion_core::css::style::Color::String("#FFFFFF".into())),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 40.0,
+                ..Default::default()
+            };
+            list.paint_content(canvas, &layout, &AnimatedProperties::default(), &test_ctx());
+        }
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (W, H),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (W * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let mut maxx = 0;
+        for y in 0..H {
+            for x in 0..W {
+                if buf[((y * W + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                }
+            }
+        }
+        assert!(
+            maxx < 80,
+            "expected ink clipped to the 80px-wide layout box, got ink up to x={maxx}"
         );
     }
 }
