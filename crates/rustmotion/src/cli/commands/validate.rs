@@ -77,6 +77,16 @@ impl FixRefusal {
     }
 }
 
+fn value_tree_has_json_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|v| value_tree_has_json_key(v, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| value_tree_has_json_key(v, key)),
+        _ => false,
+    }
+}
+
 /// `None` when `--fix` may write over `input`.
 fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     if rustmotion::loader::is_html_path(input) {
@@ -89,19 +99,17 @@ fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
         // Unparseable source is not something we should be overwriting either.
         Err(_) => return Some(FixRefusal::Templated),
     };
-    if source.get("config").is_some() || raw_source.contains("$") {
+    let declares_config_the_only_source_a_var_override_can_ever_resolve_against =
+        source.get("config").is_some();
+    if declares_config_the_only_source_a_var_override_can_ever_resolve_against {
         return Some(FixRefusal::Templated);
     }
-    if raw_source.contains("\"include\"") {
+    if value_tree_has_json_key(&source, "include") {
         return Some(FixRefusal::UsesInclude);
     }
-    // Same conservative, raw-substring detection as `UsesInclude` above (not
-    // a full walk of the tree): `components`/`for-each`/`use` can appear at
-    // any depth, and `--fix` must refuse before it ever gets far enough to
-    // find out whether they're actually reachable.
     if source.get("components").is_some()
-        || raw_source.contains("\"for-each\"")
-        || raw_source.contains("\"use\"")
+        || value_tree_has_json_key(&source, "for-each")
+        || value_tree_has_json_key(&source, "use")
     {
         return Some(FixRefusal::UsesTemplateDirectives);
     }
@@ -136,23 +144,12 @@ pub fn cmd_validate(
     lenient: bool,
     overrides: Option<&VarOverrides>,
 ) -> Result<()> {
-    let loaded = match validation::load_with_vars(ValidationSource::File(input), overrides) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let loaded = validation::load_with_vars(ValidationSource::File(input), overrides)?;
 
     let mut report_out = validation::run_checks(&loaded, strict_anim);
     if strict_attrs {
         validation::warn_strict_attrs_is_now_default();
         report_out.promote_attr_warnings();
-    }
-
-    if let Some(report_path) = report {
-        write_report(report_path, &report_out)?;
-        eprintln!("Wrote report: {}", report_path.display());
     }
 
     let mut applied_fixes = 0usize;
@@ -186,18 +183,21 @@ pub fn cmd_validate(
         }
     }
 
+    if let Some(report_path) = report {
+        write_report(report_path, &report_out)?;
+        eprintln!("Wrote report: {}", report_path.display());
+    }
+
     let all_scenes: Vec<_> = loaded.scenario.all_scenes().collect();
     let total_duration = announced_duration(&loaded.scenario);
 
     validation::print_report(&report_out, &input.display().to_string());
 
-    let blocking = !report_out.schema_errors.is_empty()
-        || (!report_out.geom_violations.is_empty() && !lenient);
-    if blocking {
+    if report_out.is_blocking(lenient) {
         if applied_fixes > 0 {
             eprintln!("Some fixes applied — re-run validate to confirm.");
         }
-        std::process::exit(1);
+        return Err(report_out.to_error());
     }
 
     eprintln!(
@@ -646,7 +646,7 @@ mod tests {
         }
 
         #[test]
-        fn a_templated_scenario_is_refused() {
+        fn a_scenario_declaring_config_is_refused() {
             // The write would bake in the substitution and make --var a no-op.
             let with_config = r#"{"config":{"title":"hi"},"video":{"width":320,"height":240,
                 "fps":30},"scenes":[{"duration":1.0,"children":[]}]}"#;
@@ -654,13 +654,49 @@ mod tests {
                 refuse_fix(Path::new("s.json"), with_config),
                 Some(FixRefusal::Templated)
             );
+        }
 
+        #[test]
+        fn a_dollar_reference_with_no_config_to_ever_resolve_it_is_not_refused() {
             let with_var = r#"{"video":{"width":320,"height":240,"fps":30},
                 "scenes":[{"duration":1.0,"children":[
                 {"type":"text","content":"$title"}]}]}"#;
+            assert_eq!(refuse_fix(Path::new("s.json"), with_var), None);
+        }
+
+        #[test]
+        fn a_price_tag_with_a_dollar_sign_and_no_config_is_not_refused() {
+            let price_tag = r#"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"text","content":"Now $9.99"}]}]}"#;
+            assert_eq!(refuse_fix(Path::new("s.json"), price_tag), None);
+        }
+
+        #[test]
+        fn a_terminal_transcript_with_a_shell_variable_and_no_config_is_not_refused() {
+            let terminal_transcript = r#"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"terminal","lines":["echo $PATH"]}]}]}"#;
+            assert_eq!(refuse_fix(Path::new("s.json"), terminal_transcript), None);
+        }
+
+        #[test]
+        fn a_content_value_that_is_the_literal_word_use_is_not_mistaken_for_the_use_directive() {
+            let json = r#"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"text","content":"use"}]}]}"#;
+            assert_eq!(refuse_fix(Path::new("s.json"), json), None);
+        }
+
+        #[test]
+        fn a_use_directive_nested_under_an_unrelated_wrapper_key_is_still_refused() {
+            let json = r##"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"card","children":[
+                {"use":"stat_card","props":{"label":"Revenue"}}]}]}]}"##;
             assert_eq!(
-                refuse_fix(Path::new("s.json"), with_var),
-                Some(FixRefusal::Templated)
+                refuse_fix(Path::new("s.json"), json),
+                Some(FixRefusal::UsesTemplateDirectives)
             );
         }
 
@@ -907,5 +943,90 @@ mod tests {
                  land on the right one"
             );
         }
+    }
+
+    mod blocking_returns_err_instead_of_calling_process_exit {
+        use super::super::cmd_validate;
+
+        #[test]
+        fn a_viewport_overflow_without_fix_or_lenient_is_returned_as_an_err() {
+            let path = std::env::temp_dir().join(format!(
+                "rm_validate_blocking_no_exit_{}.json",
+                std::process::id()
+            ));
+            let original = r##"{
+                "video": { "width": 1920, "height": 1080 },
+                "scenes": [{
+                    "duration": 1.0,
+                    "children": [{
+                        "type": "shape", "shape": "rect",
+                        "x": 100000, "y": 0,
+                        "size": { "width": 100, "height": 100 },
+                        "fill": "#ff0000"
+                    }]
+                }]
+            }"##;
+            std::fs::write(&path, original).expect("write fixture");
+
+            let result = cmd_validate(&path, None, /*fix=*/ false, false, false, false, None);
+            std::fs::remove_file(&path).ok();
+
+            assert!(
+                result.is_err(),
+                "a viewport overflow with no --fix and no --lenient must block: {result:?}"
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("geometry violation"),
+                "the returned error must name what blocked, the same information the \
+                 old process::exit(1) path gave the shell via its exit code alone"
+            );
+        }
+    }
+
+    #[test]
+    fn report_written_with_fix_reflects_the_post_fix_state_not_the_pre_fix_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "rm_validate_report_after_fix_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let scenario_path = dir.join("s.json");
+        let report_path = dir.join("report.json");
+        std::fs::write(&scenario_path, NARROW_CARD_JSON).expect("write fixture");
+
+        let _ = cmd_validate(
+            &scenario_path,
+            Some(&report_path),
+            /*fix=*/ true,
+            false,
+            false,
+            false,
+            None,
+        );
+
+        let report_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&report_path).expect("report was written"),
+        )
+        .expect("report is valid JSON");
+        std::fs::remove_dir_all(&dir).ok();
+
+        let violations = report_json["geometry_violations"]
+            .as_array()
+            .expect("geometry_violations is an array");
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected exactly the post-fix content-overflow violation, the one left after \
+             white-space:nowrap is removed and the card is still too small for the now-wrapped \
+             text: {report_json}"
+        );
+        assert_eq!(
+            violations[0]["kind"], "content_overflows_box",
+            "the pre-fix violation was unwrappable_text_overflow; seeing that kind here \
+             would mean --report was written before --fix ran: {report_json}"
+        );
     }
 }

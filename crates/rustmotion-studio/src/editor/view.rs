@@ -9,7 +9,7 @@ use gpui_kit::{
 use crate::app::state::{EditorState, StudioState};
 use crate::scenario::{
     baseline_slot, diff_scenarios, get_baseline, history_slot, list_annotations, redo, undo,
-    ChangeKind, Shared,
+    ChangeKind, Shared, View,
 };
 
 use super::annotations::AnnotationsPanel;
@@ -375,12 +375,35 @@ impl Render for EditorView {
                 .clone()
         };
         if let Some(err) = error {
-            return div()
+            return v_flex()
+                .id("editor-error")
                 .p_6()
+                .gap_4()
+                .items_start()
                 .size_full()
                 .bg(cx.theme().background)
-                .text_color(cx.theme().danger)
-                .child(format!("Error: {err}"))
+                .child(
+                    div()
+                        .text_color(cx.theme().danger)
+                        .child(format!("Error: {err}")),
+                )
+                .child(
+                    div()
+                        .id("editor-error-back-to-library")
+                        .px_3()
+                        .py_1p5()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .cursor_pointer()
+                        .child("Back to Library")
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.studio.update(cx, |state, cx| {
+                                state.view = View::Library;
+                                cx.notify();
+                            });
+                        })),
+                )
                 .into_any_element();
         }
 

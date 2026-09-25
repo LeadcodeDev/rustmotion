@@ -1291,11 +1291,13 @@ fn check_auto_scroll(
 /// workstream report for the full list.
 pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
     let mut warnings = Vec::new();
+    let video_w = scenario.video.width as f32;
     let video_h = scenario.video.height as f32;
     if video_h <= 0.0 {
         return warnings;
     }
     let min_px = MIN_LEGIBLE_FONT_RATIO * video_h;
+    let length_ctx = ConversionContext::for_viewport(video_w, video_h).length;
 
     for (vi, view) in scenario.views.iter().enumerate() {
         for (si, scene) in view.scenes.iter().enumerate() {
@@ -1303,7 +1305,14 @@ pub fn check_legibility(scenario: &ResolvedScenario) -> Vec<String> {
             let path_root = format!("views[{}].scenes[{}]", vi, si);
             for (json_idx, child) in &indexed {
                 let path = format!("{}.children[{}]", path_root, json_idx);
-                walk_legibility(&child.component, &path, min_px, video_h, &mut warnings);
+                walk_legibility(
+                    &child.component,
+                    &path,
+                    min_px,
+                    video_h,
+                    &length_ctx,
+                    &mut warnings,
+                );
             }
         }
     }
@@ -1315,9 +1324,10 @@ fn walk_legibility(
     path: &str,
     min_px: f32,
     video_h: f32,
+    length_ctx: &LengthContext,
     out: &mut Vec<String>,
 ) {
-    for (label, effective_px) in text_sizes(component) {
+    for (label, effective_px) in text_sizes(component, length_ctx) {
         // 0.05px tolerance for float rounding; not a meaningful visual gap.
         if effective_px < min_px - 0.05 {
             out.push(format!(
@@ -1361,6 +1371,7 @@ fn walk_legibility(
                 &format!("{path}.children[{i}]"),
                 min_px,
                 video_h,
+                length_ctx,
                 out,
             );
         }
@@ -1385,24 +1396,34 @@ fn declares_text_autofit(component: &Component) -> bool {
     }
 }
 
-fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
+fn font_size_ctx_or(style: &CssStyle, ctx: &LengthContext, default: f32) -> f32 {
+    style
+        .font_size
+        .as_ref()
+        .map(|l| l.resolve(ctx))
+        .unwrap_or(default)
+}
+
+fn text_sizes(component: &Component, ctx: &LengthContext) -> Vec<(&'static str, f32)> {
     match component {
         // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
-        Component::Text(t) => vec![("text", t.style.font_size_px_or(48.0))],
-        Component::RichText(t) => vec![("rich_text", t.style.font_size_px_or(48.0))],
-        Component::GradientText(t) => vec![("gradient_text", t.style.font_size_px_or(48.0))],
-        Component::Caption(t) => vec![("caption", t.style.font_size_px_or(48.0))],
-        Component::Counter(c) => vec![("counter", c.style.font_size_px_or(48.0))],
+        Component::Text(t) => vec![("text", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::RichText(t) => vec![("rich_text", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::GradientText(t) => {
+            vec![("gradient_text", font_size_ctx_or(&t.style, ctx, 48.0))]
+        }
+        Component::Caption(t) => vec![("caption", font_size_ctx_or(&t.style, ctx, 48.0))],
+        Component::Counter(c) => vec![("counter", font_size_ctx_or(&c.style, ctx, 48.0))],
         // table.rs, terminal.rs, codeblock/{dimensions,render}.rs, pill_nav.rs: 14.0
-        Component::Table(t) => vec![("table", t.style.font_size_px_or(14.0))],
-        Component::Terminal(t) => vec![("terminal", t.style.font_size_px_or(14.0))],
-        Component::Codeblock(c) => vec![("codeblock", c.style.font_size_px_or(14.0))],
-        Component::PillNav(p) => vec![("pill_nav", p.style.font_size_px_or(14.0))],
+        Component::Table(t) => vec![("table", font_size_ctx_or(&t.style, ctx, 14.0))],
+        Component::Terminal(t) => vec![("terminal", font_size_ctx_or(&t.style, ctx, 14.0))],
+        Component::Codeblock(c) => vec![("codeblock", font_size_ctx_or(&c.style, ctx, 14.0))],
+        Component::PillNav(p) => vec![("pill_nav", font_size_ctx_or(&p.style, ctx, 14.0))],
         // callout.rs, list.rs, notification.rs (title): 16.0
-        Component::Callout(c) => vec![("callout", c.style.font_size_px_or(16.0))],
-        Component::List(l) => vec![("list", l.style.font_size_px_or(16.0))],
+        Component::Callout(c) => vec![("callout", font_size_ctx_or(&c.style, ctx, 16.0))],
+        Component::List(l) => vec![("list", font_size_ctx_or(&l.style, ctx, 16.0))],
         Component::Notification(n) => {
-            let title = n.style.font_size_px_or(16.0);
+            let title = font_size_ctx_or(&n.style, ctx, 16.0);
             let mut sizes = vec![("notification title", title)];
             if n.message.is_some() {
                 // notification.rs: message_font_size() = title_font_size() * 0.85
@@ -1414,9 +1435,9 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
         // to its component default when absent from JSON), overridable by
         // `style.font-size` exactly like the rest — kbd.rs, tooltip.rs,
         // marquee.rs.
-        Component::Kbd(k) => vec![("kbd", k.style.font_size_px_or(k.font_size))],
-        Component::Tooltip(t) => vec![("tooltip", t.style.font_size_px_or(t.font_size))],
-        Component::Marquee(m) => vec![("marquee", m.style.font_size_px_or(m.font_size))],
+        Component::Kbd(k) => vec![("kbd", font_size_ctx_or(&k.style, ctx, k.font_size))],
+        Component::Tooltip(t) => vec![("tooltip", font_size_ctx_or(&t.style, ctx, t.font_size))],
+        Component::Marquee(m) => vec![("marquee", font_size_ctx_or(&m.style, ctx, m.font_size))],
         // badge.rs: BadgeSize::{Sm,Md,Lg}.params().0 = {12.0, 14.0, 18.0}.
         // `params()` is private to badge.rs, so the table is duplicated here.
         Component::Badge(b) => {
@@ -1425,7 +1446,7 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
                 rustmotion::components::badge::BadgeSize::Md => 14.0,
                 rustmotion::components::badge::BadgeSize::Lg => 18.0,
             };
-            vec![("badge", b.style.font_size_px_or(default_fs))]
+            vec![("badge", font_size_ctx_or(&b.style, ctx, default_fs))]
         }
         _ => vec![],
     }
@@ -1502,17 +1523,43 @@ fn anim_sample_times(scene_duration: f64, fps: u32) -> Vec<f64> {
 ///     used for static `style.transform`, already handling rotation/skew
 ///     via a four-corner AABB) picks up animated rotation too, with no
 ///     separate rotation-aware fold needed (constat 9).
+fn scenario_time_bases_by_view_and_scene(
+    views: &[rustmotion::schema::ResolvedView],
+) -> Vec<Vec<f64>> {
+    let mut scenario_elapsed = 0.0;
+    let mut bases = Vec::with_capacity(views.len());
+    for view in views {
+        let is_world_view_with_its_own_clock = matches!(view.view_type, ViewType::World);
+        let view_start_in_scenario_time = if is_world_view_with_its_own_clock {
+            0.0
+        } else {
+            scenario_elapsed
+        };
+        let mut view_elapsed = 0.0;
+        let mut view_bases = Vec::with_capacity(view.scenes.len());
+        for scene in &view.scenes {
+            view_bases.push(view_start_in_scenario_time + view_elapsed);
+            view_elapsed += scene.duration;
+        }
+        scenario_elapsed += view_elapsed;
+        bases.push(view_bases);
+    }
+    bases
+}
+
 pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
     let mut violations = Vec::new();
     let mut seen: HashSet<(usize, usize, String)> = HashSet::new();
     let fps = scenario.video.fps;
+    let scenario_time_bases = scenario_time_bases_by_view_and_scene(&scenario.views);
     for (vi, view) in scenario.views.iter().enumerate() {
+        let is_world_view_with_its_own_clock = matches!(view.view_type, ViewType::World);
         for (si, scene) in view.scenes.iter().enumerate() {
+            let scenario_time_base = scenario_time_bases[vi][si];
             // Constat 4: same decorative-child filtering as `validate_geometry`
             // — see that call site's comment for why.
-            let is_world = matches!(view.view_type, ViewType::World);
             let indexed = deserialize_children_indexed(scene);
-            let indexed: Vec<(usize, ChildComponent)> = if is_world {
+            let indexed: Vec<(usize, ChildComponent)> = if is_world_view_with_its_own_clock {
                 indexed
                     .into_iter()
                     .filter(|(_, c)| !c.is_decorative())
@@ -1551,7 +1598,7 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                 let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
                 let anim = Some(BuildAnimationCtx {
                     time,
-                    scenario_time: time,
+                    scenario_time: scenario_time_base + time,
                     scene_duration,
                     fps,
                 });
@@ -3100,6 +3147,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scenario_time_bases_accumulate_prior_scene_durations_in_a_slide_view() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [
+                { "duration": 4.0, "children": [] },
+                { "duration": 6.0, "children": [] },
+                { "duration": 2.0, "children": [] }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let bases = scenario_time_bases_by_view_and_scene(&scenario.views);
+        assert_eq!(
+            bases,
+            vec![vec![0.0, 4.0, 10.0]],
+            "each scene's base must be the sum of every earlier scene's duration \
+             in the same view, not 0.0 for every scene"
+        );
+    }
+
+    #[test]
+    fn scenario_time_bases_restart_at_zero_inside_a_world_view_but_keep_accumulating_after_it() {
+        let json = r##"{
+            "composition": [
+                {
+                    "type": "slide",
+                    "scenes": [{ "duration": 3.0, "children": [] }]
+                },
+                {
+                    "type": "world",
+                    "scenes": [
+                        { "duration": 5.0, "world-position": { "x": 0, "y": 0 }, "children": [] },
+                        { "duration": 7.0, "world-position": { "x": 800, "y": 0 }, "children": [] }
+                    ]
+                },
+                {
+                    "type": "slide",
+                    "scenes": [{ "duration": 1.0, "children": [] }]
+                }
+            ],
+            "video": { "width": 1920, "height": 1080 }
+        }"##;
+        let scenario = parse(json);
+        let bases = scenario_time_bases_by_view_and_scene(&scenario.views);
+        assert_eq!(
+            bases,
+            vec![vec![0.0], vec![0.0, 5.0], vec![15.0]],
+            "a world view's own scenes restart at 0.0, but the slide view after it \
+             must resume counting from the scenario's real elapsed time (3 + 5 + 7 = 15, \
+             not 3.0 as if the world view had taken no time): {bases:?}"
+        );
+    }
+
     // ─── H4 (second half): content larger than its own content box ───────────
     //
     // The first half of H4 (already fixed above) suppresses a *viewport*
@@ -4317,6 +4417,46 @@ mod legibility_tests {
             warnings[0].contains("views[0].scenes[0].children[0]"),
             "got: {}",
             warnings[0]
+        );
+    }
+
+    #[test]
+    fn vw_font_size_resolves_against_the_real_viewport_instead_of_reporting_0px() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "headline",
+                    "style": { "color": "#ffffff", "font-size": "5vw" }
+                }]
+            }]
+        }"##;
+        let warnings = check_legibility(&parse(json));
+        assert!(
+            warnings.is_empty(),
+            "5vw is 96px on a 1920-wide frame, well above the legibility floor: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn rem_font_size_resolves_instead_of_reporting_0px() {
+        let json = r##"{
+            "video": { "width": 1920, "height": 1080 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "type": "text",
+                    "content": "headline",
+                    "style": { "color": "#ffffff", "font-size": "3rem" }
+                }]
+            }]
+        }"##;
+        let warnings = check_legibility(&parse(json));
+        assert!(
+            warnings.is_empty(),
+            "3rem is 48px against the 16px root font-size: {warnings:?}"
         );
     }
 

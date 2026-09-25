@@ -185,6 +185,7 @@ pub struct Library {
     selected: usize,
     query: String,
     thumbnails: HashMap<PathBuf, Arc<RenderImage>>,
+    pending_thumbnails: HashSet<PathBuf>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -204,36 +205,59 @@ impl Library {
             selected: 0,
             query: String::new(),
             thumbnails: HashMap::new(),
+            pending_thumbnails: HashSet::new(),
             _subscriptions: vec![query_subscription],
         }
     }
 
     fn sync_thumbnails(
         &mut self,
+        all_known: &HashSet<PathBuf>,
         visible: &[ScenarioEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let keep: HashSet<&PathBuf> = visible.iter().map(|entry| &entry.path).collect();
-        let stale: Vec<PathBuf> = self
-            .thumbnails
-            .keys()
-            .filter(|path| !keep.contains(path))
-            .cloned()
-            .collect();
+        let stale = stale_thumbnail_paths(self.thumbnails.keys(), all_known);
         for path in stale {
             if let Some(image) = self.thumbnails.remove(&path) {
                 cx.drop_image(image, Some(window));
             }
         }
         for entry in visible {
-            if !self.thumbnails.contains_key(&entry.path) {
-                if let Some(image) = thumbnail_rgba(&entry.path) {
-                    self.thumbnails.insert(entry.path.clone(), image);
-                }
+            if self.thumbnails.contains_key(&entry.path)
+                || self.pending_thumbnails.contains(&entry.path)
+            {
+                continue;
             }
+            self.pending_thumbnails.insert(entry.path.clone());
+            let path = entry.path.clone();
+            let task_path = path.clone();
+            cx.spawn(async move |this, cx| {
+                let image = cx
+                    .background_executor()
+                    .spawn(async move { thumbnail_rgba(&task_path) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.pending_thumbnails.remove(&path);
+                    if let Some(image) = image {
+                        this.thumbnails.insert(path, image);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
         }
     }
+}
+
+fn stale_thumbnail_paths<'a>(
+    cached: impl Iterator<Item = &'a PathBuf>,
+    known: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    cached
+        .filter(|path| !known.contains(*path))
+        .cloned()
+        .collect()
 }
 
 impl Render for Library {
@@ -260,7 +284,11 @@ impl Render for Library {
             })
             .unwrap_or_default();
 
-        self.sync_thumbnails(&active_entries, window, cx);
+        let all_known: HashSet<PathBuf> = sections
+            .iter()
+            .flat_map(|section| section.entries.iter().map(|entry| entry.path.clone()))
+            .collect();
+        self.sync_thumbnails(&all_known, &active_entries, window, cx);
 
         let section_name = sections
             .get(self.selected)
@@ -422,11 +450,10 @@ mod tests {
 
     #[test]
     fn workspace_sections_puts_recent_first_when_present() {
-        let mut state = LibraryState::new(examples_dir(), false);
+        let mut state = LibraryState::new(examples_dir());
         state.recents = vec![ScenarioEntry {
             path: PathBuf::from("/tmp/rm_library_view_recent_demo.json"),
             name: "recent-demo".to_string(),
-            flat_index: 0,
         }];
         let library: SharedLibrary = Arc::new(Mutex::new(state));
 
@@ -438,7 +465,7 @@ mod tests {
 
     #[test]
     fn workspace_sections_omits_recent_when_empty() {
-        let mut state = LibraryState::new(examples_dir(), false);
+        let mut state = LibraryState::new(examples_dir());
         state.recents.clear();
         let library: SharedLibrary = Arc::new(Mutex::new(state));
 
@@ -452,6 +479,34 @@ mod tests {
         assert_eq!(grid_columns(240.0, 240.0, 16.0), 1);
         assert_eq!(grid_columns(496.0, 240.0, 16.0), 2);
         assert_eq!(grid_columns(0.0, 240.0, 16.0), 1);
+    }
+
+    #[test]
+    fn stale_thumbnail_paths_keeps_cached_entries_that_a_search_filter_merely_hides() {
+        let a = PathBuf::from("/lib/a.json");
+        let b = PathBuf::from("/lib/b.json");
+        let cached = [a.clone(), b.clone()];
+        let known_across_every_section: HashSet<PathBuf> = [a.clone(), b.clone()].into();
+
+        let stale = stale_thumbnail_paths(cached.iter(), &known_across_every_section);
+
+        assert!(
+            stale.is_empty(),
+            "a search filter narrowing what's *visible* must not evict thumbnails for entries \
+             that still exist in the library: {stale:?}"
+        );
+    }
+
+    #[test]
+    fn stale_thumbnail_paths_evicts_entries_the_library_scan_no_longer_has() {
+        let a = PathBuf::from("/lib/a.json");
+        let removed = PathBuf::from("/lib/removed.json");
+        let cached = [a.clone(), removed.clone()];
+        let known_across_every_section: HashSet<PathBuf> = [a.clone()].into();
+
+        let stale = stale_thumbnail_paths(cached.iter(), &known_across_every_section);
+
+        assert_eq!(stale, vec![removed]);
     }
 
     #[test]

@@ -52,6 +52,7 @@ pub struct InspectorPanel {
     editor: Entity<EditorState>,
     selection: Option<crate::app::state::Selection>,
     controls_pointer: Option<String>,
+    controls_generation: Option<u64>,
     force_rebuild: bool,
     open_picker: Option<u64>,
     color_pickers: Vec<(u64, Entity<gpui_component::color_picker::ColorPickerState>)>,
@@ -81,6 +82,7 @@ impl InspectorPanel {
             editor,
             selection: None,
             controls_pointer: None,
+            controls_generation: None,
             force_rebuild: false,
             open_picker: None,
             color_pickers: Vec::new(),
@@ -100,11 +102,19 @@ impl InspectorPanel {
     fn ensure_controls_for_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = self.editor.read(cx).selected.clone();
         let pointer = selected.as_ref().map(|s| s.pointer.clone());
-        if !self.force_rebuild && pointer == self.controls_pointer {
+        let generation = {
+            let m = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            m.generation
+        };
+        if !self.force_rebuild
+            && pointer == self.controls_pointer
+            && Some(generation) == self.controls_generation
+        {
             return;
         }
         self.force_rebuild = false;
         self.controls_pointer = pointer.clone();
+        self.controls_generation = Some(generation);
         self.selection = selected.clone();
         self.subscriptions.clear();
         self.color_pickers.clear();

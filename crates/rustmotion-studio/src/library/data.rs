@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -12,7 +11,6 @@ pub enum WatchMsg {
 pub struct ScenarioEntry {
     pub path: PathBuf,
     pub name: String,
-    pub flat_index: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -25,23 +23,17 @@ pub struct LibraryState {
     pub workspace: PathBuf,
     pub groups: Vec<Group>,
     pub recents: Vec<ScenarioEntry>,
-    pub index: Vec<PathBuf>,
-    pub thumb_cache: HashMap<PathBuf, Arc<Vec<u8>>>,
-    pub start_in_editor: bool,
     pub watch_tx: Option<Sender<WatchMsg>>,
 }
 
 pub type SharedLibrary = Arc<Mutex<LibraryState>>;
 
 impl LibraryState {
-    pub fn new(workspace: PathBuf, start_in_editor: bool) -> Self {
+    pub fn new(workspace: PathBuf) -> Self {
         let mut s = Self {
             workspace,
             groups: Vec::new(),
             recents: Vec::new(),
-            index: Vec::new(),
-            thumb_cache: HashMap::new(),
-            start_in_editor,
             watch_tx: None,
         };
         s.refresh();
@@ -61,50 +53,13 @@ impl LibraryState {
             .map(|p| ScenarioEntry {
                 name: file_title(&p),
                 path: p,
-                flat_index: 0,
             })
             .collect();
-        self.reindex();
     }
 
     pub fn note_opened(&mut self, path: &Path) {
         push_recent(path);
         self.refresh();
-        if !self.index.iter().any(|p| p == path) {
-            self.index.push(path.to_path_buf());
-        }
-    }
-
-    pub fn path_at(&self, i: usize) -> Option<PathBuf> {
-        self.index.get(i).cloned()
-    }
-
-    fn reindex(&mut self) {
-        let mut index: Vec<PathBuf> = Vec::new();
-        let mut pos: HashMap<PathBuf, usize> = HashMap::new();
-        for g in &self.groups {
-            for e in &g.entries {
-                pos.entry(e.path.clone()).or_insert_with(|| {
-                    index.push(e.path.clone());
-                    index.len() - 1
-                });
-            }
-        }
-        for e in &self.recents {
-            pos.entry(e.path.clone()).or_insert_with(|| {
-                index.push(e.path.clone());
-                index.len() - 1
-            });
-        }
-        for g in &mut self.groups {
-            for e in &mut g.entries {
-                e.flat_index = pos[&e.path];
-            }
-        }
-        for e in &mut self.recents {
-            e.flat_index = pos[&e.path];
-        }
-        self.index = index;
     }
 }
 
@@ -179,7 +134,6 @@ fn entry_for(p: &Path) -> ScenarioEntry {
     ScenarioEntry {
         name: file_title(p),
         path: p.to_path_buf(),
-        flat_index: 0,
     }
 }
 
