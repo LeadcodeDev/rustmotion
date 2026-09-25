@@ -240,6 +240,41 @@ fn register_font_file(font_mgr: &FontMgr, family: &str, path: &std::path::Path) 
     }
 }
 
+thread_local! {
+    static SYSTEM_TYPEFACE_CACHE: RefCell<HashMap<(String, i32, bool), Option<Typeface>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+thread_local! {
+    static SYSTEM_TYPEFACE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_system_typeface_probe() {
+    SYSTEM_TYPEFACE_LOOKUPS.with(|c| c.set(0));
+    SYSTEM_TYPEFACE_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn system_typeface_lookups() -> u64 {
+    SYSTEM_TYPEFACE_LOOKUPS.with(|c| c.get())
+}
+
+fn system_typeface_cached(family: &str, style: FontStyle) -> Option<Typeface> {
+    let weight = *style.weight();
+    let italic = style.slant() != skia_safe::font_style::Slant::Upright;
+    let key = (family.to_string(), weight, italic);
+    if let Some(hit) = SYSTEM_TYPEFACE_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    #[cfg(test)]
+    SYSTEM_TYPEFACE_LOOKUPS.with(|c| c.set(c.get() + 1));
+    let resolved = font_mgr().match_family_style(family, style);
+    SYSTEM_TYPEFACE_CACHE.with(|c| c.borrow_mut().insert(key, resolved.clone()));
+    resolved
+}
+
 /// Resolve a typeface for `family` falling back through Helvetica → Arial →
 /// the OS default. Returns `RustmotionError::FontNotFound` only if the host
 /// system has no usable font at all (essentially unreachable on every
@@ -254,17 +289,16 @@ pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface
     if let Some(t) = custom_typeface(family, style) {
         return Ok(t);
     }
-    let fm = font_mgr();
-    if let Some(t) = fm.match_family_style(family, style) {
+    if let Some(t) = system_typeface_cached(family, style) {
         return Ok(t);
     }
-    if let Some(t) = fm.match_family_style("Helvetica", style) {
+    if let Some(t) = system_typeface_cached("Helvetica", style) {
         return Ok(t);
     }
-    if let Some(t) = fm.match_family_style("Arial", style) {
+    if let Some(t) = system_typeface_cached("Arial", style) {
         return Ok(t);
     }
-    if let Some(t) = fm.legacy_make_typeface(None, style) {
+    if let Some(t) = font_mgr().legacy_make_typeface(None, style) {
         return Ok(t);
     }
     Err(RustmotionError::FontNotFound)
@@ -548,5 +582,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
+    fn typeface_with_fallback_memoizes_the_system_lookup() {
+        reset_system_typeface_probe();
+        for _ in 0..5 {
+            typeface_with_fallback("Helvetica", FontStyle::normal())
+                .expect("host must have a fallback typeface");
+        }
+        assert_eq!(
+            system_typeface_lookups(),
+            1,
+            "5 identical (family, weight, italic) requests must hit the OS matcher once, not \
+             once per call"
+        );
+
+        typeface_with_fallback("Helvetica", FontStyle::bold())
+            .expect("host must have a fallback typeface");
+        assert_eq!(
+            system_typeface_lookups(),
+            2,
+            "a distinct style must still be resolved (miss the cache once)"
+        );
+    }
+
+    #[test]
+    fn typeface_with_fallback_memoizes_a_missing_family_too() {
+        reset_system_typeface_probe();
+        let style = FontStyle::normal();
+        for _ in 0..3 {
+            system_typeface_cached("RmProbeDefinitelyNotAnInstalledFamily", style);
+        }
+        assert_eq!(
+            system_typeface_lookups(),
+            1,
+            "a family absent from the system must still be memoized (as a negative result), \
+             not re-queried on every call"
+        );
     }
 }

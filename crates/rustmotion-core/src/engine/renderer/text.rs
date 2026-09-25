@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use skia_safe::{Canvas, Font, Paint, Point, TextBlob, Typeface};
 
 // ─── Counter formatting ─────────────────────────────────────────────────────
@@ -60,6 +63,54 @@ pub fn format_counter_value(
 
 // ─── Text utilities ─────────────────────────────────────────────────────────
 
+thread_local! {
+    static STR_WIDTH_CACHE: RefCell<HashMap<(u32, u32, String), f32>> =
+        RefCell::new(HashMap::new());
+}
+
+const STR_WIDTH_CACHE_CAP: usize = 8192;
+
+#[cfg(test)]
+thread_local! {
+    static MEASURED_CHARS_PROBE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_str_width_probe() {
+    MEASURED_CHARS_PROBE.with(|c| c.set(0));
+    STR_WIDTH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn measured_chars_probe() -> u64 {
+    MEASURED_CHARS_PROBE.with(|c| c.get())
+}
+
+fn measure_str_cached(font: &Font, text: &str) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let key = (
+        font.typeface().unique_id(),
+        font.size().to_bits(),
+        text.to_string(),
+    );
+    if let Some(w) = STR_WIDTH_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return w;
+    }
+    #[cfg(test)]
+    MEASURED_CHARS_PROBE.with(|c| c.set(c.get() + text.chars().count() as u64));
+    let (w, _) = font.measure_str(text, None);
+    STR_WIDTH_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= STR_WIDTH_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(key, w);
+    });
+    w
+}
+
 pub fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String> {
     let explicit_lines: Vec<&str> = text.split('\n').collect();
 
@@ -68,6 +119,7 @@ pub fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String>
         None => return explicit_lines.iter().map(|s| s.to_string()).collect(),
     };
 
+    let space_w = measure_str_cached(font, " ");
     let mut result = Vec::new();
     for line in explicit_lines {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -77,19 +129,25 @@ pub fn wrap_text(text: &str, font: &Font, max_width: Option<f32>) -> Vec<String>
         }
 
         let mut current_line = String::new();
+        let mut current_w = 0.0f32;
         for word in words {
-            let test = if current_line.is_empty() {
-                word.to_string()
+            let word_w = measure_str_cached(font, word);
+            let test_w = if current_line.is_empty() {
+                word_w
             } else {
-                format!("{} {}", current_line, word)
+                current_w + space_w + word_w
             };
 
-            let (width, _) = font.measure_str(&test, None);
-            if width > max_w && !current_line.is_empty() {
-                result.push(current_line);
-                current_line = word.to_string();
+            if test_w > max_w && !current_line.is_empty() {
+                result.push(std::mem::take(&mut current_line));
+                current_line.push_str(word);
+                current_w = word_w;
             } else {
-                current_line = test;
+                if !current_line.is_empty() {
+                    current_line.push(' ');
+                }
+                current_line.push_str(word);
+                current_w = test_w;
             }
         }
         if !current_line.is_empty() {
@@ -433,7 +491,7 @@ pub fn draw_text_with_fallback(
         }
 
         // Advance cursor by the measured width of this run
-        let (w, _) = f.measure_str(segment, None);
+        let w = measure_str_cached(f, segment);
         let extra = if letter_spacing.abs() > 0.01 {
             letter_spacing * (segment.chars().count() as f32 - 1.0).max(0.0)
         } else {
@@ -454,7 +512,7 @@ pub fn measure_text_with_fallback(
 ) -> f32 {
     // Fast path
     if !needs_segmentation(text, font, emoji_font) {
-        let (w, _) = font.measure_str(text, None);
+        let w = measure_str_cached(font, text);
         let extra = if letter_spacing.abs() > 0.01 {
             letter_spacing * (text.chars().count() as f32 - 1.0).max(0.0)
         } else {
@@ -470,7 +528,7 @@ pub fn measure_text_with_fallback(
         let segment = &text[run.start..run.end];
         let mut owned = None;
         let f = resolve_run_font(&run.kind, segment, font, emoji_font, &mut owned);
-        let (w, _) = f.measure_str(segment, None);
+        let w = measure_str_cached(f, segment);
         let extra = if letter_spacing.abs() > 0.01 {
             letter_spacing * (segment.chars().count() as f32 - 1.0).max(0.0)
         } else {
@@ -528,27 +586,102 @@ pub fn wrap_text_with_tracking(
             continue;
         }
 
-        let mut current_line = String::new();
-        for word in words {
-            let test = if current_line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{} {}", current_line, word)
-            };
-
-            let width = measure_text_with_fallback(&test, font, emoji_font, letter_spacing);
-            if width > max_w && !current_line.is_empty() {
-                result.push(current_line);
-                current_line = word.to_string();
-            } else {
-                current_line = test;
-            }
-        }
-        if !current_line.is_empty() {
-            result.push(current_line);
+        if needs_segmentation(line, font, emoji_font) {
+            wrap_words_by_full_remeasurement(
+                &words,
+                font,
+                emoji_font,
+                letter_spacing,
+                max_w,
+                &mut result,
+            );
+        } else {
+            wrap_words_incrementally(&words, font, letter_spacing, max_w, &mut result);
         }
     }
     result
+}
+
+fn wrap_words_by_full_remeasurement(
+    words: &[&str],
+    font: &Font,
+    emoji_font: &Option<Font>,
+    letter_spacing: f32,
+    max_w: f32,
+    result: &mut Vec<String>,
+) {
+    let mut current_line = String::new();
+    for &word in words {
+        let test = if current_line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{} {}", current_line, word)
+        };
+
+        let width = measure_text_with_fallback(&test, font, emoji_font, letter_spacing);
+        if width > max_w && !current_line.is_empty() {
+            result.push(current_line);
+            current_line = word.to_string();
+        } else {
+            current_line = test;
+        }
+    }
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
+}
+
+fn wrap_words_incrementally(
+    words: &[&str],
+    font: &Font,
+    letter_spacing: f32,
+    max_w: f32,
+    result: &mut Vec<String>,
+) {
+    let space_w = measure_str_cached(font, " ");
+    let tracking_extra = |chars: usize| {
+        if letter_spacing.abs() > 0.01 {
+            letter_spacing * (chars as f32 - 1.0).max(0.0)
+        } else {
+            0.0
+        }
+    };
+
+    let mut current_line = String::new();
+    let mut current_base_w = 0.0f32;
+    let mut current_chars = 0usize;
+
+    for &word in words {
+        let word_base_w = measure_str_cached(font, word);
+        let word_chars = word.chars().count();
+
+        let (test_base_w, test_chars) = if current_line.is_empty() {
+            (word_base_w, word_chars)
+        } else {
+            (
+                current_base_w + space_w + word_base_w,
+                current_chars + 1 + word_chars,
+            )
+        };
+        let test_w = test_base_w + tracking_extra(test_chars);
+
+        if test_w > max_w && !current_line.is_empty() {
+            result.push(std::mem::take(&mut current_line));
+            current_line.push_str(word);
+            current_base_w = word_base_w;
+            current_chars = word_chars;
+        } else {
+            if !current_line.is_empty() {
+                current_line.push(' ');
+            }
+            current_line.push_str(word);
+            current_base_w = test_base_w;
+            current_chars = test_chars;
+        }
+    }
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
 }
 
 /// Wrap text respecting emoji font fallback for accurate measurement.
@@ -1199,5 +1332,199 @@ mod glyph_fallback_tests {
             "measured width {measured_w} should roughly match the painted ink width \
              {painted_width} (min_x={min_x}, max_x={max_x})"
         );
+    }
+}
+
+#[cfg(test)]
+mod measure_cache_tests {
+    use super::super::typeface_with_fallback;
+    use super::*;
+
+    fn bold_font(size: f32) -> Font {
+        let typeface = typeface_with_fallback("Helvetica", skia_safe::FontStyle::bold())
+            .expect("host must have a fallback typeface");
+        Font::from_typeface(typeface, size)
+    }
+
+    #[test]
+    fn measure_text_with_fallback_reuses_the_cache_for_repeated_identical_calls() {
+        reset_str_width_probe();
+        let font = bold_font(48.0);
+        let text = "Revenue is trending up this quarter";
+
+        let w1 = measure_text_with_fallback(text, &font, &None, 0.0);
+        let after_first = measured_chars_probe();
+        assert_eq!(
+            after_first,
+            text.chars().count() as u64,
+            "the first call must pay for exactly one underlying Skia measurement"
+        );
+
+        for _ in 0..5 {
+            let w = measure_text_with_fallback(text, &font, &None, 0.0);
+            assert_eq!(w, w1, "a cache hit must return the exact same width");
+        }
+        assert_eq!(
+            measured_chars_probe(),
+            after_first,
+            "5 repeated identical (font, size, tracking, text) calls must not call into Skia \
+             again — measure_text_with_fallback has no cache"
+        );
+    }
+
+    #[test]
+    fn measure_text_with_fallback_still_measures_a_genuinely_new_string() {
+        reset_str_width_probe();
+        let font = bold_font(48.0);
+        measure_text_with_fallback("first string", &font, &None, 0.0);
+        let after_first = measured_chars_probe();
+        measure_text_with_fallback("a different second string", &font, &None, 0.0);
+        assert!(
+            measured_chars_probe() > after_first,
+            "a string that was never measured before must still reach Skia"
+        );
+    }
+
+    #[test]
+    fn measure_text_with_fallback_distinguishes_font_size() {
+        reset_str_width_probe();
+        let text = "same text, different size";
+        measure_text_with_fallback(text, &bold_font(24.0), &None, 0.0);
+        let after_first = measured_chars_probe();
+        let w_big = measure_text_with_fallback(text, &bold_font(96.0), &None, 0.0);
+        assert!(
+            measured_chars_probe() > after_first,
+            "a different font size must not reuse another size's cached width"
+        );
+        assert!(
+            w_big > 0.0,
+            "sanity: the larger font must still produce a real measurement"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wrap_complexity_tests {
+    use super::super::typeface_with_fallback;
+    use super::*;
+
+    fn plain_font(size: f32) -> Font {
+        let typeface = typeface_with_fallback("Helvetica", skia_safe::FontStyle::normal())
+            .expect("host must have a fallback typeface");
+        Font::from_typeface(typeface, size)
+    }
+
+    fn distinct_words(n: usize) -> String {
+        (0..n)
+            .map(|i| format!("word{i:04}xx"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn wrap_text_with_tracking_measures_linearly_in_word_count() {
+        reset_str_width_probe();
+        let font = plain_font(14.0);
+        let text = distinct_words(200);
+        let total_len = text.chars().count() as u64;
+
+        let lines = wrap_text_with_tracking(&text, &font, &None, Some(1_000_000.0), 0.0);
+        assert_eq!(lines.len(), 1, "test setup: an effectively unbounded width must keep every word on one line, so every word's measurement re-measures the whole growing prefix under the pre-fix algorithm");
+
+        let measured = measured_chars_probe();
+        assert!(
+            measured <= total_len * 4,
+            "wrap_text_with_tracking measured {measured} characters' worth of text for a {total_len}-\
+             character input — expected roughly linear growth (<= {}), got what looks like the \
+             quadratic re-measure-the-whole-prefix-per-word behaviour",
+            total_len * 4
+        );
+    }
+
+    #[test]
+    fn wrap_text_measures_linearly_in_word_count() {
+        reset_str_width_probe();
+        let font = plain_font(14.0);
+        let text = distinct_words(200);
+        let total_len = text.chars().count() as u64;
+
+        let lines = wrap_text(&text, &font, Some(1_000_000.0));
+        assert_eq!(lines.len(), 1, "test setup: an effectively unbounded width must keep every word on one line, so every word's measurement re-measures the whole growing prefix under the pre-fix algorithm");
+
+        let measured = measured_chars_probe();
+        assert!(
+            measured <= total_len * 4,
+            "wrap_text measured {measured} characters' worth of text for a {total_len}-character \
+             input — expected roughly linear growth (<= {}), got what looks like the quadratic \
+             re-measure-the-whole-prefix-per-word behaviour",
+            total_len * 4
+        );
+    }
+
+    fn brute_force_remeasurement_wrap(font: &Font, words: &[&str], max_w: f32) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut current_line = String::new();
+        for &word in words {
+            let test = if current_line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current_line} {word}")
+            };
+            let (width, _) = font.measure_str(&test, None);
+            if width > max_w && !current_line.is_empty() {
+                result.push(current_line);
+                current_line = word.to_string();
+            } else {
+                current_line = test;
+            }
+        }
+        if !current_line.is_empty() {
+            result.push(current_line);
+        }
+        result
+    }
+
+    #[test]
+    fn wrap_text_agrees_with_brute_force_remeasurement() {
+        let font = plain_font(18.0);
+        let repeated_word = "word ".repeat(37);
+        let cases: &[(&str, f32)] = &[
+            ("The quick brown fox jumps over the lazy dog", 220.0),
+            (repeated_word.trim(), 150.0),
+            ("a bb ccc dddd eeeee ffffff ggggggg", 90.0),
+            ("single", 500.0),
+            ("exactly one line of text that just fits", 10_000.0),
+        ];
+        for &(text, max_w) in cases {
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let expected = brute_force_remeasurement_wrap(&font, &words, max_w);
+            let actual = wrap_text(text, &font, Some(max_w));
+            assert_eq!(
+                actual, expected,
+                "incremental wrap_text disagreed with brute-force remeasurement for {text:?} at \
+                 max_w={max_w}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrap_text_with_tracking_agrees_with_brute_force_remeasurement_at_zero_tracking() {
+        let font = plain_font(18.0);
+        let repeated_word = "word ".repeat(37);
+        let cases: &[(&str, f32)] = &[
+            ("The quick brown fox jumps over the lazy dog", 220.0),
+            (repeated_word.trim(), 150.0),
+            ("a bb ccc dddd eeeee ffffff ggggggg", 90.0),
+        ];
+        for &(text, max_w) in cases {
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let expected = brute_force_remeasurement_wrap(&font, &words, max_w);
+            let actual = wrap_text_with_tracking(text, &font, &None, Some(max_w), 0.0);
+            assert_eq!(
+                actual, expected,
+                "incremental wrap_text_with_tracking disagreed with brute-force remeasurement \
+                 for {text:?} at max_w={max_w}"
+            );
+        }
     }
 }
