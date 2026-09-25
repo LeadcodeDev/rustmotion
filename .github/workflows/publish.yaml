@@ -5,11 +5,40 @@ on:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
 
+permissions:
+  contents: read
+  checks: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is reachable from main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME (commit $GITHUB_SHA) is not an ancestor of origin/main; refusing to publish from a commit that was never merged."
+            exit 1
+          fi
+
+      - name: Verify CI passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --jq '.check_runs[] | select(.app.slug == "github-actions") | "\(.name)=\(.conclusion)"')
+          echo "$runs"
+          for job in fmt clippy test audit; do
+            if ! echo "$runs" | grep -qx "${job}=success"; then
+              echo "::error::CI job '$job' has not succeeded on $GITHUB_SHA; refusing to publish."
+              exit 1
+            fi
+          done
 
       - name: Install system dependencies
         # Doit rester identique à ci.yaml : l'étape « Run tests » ci-dessous lance
