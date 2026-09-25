@@ -423,11 +423,17 @@ pub fn render_frame_task_scaled(
 /// the residual as a snap in the very next (non-transition) frame: measured
 /// at 22.6px of foreground displacement in one frame with linear easing.
 /// Dividing by `transition_frames - 1` instead makes `frame_in_transition ==
-/// transition_frames - 1` land on exactly `1.0`, so the transition's last
-/// frame is the fully-completed state and there is nothing left to snap.
+/// transition_frames - 1` land on exactly `1.0` for any transition of two or
+/// more frames, so the transition's last frame is the fully-completed state
+/// and there is nothing left to snap. At exactly one frame this would divide
+/// by zero, and — the one frame having to stand in for the whole cut — that
+/// frame lands on `0.5` rather than either endpoint.
 fn transition_progress(frame_in_transition: u32, transition_duration: f64, fps: u32) -> f64 {
     let transition_frames = (transition_duration * fps as f64).round() as u32;
-    frame_in_transition as f64 / transition_frames.saturating_sub(1).max(1) as f64
+    if transition_frames <= 1 {
+        return 0.5;
+    }
+    frame_in_transition as f64 / (transition_frames - 1) as f64
 }
 
 /// Reshapes a transition's raw linear `progress` by its declared
@@ -560,8 +566,29 @@ fn render_first_frame_of_view(
     }
 }
 
+fn transition_clear_color(background: &str) -> [f32; 4] {
+    let (r, g, b, a) = rustmotion_core::engine::renderer::parse_hex_color(background);
+    [
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        a as f32 / 255.0,
+    ]
+}
+
+fn transition_options_with_scenario_background(
+    transition: &crate::schema::Transition,
+    background: &str,
+) -> TransitionOptions {
+    TransitionOptions {
+        clear_color: transition_clear_color(background),
+        ..transition.into()
+    }
+}
+
 pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
     let fps = scenario.video.fps;
+    let background = scenario.video.background.as_str();
     let mut tasks = Vec::new();
 
     for (view_idx, view) in scenario.views.iter().enumerate() {
@@ -575,7 +602,9 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
                         view_b_idx: view_idx,
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
-                        options: transition.into(),
+                        options: transition_options_with_scenario_background(
+                            transition, background,
+                        ),
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -584,7 +613,7 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
         }
 
         match view.view_type {
-            ViewType::Slide => build_slide_view_tasks(&mut tasks, view_idx, view, fps),
+            ViewType::Slide => build_slide_view_tasks(&mut tasks, view_idx, view, fps, background),
             ViewType::World => build_world_view_tasks(
                 &mut tasks,
                 view_idx,
@@ -624,32 +653,41 @@ pub fn build_frame_tasks_range(
 }
 
 /// Frames actually spent on the transition from `scenes[i]` into
-/// `scenes[i + 1]` — defined by `scenes[i + 1].transition` — clamped to the
-/// *outgoing* scene's own frame budget. `(frames, effective_duration)`
-/// where `effective_duration` is that frame count expressed back in
-/// seconds, exactly the value `transition_progress` must be given so its
-/// internal `(duration * fps).round()` reproduces `frames` instead of the
-/// raw, unclamped declared duration.
+/// `scenes[i + 1]` — defined by `scenes[i + 1].transition` — clamped to
+/// *both* the outgoing and the incoming scene's own frame budget, whichever
+/// is smaller. `(frames, effective_duration)` where `effective_duration` is
+/// that frame count expressed back in seconds, exactly the value
+/// `transition_progress` must be given so its internal `(duration *
+/// fps).round()` reproduces `frames` instead of the raw, unclamped declared
+/// duration.
 ///
-/// A transition longer than the scene it leaves cannot consume more frames
-/// than that scene has: `scenes[i]` only has `scene_frames` frames to spend,
-/// full stop. Before this clamp existed, the *entering* scene's
-/// `normal_start` (see `build_slide_view_tasks`) was computed from the raw
-/// declared duration instead of from this same number — so when a
-/// transition declared e.g. 1.0s but the outgoing scene was only 0.3s long,
-/// only 9 frames of `SlideTransition` were ever emitted, yet the entering
-/// scene still skipped its first 30 frames (`normal_start = 30`) waiting for
-/// a transition that had already finished after 9 — silently dropping 21
-/// frames (0.7s) of the entering scene's own animation. Passing the raw
-/// duration through to `transition_progress` compounded this: progress
-/// maxed out around 0.28 instead of reaching 1.0 on the last emitted frame.
+/// A transition longer than either scene it touches cannot consume more
+/// frames than that scene has: `scenes[i]` only has `scene_frames` frames to
+/// spend on its way out, and `scenes[i + 1]` only has that many to spend on
+/// its way in — `frame_in_transition` doubles as `scenes[i + 1]`'s own
+/// frame-in-scene index (see `render_frame_task_scaled`'s `SlideTransition`
+/// arm), so an unclamped incoming budget reads past content that scene never
+/// declared it would show. Before the outgoing half of this clamp existed,
+/// the *entering* scene's `normal_start` (see `build_slide_view_tasks`) was
+/// computed from the raw declared duration instead of from this same
+/// number — so when a transition declared e.g. 1.0s but the outgoing scene
+/// was only 0.3s long, only 9 frames of `SlideTransition` were ever emitted,
+/// yet the entering scene still skipped its first 30 frames (`normal_start =
+/// 30`) waiting for a transition that had already finished after 9 —
+/// silently dropping 21 frames (0.7s) of the entering scene's own animation.
+/// Passing the raw duration through to `transition_progress` compounded
+/// this: progress maxed out around 0.28 instead of reaching 1.0 on the last
+/// emitted frame.
 fn actual_outgoing_transition(scenes: &[Scene], i: usize, fps: u32) -> (u32, f64) {
     let Some(transition) = scenes.get(i + 1).and_then(|s| s.transition.as_ref()) else {
         return (0, 0.0);
     };
     let raw_frames = (transition.duration * fps as f64).round() as u32;
-    let scene_frames = (scenes[i].duration * fps as f64).round() as u32;
-    let frames = raw_frames.min(scene_frames);
+    let outgoing_scene_frames = (scenes[i].duration * fps as f64).round() as u32;
+    let incoming_scene_frames = (scenes[i + 1].duration * fps as f64).round() as u32;
+    let frames = raw_frames
+        .min(outgoing_scene_frames)
+        .min(incoming_scene_frames);
     (frames, frames as f64 / fps as f64)
 }
 
@@ -658,6 +696,7 @@ fn build_slide_view_tasks(
     view_idx: usize,
     view: &ResolvedView,
     fps: u32,
+    background: &str,
 ) {
     let scenes = &view.scenes;
 
@@ -704,7 +743,7 @@ fn build_slide_view_tasks(
                     scene_a_total_frames: scene_frames,
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
-                    options: transition.into(),
+                    options: transition_options_with_scenario_background(transition, background),
                     transition_duration: outgoing_effective_duration,
                     easing: easing.clone(),
                 });
@@ -778,13 +817,14 @@ pub fn segment_slots(scenario: &Scenario) -> Option<Vec<SegmentSlot>> {
 pub fn slot_hash(scenario: &Scenario, slot: &SegmentSlot) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    hash_fonts(&scenario.fonts, &mut h);
     match slot {
         SegmentSlot::Scene {
             view_idx,
             scene_idx,
         } => {
             let scenes = &scenario.views[*view_idx].scenes;
-            let mut h = DefaultHasher::new();
             hash_scene(&scenes[*scene_idx]).hash(&mut h);
             if *scene_idx > 0 {
                 let fps = scenario.video.fps;
@@ -792,10 +832,8 @@ pub fn slot_hash(scenario: &Scenario, slot: &SegmentSlot) -> u64 {
                     .0
                     .hash(&mut h);
             }
-            h.finish()
         }
         SegmentSlot::ViewTransition { view_idx } => {
-            let mut h = DefaultHasher::new();
             let prev_view = &scenario.views[view_idx - 1];
             if let Some(last) = prev_view.scenes.last() {
                 hash_scene(last).hash(&mut h);
@@ -806,9 +844,9 @@ pub fn slot_hash(scenario: &Scenario, slot: &SegmentSlot) -> u64 {
             serde_json::to_string(&scenario.views[*view_idx].transition)
                 .unwrap_or_default()
                 .hash(&mut h);
-            h.finish()
         }
     }
+    h.finish()
 }
 
 /// Decide which slots must re-render given the previous run's segments.
@@ -907,7 +945,10 @@ pub(super) fn build_slot_frame_tasks(
                         view_b_idx: *view_idx,
                         frame_in_transition: f,
                         transition_type: transition.transition_type.clone(),
-                        options: transition.into(),
+                        options: transition_options_with_scenario_background(
+                            transition,
+                            &scenario.video.background,
+                        ),
                         transition_duration: transition.duration,
                         easing: transition.easing.clone(),
                     });
@@ -977,7 +1018,10 @@ pub(super) fn build_scene_frame_tasks_in_view(
                 scene_a_total_frames: scene_frames,
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
-                options: transition.into(),
+                options: transition_options_with_scenario_background(
+                    transition,
+                    &scenario.video.background,
+                ),
                 transition_duration: outgoing_effective_duration,
                 easing: easing.clone(),
             });
@@ -990,8 +1034,64 @@ pub(super) fn build_scene_frame_tasks_in_view(
 /// Cached H.264 data for a single scene segment
 #[derive(Debug)]
 pub struct SceneSegment {
-    pub h264_data: Vec<u8>,
+    pub h264_data: std::sync::Arc<Vec<u8>>,
     pub scene_hash: u64,
+}
+
+fn fold_file_size_and_mtime_into_hash(
+    path: &str,
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+) {
+    use std::hash::Hash;
+    if let Ok(meta) = std::fs::metadata(path) {
+        meta.len().hash(hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                dur.as_nanos().hash(hasher);
+            }
+        }
+    }
+}
+
+fn fold_asset_src_paths_recursively_into_hash(
+    value: &serde_json::Value,
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+) {
+    use std::hash::Hash;
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map {
+                if key == "src" {
+                    if let serde_json::Value::String(s) = v {
+                        s.hash(hasher);
+                        fold_file_size_and_mtime_into_hash(s, hasher);
+                    }
+                }
+                fold_asset_src_paths_recursively_into_hash(v, hasher);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                fold_asset_src_paths_recursively_into_hash(v, hasher);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn hash_fonts(
+    fonts: &[crate::schema::FontEntry],
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+) {
+    use std::hash::Hash;
+    for font in fonts {
+        font.family.hash(hasher);
+        font.source.hash(hasher);
+        if let Some(ref path) = font.path {
+            path.hash(hasher);
+            fold_file_size_and_mtime_into_hash(path, hasher);
+        }
+    }
 }
 
 pub fn hash_scene(scene: &Scene) -> u64 {
@@ -1000,6 +1100,9 @@ pub fn hash_scene(scene: &Scene) -> u64 {
     let json = serde_json::to_string(scene).unwrap_or_default();
     let mut hasher = DefaultHasher::new();
     json.hash(&mut hasher);
+    for child in &scene.children {
+        fold_asset_src_paths_recursively_into_hash(child, &mut hasher);
+    }
     hasher.finish()
 }
 
@@ -1066,11 +1169,15 @@ mod transition_progress_tests {
         assert_eq!(p, 1.0);
     }
 
-    // A single-frame transition must not divide by zero.
     #[test]
-    fn single_frame_transition_does_not_panic() {
+    fn single_frame_transition_blends_instead_of_dropping_either_side() {
         let p = transition_progress(0, 1.0 / 60.0, 30);
         assert!(p.is_finite());
+        assert_eq!(
+            p, 0.5,
+            "with only one frame to represent the whole cut, neither scene's boundary frame may \
+             be silently weighted to zero"
+        );
     }
 }
 
@@ -1124,6 +1231,62 @@ mod outgoing_transition_clamp_tests {
         let (frames, effective_duration) = actual_outgoing_transition(&pair, 0, 30);
         assert_eq!(frames, 15);
         assert!((effective_duration - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clamps_to_the_incoming_scenes_own_frame_budget() {
+        let scenes = vec![scene(2.0), scene_with_transition(0.3, 1.0)];
+        let (frames, effective_duration) = actual_outgoing_transition(&scenes, 0, 30);
+        assert_eq!(
+            frames, 9,
+            "9 frames is all scene B (0.3s @ 30fps) has to spend, even though scene A (2.0s) \
+             and the declared 1.0s transition could both afford more"
+        );
+        assert!(
+            (effective_duration - 0.3).abs() < 1e-9,
+            "effective duration must reflect the clamped frame count, not the raw 1.0s: {effective_duration}"
+        );
+    }
+
+    #[test]
+    fn no_slide_transition_frame_reads_past_the_entering_scenes_own_length() {
+        let json = r#"{
+            "video": { "width": 320, "height": 180, "fps": 30 },
+            "scenes": [
+                { "duration": 2.0, "children": [] },
+                { "duration": 0.3, "children": [],
+                  "transition": { "type": "fade", "duration": 1.0 } }
+            ]
+        }"#;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let tasks = build_frame_tasks(&scenario);
+
+        let scene_b_frames = (0.3_f64 * 30.0).round() as u32; // 9
+        let max_transition_frame_in = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::SlideTransition {
+                    scene_b_idx: 1,
+                    frame_in_transition,
+                    ..
+                } => Some(*frame_in_transition),
+                _ => None,
+            })
+            .max();
+        assert_eq!(
+            max_transition_frame_in,
+            Some(scene_b_frames - 1),
+            "the transition into scene B must stop at scene B's own last frame (index {}), not \
+             read past it",
+            scene_b_frames - 1
+        );
+
+        assert_eq!(
+            tasks.len(),
+            60,
+            "scene A's own 60-frame budget (2.0s @ 30fps) splits between its Normal frames and \
+             the transition it feeds, but the total must still be exactly 60: tasks={tasks:?}"
+        );
     }
 
     // The core regression: every one of scene B's own local-frame indices
@@ -1190,6 +1353,107 @@ mod outgoing_transition_clamp_tests {
         // (60 - 9 = 51) + 0 Normal frames for scene A (fully absorbed by
         // the clamped transition) = 60 tasks total.
         assert_eq!(tasks.len(), 60, "tasks: {tasks:?}");
+    }
+}
+
+#[cfg(test)]
+mod transition_clear_color_tests {
+    use super::*;
+
+    #[test]
+    fn slide_transition_options_carry_the_scenarios_own_background_not_black() {
+        let json = r##"{
+            "video": { "width": 32, "height": 32, "fps": 10, "background": "#00ff00" },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 1.0, "children": [],
+                  "transition": { "type": "flip", "duration": 0.5 } }
+            ]
+        }"##;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let tasks = build_frame_tasks(&scenario);
+
+        let clear_color = tasks
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::SlideTransition { options, .. } => Some(options.clear_color),
+                _ => None,
+            })
+            .expect(
+                "scenario has a flip transition, so at least one SlideTransition task must exist",
+            );
+
+        assert_eq!(
+            clear_color,
+            [0.0, 1.0, 0.0, 1.0],
+            "clear_color must come from video.background (#00ff00), not the default opaque \
+             black — a flip transition on a light-background video must not flash black"
+        );
+    }
+
+    #[test]
+    fn view_transition_options_carry_the_scenarios_own_background_not_black() {
+        let json = r##"{
+            "video": { "width": 32, "height": 32, "fps": 10, "background": "#00ff00" },
+            "composition": [
+                { "type": "slide", "scenes": [
+                    { "duration": 0.5, "children": [] }
+                ]},
+                { "type": "slide", "transition": { "type": "flip", "duration": 0.5 },
+                  "scenes": [
+                    { "duration": 0.5, "children": [] }
+                ]}
+            ]
+        }"##;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+        let tasks = build_frame_tasks(&scenario);
+
+        let clear_color = tasks
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::ViewTransition { options, .. } => Some(options.clear_color),
+                _ => None,
+            })
+            .expect(
+                "composition has a view-level flip transition, so a ViewTransition task must exist",
+            );
+
+        assert_eq!(clear_color, [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn incremental_slot_builder_agrees_with_the_full_builder_on_clear_color() {
+        let json = r##"{
+            "video": { "width": 32, "height": 32, "fps": 10, "background": "#0000ff" },
+            "scenes": [
+                { "duration": 1.0, "children": [] },
+                { "duration": 1.0, "children": [],
+                  "transition": { "type": "flip", "duration": 0.5 } }
+            ]
+        }"##;
+        let scenario = crate::loader::load_scenario_from_source(None, Some(json)).unwrap();
+
+        let full_color = build_frame_tasks(&scenario)
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::SlideTransition { options, .. } => Some(options.clear_color),
+                _ => None,
+            })
+            .expect("full builder must emit a SlideTransition task");
+
+        let slot_color = build_scene_frame_tasks_in_view(&scenario, 0, 0)
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::SlideTransition { options, .. } => Some(options.clear_color),
+                _ => None,
+            })
+            .expect("incremental slot builder must emit the same SlideTransition task");
+
+        assert_eq!(
+            full_color, slot_color,
+            "the full and incremental builders must resolve clear_color identically"
+        );
+        assert_eq!(full_color, [0.0, 0.0, 1.0, 1.0]);
     }
 }
 
@@ -1447,7 +1711,7 @@ mod segment_tests {
         let prev: Vec<SceneSegment> = base_hashes
             .iter()
             .map(|h| SceneSegment {
-                h264_data: Vec::new(),
+                h264_data: std::sync::Arc::new(Vec::new()),
                 scene_hash: *h,
             })
             .collect();
@@ -1473,5 +1737,77 @@ mod segment_tests {
         let nv_hashes: Vec<u64> = nv_slots.iter().map(|s| slot_hash(&no_vt, s)).collect();
         let all = plan_dirty(&no_vt, &nv_slots, &nv_hashes, Some(&prev));
         assert!(all.iter().all(|d| *d));
+    }
+
+    #[test]
+    fn slot_hash_changes_when_a_referenced_image_is_edited_in_place() {
+        let img_path = std::env::temp_dir().join(format!(
+            "rustmotion_slot_hash_asset_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&img_path, b"content-a").expect("write asset v1");
+
+        let json = format!(
+            r##"{{"video": {{"width": 32, "height": 32, "fps": 10}},
+            "scenes": [{{"duration": 0.2, "children": [
+                {{"type": "image", "src": "{}", "style": {{"width": 10, "height": 10}}}}
+            ]}}]}}"##,
+            img_path.to_str().unwrap().replace('\\', "\\\\")
+        );
+        let s = scenario(&json);
+        let slots = segment_slots(&s).unwrap();
+        let before = slot_hash(&s, &slots[0]);
+
+        std::fs::write(&img_path, b"content-b-quite-a-bit-longer-now").expect("write asset v2");
+        let s_reloaded = scenario(&json);
+        let after = slot_hash(&s_reloaded, &slots[0]);
+
+        assert_ne!(
+            before, after,
+            "editing the image file in place (same src path, new bytes/mtime) must change \
+             slot_hash, or --watch keeps splicing in the old render of that scene forever"
+        );
+
+        let _ = std::fs::remove_file(&img_path);
+    }
+
+    #[test]
+    fn slot_hash_changes_when_a_scenario_font_file_is_edited_in_place() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rustmotion_slot_hash_font_{}_{}.ttf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&font_path, b"font-bytes-v1").expect("write font v1");
+
+        let json = format!(
+            r##"{{"video": {{"width": 32, "height": 32, "fps": 10}},
+            "fonts": [{{"path": "{}", "family": "TestFont"}}],
+            "scenes": [{{"duration": 0.2, "children": [{{"type": "text", "content": "hi"}}]}}]
+            }}"##,
+            font_path.to_str().unwrap().replace('\\', "\\\\")
+        );
+        let s = scenario(&json);
+        let slots = segment_slots(&s).unwrap();
+        let before = slot_hash(&s, &slots[0]);
+
+        std::fs::write(&font_path, b"font-bytes-v2-different-length").expect("write font v2");
+        let s_reloaded = scenario(&json);
+        let after = slot_hash(&s_reloaded, &slots[0]);
+
+        assert_ne!(
+            before, after,
+            "editing a scenario font file in place (same path, new bytes/mtime) must change \
+             slot_hash for every slot, since text layout/shape depends on it"
+        );
+
+        let _ = std::fs::remove_file(&font_path);
     }
 }
