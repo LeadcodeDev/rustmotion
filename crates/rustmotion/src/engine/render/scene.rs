@@ -590,7 +590,14 @@ fn paint_decorative_fullscreen(
         Some(effects) => resolve_props_for_effects(&effects, time, ctx.scene_duration),
         None => AnimatedProperties::default(),
     };
-    if props.opacity <= 0.0 {
+    let style_opacity = child
+        .component
+        .as_styled()
+        .style_config()
+        .opacity
+        .unwrap_or(1.0);
+    let combined_opacity = (style_opacity * props.opacity).clamp(0.0, 1.0);
+    if combined_opacity <= 0.0 {
         return;
     }
 
@@ -615,8 +622,15 @@ fn paint_decorative_fullscreen(
         video_height: ctx.video_height,
         stagger_offset: start_at,
     };
+    let uses_opacity_layer = combined_opacity < 1.0;
     canvas.save();
+    if uses_opacity_layer {
+        canvas.save_layer_alpha_f(None, combined_opacity);
+    }
     painter.paint_content(canvas, &local, &props, &paint_ctx);
+    if uses_opacity_layer {
+        canvas.restore();
+    }
     canvas.restore();
 }
 
@@ -1093,6 +1107,7 @@ pub fn render_world_frame_scaled(
         // Apply per-scene camera if present
         let has_camera = scene.camera.is_some();
         if let Some(ref camera) = scene.camera {
+            canvas.save();
             apply_camera_transform(canvas, camera, anim_time as f32, vw, vh);
         }
 
@@ -1325,6 +1340,7 @@ pub fn render_scene_fg_scaled(
 
     let has_camera = scene.camera.is_some() && plane_cam.is_none();
     if let (Some(camera), None) = (&scene.camera, plane_cam) {
+        canvas.save();
         apply_camera_transform(
             canvas,
             camera,
@@ -1469,8 +1485,6 @@ pub(super) fn apply_camera_transform(
     let rotation = interpolate_camera_property(camera, "rotation", time);
     let (cx, cy) = resolve_camera_origin(camera, time, width, height);
 
-    canvas.save();
-
     // 1. Translate to the focal point
     canvas.translate((cx, cy));
     // 2. Apply rotation
@@ -1483,4 +1497,130 @@ pub(super) fn apply_camera_transform(
     }
     // 4. Translate back from the focal point + apply camera pan offset
     canvas.translate((-cx - x, -cy - y));
+}
+
+#[cfg(test)]
+mod camera_transform_save_balance_tests {
+    use super::*;
+    use crate::engine::render::CanvasGuard;
+
+    fn test_camera() -> Camera {
+        Camera {
+            x: 10.0,
+            y: 5.0,
+            zoom: 1.5,
+            rotation: 12.0,
+            origin: None,
+            keyframes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn canvas_guard_around_apply_camera_transform_leaves_the_save_stack_balanced() {
+        let info = ImageInfo::new(
+            (4, 4),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut surface = surfaces::raster(&info, None, None).unwrap();
+        let canvas = surface.canvas();
+        let camera = test_camera();
+        let before = canvas.save_count();
+        {
+            let _guard = CanvasGuard::new(canvas);
+            apply_camera_transform(canvas, &camera, 0.0, 100.0, 100.0);
+        }
+        assert_eq!(
+            canvas.save_count(),
+            before,
+            "a CanvasGuard wrapping apply_camera_transform must leave save_count() exactly as \
+             it found it once the guard drops"
+        );
+    }
+}
+
+#[cfg(test)]
+mod paint_decorative_fullscreen_tests {
+    use super::*;
+
+    fn particle_child(style_opacity: f32) -> ChildComponent {
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 1.0,
+            "children": [{
+                "type": "particle",
+                "particle_type": "snow",
+                "count": 300,
+                "colors": ["#FFFFFF"],
+                "size_range": { "min": 10.0, "max": 16.0 },
+                "style": { "opacity": style_opacity }
+            }]
+        }))
+        .unwrap();
+        deserialize_children(&scene).remove(0)
+    }
+
+    fn render_ctx() -> RenderContext {
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 1.0,
+            "children": []
+        }))
+        .unwrap();
+        RenderContext {
+            time: SceneTime::for_frame(&scene, 0, 30),
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 100,
+            video_height: 100,
+            stagger_offset: 0.0,
+            camera: None,
+        }
+    }
+
+    fn peak_brightness(child: &ChildComponent) -> u8 {
+        let (w, h) = (100.0_f32, 100.0_f32);
+        let info = ImageInfo::new(
+            (w as i32, h as i32),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut surface = surfaces::raster(&info, None, None).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0));
+        paint_decorative_fullscreen(canvas, child, w, h, &render_ctx());
+        let dst = ImageInfo::new(
+            (w as i32, h as i32),
+            ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+        surface
+            .read_pixels(&dst, &mut pixels, (w as usize) * 4, (0, 0))
+            .then_some(())
+            .unwrap();
+        pixels
+            .chunks(4)
+            .map(|p| p[0].max(p[1]).max(p[2]))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn style_opacity_dims_a_decorative_fullscreen_particle_layer() {
+        let dim = peak_brightness(&particle_child(0.05));
+        let bright = peak_brightness(&particle_child(1.0));
+        assert!(
+            bright > 200,
+            "sanity: the full-opacity render must actually paint something bright, got {bright}"
+        );
+        assert!(
+            dim < 40,
+            "style.opacity must dim a decorative fullscreen particle layer the same way it \
+             dims every other component — got peak brightness {dim} at opacity 0.05"
+        );
+    }
 }

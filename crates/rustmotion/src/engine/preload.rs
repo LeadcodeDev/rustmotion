@@ -31,6 +31,10 @@ pub fn video_frame_byte_size(width: u32, height: u32) -> u64 {
         .saturating_mul(4)
 }
 
+fn expected_ffmpeg_output_frame_count(source_duration: f64, output_fps: u32) -> u64 {
+    ((source_duration * output_fps as f64).ceil() as u64).saturating_add(1)
+}
+
 /// Whether caching `additional_bytes` more on top of `already_cached_bytes`
 /// would cross [`VIDEO_FRAME_CACHE_BUDGET_BYTES`]. Saturating so a caller
 /// that already (somehow) exceeds the budget, or an `additional_bytes` at
@@ -60,6 +64,13 @@ fn video_frame_cache_bytes() -> u64 {
 /// Pre-fetch and cache all icon components before rendering.
 /// Call this before the render loop to avoid HTTP requests during parallel rendering.
 pub fn prefetch_icons(scenes: &[Scene]) {
+    if let Err(message) = try_prefetch_icons(scenes) {
+        panic!("{message}");
+    }
+}
+
+/// Non-panicking form of [`prefetch_icons`], for a long-lived caller (the studio) that must survive an unresolvable icon.
+pub fn try_prefetch_icons(scenes: &[Scene]) -> Result<(), String> {
     use std::collections::HashSet;
 
     let mut seen = HashSet::new();
@@ -184,7 +195,7 @@ pub fn prefetch_icons(scenes: &[Scene]) {
     }
 
     if !unresolved.is_empty() {
-        panic!(
+        return Err(format!(
             "rustmotion: {} icon(s) could not be preloaded — checked the disk cache at \
              {} and the network, both failed:\n  - {}\n\
              A render must not silently omit an icon: fix the identifier(s), or connect to \
@@ -192,8 +203,9 @@ pub fn prefetch_icons(scenes: &[Scene]) {
             unresolved.len(),
             icon_cache_dir().display(),
             unresolved.join("\n  - ")
-        );
+        ));
     }
+    Ok(())
 }
 
 /// Pre-extract all needed frames from video sources in a single ffmpeg pass.
@@ -281,7 +293,7 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
                 );
                 return;
             }
-            let expected_frames = (times.len() as u64).saturating_add(1);
+            let expected_frames = expected_ffmpeg_output_frame_count(duration, fps);
             let expected_bytes = frame_byte_size.saturating_mul(expected_frames);
             let already_cached = video_frame_cache_bytes();
             if would_exceed_cache_budget(already_cached, expected_bytes) {
@@ -453,6 +465,37 @@ mod tests {
             result.is_err(),
             "prefetch_icons must panic (or otherwise hard-fail) when an icon cannot be \
              resolved via disk cache or network, instead of silently continuing"
+        );
+    }
+
+    #[test]
+    fn try_prefetch_icons_reports_an_unresolvable_icon_as_err_not_a_panic() {
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "duration": 1.0,
+            "children": [
+                {"type": "icon", "icon": "not-a-valid-icon-id-no-colon"}
+            ]
+        }))
+        .expect("scene must deserialize");
+
+        let err = try_prefetch_icons(std::slice::from_ref(&scene))
+            .expect_err("an unresolvable icon must be reported, not silently swallowed");
+        assert!(
+            err.contains("not-a-valid-icon-id-no-colon"),
+            "error must name the unresolvable icon: {err}"
+        );
+    }
+
+    #[test]
+    fn expected_ffmpeg_output_frame_count_scales_with_playback_rate() {
+        let fps = 30u32;
+        let times_len = 100usize;
+        let rate = 2.0;
+        let source_duration = (times_len - 1) as f64 * rate / fps as f64 + 1.0 / fps as f64;
+        let expected = expected_ffmpeg_output_frame_count(source_duration, fps);
+        assert!(
+            expected >= 199,
+            "expected frame count must cover the full 2x-rate source span (>=199), got {expected}"
         );
     }
 }
