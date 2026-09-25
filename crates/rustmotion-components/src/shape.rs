@@ -52,6 +52,20 @@ impl Painter for Shape {
         let h = layout.height;
         let corner_radius = self.style.border_radius_px();
 
+        let stroke_w = self.stroke.as_ref().map(|stroke| {
+            if props.stroke_width >= 0.0 {
+                props.stroke_width
+            } else {
+                stroke.width
+            }
+        });
+        let stroke_inset = stroke_w.unwrap_or(0.0) / 2.0;
+        let (shape_x, shape_y) = (stroke_inset, stroke_inset);
+        let (shape_w, shape_h) = (
+            (w - stroke_inset * 2.0).max(0.0),
+            (h - stroke_inset * 2.0).max(0.0),
+        );
+
         if let Some(fill) = &self.fill {
             let mut paint = match fill {
                 Fill::Solid(color) => paint_from_hex(color),
@@ -123,21 +137,33 @@ impl Painter for Shape {
                 }
             };
             paint.set_style(PaintStyle::Fill);
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
+            draw_shape_path(
+                canvas,
+                &self.shape,
+                shape_x,
+                shape_y,
+                shape_w,
+                shape_h,
+                corner_radius,
+                &paint,
+            );
         }
 
         if let Some(stroke) = &self.stroke {
             let mut paint = paint_from_hex(&stroke.color);
             paint.set_style(PaintStyle::Stroke);
-            let stroke_w = if props.stroke_width >= 0.0 {
-                props.stroke_width
-            } else {
-                stroke.width
-            };
+            let stroke_w = stroke_w.expect("stroke_w is Some whenever self.stroke is Some");
             paint.set_stroke_width(stroke_w);
 
             if props.draw_progress >= 0.0 && props.draw_progress < 1.0 {
-                if let Some(path) = build_shape_path(&self.shape, 0.0, 0.0, w, h, corner_radius) {
+                if let Some(path) = build_shape_path(
+                    &self.shape,
+                    shape_x,
+                    shape_y,
+                    shape_w,
+                    shape_h,
+                    corner_radius,
+                ) {
                     let mut measure = skia_safe::PathMeasure::new(&path, false, None);
                     let path_len = measure.length();
                     if path_len > 0.0 {
@@ -150,7 +176,16 @@ impl Painter for Shape {
                 }
             }
 
-            draw_shape_path(canvas, &self.shape, 0.0, 0.0, w, h, corner_radius, &paint);
+            draw_shape_path(
+                canvas,
+                &self.shape,
+                shape_x,
+                shape_y,
+                shape_w,
+                shape_h,
+                corner_radius,
+                &paint,
+            );
         }
 
         if let Some(text) = &self.text {
@@ -253,4 +288,103 @@ fn render_shape_text(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ink_bounds(surface: &mut skia_safe::Surface, w: i32, h: i32) -> (i32, i32, i32, i32) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let (mut minx, mut miny, mut maxx, mut maxy) = (w, h, 0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    miny = miny.min(y);
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx, miny, maxx, maxy)
+    }
+
+    #[test]
+    fn a_thick_stroke_flush_to_the_box_stays_within_it() {
+        let shape = Shape {
+            shape: ShapeType::Rect,
+            text: None,
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+            fill: None,
+            stroke: Some(Stroke {
+                color: "#FFFFFF".to_string(),
+                width: 40.0,
+            }),
+        };
+
+        const CANVAS_W: i32 = 300;
+        const CANVAS_H: i32 = 300;
+        const OFFSET: f32 = 100.0;
+        const BOX_W: f32 = 100.0;
+        const BOX_H: f32 = 100.0;
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((CANVAS_W, CANVAS_H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.translate((OFFSET, OFFSET));
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: BOX_W,
+                height: BOX_H,
+                ..Default::default()
+            };
+            let ctx = PaintCtx {
+                time: 0.0,
+                scenario_time: 0.0,
+                scene_duration: 1.0,
+                frame_index: 0,
+                fps: 30,
+                video_width: CANVAS_W as u32,
+                video_height: CANVAS_H as u32,
+                stagger_offset: 0.0,
+            };
+            shape.paint_content(canvas, &layout, &AnimatedProperties::default(), &ctx);
+        }
+
+        let (minx, miny, maxx, maxy) = ink_bounds(&mut surface, CANVAS_W, CANVAS_H);
+
+        assert!(
+            minx as f32 >= OFFSET && miny as f32 >= OFFSET,
+            "a centre-aligned stroke must not bleed left/above the box (min=({minx},{miny}), \
+             box origin=({OFFSET},{OFFSET}))"
+        );
+        assert!(
+            maxx as f32 <= OFFSET + BOX_W && maxy as f32 <= OFFSET + BOX_H,
+            "a centre-aligned stroke must not bleed right/below the box (max=({maxx},{maxy}), \
+             box far corner=({},{}))",
+            OFFSET + BOX_W,
+            OFFSET + BOX_H
+        );
+    }
 }

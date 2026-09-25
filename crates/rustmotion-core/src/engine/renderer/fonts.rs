@@ -1,5 +1,6 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use skia_safe::{FontMgr, FontStyle, Typeface};
@@ -17,6 +18,17 @@ thread_local! {
     // picked — so each render thread builds each custom face at most once.
     static CUSTOM_TYPEFACES: RefCell<HashMap<(String, i32, bool), Typeface>> =
         RefCell::new(HashMap::new());
+    static CUSTOM_TYPEFACES_BUILT_AT_EPOCH: Cell<u64> = const { Cell::new(0) };
+}
+
+static CUSTOM_FONT_REGISTRY_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+fn evict_custom_typefaces_if_registry_changed_since() {
+    let current = CUSTOM_FONT_REGISTRY_EPOCH.load(Ordering::Acquire);
+    if CUSTOM_TYPEFACES_BUILT_AT_EPOCH.with(Cell::get) != current {
+        CUSTOM_TYPEFACES.with(|cache| cache.borrow_mut().clear());
+        CUSTOM_TYPEFACES_BUILT_AT_EPOCH.with(|e| e.set(current));
+    }
 }
 
 pub fn font_mgr() -> FontMgr {
@@ -51,23 +63,29 @@ fn custom_font_registry() -> &'static Mutex<HashMap<String, Vec<CustomFontVarian
 }
 
 /// Register a custom font's bytes under `family`, tagged with the `(weight,
-/// italic)` style Skia reports for the parsed file. A no-op if that exact
-/// `(family, weight, italic)` combination is already registered.
+/// italic)` style Skia reports for the parsed file. Replaces the bytes of
+/// that exact `(family, weight, italic)` combination if already registered,
+/// and bumps `CUSTOM_FONT_REGISTRY_EPOCH` so every thread's cached
+/// `Typeface` for it is dropped, not only the caller's.
 pub fn register_custom_font_variant(family: &str, data: Vec<u8>, weight: i32, italic: bool) {
-    let mut reg = custom_font_registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let variants = reg.entry(family.to_string()).or_default();
-    if !variants
-        .iter()
-        .any(|v| v.weight == weight && v.italic == italic)
     {
-        variants.push(CustomFontVariant {
-            data,
-            weight,
-            italic,
-        });
+        let mut reg = custom_font_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let variants = reg.entry(family.to_string()).or_default();
+        match variants
+            .iter_mut()
+            .find(|v| v.weight == weight && v.italic == italic)
+        {
+            Some(existing) => existing.data = data,
+            None => variants.push(CustomFontVariant {
+                data,
+                weight,
+                italic,
+            }),
+        }
     }
+    CUSTOM_FONT_REGISTRY_EPOCH.fetch_add(1, Ordering::Release);
 }
 
 /// The raw bytes registered for `family`'s closest `(weight, italic)` match,
@@ -102,6 +120,7 @@ fn closest_variant(
 /// building it from the global bytes on first use per thread and caching it
 /// thereafter. `None` when no custom font is registered under `family`.
 fn custom_typeface(family: &str, style: FontStyle) -> Option<Typeface> {
+    evict_custom_typefaces_if_registry_changed_since();
     let weight = *style.weight();
     let italic = style.slant() != skia_safe::font_style::Slant::Upright;
     let cache_key = (family.to_string(), weight, italic);
@@ -280,6 +299,15 @@ fn system_typeface_cached(family: &str, style: FontStyle) -> Option<Typeface> {
 /// system has no usable font at all (essentially unreachable on every
 /// supported platform). Use this instead of `.expect("FontNotFound")` so we
 /// never panic from a `paint` callback.
+fn first_sighting_of_missing_family(family: &str) -> bool {
+    use std::collections::HashSet;
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+        .lock()
+        .map(|mut seen| seen.insert(family.to_owned()))
+        .unwrap_or(false)
+}
+
 pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface> {
     // Custom/Google fonts declared in the scenario win over system fonts:
     // they are not visible to `match_family_style`, so resolve them from the
@@ -291,6 +319,14 @@ pub fn typeface_with_fallback(family: &str, style: FontStyle) -> Result<Typeface
     }
     if let Some(t) = system_typeface_cached(family, style) {
         return Ok(t);
+    }
+    if first_sighting_of_missing_family(family) {
+        eprintln!(
+            "Warning: font-family '{family}' is not installed on this system and no matching \
+             fonts entry was declared — substituting Helvetica/Arial/the OS default. Text \
+             wrapping and the geometry validator's verdict for this scenario can differ on a \
+             machine where '{family}' is actually available."
+        );
     }
     if let Some(t) = system_typeface_cached("Helvetica", style) {
         return Ok(t);
@@ -423,13 +459,50 @@ mod tests {
     }
 
     #[test]
-    fn registering_the_same_weight_twice_keeps_the_first() {
+    fn registering_the_same_variant_again_overwrites_its_bytes() {
         register_custom_font_variant("RmProbeDupeFamily", vec![1, 2, 3], 400, false);
         register_custom_font_variant("RmProbeDupeFamily", vec![9, 9], 400, false);
         assert_eq!(
             custom_font_bytes("RmProbeDupeFamily", 400, false),
-            Some(vec![1, 2, 3]),
-            "re-registering the same (weight, italic) must not clobber the first file"
+            Some(vec![9, 9]),
+            "re-registering the same (weight, italic) must replace the stored bytes — a \
+             hot-swapped font file must not stay pinned to whichever bytes won the race first"
+        );
+    }
+
+    #[test]
+    fn a_hot_swapped_custom_font_is_visible_from_a_different_thread() {
+        let cache_dir = format!(
+            "{}/.cache/rustmotion/fonts",
+            std::env::var("HOME").unwrap_or_default()
+        );
+        let (Ok(anton_bytes), Ok(inter_bytes)) = (
+            std::fs::read(format!("{cache_dir}/anton-400.ttf")),
+            std::fs::read(format!("{cache_dir}/inter-400.ttf")),
+        ) else {
+            return; // cold font cache → skip (render QA covers it)
+        };
+
+        register_custom_font_variant("RmProbeHotSwapFamily", anton_bytes, 400, false);
+        let resolve_on_worker = || {
+            std::thread::spawn(|| {
+                typeface_with_fallback("RmProbeHotSwapFamily", FontStyle::normal())
+                    .unwrap()
+                    .family_name()
+            })
+            .join()
+            .unwrap()
+        };
+        let before = resolve_on_worker();
+
+        register_custom_font_variant("RmProbeHotSwapFamily", inter_bytes, 400, false);
+        let after = resolve_on_worker();
+
+        assert_ne!(
+            before, after,
+            "a worker thread's cached typeface must be dropped when the registry is \
+             re-registered on another thread, not just on the thread that called \
+             register_custom_font_variant"
         );
     }
 
@@ -620,5 +693,30 @@ mod tests {
             "a family absent from the system must still be memoized (as a negative result), \
              not re-queried on every call"
         );
+    }
+
+    #[test]
+    fn a_missing_font_family_is_reported_once_and_only_once() {
+        let family = "RmProbeMissingFamilyForWarning";
+        assert!(
+            first_sighting_of_missing_family(family),
+            "an unresolved font-family must be reported at least once instead of being \
+             substituted silently"
+        );
+        assert!(
+            !first_sighting_of_missing_family(family),
+            "the same missing family must not be reported again on every later lookup"
+        );
+        assert!(
+            first_sighting_of_missing_family("RmProbeMissingFamilyForWarningOther"),
+            "a distinct missing family must still be reported on its own first sighting"
+        );
+    }
+
+    #[test]
+    fn typeface_with_fallback_still_resolves_something_for_a_missing_family() {
+        let tf = typeface_with_fallback("RmProbeAnotherMissingFamily", FontStyle::normal())
+            .expect("a missing family must still resolve through the Helvetica/Arial/OS chain");
+        assert_ne!(tf.family_name(), "RmProbeAnotherMissingFamily");
     }
 }

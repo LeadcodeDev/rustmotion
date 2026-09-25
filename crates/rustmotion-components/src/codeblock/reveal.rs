@@ -33,14 +33,20 @@ pub(super) fn compute_reveal(
                 RevealMode::Typewriter => {
                     let total_chars: usize = highlighted
                         .iter()
-                        .map(|l| l.spans.iter().map(|s| s.text.len()).sum::<usize>())
+                        .map(|l| {
+                            l.spans
+                                .iter()
+                                .map(|s| s.text.chars().count())
+                                .sum::<usize>()
+                        })
                         .sum();
                     let visible_chars = (total_chars as f64 * progress).round() as usize;
                     let mut chars_remaining = visible_chars;
                     let mut visible_lines = 0;
                     let mut last_line_chars = None;
                     for line in highlighted {
-                        let line_chars: usize = line.spans.iter().map(|s| s.text.len()).sum();
+                        let line_chars: usize =
+                            line.spans.iter().map(|s| s.text.chars().count()).sum();
                         if chars_remaining >= line_chars {
                             chars_remaining -= line_chars;
                             visible_lines += 1;
@@ -219,7 +225,7 @@ pub(super) fn draw_single_highlighted_line_partial(
         };
 
         if text_to_draw.is_empty() {
-            chars_drawn += span.text.len();
+            chars_drawn += span.text.chars().count();
             continue;
         }
 
@@ -248,7 +254,7 @@ pub(super) fn draw_single_highlighted_line_partial(
         );
         let w = measure_text_with_fallback(&text_to_draw, font, &emoji_f, 0.0);
         cursor_x += w;
-        chars_drawn += text_to_draw.len();
+        chars_drawn += text_to_draw.chars().count();
 
         if let Some(limit) = char_limit {
             if chars_drawn >= limit {
@@ -286,5 +292,131 @@ pub(super) fn draw_single_highlighted_line(
         draw_text_with_fallback(canvas, &span.text, font, &emoji_f, 0.0, cursor_x, y, &paint);
         let w = measure_text_with_fallback(&span.text, font, &emoji_f, 0.0);
         cursor_x += w;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::highlight::ColoredSpan;
+    use super::*;
+
+    fn codeblock_with_reveal(duration: f64) -> Codeblock {
+        serde_json::from_value(serde_json::json!({
+            "code": "placeholder",
+            "reveal": {"mode": "typewriter", "start": 0.0, "duration": duration}
+        }))
+        .expect("minimal codeblock JSON must deserialize")
+    }
+
+    fn line_of(text: &str) -> HighlightedLine {
+        HighlightedLine {
+            spans: vec![ColoredSpan {
+                text: text.to_string(),
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }],
+        }
+    }
+
+    #[test]
+    fn typewriter_budget_is_spent_in_characters_not_bytes() {
+        let layer = codeblock_with_reveal(4.0);
+        let accented = "éééééééééé"; // 10 chars, 20 UTF-8 bytes
+        assert_eq!(accented.chars().count(), 10);
+        assert_eq!(accented.len(), 20);
+        let highlighted = vec![line_of(accented)];
+
+        let (visible_lines, last_line_chars, _) = compute_reveal(&layer, 2.0, &highlighted);
+
+        assert_eq!(visible_lines, 1);
+        assert_eq!(
+            last_line_chars,
+            Some(5),
+            "half a 4s reveal (t=2.0) over 10 characters must budget 5 CHARACTERS, not 10 bytes \
+             worth of budget spent as if it were 10 characters"
+        );
+    }
+
+    #[test]
+    fn char_limit_is_honoured_in_characters_across_a_multibyte_span_boundary() {
+        let line = HighlightedLine {
+            spans: vec![
+                ColoredSpan {
+                    text: "café".to_string(),
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
+                ColoredSpan {
+                    text: "test".to_string(),
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
+            ],
+        };
+
+        let typeface = rustmotion_core::engine::renderer::typeface_with_fallback(
+            "Helvetica",
+            skia_safe::FontStyle::normal(),
+        )
+        .expect("host must have a fallback typeface");
+        let font = Font::from_typeface(typeface, 24.0);
+
+        const W: i32 = 400;
+        const H: i32 = 100;
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            draw_single_highlighted_line_partial(canvas, &line, &font, 0.0, 50.0, 1.0, Some(5));
+        }
+        let with_five_chars = max_ink_x(&mut surface, W, H);
+
+        let mut surface_cafe_only =
+            skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = surface_cafe_only.canvas();
+            draw_single_highlighted_line_partial(canvas, &line, &font, 0.0, 50.0, 1.0, Some(4));
+        }
+        let with_cafe_only = max_ink_x(&mut surface_cafe_only, W, H);
+
+        assert!(
+            with_five_chars > with_cafe_only,
+            "a limit of 5 characters must draw one more glyph than a limit of 4 (the 't' from \
+             the second span), not stop after \"café\" because its byte length already reached \
+             the limit"
+        );
+    }
+
+    fn max_ink_x(surface: &mut skia_safe::Surface, w: i32, h: i32) -> i32 {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let mut maxx = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    maxx = maxx.max(x);
+                }
+            }
+        }
+        maxx
     }
 }

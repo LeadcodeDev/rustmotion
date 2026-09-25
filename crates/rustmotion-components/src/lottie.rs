@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
@@ -61,36 +64,131 @@ rustmotion_core::impl_traits!(Lottie {
     Styled => style,
 });
 
+struct ResolvedLottieSource {
+    bytes: Vec<u8>,
+    fr: f64,
+    total_frames: usize,
+    duration: f64,
+}
+
+fn lottie_source_key(lottie: &Lottie) -> Option<String> {
+    if let Some(ref src) = lottie.src {
+        Some(format!("src:{src}"))
+    } else if let Some(ref data) = lottie.data {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        Some(format!("data:{:x}", hasher.finish()))
+    } else {
+        None
+    }
+}
+
+fn load_lottie_source(lottie: &Lottie, key: &str) -> Option<Arc<ResolvedLottieSource>> {
+    let bytes = if let Some(ref src) = lottie.src {
+        match std::fs::read(src) {
+            Ok(b) => b,
+            Err(e) => {
+                if crate::warn_once_for(&format!("lottie-read:{key}")) {
+                    eprintln!(
+                        "Warning: lottie failed to read '{src}': {e} — this component will \
+                         render nothing."
+                    );
+                }
+                return None;
+            }
+        }
+    } else {
+        lottie.data.clone().unwrap_or_default().into_bytes()
+    };
+
+    let json: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            if crate::warn_once_for(&format!("lottie-parse:{key}")) {
+                eprintln!(
+                    "Warning: lottie source is not valid JSON: {e} — this component will \
+                     render nothing."
+                );
+            }
+            return None;
+        }
+    };
+    let fr = json["fr"].as_f64().unwrap_or(30.0);
+    let ip = json["ip"].as_f64().unwrap_or(0.0);
+    let op = json["op"].as_f64().unwrap_or(60.0);
+    let total_frames = (op - ip).max(0.0) as usize;
+    let duration = if fr > 0.0 {
+        total_frames as f64 / fr
+    } else {
+        0.0
+    };
+
+    Some(Arc::new(ResolvedLottieSource {
+        bytes,
+        fr,
+        total_frames,
+        duration,
+    }))
+}
+
+fn resolved_lottie_source(lottie: &Lottie) -> Option<Arc<ResolvedLottieSource>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<ResolvedLottieSource>>>>> =
+        OnceLock::new();
+
+    let key = lottie_source_key(lottie)?;
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+    {
+        return hit.clone();
+    }
+
+    let resolved = load_lottie_source(lottie, &key);
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, resolved.clone());
+    resolved
+}
+
 impl Lottie {
-    /// Parse Lottie JSON metadata (fr, ip, op, w, h).
-    fn parse_metadata(&self) -> Result<(f64, usize, f64, f32, f32)> {
-        let json_str = if let Some(ref src) = self.src {
-            std::fs::read_to_string(src).map_err(|e| RustmotionError::LottieRead {
-                path: src.clone(),
-                reason: e.to_string(),
-            })?
-        } else if let Some(ref data) = self.data {
-            data.clone()
-        } else {
+    /// Parse Lottie JSON metadata (fr, total_frames, duration).
+    fn parse_metadata(&self) -> Result<(f64, usize, f64)> {
+        if self.src.is_none() && self.data.is_none() {
+            if crate::warn_once_for("lottie-no-source") {
+                eprintln!(
+                    "Warning: lottie has neither 'src' nor 'data' — this component will \
+                     render nothing."
+                );
+            }
             return Err(RustmotionError::LottieMissingSrc);
-        };
-
-        let json: serde_json::Value = serde_json::from_str(&json_str)?;
-        let fr = json["fr"].as_f64().unwrap_or(30.0);
-        let ip = json["ip"].as_f64().unwrap_or(0.0);
-        let op = json["op"].as_f64().unwrap_or(60.0);
-        let w = json["w"].as_f64().unwrap_or(200.0) as f32;
-        let h = json["h"].as_f64().unwrap_or(200.0) as f32;
-        let total_frames = (op - ip) as usize;
-        let duration = total_frames as f64 / fr;
-
-        Ok((fr, total_frames, duration, w, h))
+        }
+        resolved_lottie_source(self)
+            .map(|r| (r.fr, r.total_frames, r.duration))
+            .ok_or_else(|| {
+                RustmotionError::Generic("lottie source could not be read or parsed".to_string())
+            })
     }
 
     /// Get the cache key for a specific frame (frames_dir path).
     fn cache_key(&self, frame: usize) -> String {
-        let src = self.src.as_deref().unwrap_or("inline");
-        format!("lottie:{}:frame:{}", src, frame)
+        let source = match (&self.src, &self.data) {
+            (Some(src), _) => src.clone(),
+            (None, Some(data)) => {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                data.hash(&mut hasher);
+                format!("inline-{:x}", hasher.finish())
+            }
+            (None, None) => "no-source".to_string(),
+        };
+        let frames_dir = self.frames_dir.as_deref().unwrap_or("");
+        format!("lottie:{source}:{frames_dir}:frame:{frame}")
     }
 
     /// Load a pre-rendered frame from frames_dir.
@@ -167,6 +265,14 @@ mod native {
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
         h
+    }
+
+    pub(super) fn checked_pixel_area(width: u32, height: u32) -> Option<usize> {
+        (width as usize).checked_mul(height as usize)
+    }
+
+    pub(super) fn checked_byte_len(pixel_count: usize) -> Option<usize> {
+        pixel_count.checked_mul(4)
     }
 
     type NativeCacheMap = Arc<DashMap<FrameKey, Arc<Vec<u8>>>>;
@@ -246,11 +352,15 @@ mod native {
         let rgba = with_engine(|engine| -> Option<Vec<u8>> {
             use thorvg::Paint as ThorPaint;
 
-            let mut buffer = vec![0u32; (width * height) as usize];
+            let area = checked_pixel_area(width, height)?;
+            let mut buffer = vec![0u32; area];
 
             let mut canvas = engine.sw_canvas(EngineOption::Default).ok()?;
             // SAFETY: `buffer` is alive for the duration of this closure; canvas
-            // borrows it until `canvas.sync()` is called.
+            // borrows it until `canvas.sync()` is called. `buffer.len()` is
+            // exactly `width * height` (`checked_pixel_area` above rejects any
+            // product that would overflow rather than wrap), so `set_target`
+            // below is never told a surface larger than the buffer backing it.
             unsafe {
                 canvas
                     .set_target(&mut buffer, width, width, height, ColorSpace::ABGR8888)
@@ -277,7 +387,7 @@ mod native {
             canvas.sync().ok()?;
 
             // Reinterpret Vec<u32> as Vec<u8> (R,G,B,A layout — see doc above).
-            let byte_len = buffer.len() * 4;
+            let byte_len = checked_byte_len(buffer.len())?;
             let mut out = Vec::with_capacity(byte_len);
             // SAFETY: u32 has no uninitialized padding; the full slice is valid
             // for any byte reinterpretation.
@@ -332,44 +442,13 @@ mod native {
         f.min(total_frames.saturating_sub(1)) as u32
     }
 
-    /// Resolve the raw JSON bytes from a `Lottie` component.
-    /// Returns `None` and prints a one-time warning on file-read failure.
-    pub(super) fn resolve_json(lottie: &super::Lottie) -> Option<Vec<u8>> {
-        if let Some(ref data) = lottie.data {
-            return Some(data.as_bytes().to_vec());
-        }
-        if let Some(ref src) = lottie.src {
-            match std::fs::read(src) {
-                Ok(bytes) => return Some(bytes),
-                Err(e) => {
-                    let path_hash = fnv1a(src.as_bytes());
-                    if !failed_sources().contains_key(&path_hash) {
-                        eprintln!(
-                            "[rustmotion] lottie-native: cannot read '{}': {}; \
-                             further errors for this source will be suppressed",
-                            src, e
-                        );
-                        failed_sources().insert(path_hash, ());
-                    }
-                    return None;
-                }
-            }
-        }
-        None
-    }
-
     pub(super) fn paint_native(
         lottie: &super::Lottie,
         canvas: &skia_safe::Canvas,
         layout: &rustmotion_core::engine::layout_pass::BoxLayout,
         ctx: &rustmotion_core::traits::PaintCtx,
     ) {
-        let json_bytes = match resolve_json(lottie) {
-            Some(b) => b,
-            None => return,
-        };
-
-        let Ok((fr, total_frames, duration, _w, _h)) = lottie.parse_metadata() else {
+        let Some(resolved) = super::resolved_lottie_source(lottie) else {
             return;
         };
 
@@ -383,12 +462,12 @@ mod native {
             ctx.time,
             lottie.speed,
             lottie.repeat,
-            fr,
-            total_frames,
-            duration,
+            resolved.fr,
+            resolved.total_frames,
+            resolved.duration,
         );
 
-        let rgba = match render_frame(&json_bytes, frame_index, w, h) {
+        let rgba = match render_frame(&resolved.bytes, frame_index, w, h) {
             Some(r) => r,
             None => return,
         };
@@ -411,13 +490,15 @@ mod native {
     }
 
     #[cfg(test)]
+    pub(super) use checked_byte_len as test_checked_byte_len;
+    #[cfg(test)]
+    pub(super) use checked_pixel_area as test_checked_pixel_area;
+    #[cfg(test)]
     pub(super) use frame_at_time as test_frame_at_time;
     #[cfg(test)]
     pub(super) use native_lottie_cache as test_cache;
     #[cfg(test)]
     pub(super) use render_frame as test_render_frame;
-    #[cfg(test)]
-    pub(super) use resolve_json as test_resolve_json;
 }
 
 // ─── Painter ─────────────────────────────────────────────────────────────────
@@ -430,8 +511,7 @@ impl Painter for Lottie {
         _props: &AnimatedProperties,
         ctx: &PaintCtx,
     ) {
-        let Ok((fr, total_frames, duration, _intrinsic_w, _intrinsic_h)) = self.parse_metadata()
-        else {
+        let Ok((fr, total_frames, duration)) = self.parse_metadata() else {
             return;
         };
 
@@ -480,7 +560,10 @@ impl Painter for Lottie {
 
 #[cfg(all(test, feature = "lottie-native"))]
 mod tests {
-    use super::native::{test_cache, test_frame_at_time, test_render_frame};
+    use super::native::{
+        test_cache, test_checked_byte_len, test_checked_pixel_area, test_frame_at_time,
+        test_render_frame,
+    };
 
     /// Minimal valid Lottie: 30 fps, 30 frames (1 second), one red 80×80 rect layer.
     /// Taken verbatim from the spike at lottie-spike-thorvg/src/main.rs.
@@ -608,6 +691,31 @@ mod tests {
         assert_eq!(*buf_fast, *buf_normal);
     }
 
+    #[test]
+    fn width_times_height_no_longer_wraps_to_zero_at_the_u32_boundary() {
+        assert_eq!(
+            test_checked_pixel_area(65_536, 65_536),
+            Some(4_294_967_296),
+            "65536*65536 must resolve to its real product, not silently wrap to 0 the way plain \
+             u32 multiplication does"
+        );
+    }
+
+    #[test]
+    fn ordinary_dimensions_still_compute_the_right_area() {
+        assert_eq!(test_checked_pixel_area(1920, 1080), Some(1920 * 1080));
+    }
+
+    #[test]
+    fn a_byte_length_that_would_overflow_usize_is_rejected_not_wrapped() {
+        assert_eq!(
+            test_checked_byte_len(usize::MAX / 2),
+            None,
+            "a pixel count whose byte length overflows usize must be rejected, not wrapped"
+        );
+        assert_eq!(test_checked_byte_len(100), Some(400));
+    }
+
     // ── Test 4: invalid JSON → no panic, zero pixels ──────────────────────────
     #[test]
     fn invalid_json_no_panic_zero_pixels() {
@@ -634,7 +742,7 @@ mod tests {
     // any entry whose src_hash matches the red lottie if frames_dir was set.
     #[test]
     fn frames_dir_priority_no_native_cache_entry() {
-        use super::{native, Lottie};
+        use super::Lottie;
 
         // Clear the cache so we start clean.
         test_cache().clear();
@@ -661,15 +769,118 @@ mod tests {
         // Since we can't call paint_content (needs a Canvas), we verify the
         // invariant: frames_dir branch returns early → native cache stays empty.
         //
-        // We confirm that the frames_dir path is taken by calling `resolve_json`
-        // (which doesn't touch the cache) and checking the cache is still empty.
-        let _ = native::test_resolve_json(&lottie);
+        // We confirm that the frames_dir path is taken by resolving the source
+        // (which doesn't touch the native frame cache) and checking the cache
+        // is still empty.
+        let _ = super::resolved_lottie_source(&lottie);
 
         // The important check: native cache has no entry for this lottie.
         // If frames_dir priority is broken and native was called, an entry would appear.
         assert!(
             !test_cache().contains_key(&expected_key),
             "native cache must not be populated when frames_dir takes priority"
+        );
+    }
+}
+
+#[cfg(test)]
+mod silent_failure_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_lottie_source_file_must_claim_its_warn_once_slot() {
+        let missing_src = std::env::temp_dir().join(format!(
+            "rustmotion-lottie-test-missing-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let _ = std::fs::remove_file(&missing_src);
+        let src_str = missing_src.to_str().unwrap().to_string();
+
+        let lottie = Lottie {
+            src: Some(src_str.clone()),
+            data: None,
+            speed: 1.0,
+            repeat: true,
+            frames_dir: None,
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: vec![],
+            stagger: None,
+        };
+        let layout = BoxLayout {
+            width: 100.0,
+            height: 100.0,
+            ..Default::default()
+        };
+        let ctx = PaintCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width: 100,
+            video_height: 100,
+            stagger_offset: 0.0,
+        };
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        {
+            let canvas = surface.canvas();
+            lottie.paint_content(canvas, &layout, &AnimatedProperties::default(), &ctx);
+        }
+
+        let key = format!("lottie-read:src:{src_str}");
+        assert!(
+            !crate::warn_once_for(&key),
+            "paint_content must have claimed this warning slot on the failed-read path — it \
+             is still unclaimed (first sighting), meaning a bad lottie src rendered nothing \
+             without a trace anywhere"
+        );
+    }
+}
+
+#[cfg(test)]
+mod frames_dir_cache_key_tests {
+    use super::*;
+
+    fn lottie(src: Option<&str>, data: Option<&str>, frames_dir: &str) -> Lottie {
+        Lottie {
+            src: src.map(str::to_string),
+            data: data.map(str::to_string),
+            speed: 1.0,
+            repeat: true,
+            frames_dir: Some(frames_dir.to_string()),
+            timing: Default::default(),
+            style: Default::default(),
+            timeline: vec![],
+            stagger: None,
+        }
+    }
+
+    #[test]
+    fn distinct_frames_dirs_with_identical_inline_data_do_not_collide() {
+        let a = lottie(None, Some(r#"{"fr":30}"#), "/frames/a");
+        let b = lottie(None, Some(r#"{"fr":30}"#), "/frames/b");
+        assert_ne!(
+            a.cache_key(3),
+            b.cache_key(3),
+            "two lottie components with no src and different frames_dir must not share an \
+             asset_cache slot"
+        );
+    }
+
+    #[test]
+    fn distinct_inline_data_with_no_src_do_not_collide() {
+        let a = lottie(None, Some(r#"{"fr":24}"#), "/frames/shared");
+        let b = lottie(None, Some(r#"{"fr":30}"#), "/frames/shared");
+        assert_ne!(
+            a.cache_key(3),
+            b.cache_key(3),
+            "two lottie components sharing a frames_dir but declaring different inline data \
+             must not share an asset_cache slot"
         );
     }
 }

@@ -6,7 +6,10 @@ use skia_safe::{Canvas, PaintStyle, Path, PathBuilder, RRect, Rect};
 
 use rustmotion_core::engine::animator::AnimatedProperties;
 use rustmotion_core::engine::layout_pass::BoxLayout;
-use rustmotion_core::engine::renderer::{paint_from_hex, typeface_with_fallback, wrap_text};
+use rustmotion_core::engine::renderer::{
+    draw_text_with_fallback, emoji_typeface, measure_text_with_fallback, paint_from_hex,
+    typeface_with_fallback, wrap_text,
+};
 use rustmotion_core::schema::TimelineStep;
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
@@ -173,16 +176,15 @@ impl Callout {
         let mut text_paint = paint_from_hex(self.text_color());
         text_paint.set_anti_alias(true);
 
+        let emoji_font = emoji_typeface().map(|tf| skia_safe::Font::from_typeface(tf, font_size));
         for (i, line) in lines.iter().enumerate() {
             if line.is_empty() {
                 continue;
             }
-            if let Some(blob) = skia_safe::TextBlob::new(line, &font) {
-                let blob_w = blob.bounds().width();
-                let x = text_area_x + (text_area_w - blob_w) / 2.0;
-                let y = text_y_start + i as f32 * line_height;
-                canvas.draw_text_blob(&blob, (x, y), &text_paint);
-            }
+            let line_w = measure_text_with_fallback(line, &font, &emoji_font, 0.0);
+            let x = text_area_x + (text_area_w - line_w) / 2.0;
+            let y = text_y_start + i as f32 * line_height;
+            draw_text_with_fallback(canvas, line, &font, &emoji_font, 0.0, x, y, &text_paint);
         }
 
         Ok(())
@@ -275,6 +277,115 @@ mod tests {
         assert!(
             text_ink > 10,
             "callout at font-size: 2rem must paint visible text, got {text_ink} pixels"
+        );
+    }
+
+    fn dump_pixels(surface: &mut skia_safe::Surface, w: i32, h: i32) -> Vec<u8> {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        buf
+    }
+
+    #[test]
+    fn cjk_text_is_drawn_through_the_shared_fallback_primitive() {
+        let text = "你好世界";
+        let callout = Callout {
+            text: text.to_string(),
+            arrow_direction: ArrowDirection::default(),
+            arrow_size: default_arrow_size(),
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(40.0)),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        const W: i32 = 400;
+        const H: i32 = 200;
+
+        let mut actual = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        callout
+            .paint(actual.canvas(), W as f32, H as f32, &test_ctx())
+            .expect("paint succeeds");
+        let actual_pixels = dump_pixels(&mut actual, W, H);
+
+        let font_style = skia_safe::FontStyle::normal();
+        let typeface =
+            rustmotion_core::engine::renderer::typeface_with_fallback("Inter", font_style)
+                .expect("host must have a fallback typeface");
+        let font = skia_safe::Font::from_typeface(typeface, callout.font_size(&test_ctx()));
+        let (_, metrics) = font.metrics();
+        let ascent = -metrics.ascent;
+        let bubble = callout.bubble_rect(W as f32, H as f32);
+        let padding = 12.0;
+        let text_area_x = bubble.left + padding;
+        let text_area_w = bubble.width() - padding * 2.0;
+        let line_height = callout.font_size(&test_ctx()) * 1.4;
+        let lines = rustmotion_core::engine::renderer::wrap_text(text, &font, Some(text_area_w));
+        let total_text_h = lines.len() as f32 * line_height;
+        let text_y_start = bubble.top + (bubble.height() - total_text_h) / 2.0 + ascent;
+
+        let mut expected = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        {
+            let canvas = expected.canvas();
+            let rrect = RRect::new_rect_xy(bubble, callout.radius(), callout.radius());
+            let mut bg_paint = paint_from_hex(callout.bg_color());
+            bg_paint.set_style(PaintStyle::Fill);
+            bg_paint.set_anti_alias(true);
+            canvas.draw_rrect(rrect, &bg_paint);
+            canvas.draw_path(&callout.arrow_path(W as f32, H as f32), &bg_paint);
+
+            let mut text_paint = paint_from_hex(callout.text_color());
+            text_paint.set_anti_alias(true);
+            let emoji_font = rustmotion_core::engine::renderer::emoji_typeface()
+                .map(|tf| skia_safe::Font::from_typeface(tf, font.size()));
+            for (i, line) in lines.iter().enumerate() {
+                if line.is_empty() {
+                    continue;
+                }
+                let line_w = rustmotion_core::engine::renderer::measure_text_with_fallback(
+                    line,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                );
+                let x = text_area_x + (text_area_w - line_w) / 2.0;
+                let y = text_y_start + i as f32 * line_height;
+                rustmotion_core::engine::renderer::draw_text_with_fallback(
+                    canvas,
+                    line,
+                    &font,
+                    &emoji_font,
+                    0.0,
+                    x,
+                    y,
+                    &text_paint,
+                );
+            }
+        }
+        let expected_pixels = dump_pixels(&mut expected, W, H);
+
+        assert_eq!(
+            actual_pixels, expected_pixels,
+            "callout must draw text through draw_text_with_fallback (glyph-coverage and \
+             emoji-font fallback, advance-width centering) like every other text-painting \
+             component, not through a bare TextBlob::new on a single font centered on its own \
+             ink bounds"
         );
     }
 }

@@ -115,18 +115,25 @@ impl Painter for AudioSpectrum {
         let (r, g, b, a) = parse_hex_color(&self.color);
         let color = Color::from_argb(a, r, g, b);
 
+        canvas.save();
+        canvas.clip_rect(
+            Rect::from_xywh(0.0, 0.0, w.max(0.0), h.max(0.0)),
+            skia_safe::ClipOp::Intersect,
+            true,
+        );
+
         match self.mode {
             SpectrumMode::Bars => {
-                let total_gap = self.bar_gap * (n as f32 - 1.0);
-                let bar_w = ((w - total_gap) / n as f32).max(1.0);
+                let stride = w / n as f32;
+                let bar_w = (stride - self.bar_gap).max(1.0);
                 let mut paint = Paint::default();
                 paint.set_color(color);
                 paint.set_style(PaintStyle::Fill);
                 paint.set_anti_alias(true);
 
                 for (i, &v) in values.iter().enumerate() {
-                    let bar_h = (v * h).max(self.min_height);
-                    let x = i as f32 * (bar_w + self.bar_gap);
+                    let bar_h = (v * h).max(self.min_height).min(h);
+                    let x = i as f32 * stride;
                     let y = h - bar_h;
                     canvas.draw_rect(Rect::from_xywh(x, y, bar_w, bar_h), &paint);
                 }
@@ -145,7 +152,9 @@ impl Painter for AudioSpectrum {
 
                 for (i, &v) in values.iter().enumerate() {
                     let angle = (i as f32 / n as f32) * 2.0 * std::f32::consts::PI;
-                    let bar_len = (v * (max_r - inner_r)).max(self.min_height);
+                    let bar_len = (v * (max_r - inner_r))
+                        .max(self.min_height)
+                        .min(max_r - inner_r);
                     let x0 = cx + inner_r * angle.cos();
                     let y0 = cy + inner_r * angle.sin();
                     let x1 = cx + (inner_r + bar_len) * angle.cos();
@@ -154,5 +163,112 @@ impl Painter for AudioSpectrum {
                 }
             }
         }
+
+        canvas.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ink_bounds(surface: &mut skia_safe::Surface, w: i32, h: i32) -> (i32, i32, i32, i32) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let (mut minx, mut miny, mut maxx, mut maxy) = (w, h, 0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if buf[((y * w + x) * 4 + 3) as usize] > 0 {
+                    minx = minx.min(x);
+                    miny = miny.min(y);
+                    maxx = maxx.max(x);
+                    maxy = maxy.max(y);
+                }
+            }
+        }
+        (minx, miny, maxx, maxy)
+    }
+
+    #[test]
+    fn bars_overflowing_the_box_are_kept_inside_it() {
+        const CANVAS_W: i32 = 800;
+        const CANVAS_H: i32 = 700;
+        const OFFSET_X: f32 = 200.0;
+        const OFFSET_Y: f32 = 500.0;
+        const BOX_W: f32 = 300.0;
+        const BOX_H: f32 = 100.0;
+
+        let spectrum = AudioSpectrum {
+            track: None,
+            bars: 64,
+            mode: SpectrumMode::Bars,
+            color: "#FFFFFF".to_string(),
+            bar_gap: 8.0,
+            min_height: 500.0,
+            timing: Default::default(),
+            style: CssStyle::default(),
+            timeline: Vec::new(),
+            stagger: None,
+        };
+
+        let mut surface =
+            skia_safe::surfaces::raster_n32_premul((CANVAS_W, CANVAS_H)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.translate((OFFSET_X, OFFSET_Y));
+            let layout = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: BOX_W,
+                height: BOX_H,
+                ..Default::default()
+            };
+            let ctx = PaintCtx {
+                time: 0.0,
+                scenario_time: 0.0,
+                scene_duration: 1.0,
+                frame_index: 0,
+                fps: 30,
+                video_width: CANVAS_W as u32,
+                video_height: CANVAS_H as u32,
+                stagger_offset: 0.0,
+            };
+            spectrum.paint_content(canvas, &layout, &AnimatedProperties::default(), &ctx);
+        }
+
+        let (minx, miny, maxx, maxy) = ink_bounds(&mut surface, CANVAS_W, CANVAS_H);
+
+        assert!(
+            minx as f32 >= OFFSET_X,
+            "ink must not start left of the box (x={minx}, box left={OFFSET_X})"
+        );
+        assert!(
+            maxx as f32 <= OFFSET_X + BOX_W,
+            "ink must not run right of the box (x={maxx}, box right={})",
+            OFFSET_X + BOX_W
+        );
+        assert!(
+            miny as f32 >= OFFSET_Y,
+            "min_height must not push bars above the box's top edge (y={miny}, box top={OFFSET_Y})"
+        );
+        assert!(
+            maxy as f32 <= OFFSET_Y + BOX_H,
+            "ink must not run below the box (y={maxy}, box bottom={})",
+            OFFSET_Y + BOX_H
+        );
     }
 }
