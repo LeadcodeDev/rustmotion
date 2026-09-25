@@ -152,6 +152,7 @@ where
             0.0,
             (1.0, 0.0),
             &root_css,
+            viewport,
         ));
     }
 
@@ -431,6 +432,7 @@ fn build_child<'a>(
     stagger_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Vec<BoxNode> {
     // Compute the local animation context for this node — remapped by the
     // accumulated affine time transform from ancestor containers.
@@ -652,8 +654,9 @@ fn build_child<'a>(
         stagger_delay,
         time_remap,
         &css,
+        viewport,
     );
-    let intrinsic = component_intrinsic(&child.component, &css);
+    let intrinsic = component_intrinsic(&child.component, &css, viewport);
 
     let principal = BoxNode {
         id,
@@ -1168,39 +1171,48 @@ fn apply_glow_effect(css: &mut CssStyle, effects: &[rustmotion_core::schema::Ani
 fn component_intrinsic(
     component: &Component,
     cascaded_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Option<Arc<dyn rustmotion_core::engine::box_tree::IntrinsicMeasure>> {
     let cascaded_component = component.with_cascaded_style(cascaded_css);
     let component = cascaded_component.as_ref().unwrap_or(component);
 
     use Component::*;
     match component {
-        Text(t) => Some(Arc::new(crate::intrinsic::TextIntrinsic::from_text(t))),
+        Text(t) => Some(Arc::new(
+            crate::intrinsic::TextIntrinsic::from_text_for_viewport(t, viewport),
+        )),
         GradientText(t) => Some(Arc::new(
-            crate::intrinsic::GradientTextIntrinsic::from_gradient_text(t),
+            crate::intrinsic::GradientTextIntrinsic::from_gradient_text_for_viewport(t, viewport),
         )),
-        Caption(c) => Some(Arc::new(crate::intrinsic::CaptionIntrinsic::from_caption(
-            c,
-        ))),
-        Kbd(k) => Some(Arc::new(crate::intrinsic::KbdIntrinsic::from_kbd(k))),
-        Counter(c) => Some(Arc::new(crate::intrinsic::CounterIntrinsic::from_counter(
-            c,
-        ))),
+        Caption(c) => Some(Arc::new(
+            crate::intrinsic::CaptionIntrinsic::from_caption_for_viewport(c, viewport),
+        )),
+        Kbd(k) => Some(Arc::new(
+            crate::intrinsic::KbdIntrinsic::from_kbd_for_viewport(k, viewport),
+        )),
+        Counter(c) => Some(Arc::new(
+            crate::intrinsic::CounterIntrinsic::from_counter_for_viewport(c, viewport),
+        )),
         NumberWheel(w) => Some(Arc::new(
-            crate::intrinsic::NumberWheelIntrinsic::from_number_wheel(w),
+            crate::intrinsic::NumberWheelIntrinsic::from_number_wheel_for_viewport(w, viewport),
         )),
-        Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
+        Badge(b) => Some(Arc::new(
+            crate::intrinsic::BadgeIntrinsic::from_badge_for_viewport(b, viewport),
+        )),
         Terminal(t) => Some(Arc::new(
-            crate::intrinsic::TerminalIntrinsic::from_terminal(t),
+            crate::intrinsic::TerminalIntrinsic::from_terminal_for_viewport(t, viewport),
         )),
-        Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
+        Table(t) => Some(Arc::new(
+            crate::intrinsic::TableIntrinsic::from_table_for_viewport(t, viewport),
+        )),
         Codeblock(c) => Some(Arc::new(
-            crate::intrinsic::CodeblockIntrinsic::from_codeblock(c),
+            crate::intrinsic::CodeblockIntrinsic::from_codeblock_for_viewport(c, viewport),
         )),
         // M2: rich_text had no intrinsic measurer at all, so it laid out
         // 0×0 and rendered nothing unless the author guessed an explicit
         // width/height.
         RichText(rt) => Some(Arc::new(
-            crate::intrinsic::RichTextIntrinsic::from_rich_text(rt),
+            crate::intrinsic::RichTextIntrinsic::from_rich_text_for_viewport(rt, viewport),
         )),
         _ => None,
     }
@@ -1224,6 +1236,7 @@ fn container_children<'a>(
     inherited_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
 ) -> Vec<BoxNode> {
     let (children, stagger, child_scale, child_offset): (&[ChildComponent], Option<f32>, f64, f64) =
         match component {
@@ -1290,6 +1303,7 @@ fn container_children<'a>(
             inherited_delay + j as f64 * step,
             child_remap,
             parent_css,
+            viewport,
         ));
     }
     result
@@ -2557,6 +2571,54 @@ mod tests {
         assert_eq!(l.y, 30.0);
         assert_eq!(l.width, 100.0);
         assert_eq!(l.height, 80.0);
+    }
+
+    #[test]
+    fn text_intrinsic_measures_vw_against_the_real_viewport_not_1920x1080() {
+        use rustmotion_core::engine::box_tree::AvailableSpace;
+
+        let text = Component::Text(crate::text::Text {
+            content: "WWWWWWWWWW".into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(rustmotion_core::css::Length::String("5vw".into())),
+                white_space: Some(rustmotion_core::css::style::WhiteSpace::Nowrap),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
+        });
+        let scene = vec![ChildComponent {
+            component: text,
+            position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
+            x: None,
+            y: None,
+            z_index: None,
+            bleed: false,
+        }];
+        let built = build_scene(&scene, (3840.0, 2160.0));
+        let node = &built.root.children[0];
+        let intrinsic = node
+            .intrinsic
+            .as_ref()
+            .expect("text carries an intrinsic measurer");
+        let (natural_w, _) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        assert!(
+            natural_w > 1000.0,
+            "expected 5vw on a 3840-wide viewport to resolve to a 192px font-size \
+             (natural width of ten 'W' glyphs > 1000px), got {natural_w} — intrinsic \
+             measurement is still using the hardcoded 1920x1080 fallback"
+        );
     }
 
     #[test]
