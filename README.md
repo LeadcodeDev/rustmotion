@@ -21,57 +21,60 @@ cargo install rustmotion
 Generate and install completions for your shell:
 
 ```bash
+# Or let rustmotion install completions for your current shell automatically:
+rustmotion completions install
+
 # Zsh (add to ~/.zshrc)
-rustmotion completions zsh > ~/.zfunc/_rustmotion
+rustmotion completions generate zsh > ~/.zfunc/_rustmotion
 # then add to .zshrc:  fpath=(~/.zfunc $fpath) && autoload -Uz compinit && compinit
 
 # Or one-liner for Oh My Zsh:
-rustmotion completions zsh > ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/rustmotion/_rustmotion
+rustmotion completions generate zsh > ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/rustmotion/_rustmotion
 
 # Bash (add to ~/.bashrc)
-rustmotion completions bash > ~/.local/share/bash-completion/completions/rustmotion
+rustmotion completions generate bash > ~/.local/share/bash-completion/completions/rustmotion
 
 # Fish
-rustmotion completions fish > ~/.config/fish/completions/rustmotion.fish
+rustmotion completions generate fish > ~/.config/fish/completions/rustmotion.fish
 ```
 
 ## Quick Start
 
 ```bash
 # Render a video
-rustmotion render scenario.json -o video.mp4
+rustmotion render -f scenario.json -o video.mp4
 
 # Render with a specific codec
-rustmotion render scenario.json -o video.webm --codec vp9 --crf 30
+rustmotion render -f scenario.json -o video.webm --codec vp9 --crf 30
 
 # Export as PNG sequence
-rustmotion render scenario.json -o frames/ --format png-seq
+rustmotion render -f scenario.json -o frames/ --format png-seq
 
 # Export as animated GIF
-rustmotion render scenario.json -o output.gif --format gif
+rustmotion render -f scenario.json -o output.gif --format gif
 
 # Render a single frame for preview
-rustmotion render scenario.json --frame 42 -o frame.png
+rustmotion render -f scenario.json --frame 42 -o frame.png
 
 # Validate without rendering
-rustmotion validate scenario.json
+rustmotion validate -f scenario.json
 
 # Export JSON Schema (for editor autocompletion or LLM prompts)
 rustmotion schema -o schema.json
 
 # Show scenario info
-rustmotion info scenario.json
+rustmotion info -f scenario.json
 ```
 
 ## Claude Code Skills
 
-rustmotion ships with built-in [Claude Code](https://claude.ai/claude-code) skills — 30 rules and best practices for generating video scenarios with AI. After installing rustmotion, run:
+rustmotion ships with built-in [Claude Code](https://claude.ai/claude-code) skills — 57 rules and best practices for generating video scenarios with AI. After installing rustmotion, run:
 
 ```bash
 # Install skills in your video project (recommended)
 cd my-video-project/
 rustmotion skills install
-# → .claude/skills/rustmotion/  (SKILL.md + 29 rules)
+# → .claude/skills/rustmotion/  (SKILL.md + 57 rules)
 # → CLAUDE.md                   (project instructions)
 
 # Or install globally (available in all projects)
@@ -190,7 +193,7 @@ rustmotion schema -o schema.json
 Shows information about a scenario (duration, scene count, dimensions, ...).
 
 ```bash
-rustmotion info scenario.json
+rustmotion info -f scenario.json
 ```
 
 ### `rustmotion skills`
@@ -235,7 +238,7 @@ Generates or installs shell completions — `install`, `uninstall`, `generate <s
 | `fps` | `u32` | `30` | Frames per second |
 | `background` | `string` | `"#000000"` | Default background color (hex) |
 | `codec` | `string` | | Accepted by the schema (`h264`, `h265`, `vp9`, `prores`) but not yet read by the encoder — set the codec with `render --codec`/`batch --codec` instead |
-| `crf` | `u8` | `23` | Constant Rate Factor (0-51, lower = better quality) |
+| `crf` | `u8` | | Accepted by the schema but not read by `render`/`still`/`batch` — only `rustmotion-studio`'s export reads it. From the CLI, set quality with `render --crf`/`batch --crf` instead |
 
 ### Audio Tracks
 
@@ -450,7 +453,7 @@ Config entries not listed in overrides keep their default values. Referencing an
 
 ### Standalone rendering
 
-When rendering a structural component directly (`rustmotion render components/outro.json`), all default values are applied automatically.
+When rendering a structural component directly (`rustmotion render -f components/outro.json`), all default values are applied automatically.
 
 ---
 
@@ -534,7 +537,7 @@ Without `swap`, the labels cut over at each `at`. The box is measured for the **
 | `text-align` | `enum` | `"left"` | `"left"`, `"center"`, `"right"` |
 | `line-height` | `f32` | | Line height multiplier |
 | `letter-spacing` | `f32` | | Additional spacing between characters |
-| `text-shadow` | `object` | | `{ "color": "#000", "offset_x": 2, "offset_y": 2, "blur": 4 }` |
+| `text-shadow` | `array` | | `[{ "color": "#000", "offset-x": 2, "offset-y": 2, "blur": 4 }]` (array of shadows, kebab-case keys) |
 | `stroke` | `object` | | `{ "color": "#000", "width": 2 }` |
 | `text-background` | `object` | | `{ "color": "#000", "padding": 4, "corner_radius": 4 }` |
 
@@ -546,22 +549,26 @@ Without `swap`, the labels cut over at each `at`. The box is measured for the **
 {
   "type": "shape",
   "shape": "rounded_rect",
-  "size": { "width": 300, "height": 200 },
+  "fill": "#3b82f6",
+  "stroke": { "color": "#ffffff", "width": 2 },
   "style": {
-    "fill": "#3b82f6",
+    "width": 300,
+    "height": 200,
     "border-radius": 16,
-    "stroke": { "color": "#ffffff", "width": 2 },
     "animation": [{ "name": "scale_in", "duration": 0.6 }]
   }
 }
 ```
 
-**Root fields:** `shape` (required), `size`, `text`
+**Root fields:** `shape` (required), `fill`, `stroke`, `text`. There is no root `size` field — set dimensions via `style.width`/`style.height` like any other component.
 
-| Style field | Type | Default | Description |
+| Root field | Type | Default | Description |
 |---|---|---|---|
 | `fill` | `string \| gradient` | | Fill color (hex) or gradient object |
 | `stroke` | `{color, width}` | | Stroke outline |
+
+| Style field | Type | Default | Description |
+|---|---|---|---|
 | `border-radius` | `f32` | | Corner radius (for `rounded_rect`) |
 
 **Shape types:** `rect`, `circle`, `rounded_rect`, `ellipse`, `triangle`, `star` (with `points`, default 5), `polygon` (with `sides`, default 6), `path` (with `data` SVG path string)
@@ -585,8 +592,8 @@ Types: `linear`, `radial`.
 {
   "type": "shape",
   "shape": "circle",
-  "size": { "width": 56, "height": 56 },
-  "style": { "fill": "#2A74FF" },
+  "fill": "#2A74FF",
+  "style": { "width": 56, "height": 56 },
   "text": {
     "content": "1",
     "font_size": 22,
@@ -608,9 +615,10 @@ Types: `linear`, `radial`.
 {
   "type": "image",
   "src": "photo.png",
-  "size": { "width": 1080, "height": 1080 },
   "fit": "cover",
   "style": {
+    "width": 1080,
+    "height": 1080,
     "animation": [{ "name": "fade_in", "duration": 0.5 }]
   }
 }
@@ -619,8 +627,9 @@ Types: `linear`, `radial`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `src` | `string` | (required) | Path to image file (PNG, JPEG, WebP) |
-| `size` | `{width, height}` | | Target size (uses native image size if omitted) |
 | `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"`, `"none"` |
+
+There is no root `size` field. Target size is set via `style.width`/`style.height` (uses native image size if omitted).
 
 ---
 
@@ -630,7 +639,7 @@ Types: `linear`, `radial`.
 {
   "type": "svg",
   "src": "logo.svg",
-  "size": { "width": 200, "height": 200 }
+  "style": { "width": 200, "height": 200 }
 }
 ```
 
@@ -647,9 +656,8 @@ Or with inline SVG:
 |---|---|---|---|
 | `src` | `string` | | Path to `.svg` file |
 | `data` | `string` | | Inline SVG markup |
-| `size` | `{width, height}` | | Target size (uses SVG intrinsic size if omitted) |
 
-One of `src` or `data` is required.
+One of `src` or `data` is required. There is no root `size` field — target size is set via `style.width`/`style.height` (uses SVG intrinsic size if omitted).
 
 ---
 
@@ -663,17 +671,15 @@ Browse all available icons at [icon-sets.iconify.design](https://icon-sets.iconi
 {
   "type": "icon",
   "icon": "lucide:home",
-  "size": { "width": 64, "height": 64 },
-  "style": { "color": "#38bdf8" }
+  "style": { "width": 64, "height": 64, "color": "#38bdf8" }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `icon` | `string` | (required) | Iconify identifier `"prefix:name"` (e.g. `"lucide:home"`, `"mdi:account"`) |
-| `size` | `{width, height}` | `24x24` | Icon size in pixels |
 
-Style: `color` (default `"#FFFFFF"`)
+There is no root `size` field. Style: `width`/`height` (default `24x24`), `color` (default `"#FFFFFF"`)
 
 **Common icon sets:**
 
@@ -697,25 +703,26 @@ Embeds a video clip as a component. Requires `ffmpeg` on PATH.
 {
   "type": "video",
   "src": "clip.mp4",
-  "size": { "width": 1080, "height": 1920 },
   "trim_start": 2.0,
   "trim_end": 8.0,
   "playback_rate": 0.5,
   "fit": "cover",
-  "volume": 0.0
+  "volume": 0.0,
+  "style": { "width": 1080, "height": 1920 }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `src` | `string` | (required) | Path to video file |
-| `size` | `{width, height}` | (required) | Display size |
 | `trim_start` | `f64` | `0.0` | Start offset in the source clip (seconds) |
 | `trim_end` | `f64` | | End offset in the source clip (seconds) |
 | `playback_rate` | `f64` | `1.0` | Playback speed (0.5 = half speed, 2.0 = double) |
 | `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"` |
 | `volume` | `f32` | `1.0` | Audio volume (0.0 = mute) |
 | `loop_video` | `bool` | | Loop the clip |
+
+There is no root `size` field — display size is set via `style.width`/`style.height`.
 
 ---
 
@@ -727,17 +734,18 @@ Displays an animated GIF, synced to the scene timeline.
 {
   "type": "gif",
   "src": "animation.gif",
-  "size": { "width": 300, "height": 300 },
-  "fit": "cover"
+  "fit": "cover",
+  "style": { "width": 300, "height": 300 }
 }
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `src` | `string` | (required) | Path to `.gif` file |
-| `size` | `{width, height}` | | Display size (uses GIF native size if omitted) |
 | `fit` | `string` | `"cover"` | `"cover"`, `"contain"`, `"fill"` |
 | `loop_gif` | `bool` | `true` | Loop the GIF animation |
+
+There is no root `size` field — display size is set via `style.width`/`style.height` (uses GIF native size if omitted).
 
 ---
 
@@ -816,8 +824,8 @@ Container that places children at fixed absolute coordinates (like Flutter's `St
 {
   "type": "positioned",
   "children": [
-    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "size": { "width": 400, "height": 300 }, "style": { "fill": "#1E293B", "border-radius": 16 } },
-    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "size": { "width": 64, "height": 64 }, "style": { "color": "#FFFFFF" } }
+    { "type": "shape", "shape": "rect", "position": { "x": 0, "y": 0 }, "fill": "#1E293B", "style": { "width": 400, "height": 300, "border-radius": 16 } },
+    { "type": "icon", "icon": "lucide:phone-off", "position": { "x": 170, "y": 120 }, "style": { "width": 64, "height": 64, "color": "#FFFFFF" } }
   ]
 }
 ```
@@ -833,38 +841,40 @@ Use `container` instead of `card` when you don't need background, border, or sha
 ```json
 {
   "type": "container",
-  "size": { "width": "auto", "height": "auto" },
   "style": {
+    "width": "auto",
+    "height": "auto",
     "align-items": "center",
-    "gap": 36,
-    "timeline": [
-      { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
-        { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
-        { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
-      ]}]}
-    ]
+    "gap": 36
   },
+  "timeline": [
+    { "at": 3.5, "animation": [{ "name": "keyframes", "keyframes": [
+      { "property": "scale", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.8, "value": 4 }], "easing": "ease_in" },
+      { "property": "opacity", "keyframes": [{ "time": 0, "value": 1 }, { "time": 0.7, "value": 0 }], "easing": "ease_in" }
+    ]}]}
+  ],
   "children": [
-    { "type": "icon", "icon": "lucide:zap", "size": { "width": 80, "height": 80 }, "style": { "color": "#25D366" } },
+    { "type": "icon", "icon": "lucide:zap", "style": { "width": 80, "height": 80, "color": "#25D366" } },
     { "type": "text", "content": "All children scale together", "style": { "font-size": 48, "color": "#FFFFFF" } }
   ]
 }
 ```
 
-Supports all flex layout properties (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`) and all style properties (`animation`, `timeline`, `opacity`, `margin`). No `background`, `border`, `box-shadow`, or clipping — children can overflow freely.
+Supports all flex layout properties (`flex-direction`, `align-items`, `justify-content`, `gap`, `padding`) and all style properties (`opacity`, `margin`). No `background`, `border`, `box-shadow`, or clipping — children can overflow freely. `animation` is a `style` property; `timeline` is a root field, not nested under `style` (`CssStyle` has no `timeline` key).
 
 ---
 
 ### Card / Flex
 
-Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. Each dimension of `size` can be a number or `"auto"`.
+Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`. There is no root `size` field — dimensions are set via `style.width`/`style.height`, each of which can be a number or `"auto"`.
 
 **Flex example:**
 ```json
 {
   "type": "card",
-  "size": { "width": 800, "height": "auto" },
   "style": {
+    "width": 800,
+    "height": "auto",
     "flex-direction": "row",
     "align-items": "center",
     "gap": 16,
@@ -874,7 +884,7 @@ Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`
     "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
   },
   "children": [
-    { "type": "icon", "icon": "lucide:check-circle", "size": { "width": 48, "height": 48 }, "style": { "color": "#22C55E" } },
+    { "type": "icon", "icon": "lucide:check-circle", "style": { "width": 48, "height": 48, "color": "#22C55E" } },
     { "type": "text", "content": "Feature enabled", "style": { "font-size": 32, "color": "#FFFFFF" } }
   ]
 }
@@ -884,11 +894,12 @@ Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`
 ```json
 {
   "type": "card",
-  "size": { "width": 600, "height": 400 },
   "style": {
+    "width": 600,
+    "height": 400,
     "display": "grid",
-    "grid-template-columns": [{ "fr": 1 }, { "fr": 1 }],
-    "grid-template-rows": [{ "fr": 1 }, { "fr": 1 }],
+    "grid-template-columns": [1, 1],
+    "grid-template-rows": [1, 1],
     "gap": 16,
     "padding": 24,
     "background": "#1a1a2e"
@@ -910,14 +921,14 @@ Visual container with CSS-like flex & grid layout. `flex` is an alias for `card`
 | `background` | `string` | | Background color (hex) |
 | `border-radius` | `f32` | `12.0` | Corner radius |
 | `border` | `object` | | `{ "color": "#E5E7EB", "width": 1 }` |
-| `box-shadow` | `object` | | `{ "color": "#00000040", "offset_x": 0, "offset_y": 4, "blur": 12 }` |
+| `box-shadow` | `array` | | `[{ "color": "#00000040", "offset-x": 0, "offset-y": 4, "blur": 12 }]` (array of shadows, kebab-case keys) |
 | `padding` | `f32 \| object` | | Inner spacing |
 | `flex-direction` | `enum` | `"column"` | `"column"`, `"row"`, `"column_reverse"`, `"row_reverse"` |
 | `flex-wrap` | `bool` | `false` | Wrap children to next line |
 | `align-items` | `enum` | `"start"` | `"start"`, `"center"`, `"end"`, `"stretch"` |
 | `justify-content` | `enum` | `"start"` | `"start"`, `"center"`, `"end"`, `"space_between"`, `"space_around"`, `"space_evenly"` |
 | `gap` | `f32` | `0` | Spacing between children |
-| `grid-template-columns` | `array` | | `[{"px": N}, {"fr": N}, "auto"]` |
+| `grid-template-columns` | `array` | | Each entry is a bare number (fraction, e.g. `1` = `1fr`), a length string (`"200px"`), or a keyword (`"auto"`, `"min-content"`, `"max-content"`) — e.g. `[1, 1, "200px"]` |
 | `grid-template-rows` | `array` | | Same format as columns |
 
 **Per-child layout properties** (in child `"style"`):
@@ -955,7 +966,7 @@ Code block with syntax highlighting, chrome, reveal animations, and animated dif
 }
 ```
 
-**Root fields:** `code` (required), `language`, `theme`, `size`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`
+**Root fields:** `code` (required), `language`, `theme`, `show_line_numbers`, `chrome`, `highlights`, `reveal`, `states`, `diff`, `auto_scroll`. There is no root `size` field — dimensions are set via `style.width`/`style.height`, like any other component.
 
 | Style field | Type | Default |
 |---|---|---|
@@ -1110,7 +1121,8 @@ Speech bubble with directional arrow.
 | `text` | `string` | (required) | Callout text |
 | `arrow_direction` | `enum` | `"bottom"` | `"top"`, `"bottom"`, `"left"`, `"right"` |
 | `arrow_size` | `f32` | `12.0` | Arrow triangle size |
-| `size` | `{width, height}` | | Fixed size (auto-sized if omitted) |
+
+There is no root `size` field — fixed dimensions are set via `style.width`/`style.height` (auto-sized if omitted).
 
 Style: `background` (default `"#333333"`), `color` (default `"#FFFFFF"`), `border-radius` (default `8`), `font-size` (default `16`), `font-family`
 
@@ -1130,7 +1142,7 @@ Terminal/console window with colored lines and optional chrome.
     { "text": "npm install", "line_type": "prompt" },
     { "text": "added 42 packages", "line_type": "output" }
   ],
-  "size": { "width": 600, "height": 300 }
+  "style": { "width": 600, "height": 300 }
 }
 ```
 
@@ -1141,7 +1153,8 @@ Terminal/console window with colored lines and optional chrome.
 | `title` | `string` | | Window title |
 | `show_chrome` | `bool` | `true` | Show title bar with traffic light dots |
 | `reveal` | `object` | | `{ "mode": "typewriter"\|"line_by_line", "start": 0, "duration": 1, "easing": "linear" }` |
-| `size` | `{width, height}` | | Terminal size (default 500x auto) |
+
+There is no root `size` field — terminal size is set via `style.width`/`style.height` (default 500x auto).
 
 **Line types:** `"prompt"` (shows `$ ` prefix in green), `"command"` (white text), `"output"` (gray text)
 
@@ -1161,8 +1174,7 @@ Data table with headers and styled rows.
     ["Alice", "Engineer", "Active"],
     ["Bob", "Designer", "Away"]
   ],
-  "size": { "width": 600, "height": 200 },
-  "style": { "color": "#FFFFFF", "font-size": 14 }
+  "style": { "width": 600, "height": 200, "color": "#FFFFFF", "font-size": 14 }
 }
 ```
 
@@ -1174,7 +1186,8 @@ Data table with headers and styled rows.
 | `row_colors` | `string[]` | `["#1F2937", "#111827"]` | Alternating row colors |
 | `border_color` | `string` | `"#4B5563"` | Grid line color |
 | `header_text_color` | `string` | `"#FFFFFF"` | Header text color |
-| `size` | `{width, height}` | | Table size |
+
+There is no root `size` field — table size is set via `style.width`/`style.height`.
 
 Style: `color` (default `"#FFFFFF"`) — cell text color, `font-size` (default `14`), `font-family`, `border-radius`
 
@@ -1194,7 +1207,7 @@ Data visualization with bar, line, or pie charts. Animated by default.
     { "value": 95, "label": "Q3" },
     { "value": 150, "label": "Q4" }
   ],
-  "size": { "width": 400, "height": 300 }
+  "style": { "width": 400, "height": 300 }
 }
 ```
 
@@ -1202,10 +1215,11 @@ Data visualization with bar, line, or pie charts. Animated by default.
 |---|---|---|---|
 | `chart_type` | `enum` | (required) | `"bar"`, `"line"`, `"pie"` |
 | `data` | `array` | (required) | `[{ "value", "label"?, "color"? }]` |
-| `size` | `{width, height}` | `300x200` | Chart size |
 | `animated` | `bool` | `true` | Animate chart fill/draw |
 | `animation_duration` | `f64` | `1.5` | Animation duration in seconds |
 | `colors` | `string[]` | | Custom color palette (hex) |
+
+There is no root `size` field — chart size is set via `style.width`/`style.height` (default `300x200`).
 
 Default palette: `#3B82F6`, `#EF4444`, `#22C55E`, `#F59E0B`, `#8B5CF6`, `#EC4899`, `#06B6D4`, `#F97316`
 
@@ -1221,7 +1235,7 @@ Device frame (phone, laptop, browser) with image content inside.
   "device": "iphone",
   "src": "screenshot.png",
   "theme": "dark",
-  "size": { "width": 375, "height": 812 }
+  "style": { "width": 375, "height": 812 }
 }
 ```
 
@@ -1230,7 +1244,8 @@ Device frame (phone, laptop, browser) with image content inside.
 | `device` | `enum` | (required) | `"iphone"`, `"android"`, `"laptop"`, `"browser"` |
 | `src` | `string` | (required) | Path to content image |
 | `theme` | `enum` | `"dark"` | `"dark"` or `"light"` bezel color |
-| `size` | `{width, height}` | | Device size (defaults: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600) |
+
+There is no root `size` field — device size is set via `style.width`/`style.height` (defaults: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600).
 
 ---
 
@@ -1373,9 +1388,9 @@ Renders Lottie animations from pre-rendered PNG frame sequences.
   "type": "lottie",
   "src": "animation.json",
   "frames_dir": "/path/to/frames",
-  "size": { "width": 300, "height": 300 },
   "speed": 1.0,
-  "loop": true
+  "loop": true,
+  "style": { "width": 300, "height": 300 }
 }
 ```
 
@@ -1384,9 +1399,10 @@ Renders Lottie animations from pre-rendered PNG frame sequences.
 | `src` | `string` | | Path to Lottie JSON (for timing metadata) |
 | `data` | `string` | | Inline Lottie JSON data |
 | `frames_dir` | `string` | | Directory with numbered PNGs (`0000.png`, `0001.png`, ...) |
-| `size` | `{width, height}` | | Display size (falls back to Lottie intrinsic size) |
 | `speed` | `f32` | `1.0` | Playback speed multiplier |
 | `loop` | `bool` | `true` | Loop the animation |
+
+There is no root `size` field — display size is set via `style.width`/`style.height` (falls back to Lottie intrinsic size).
 
 Generate frames with: `npx lottie-to-frames animation.json --output frames/`
 
@@ -1637,6 +1653,7 @@ When `transition` is specified, background properties interpolate smoothly from 
 {
   "duration": 5.0,
   "animated-background": {
+    "preset": "gradient_shift",
     "colors": ["#667eea", "#764ba2", "#f093fb"],
     "speed": 30,
     "gradient_type": "linear"
@@ -1645,12 +1662,14 @@ When `transition` is specified, background properties interpolate smoothly from 
 }
 ```
 
+`preset` is required — the empty/omitted value is rejected rather than silently defaulting to `gradient_shift`.
+
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `preset` | `string` | (required) | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"grid_lines"`, `"halo"`, `"pixel_grid"`, `"heropattern"` |
 | `colors` | `string[]` | `[]` | Gradient colors (hex) |
-| `speed` | `f32` | `30.0` | Animation speed |
+| `speed` | `f32` | `30.0` in this legacy flat form (see below); `0.0` (static) in the nested `{ "preset": "...", "<preset>": {...} }` form — set it explicitly either way | Animation speed |
 | `gradient_type` | `string` | `"linear"` | `"linear"` or `"radial"` |
-| `preset` | `string` | | `"gradient_shift"`, `"concentric_circles"`, `"grid_dots"`, `"grid_lines"`, `"halo"`, `"pixel_grid"`, `"heropattern"` |
 | `element_size` | `f32` | `4.0` | Dot size for grid_dots; stroke width for concentric_circles |
 | `spacing` | `f32` | `60.0` | Element spacing for grid_dots/concentric_circles |
 | `count` | `u32` | | Number of circles for concentric_circles (overrides spacing) |
@@ -1958,7 +1977,7 @@ Any component can be rendered with true 3D perspective using keyframe animations
 ```json
 {
   "style": {
-    "box-shadow": { "color": "#00000060", "offset_x": 0, "offset_y": 20, "blur": 60 },
+    "box-shadow": [{ "color": "#00000060", "offset-x": 0, "offset-y": 20, "blur": 60 }],
     "animation": [{
       "name": "keyframes",
       "keyframes": [
@@ -1980,16 +1999,16 @@ Define sequential animation phases within a single scene using the `timeline` fi
 ```json
 {
   "style": {
-    "animation": [{ "name": "fade_in_up", "duration": 0.6 }],
-    "timeline": [
-      { "at": 2.0, "animation": [{ "name": "shake", "duration": 0.5 }] },
-      { "at": 4.0, "animation": [{ "name": "fade_out", "duration": 0.8 }] }
-    ]
-  }
+    "animation": [{ "name": "fade_in_up", "duration": 0.6 }]
+  },
+  "timeline": [
+    { "at": 2.0, "animation": [{ "name": "shake", "duration": 0.5 }] },
+    { "at": 4.0, "animation": [{ "name": "fade_out", "duration": 0.8 }] }
+  ]
 }
 ```
 
-Each step activates at `step.at` seconds, with animations resolved relative to that time. Steps merge additively with base animations.
+Each step activates at `step.at` seconds, with animations resolved relative to that time. Steps merge additively with base animations. `timeline` is a root field on the component, not nested under `style` (`CssStyle` has no `timeline` key).
 
 ### Motion Blur
 
@@ -2011,14 +2030,14 @@ Renders multiple sub-frames and composites them for physically-correct motion bl
 
 | Format | Command | Requires |
 |---|---|---|
-| **MP4 (H.264 10-bit)** | `rustmotion render in.json -o out.mp4` | ffmpeg (auto-detected) |
-| **MP4 (H.264 8-bit)** | `rustmotion render in.json -o out.mp4` | Built-in (fallback without ffmpeg) |
-| **MP4 (H.265)** | `rustmotion render in.json -o out.mp4 --codec h265` | ffmpeg |
-| **WebM (VP9)** | `rustmotion render in.json -o out.webm --codec vp9` | ffmpeg |
-| **MOV (ProRes)** | `rustmotion render in.json -o out.mov --codec prores` | ffmpeg |
-| **Animated GIF** | `rustmotion render in.json -o out.gif --format gif` | Built-in |
-| **PNG Sequence** | `rustmotion render in.json -o frames/ --format png-seq` | Built-in |
-| **Single Frame** | `rustmotion render in.json --frame 0 -o preview.png` | Built-in |
+| **MP4 (H.264 10-bit)** | `rustmotion render -f in.json -o out.mp4` | ffmpeg (auto-detected) |
+| **MP4 (H.264 8-bit)** | `rustmotion render -f in.json -o out.mp4` | Built-in (fallback without ffmpeg) |
+| **MP4 (H.265)** | `rustmotion render -f in.json -o out.mp4 --codec h265` | ffmpeg |
+| **WebM (VP9)** | `rustmotion render -f in.json -o out.webm --codec vp9` | ffmpeg |
+| **MOV (ProRes)** | `rustmotion render -f in.json -o out.mov --codec prores` | ffmpeg |
+| **Animated GIF** | `rustmotion render -f in.json -o out.gif --format gif` | Built-in |
+| **PNG Sequence** | `rustmotion render -f in.json -o frames/ --format png-seq` | Built-in |
+| **Single Frame** | `rustmotion render -f in.json --frame 0 -o preview.png` | Built-in |
 
 Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), and ProRes 4444.
 
@@ -2045,13 +2064,14 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
         {
           "type": "shape",
           "shape": "rounded_rect",
-          "size": { "width": 900, "height": 520 },
+          "fill": {
+            "type": "linear",
+            "colors": ["#6366f1", "#8b5cf6"],
+            "angle": 135
+          },
           "style": {
-            "fill": {
-              "type": "linear",
-              "colors": ["#6366f1", "#8b5cf6"],
-              "angle": 135
-            },
+            "width": 900,
+            "height": 520,
             "border-radius": 32,
             "animation": [{ "name": "scale_in", "duration": 0.6 }]
           }
@@ -2059,8 +2079,9 @@ Transparency is supported with `--transparent` for PNG sequences, WebM (VP9), an
         {
           "type": "icon",
           "icon": "lucide:rocket",
-          "size": { "width": 80, "height": 80 },
           "style": {
+            "width": 80,
+            "height": 80,
             "color": "#FFFFFF",
             "animation": [{ "name": "fade_in_up", "delay": 0.3, "duration": 0.6 }]
           }
@@ -2137,7 +2158,7 @@ pub trait Painter {
 }
 ```
 
-`PaintCtx` carries `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
+`PaintCtx` carries `time`, `scenario_time` (elapsed since the scenario/view started — what audio-reactive painters index on, since `time` resets at each scene), `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
 
 ### Workspace layout
 
@@ -2147,7 +2168,7 @@ crates/
 │   ├── css/            # CssStyle, units, cascade, taffy bridge, animation resolution
 │   ├── engine/          # box_tree, layout_pass, paint_pass, animator, transitions, Skia primitives
 │   ├── schema/          # Scenario, Scene, VideoConfig, style, background, animation, codeblock models
-│   └── traits/          # Painter, Animatable, Timed, Styled
+│   └── traits/          # Painter, Animatable, Timed, Styled, + 7 more (11 files total)
 ├── rustmotion-components/src/
 │   ├── lib.rs            # `Component` enum (60 variants) + dispatch (as_painter, as_animatable, ...)
 │   ├── box_builder.rs    # JSON components → BuiltScene (box tree + stagger delays)

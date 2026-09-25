@@ -27,6 +27,6 @@ rustmotion validate -f /tmp/scenario.json --strict-anim     # per-frame checks
 rustmotion validate -f /tmp/scenario.json --lenient         # warnings only
 ```
 
-`--fix` handles the two mechanical cases: it sets `auto_scroll: true` on `auto_scroll_disabled_overflow`, and removes `style.white-space` on `unwrappable_text_overflow` (falling back to the `normal` default, i.e. wrapping). Viewport and content-box overflows are never auto-fixed — they need a layout decision only you can make.
+`--fix` handles three mechanical cases: it sets `auto_scroll: true` on `auto_scroll_disabled_overflow`; it removes `style.white-space` on `unwrappable_text_overflow` (falling back to the `normal` default, i.e. wrapping); and on `content_overflows_box` for `text`/`gradient_text` specifically, it sets `style.text-autofit: true`, which shrinks the font until the content fits (down to a calibrated readability floor — if that's not enough, the violation is still reported). `content_overflows_box` on every other component, and every `viewport_overflow`, is never auto-fixed — those need a layout decision only you can make. Do not hand-resize a box `--fix` would have handled instead; but also don't reach for `text-autofit` to paper over a layout you could simply size correctly — it's for content whose length you can't know ahead of time.
 
 **FORBIDDEN:** Presenting JSON that has not been validated by `rustmotion validate`.

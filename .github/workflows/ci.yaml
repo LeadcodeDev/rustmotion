@@ -72,16 +72,21 @@ jobs:
       #   RUSTSEC-2026-0204 — crossbeam-epoch 0.9.18, invalid pointer deref in `fmt::Pointer`.
       #     Via rayon-core <- exr <- image, reaches rustmotion-core/-components. Fix: >=0.9.20.
       #   RUSTSEC-2026-0195, RUSTSEC-2026-0194 — quick-xml 0.38.4 / 0.39.4, DoS + quadratic runtime.
-      #     0.38.4 via syntect reaches the published crates; 0.39.4 via dioxus-desktop/rfd is
-      #     rustmotion-studio-only (Linux/Wayland file dialogs). Fix: >=0.41.0.
+      #     0.38.4 reaches the published crates via syntect -> plist. 0.39.4 is
+      #     rustmotion-studio-only (Linux/Wayland), via wayland-client/wayland-protocols* ->
+      #     wayland-scanner, themselves pulled in by rfd (file dialogs) and gpui-pre-linux
+      #     (window backend) — not dioxus-desktop, which is no longer a dependency since the
+      #     gpui-kit migration. Fix: >=0.41.0 (a third, already-fixed instance is in the tree
+      #     today via `xcb`).
       #   RUSTSEC-2026-0285 — rustls 0.23.37, TLS 1.3 handshake level-boundary bug.
       #     Via ureq, used by rustmotion/rustmotion-core for Google Fonts + Iconify fetches. Fix: >=0.23.45.
       #   RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0049 — rustls-webpki
       #     0.103.9, four CRL/name-constraint parsing bugs. Same ureq path as rustls above.
       #     Fix: >=0.103.13,<0.104.0-alpha.1 (or the matching 0.104 alpha per advisory).
       #   RUSTSEC-2026-0257 — webbrowser 1.2.1, BROWSER env argument injection on Unix.
-      #     Via dioxus-desktop, rustmotion-studio only (`publish = false`, never reaches a published
-      #     crate). Fix: >=1.2.2.
+      #     `webbrowser` is no longer in Cargo.lock at all (it left with dioxus-desktop during the
+      #     gpui-kit migration) — this --ignore is currently inert. Left in rather than dropped
+      #     silently: re-verify before removing, in case something reintroduces the crate.
       - name: Audit dependencies
         run: >
           cargo audit

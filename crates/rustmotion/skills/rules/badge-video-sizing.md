@@ -22,11 +22,11 @@
   "type": "badge",
   "text": "Premier plan",
   "icon": "lucide:zap",
-  "color": "#6366F1",
   "position": "absolute",
   "x": 270,
   "y": 580,
   "style": {
+    "background": "#6366F1",
     "font-size": 40,
     "z-index": 2,
     "box-shadow": [{ "color": "#6366F1A0", "offset-y": 0, "blur": 60 }],

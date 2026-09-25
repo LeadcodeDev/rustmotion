@@ -15,10 +15,11 @@ Dark gradients are prone to color banding (visible steps instead of smooth trans
 | General use | Default H.264 10-bit (requires ffmpeg) |
 | No ffmpeg available | Built-in openh264 (8-bit, may show banding on dark gradients) |
 
-**GOOD:** Use `gradient_type: "radial"` with at least 3 colors for smooth transitions:
+**GOOD:** Use `gradient_type: "radial"` with at least 3 colors for smooth transitions. `preset` is required — the empty/omitted value is rejected rather than silently defaulting to `gradient_shift`:
 ```json
 {
   "background": {
+    "preset": "gradient_shift",
     "colors": ["#0f172a", "#1e1b4b", "#0f172a"],
     "speed": 20,
     "gradient_type": "radial"
@@ -30,7 +31,7 @@ Or use a named template with `$ref` for reuse across scenes:
 ```json
 {
   "backgrounds": {
-    "dark_radial": { "colors": ["#0f172a", "#1e1b4b", "#0f172a"], "speed": 20, "gradient_type": "radial" }
+    "dark_radial": { "preset": "gradient_shift", "colors": ["#0f172a", "#1e1b4b", "#0f172a"], "speed": 20, "gradient_type": "radial" }
   },
   "scenes": [
     { "duration": 5, "background": { "$ref": "dark_radial" } }
@@ -42,6 +43,7 @@ Or use a named template with `$ref` for reuse across scenes:
 ```json
 {
   "background": {
+    "preset": "gradient_shift",
     "colors": ["#0a0a0a", "#0b0b0b"],
     "gradient_type": "radial"
   }

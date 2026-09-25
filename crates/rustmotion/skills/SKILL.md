@@ -5,11 +5,26 @@ metadata:
   tags: motion, video, rust, animation, composition
 ---
 
-# Skill: Generate rustmotion JSON Scenarios
+# Skill: Generate rustmotion Scenarios (JSON or HTML)
 
 ## What is rustmotion?
 
-rustmotion is a CLI tool that renders motion design videos from JSON scenario files. It uses Skia for 2D rendering and supports MP4, WebM, MOV, GIF, and PNG sequence outputs.
+rustmotion is a CLI tool that renders motion design videos from scenario files. It uses Skia for 2D rendering and supports MP4, WebM, MOV, GIF, and PNG sequence outputs. Two authoring formats exist and both compile to the same engine: **JSON**, which reaches every component and every field, and an **HTML dialect** (`rustmotion-html`), a thin transpiler for authors who find tags and `style="..."` strings more natural — at the cost of real, structural gaps (see below).
+
+## Output format: ask before writing anything
+
+This is the first decision, before any other question and before any file is written.
+
+1. **The user already named a format** ("write it in HTML", "give me JSON", "use rustmotion-html") → use that, skip the question.
+2. **The request obviously needs something the HTML dialect cannot express** → skip the question, use JSON, and don't offer HTML at all (offering a format that can't do the job is worse than not offering a choice). It cannot express, at all:
+   - Any component field that is an array or object of structured data beyond `style`/`anim` — `chart` (all 12 types), `table`, `list`, `stepper`, the `timeline` *component*, `tag_cloud`, `avatar_group`, `pill_nav`, `sparkline`/`stat`/`heatmap`/`treemap`/`dot_map`'s data arrays, and the per-component `timeline` field (state-transition steps) on any of the 60 components.
+   - Structured CSS: `box-shadow`, `text-shadow`, `transform`, `filter`/`backdrop-filter`, `border` as an object, `clip-path`, gradients (`fill`/`background` as a gradient object), `font-family` stacks, `grid-column`/`grid-row` span objects, `transition`. Only flat scalar style properties survive inline `style="..."` — `padding`/`margin`/`border-radius` get the CSS 1–4-value shorthand, `grid-template-columns`/`-rows` accept a track list, everything else rejects a multi-token value outright.
+   - `audio` tracks — so `waveform`, `audio_spectrum`, and `style.audio-reactive` are dead in HTML (nothing to bind to).
+   - `composition`/`world` views — `world-position` parses but is inert; the HTML dialect only ever emits a flat `scenes` list (one implicit `slide` view).
+   - Root-level `config`/variables, named `backgrounds` templates, `version`.
+3. **Otherwise** — plain layout, text, icons, images, simple flat-color shapes, basic entrance animations — ask once with `AskUserQuestion`: *"Scenario format: JSON (full component set, arrays/objects, charts, audio, world views) or HTML (tags + `style=`, quicker to hand-edit, but flat/scalar styling only and no data-viz/audio/world components)?"* Default to JSON if the answer is unclear — it is the format every rule in this file is written against, and it never has a capability gap to work around.
+
+If HTML is chosen, see [rules/html-dialect.md](rules/html-dialect.md) for the tag/attribute syntax, the compact `anim` DSL, and the full list of footguns (silent-`div`-on-typo, whitespace significance, the missing-colon-drops-the-declaration trap, no inline text formatting). Every other rule in this file that shows a JSON snippet still describes the right component, field, and value — translate it through that syntax reference rather than treating the two formats as needing separate design rules.
 
 ## Quick Reference
 
@@ -39,6 +54,8 @@ rustmotion schema                                   # Print JSON Schema
 ---
 
 ## Mental Model: Think HTML/CSS, not canvas
+
+This is a way of *thinking about the JSON schema* — not the real `rustmotion-html` dialect covered in [rules/html-dialect.md](rules/html-dialect.md). It applies whichever format you're actually writing.
 
 Rustmotion's JSON API is a direct superset of HTML/CSS. When composing a scene, **think "how would I write this in HTML/CSS?" first** — then translate. Do not think in terms of pixel coordinates; think in terms of flow, flex, and grid.
 
@@ -215,7 +232,8 @@ For each scene in the validated plan:
 
 Read individual rule files for detailed explanations, GOOD/BAD examples, and constraints:
 
-- [rules/html-css-mental-model.md](rules/html-css-mental-model.md) - **CRITICAL:** Think HTML/CSS — flow layout first, absolute only for decorative/overlay elements
+- [rules/html-dialect.md](rules/html-dialect.md) - **CRITICAL:** The real `rustmotion-html` tag/attribute syntax, when it can and can't express what's being asked, and the ask-the-user gate before generation starts
+- [rules/html-css-mental-model.md](rules/html-css-mental-model.md) - **CRITICAL:** Think HTML/CSS — flow layout first, absolute only for decorative/overlay elements (this is a JSON *mental model*, not the HTML dialect above — see the distinction in rules/html-dialect.md)
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
@@ -266,7 +284,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 ### Architecture (pour contribuer au code)
 
 - [rules/paint-context.md](rules/paint-context.md) - Painter trait API: paint_content(canvas, layout, props, ctx) — remplace l'ancien Widget
-- [rules/module-structure.md](rules/module-structure.md) - Structure des crates: rustmotion-core (css/, engine/, traits/) + rustmotion-components (57 composants)
+- [rules/module-structure.md](rules/module-structure.md) - Structure des crates: rustmotion-core (css/, engine/, traits/) + rustmotion-components (60 composants)
 
 ---
 
@@ -733,7 +751,7 @@ Config types: `string`, `number`, `boolean`, `object`, `array`. Omitted override
 { "type": "fade", "duration": 0.5 }
 ```
 
-**15 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `corner_reveal`, `pixel_dissolve`, `none`
+**17 types:** `fade`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `zoom_in`, `zoom_out`, `flip`, `clock_wipe`, `iris`, `slide`, `dissolve`, `corner_reveal`, `pixel_dissolve`, `camera_pan`, `chromatic_wipe`, `none`
 
 `corner_reveal` uncovers the incoming scene through a rectangle anchored at one
 corner: two edges stay pinned to the frame, the other two travel until it fills.
@@ -770,7 +788,7 @@ Default duration: `0.5` seconds.
 
 ### Component Types
 
-The engine has **57** component types total (`Component` enum, `crates/rustmotion-components/src/lib.rs:194-254`). The catalog below has a dedicated write-up with a JSON example for most of them; the rest are containers (`card`/`flex`, `div`, `grid`, `positioned`) covered in the "Mental Model: Think HTML/CSS" section above, plus `waveform`/`audio_spectrum` covered in [rules/audio-reactive.md](rules/audio-reactive.md).
+The engine has **60** component types total (`Component` enum, `crates/rustmotion-components/src/lib.rs`). The catalog below has a dedicated write-up with a JSON example for most of them; the rest are containers (`card`/`flex`, `div`, `grid`, `positioned`) covered in the "Mental Model: Think HTML/CSS" section above, plus `waveform`/`audio_spectrum` covered in [rules/audio-reactive.md](rules/audio-reactive.md).
 
 All components are discriminated by `"type"`. Rendered in array order (first = bottom). See Rule 7.
 
@@ -1399,7 +1417,7 @@ Speech bubble with directional arrow.
 }
 ```
 
-**Root fields:** `text` (required), `arrow_direction` (top/bottom/left/right), `arrow_size` (default 12), `size`
+**Root fields:** `text` (required), `arrow_direction` (top/bottom/left/right), `arrow_size` (default 12). No root `size` field — fixed dimensions are set via `style.width`/`style.height`.
 
 Style: `background` (default `"#333333"`), `color` (default `"#FFFFFF"`), `border-radius` (default 8), `font-size` (default 16), `font-family`
 
@@ -1544,7 +1562,7 @@ Device frame with image content inside.
 }
 ```
 
-**Root fields:** `device` (required — iphone/android/laptop/browser), `src` (required — path to image), `theme` (dark/light), `size`
+**Root fields:** `device` (required — iphone/android/laptop/browser), `src` (required — path to image), `theme` (dark/light). No root `size` field — device size is set via `style.width`/`style.height`.
 
 Default sizes: iPhone 375x812, Android 360x800, Laptop 800x550, Browser 800x600
 
@@ -2064,7 +2082,7 @@ Text with animated gradient fill.
 }
 ```
 
-**Root fields:** `content` (required), `colors` (array of hex, default ["#3B82F6", "#8B5CF6"]), `angle` (90 — gradient angle in degrees), `animate_angle` (false — rotate gradient over time), `speed` (0.5 — rotations/sec when animate_angle), `size`
+**Root fields:** `content` (required), `colors` (array of hex, default ["#3B82F6", "#8B5CF6"]), `angle` (90 — gradient angle in degrees), `animate_angle` (false — rotate gradient over time), `speed` (0.5 — rotations/sec when animate_angle). No root `size` field — dimensions are set via `style.width`/`style.height`.
 
 Style: `font-size`, `font-weight`, `font-family`
 
@@ -2664,7 +2682,7 @@ Orbit creates continuous circular or elliptical motion with pseudo-3D depth simu
 
 ```bash
 # Render a scenario file to MP4
-rustmotion render scenario.json -o output.mp4
+rustmotion render -f scenario.json -o output.mp4
 
 # Render from inline JSON
 rustmotion render --json '{ ... }' -o output.mp4
@@ -2680,22 +2698,22 @@ rustmotion validate -f scenario.json --lenient          # warnings only
 rustmotion schema
 
 # Show scenario info
-rustmotion info scenario.json
+rustmotion info -f scenario.json
 
 # Render a single frame (0-indexed) as PNG
-rustmotion render scenario.json -o frame.png --frame 0
+rustmotion render -f scenario.json -o frame.png --frame 0
 
 # Render with specific codec/format
-rustmotion render scenario.json -o output.webm --codec vp9 --format webm
+rustmotion render -f scenario.json -o output.webm --codec vp9 --format webm
 
 # Render as GIF
-rustmotion render scenario.json -o output.gif --format gif
+rustmotion render -f scenario.json -o output.gif --format gif
 
 # Render as PNG sequence
-rustmotion render scenario.json -o frames/ --format png-seq
+rustmotion render -f scenario.json -o frames/ --format png-seq
 
 # Machine-readable output
-rustmotion render scenario.json -o output.mp4 --output-format json
+rustmotion render -f scenario.json -o output.mp4 --output-format json
 ```
 
 ---

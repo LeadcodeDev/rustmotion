@@ -2,13 +2,15 @@
 
 ## Workspace crate split
 
-The workspace is split into three crates:
+The workspace is split into five crates:
 
 | Crate | Role |
 |---|---|
 | `rustmotion-core` | Engine, CSS model, schema types, Painter trait |
-| `rustmotion-components` | 57 component structs + Painter impls + box builder |
+| `rustmotion-components` | 60 component structs + Painter impls + box builder |
 | `rustmotion` | Encode/loader pipeline + the `rustmotion` binary (`src/cli/`) |
+| `rustmotion-studio` | Desktop app (gpui-kit), `publish = false` — no comments allowed in this crate, ever |
+| `rustmotion-html` | HTML+inline-CSS → scenario JSON transpiler, browserless — see [rules/html-dialect.md](html-dialect.md) |
 
 ---
 
@@ -43,11 +45,12 @@ src/
 │   ├── animation.rs      # EasingType, AnimationPreset, PresetConfig, AnimationEffect
 │   ├── codeblock_types.rs# CodeblockChrome, CodeblockState, CodeblockReveal
 │   └── video.rs          # Size, ShapeType, Stroke, ImageFit, GlowConfig, OrbitConfig
-└── traits/
+└── traits/               # 11 files
     ├── painter.rs        # Painter trait + PaintCtx + AvailableSize + MeasureCtx
     ├── animatable.rs     # Animatable trait (animation field)
     ├── timed.rs          # Timed trait + TimingConfig (start_at, end_at)
-    └── styled.rs         # Styled trait (style field accessor)
+    ├── styled.rs         # Styled trait (style field accessor)
+    └── backgrounded.rs, bordered.rs, clipped.rs, container.rs, rounded.rs, shadowed.rs
 ```
 
 ### Key types
@@ -55,7 +58,7 @@ src/
 - **`CssStyle`** (`css/style.rs`) — replaces the old `LayerStyle`. All fields are optional; names are CSS kebab-case (`flex-direction`, `border-radius`, `font-size`). Serde uses `rename_all = "kebab-case"`.
 - **`BoxLayout`** (`engine/layout_pass.rs`) — final resolved geometry: `x, y, width, height, padding_box, content_box`.
 - **`AnimatedProperties`** (`engine/animator.rs`) — per-component animation state (draw_progress, char animation, visible_chars, font_size override, color override, stroke_width, 3D rotate_x/rotate_y, etc.).
-- **`PaintCtx`** (`traits/painter.rs`) — frame-level context: `time`, `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
+- **`PaintCtx`** (`traits/painter.rs`) — frame-level context: `time`, `scenario_time` (elapsed since the scenario/view started — what audio-reactive painters index on), `scene_duration`, `fps`, `frame_index`, `video_width`, `video_height`, `stagger_offset`.
 
 ---
 
