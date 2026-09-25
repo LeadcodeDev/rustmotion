@@ -117,7 +117,11 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
             .copied()
             .unwrap_or((1.0, 0.0));
         let local_time = frame.time * t_scale + t_shift;
-        let props = match crate::box_builder::effective_effects(&child.component, stagger_delay) {
+        let props = match crate::box_builder::effective_effects(
+            &child.component,
+            stagger_delay,
+            local_time,
+        ) {
             Some(effects) => resolve_props_for_effects(&effects, local_time, frame.scene_duration),
             None => AnimatedProperties::default(),
         };

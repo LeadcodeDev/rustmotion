@@ -316,7 +316,8 @@ fn build_ghosts<'a>(
             scene_duration: actx.scene_duration,
             fps: actx.fps,
         };
-        if let Some(ghost_effects) = effective_effects(&child.component, stagger_delay) {
+        if let Some(ghost_effects) = effective_effects(&child.component, stagger_delay, ghost_time)
+        {
             let props = resolve_props_for_effects(
                 &ghost_effects,
                 ghost_actx.time,
@@ -452,7 +453,7 @@ fn build_child<'a>(
     // lower (earlier in the slot table). The principal's id is allocated below.
     let mut ghosts: Vec<BoxNode> = Vec::new();
     if let Some(actx) = local_actx {
-        if let Some(effects) = effective_effects(&child.component, stagger_delay) {
+        if let Some(effects) = effective_effects(&child.component, stagger_delay, actx.time) {
             ghosts = build_ghosts(
                 child,
                 components,
@@ -534,7 +535,7 @@ fn build_child<'a>(
     // — internal animations like draw_progress or char_animation remain on the
     // `AnimatedProperties` legacy path.
     if let Some(actx) = local_actx {
-        if let Some(effects) = effective_effects(&child.component, stagger_delay) {
+        if let Some(effects) = effective_effects(&child.component, stagger_delay, actx.time) {
             let props = resolve_props_for_effects(&effects, actx.time, actx.scene_duration);
             if props_has_paint_overrides(&props) {
                 apply_animated_props(&mut css, &props);
@@ -655,13 +656,19 @@ fn build_child<'a>(
 }
 
 /// The full effect list for a component at paint time: `style.animation`,
-/// plus `timeline` steps shifted by their `at`, plus keyframes synthesized
-/// from timeline style-state changes (`style.transition`), plus the
-/// container-stagger delay applied to everything. Returns `None` when there
-/// is nothing to resolve, `Some(Cow::Borrowed)` on the no-merge fast path.
+/// plus the `timeline` steps whose `at` `t` has reached, shifted by their
+/// `at`, plus keyframes synthesized from timeline style-state changes
+/// (`style.transition`), plus the container-stagger delay applied to
+/// everything. Returns `None` when there is nothing to resolve,
+/// `Some(Cow::Borrowed)` on the no-merge fast path.
+///
+/// `t` is the component's own local time, the same clock
+/// `resolve_props_for_effects` is called with, and the same one
+/// `apply_style_states` gates a step's `style` on.
 pub fn effective_effects(
     component: &Component,
     extra_delay: f64,
+    t: f64,
 ) -> Option<std::borrow::Cow<'_, [rustmotion_core::schema::AnimationEffect]>> {
     let animatable = component.as_animatable()?;
     let effects = animatable.animation_effects();
@@ -675,7 +682,7 @@ pub fn effective_effects(
         return (!effects.is_empty()).then_some(std::borrow::Cow::Borrowed(effects));
     }
     let mut merged = effects.to_vec();
-    for step in steps {
+    for step in steps.iter().filter(|s| s.at <= t - extra_delay) {
         for effect in &step.animation {
             let mut e = effect.clone();
             e.shift_delay(step.at);
@@ -2185,6 +2192,62 @@ pub fn component_kind(c: &Component) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two timeline steps on one node. Each step is documented to trigger at
+    /// its own `at`, and `apply_style_states` already gates a step's `style`
+    /// that way — its `animation` half must obey the same rule, or a step
+    /// that has not begun still sets the value through the shared
+    /// last-effect-wins bucket.
+    #[test]
+    fn a_timeline_step_leaves_the_value_alone_until_its_at() {
+        let component: Component = serde_json::from_value(json!({
+            "type": "shape",
+            "shape": "circle",
+            "fill": "#1EA2C2",
+            "style": { "width": 120, "height": 120 },
+            "timeline": [
+                { "at": 3.0, "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "translate_x", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 0.0 }, { "time": 1.0, "value": 200.0 }] }] }] },
+                { "at": 6.0, "animation": [{ "name": "keyframes", "duration": 1.0, "keyframes": [
+                    { "property": "translate_x", "easing": "linear", "keyframes": [
+                        { "time": 0.0, "value": 200.0 }, { "time": 1.0, "value": 0.0 }] }] }] }
+            ]
+        }))
+        .expect("component deserializes");
+
+        let tx = |t: f64| match effective_effects(&component, 0.0, t) {
+            Some(effects) => resolve_props_for_effects(&effects, t, 9.0).translate_x as f64,
+            None => AnimatedProperties::default().translate_x as f64,
+        };
+
+        assert!(
+            tx(0.5).abs() < 1.0,
+            "before either step, translate_x is 0, got {}",
+            tx(0.5)
+        );
+        assert!(
+            (tx(3.5) - 100.0).abs() < 2.0,
+            "halfway through step one, got {}",
+            tx(3.5)
+        );
+        assert!(
+            (tx(5.0) - 200.0).abs() < 1.0,
+            "step one has ended and holds, got {}",
+            tx(5.0)
+        );
+        assert!(
+            (tx(6.5) - 100.0).abs() < 2.0,
+            "halfway through step two, got {}",
+            tx(6.5)
+        );
+        assert!(
+            tx(8.0).abs() < 1.0,
+            "step two has ended and holds, got {}",
+            tx(8.0)
+        );
+    }
+
     use rustmotion_core::css::style::{
         CssStyle, Display, Edges, FlexDirection, Gap, Size as CSize,
     };
