@@ -581,7 +581,7 @@ fn paint_decorative_fullscreen(
         }
     }
 
-    let props = match effective_effects(&child.component, 0.0) {
+    let props = match effective_effects(&child.component, 0.0, time) {
         Some(effects) => resolve_props_for_effects(&effects, time, ctx.scene_duration),
         None => AnimatedProperties::default(),
     };

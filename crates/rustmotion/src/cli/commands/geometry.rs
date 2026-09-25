@@ -1504,7 +1504,7 @@ fn walk_anim(
                 .copied()
                 .unwrap_or((1.0, 0.0));
             let local_time = scale * time + shift;
-            let props = match effective_effects(&child.component, stagger_delay) {
+            let props = match effective_effects(&child.component, stagger_delay, local_time) {
                 Some(effects) => resolve_props_for_effects(&effects, local_time, scene_duration),
                 None => AnimatedProperties::default(),
             };
