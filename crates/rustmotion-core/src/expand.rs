@@ -645,7 +645,9 @@ fn expand_use_directive(
                 component: directive.use_name.clone(),
                 param: pname.clone(),
                 path: format!("{file_label}: {location}"),
-                detail: format!("is declared as type \"{declared}\" but its {origin} is a {actual}"),
+                detail: format!(
+                    "is declared as type \"{declared}\" but its {origin} is a {actual}"
+                ),
             });
         }
         bindings.insert(pname.clone(), value);
