@@ -1,5 +1,6 @@
 mod background;
 mod canvas_guard;
+pub mod composite;
 pub mod post_effects;
 mod scene;
 

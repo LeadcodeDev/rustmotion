@@ -235,6 +235,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet
+- [rules/overlapping-scenes.md](rules/overlapping-scenes.md) - Make an element outlive a cut: overlapping `at` windows composite instead of replacing, who supplies the background, and why `snap` never creates an overlap
 - [rules/even-dimensions.md](rules/even-dimensions.md) - Use even width/height for H.264 encoding
 - [rules/composition-recipes.md](rules/composition-recipes.md) - **Read this before reaching for a UI-widget component.** Composing KPI cards, pill rows, progress bars, and other former "frozen composition" shapes from primitives, `components`, and `for-each`
 - [rules/templates-and-iteration.md](rules/templates-and-iteration.md) - `for-each`/`components`/`use` mechanics: bindings, param defaults, ordering of passes, named errors
