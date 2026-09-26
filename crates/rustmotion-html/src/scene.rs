@@ -24,15 +24,11 @@ const KNOWN_SCENE_ATTRS: &[&str] = &[
     "animated-background",
 ];
 
-/// Parse an `effects` attribute value: must be a JSON array.
 fn parse_effects_attr(raw: &str) -> Result<Value, HtmlError> {
     let trimmed = raw.trim();
     serde_json::from_str(trimmed).map_err(|e| HtmlError::InvalidEffectsJson(e.to_string()))
 }
 
-/// Parse a `world-position` attribute: either `"x,y"` (the idiomatic HTML
-/// form, mirroring `font`'s `weights="400,700"` CSV convention) or a JSON
-/// `{"x":..,"y":..}` object, matching `WorldPosition`'s wire shape.
 fn parse_world_position_attr(raw: &str) -> Result<Value, HtmlError> {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') {
@@ -52,13 +48,6 @@ fn parse_world_position_attr(raw: &str) -> Result<Value, HtmlError> {
     Ok(serde_json::json!({ "x": x, "y": y }))
 }
 
-/// Parse an `animated-background` attribute: JSON object/array (matching
-/// `scene["animated-background"]`'s `AnimatedBackground` shape, e.g.
-/// `{"preset":"halo","halo":{...},"speed":0}`) if it starts with `{`/`[`,
-/// otherwise a bare string (left for the typed scenario loader to reject —
-/// no preset is nameable without its config, so this never has a legitimate
-/// bare-string form, but the reachable-attribute goal is what matters here:
-/// the value now always reaches the JSON instead of vanishing before it).
 fn parse_animated_background_attr(raw: &str) -> Result<Value, HtmlError> {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -69,8 +58,6 @@ fn parse_animated_background_attr(raw: &str) -> Result<Value, HtmlError> {
     }
 }
 
-/// Map a `<scene>` element to a scene JSON object. Defaults to a centered flex
-/// layout (overridable via `align`/`justify`/`direction`/`gap`/`padding` attrs).
 pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     let attrs = element_attrs(handle);
     check_known_attrs("scene", &attrs, KNOWN_SCENE_ATTRS)?;
@@ -100,15 +87,12 @@ pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     }
     obj.insert("layout".into(), Value::Object(layout));
 
-    // background: string or inline JSON object/array
     if let Some(bg) = get("background") {
         obj.insert("background".into(), parse_background_attr(&bg)?);
     }
 
-    // effects: JSON array of PostEffect objects
     if let Some(fx) = get("effects") {
         let parsed = parse_effects_attr(&fx)?;
-        // Validate that it is an array (not just any JSON value)
         if !parsed.is_array() {
             return Err(HtmlError::InvalidEffectsJson(
                 "effects must be a JSON array".into(),
@@ -117,7 +101,6 @@ pub(crate) fn scene_to_value(handle: &Handle) -> Result<Value, HtmlError> {
         obj.insert("effects".into(), parsed);
     }
 
-    // transition: type is required; duration and easing are optional extras
     let has_transition_params =
         get("transition-duration").is_some() || get("transition-easing").is_some();
     if let Some(t) = get("transition") {
@@ -177,8 +160,6 @@ mod tests {
         assert_eq!(v["transition"]["type"], json!("fade"));
     }
 
-    // --- background ---
-
     #[test]
     fn scene_background_string_color() {
         let dom =
@@ -214,8 +195,6 @@ mod tests {
             "expected InvalidBackgroundJson, got: {err:?}"
         );
     }
-
-    // --- effects ---
 
     #[test]
     fn scene_effects_json_array_transpiled() {
@@ -275,8 +254,6 @@ mod tests {
         assert_eq!(v["effects"][0]["type"], json!("vignette"));
         assert_eq!(v["effects"][1]["type"], json!("pixelate"));
     }
-
-    // --- transition with duration and easing ---
 
     #[test]
     fn scene_transition_full_params() {

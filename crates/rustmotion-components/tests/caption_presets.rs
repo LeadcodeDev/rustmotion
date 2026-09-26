@@ -1,11 +1,3 @@
-//! Pixel tests for the TikTok-style caption presets (`word_pop`, `karaoke_pop`).
-//!
-//! These route a caption component through the real pipeline
-//! (box_builder + run_layout + paint_tree) and assert on the pixels that
-//! come out: the active word must be painted, the pill background must be
-//! visible (probed via its configurable color), and inactive words must be
-//! absent in `word_pop` mode.
-
 use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
 use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
 use rustmotion_components::{ChildComponent, Component, PositionMode};
@@ -16,14 +8,10 @@ use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 const W: u32 = 400;
 const H: u32 = 300;
 
-/// Renders a single caption component (absolutely positioned at y=150 so the
-/// baseline-anchored glyphs are fully on-canvas) and returns the RGBA buffer.
 fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
     render_caption_at(json, time, 150.0)
 }
 
-/// Same as [`render_caption`] but with an explicit vertical position, for
-/// tests whose caption spans more lines than fit below the default y=150.
 fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
     let component: Component = serde_json::from_value(json).expect("deserialize caption");
     let child = ChildComponent {
@@ -94,19 +82,16 @@ fn lit_pixels(buf: &[u8]) -> usize {
     count_pixels(buf, |p| p[3] > 0)
 }
 
-/// Magenta pill probe: high red + blue, low green.
 fn magenta_pixels(buf: &[u8]) -> usize {
     count_pixels(buf, |p| {
         p[0] > 180 && p[2] > 180 && p[1] < 100 && p[3] > 200
     })
 }
 
-/// Yellow active-word probe: high red + green, low blue.
 fn yellow_pixels(buf: &[u8]) -> usize {
     count_pixels(buf, |p| p[0] > 180 && p[1] > 180 && p[2] < 100)
 }
 
-/// White inactive-word probe: high red + green + blue.
 fn white_pixels(buf: &[u8]) -> usize {
     count_pixels(buf, |p| p[0] > 200 && p[1] > 200 && p[2] > 200)
 }
@@ -127,9 +112,6 @@ fn word_pop_caption() -> serde_json::Value {
 
 #[test]
 fn word_pop_shows_active_word_with_pill() {
-    // At t=0.45 the first word is active and the pop-in animation has
-    // settled (scale=1). Both the magenta pill and the yellow word must
-    // be painted.
     let buf = render_caption(word_pop_caption(), 0.45);
     let pill = magenta_pixels(&buf);
     let word = yellow_pixels(&buf);
@@ -139,8 +121,6 @@ fn word_pop_shows_active_word_with_pill() {
 
 #[test]
 fn word_pop_hides_inactive_words() {
-    // At t=1.5 no word window is active: word_pop must paint nothing at
-    // all (no lingering pill, no inactive words).
     let buf = render_caption(word_pop_caption(), 1.5);
     let lit = lit_pixels(&buf);
     assert!(lit < 50, "expected empty canvas, got {lit} lit pixels");
@@ -148,9 +128,6 @@ fn word_pop_hides_inactive_words() {
 
 #[test]
 fn word_pop_scales_in() {
-    // Right after the word starts (t=0.02) the spring-like scale-in has
-    // barely begun, so far fewer pixels are lit than once it has settled
-    // (t=0.45).
     let early = lit_pixels(&render_caption(word_pop_caption(), 0.02));
     let settled = lit_pixels(&render_caption(word_pop_caption(), 0.45));
     assert!(
@@ -161,8 +138,6 @@ fn word_pop_scales_in() {
 
 #[test]
 fn word_pop_default_pill_is_translucent_black() {
-    // Without pill_color the pill defaults to black at 70% opacity:
-    // pixels that are dark and semi-transparent must exist.
     let mut json = word_pop_caption();
     json.as_object_mut().unwrap().remove("pill_color");
     let buf = render_caption(json, 0.45);
@@ -177,8 +152,6 @@ fn word_pop_default_pill_is_translucent_black() {
 
 #[test]
 fn karaoke_pop_highlights_active_word_with_pill() {
-    // Full line stays visible (white inactive words), the active word
-    // takes active_color with a magenta pill behind it.
     let json = serde_json::json!({
         "type": "caption",
         "mode": "karaoke_pop",
@@ -207,14 +180,6 @@ fn karaoke_pop_highlights_active_word_with_pill() {
     );
 }
 
-/// Audit finding #1: a caption with no `max_width` set, given a box
-/// narrower than its unwrapped content via `style.width` (mirrors a caption
-/// placed inside a card, the documented use case), must wrap to fit that
-/// box — not paint one wide line that bleeds out of it. Routed through the
-/// real pipeline so `CaptionIntrinsic` (the box taffy reserves) and
-/// `Caption::paint` (what actually gets drawn) are exercised together: this
-/// is exactly the measure-vs-paint pairing the geometry validator depends
-/// on to catch overflow, and before the fix the two disagreed silently.
 #[test]
 fn wraps_within_its_layout_box_when_max_width_is_unset() {
     let json = serde_json::json!({
@@ -231,8 +196,6 @@ fn wraps_within_its_layout_box_when_max_width_is_unset() {
             { "text": "lazy", "start": 0.0, "end": 100.0 },
             { "text": "dog", "start": 0.0, "end": 100.0 }
         ],
-        // No `max_width` — the box comes entirely from `style.width` below,
-        // mirroring a caption inside a fixed-width card.
         "style": { "width": "150px", "font-size": 24, "color": "#FFFFFF" }
     });
     let buf = render_caption_at(json, 0.5, 20.0);
@@ -251,8 +214,6 @@ fn wraps_within_its_layout_box_when_max_width_is_unset() {
     );
 }
 
-/// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent pixel
-/// in an RGBA8888 `W`x`H` buffer, or `None` if nothing was painted.
 fn ink_bounds(buf: &[u8]) -> Option<(i32, i32, i32, i32)> {
     let (mut minx, mut maxx, mut miny, mut maxy) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
     for y in 0..H as i32 {

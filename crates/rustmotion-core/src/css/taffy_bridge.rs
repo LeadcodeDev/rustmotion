@@ -1,11 +1,3 @@
-//! `CssStyle` → `taffy::Style` converter.
-//!
-//! Inspired by `stylo_taffy` (Servo) but kept minimal: we only translate the
-//! layout-affecting properties. Paint properties (color, background, transform,
-//! filter, etc.) are read separately by the paint pass.
-//!
-//! Currently a stub — fleshed out in step 3 of the migration plan.
-
 use taffy::prelude as tf;
 
 use super::style::{
@@ -21,16 +13,6 @@ pub struct ConversionContext {
 }
 
 impl ConversionContext {
-    /// Anchor `vw`/`vh` resolution to a real output viewport.
-    ///
-    /// [`ConversionContext::default()`] carries a 1920×1080 viewport, which is
-    /// only ever correct by coincidence. Any caller that knows the video's real
-    /// dimensions must build its context here instead: on a 1080×1920 vertical
-    /// render, the default resolves `50vw` to 960px where the truth is 540px,
-    /// and misses `vh` by the same margin in the other axis.
-    ///
-    /// `font-size` / `root-font-size` stay at the CSS initial 16px: nothing
-    /// upstream resolves and threads a root font-size through yet.
     pub fn for_viewport(viewport_width: f32, viewport_height: f32) -> Self {
         Self {
             length: LengthContext {
@@ -42,29 +24,22 @@ impl ConversionContext {
     }
 }
 
-/// Convert a [`CssStyle`] into a [`taffy::Style`]. Properties not relevant to
-/// layout are ignored. Unsupported / unset properties fall back to taffy
-/// defaults (which match CSS initial values).
 pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     let mut style = tf::Style::DEFAULT;
 
-    // Display
     style.display = match css.display {
         Some(Display::None) => tf::Display::None,
         Some(Display::Block) => tf::Display::Block,
         Some(Display::Flex) => tf::Display::Flex,
         Some(Display::Grid) => tf::Display::Grid,
-        // inline-block / contents → fall back to block in our scope
         _ => tf::Display::Block,
     };
 
-    // Position
     style.position = match css.position {
         Some(Position::Absolute) => tf::Position::Absolute,
         _ => tf::Position::Relative,
     };
 
-    // Inset
     style.inset = tf::Rect {
         top: lp_to_lp_auto(css.top.as_ref(), ctx),
         right: lp_to_lp_auto(css.right.as_ref(), ctx),
@@ -72,7 +47,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
         left: lp_to_lp_auto(css.left.as_ref(), ctx),
     };
 
-    // Sizing
     style.size = tf::Size {
         width: size_to_dim(css.width.as_ref(), ctx),
         height: size_to_dim(css.height.as_ref(), ctx),
@@ -87,11 +61,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     };
     style.aspect_ratio = css.aspect_ratio;
 
-    // `box-sizing` (round 4 audit, lot LAYOUT, constat 3): taffy supports it
-    // natively (`Style::box_sizing`, default `BorderBox`) — schema-valid but
-    // untranslated before this fix, so `content-box` was silently ignored
-    // and every sized box behaved as `border-box` regardless of what the
-    // author declared.
     if let Some(bs) = css.box_sizing {
         style.box_sizing = match bs {
             BoxSizing::ContentBox => tf::BoxSizing::ContentBox,
@@ -99,12 +68,10 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
         };
     }
 
-    // Margin / padding / border (border WIDTH only — border style/color are paint props)
     style.margin = edges_to_rect_lpa(css.margin.as_ref(), ctx);
     style.padding = edges_to_rect_lp(css.padding.as_ref(), ctx);
     style.border = border_widths(css.border.as_ref(), ctx);
 
-    // Flex
     style.flex_direction = match css.flex_direction {
         Some(FlexDirection::Row) => tf::FlexDirection::Row,
         Some(FlexDirection::RowReverse) => tf::FlexDirection::RowReverse,
@@ -147,19 +114,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     if let Some(basis) = css.flex_basis.as_ref() {
         style.flex_basis = size_to_dim(Some(basis), ctx);
     }
-    // `order` (round 4 audit, lot LAYOUT, constat 3): schema-valid but has no
-    // taffy equivalent — taffy has no flex/grid item-reordering primitive
-    // (its internal `order` on `Layout` is source order, assigned during
-    // layout, not settable via `Style`). Translating is not possible, so —
-    // per the same "fail loud instead of a silent no-op" contract this
-    // module's `Length`/`LengthPercentage` parsing already uses (see
-    // `units.rs`'s `px_or_warn` / `parse_length_or_warn`) — warn instead of
-    // dropping it without a trace. Reorder the JSON `children` array itself
-    // to get the equivalent effect.
-    // Emitted at most once per process: `to_taffy_style` runs per node per
-    // layout pass, and layout runs per frame — an unguarded `eprintln!` here
-    // would print the same line a thousand times over a single render and
-    // slow it down while doing so.
     if css.order.is_some() {
         static WARNED_ORDER: std::sync::Once = std::sync::Once::new();
         WARNED_ORDER.call_once(|| {
@@ -171,7 +125,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
         });
     }
 
-    // Gap
     if let Some(gap) = css.gap.as_ref() {
         let (row, col) = match gap {
             Gap::Uniform(v) => (lp_to_lp(v, ctx), lp_to_lp(v, ctx)),
@@ -183,7 +136,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
         };
     }
 
-    // Grid
     if let Some(tracks) = css.grid_template_columns.as_ref() {
         style.grid_template_columns = tracks
             .iter()
@@ -210,11 +162,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     if let Some(gr) = css.grid_row.as_ref() {
         style.grid_row = grid_placement_line(gr);
     }
-    // `justify-items` / `justify-self` (round 4 audit, lot LAYOUT, constat 3):
-    // taffy supports both natively for grid children, reusing the same
-    // `AlignItems`/`AlignSelf` types as `align-items`/`align-self` (the
-    // block-axis equivalents) — same untranslated-but-schema-valid gap as
-    // `box-sizing` above.
     if let Some(ji) = css.justify_items {
         style.justify_items = Some(justify_items_to_taffy(ji));
     }
@@ -222,7 +169,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
         style.justify_self = justify_self_to_taffy(js);
     }
 
-    // Overflow
     if let Some(o) = css.overflow {
         let v = overflow_to_taffy(o);
         style.overflow = taffy::Point { x: v, y: v };
@@ -237,18 +183,6 @@ pub fn to_taffy_style(css: &CssStyle, ctx: &ConversionContext) -> tf::Style {
     style
 }
 
-/// Resolve `padding` + `border` width into a single content-box inset, in
-/// px, per axis: `(horizontal, vertical)` i.e. `(left + right, top +
-/// bottom)`.
-///
-/// Mirrors what taffy 0.10.1's own `compute_leaf_layout` (`content_box_inset
-/// = padding + border`) subtracts from a leaf's `available_space` before
-/// handing it to the measure function — see [`crate::engine::layout_pass`],
-/// which uses this to bring `known_dimensions` (still border-box) into that
-/// same content-box space (RM-27). Percentage padding/border resolves
-/// against `ctx.length.parent_size` like every other percentage in this
-/// module; a leaf's own known/available width is not threaded here, so a
-/// percentage inset on a leaf is only as accurate as that shared context.
 pub(crate) fn content_box_inset(css: &CssStyle, ctx: &ConversionContext) -> (f32, f32) {
     let (pt, pr, pb, pl) = css.padding.as_ref().map(Edges::resolve).unwrap_or_default();
     let padding = (
@@ -325,19 +259,12 @@ fn justify_items_to_taffy(j: JustifyItems) -> tf::AlignItems {
         JustifyItems::Start => tf::AlignItems::Start,
         JustifyItems::End => tf::AlignItems::End,
         JustifyItems::Center => tf::AlignItems::Center,
-        // `legacy` (old CSS2-era grid keyword, only meaningful combined with
-        // `left`/`right`/`center` which this schema doesn't expose) has no
-        // taffy analog; `Start` is the closest normal-flow behaviour and
-        // matches this bridge's own `Auto`-ish fallbacks elsewhere.
         JustifyItems::Legacy => tf::AlignItems::Start,
     }
 }
 
 fn justify_self_to_taffy(j: JustifySelf) -> Option<tf::AlignSelf> {
     Some(match j {
-        // `auto` computes to the parent's `justify-items` — `None` is
-        // exactly how this bridge already models `align-self: auto`
-        // inheriting `align-items` above.
         JustifySelf::Auto => return None,
         JustifySelf::Stretch => tf::AlignSelf::Stretch,
         JustifySelf::Start => tf::AlignSelf::Start,
@@ -366,7 +293,6 @@ fn overflow_to_taffy(o: Overflow) -> taffy::Overflow {
     }
 }
 
-/// Convert `LengthPercentage` → taffy `LengthPercentage`.
 fn lp_to_lp(v: &LengthPercentage, ctx: &ConversionContext) -> tf::LengthPercentage {
     match v.parse() {
         ParsedLength::Px(p) => tf::LengthPercentage::length(p),
@@ -379,7 +305,6 @@ fn lp_to_lp(v: &LengthPercentage, ctx: &ConversionContext) -> tf::LengthPercenta
     }
 }
 
-/// Convert `LengthPercentage` → taffy `LengthPercentageAuto`. None → auto.
 fn lp_to_lp_auto(
     v: Option<&LengthPercentage>,
     ctx: &ConversionContext,
@@ -403,7 +328,6 @@ fn lp_to_lp_auto(
     }
 }
 
-/// Convert `Size` → taffy `Dimension`.
 fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
     let Some(s) = s else {
         return tf::Dimension::auto();
@@ -420,11 +344,7 @@ fn size_to_dim(s: Option<&Size>, ctx: &ConversionContext) -> tf::Dimension {
             ParsedLength::Vh(p) => tf::Dimension::length(p / 100.0 * ctx.length.viewport_height),
             ParsedLength::Fr(_) => tf::Dimension::auto(),
         },
-        Size::Keyword(_) => {
-            // taffy 0.10 supports max-content / min-content / fit-content via Dimension.
-            // We map them to `auto` for now; refine later if needed.
-            tf::Dimension::auto()
-        }
+        Size::Keyword(_) => tf::Dimension::auto(),
     }
 }
 
@@ -479,7 +399,6 @@ fn border_widths(
             left: tf::LengthPercentage::length(0.0),
         };
     };
-    // Per-side overrides take precedence over the uniform `width`.
     let uniform = b.width.as_ref().map(|e| e.resolve());
     let pick_side = |side: Option<&super::style::BorderSide>, idx: usize| -> tf::LengthPercentage {
         if let Some(side) = side {
@@ -508,12 +427,6 @@ fn border_widths(
     }
 }
 
-/// Convert a [`GridTrack`] into a taffy `TrackSizingFunction` (used for both
-/// the min and max sizing function, except `fr` which uses taffy's `flex()`
-/// helper — `minmax(0, Nfr)`. This gives *exactly* evenly-sized tracks
-/// regardless of child content, matching the `flex-direction: row` control
-/// (`flex-grow: 1` siblings) rather than CSS's stricter `minmax(auto, Nfr)`
-/// default, which lets content push a track wider than its fair share.
 fn grid_track_sizing(t: &GridTrack, ctx: &ConversionContext) -> tf::TrackSizingFunction {
     match t {
         GridTrack::Fr(n) => tf::flex(*n),
@@ -546,9 +459,6 @@ fn grid_length_sizing(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::Tra
     }
 }
 
-/// `min` side of an explicit `minmax(min, max)`. `fr` is not a valid CSS
-/// minimum sizing function, so it falls back to `auto` (matches taffy's own
-/// `MaxTrackSizingFunction -> MinTrackSizingFunction` conversion for `fr`).
 fn grid_track_min(t: &GridTrack, ctx: &ConversionContext) -> tf::MinTrackSizingFunction {
     match t {
         GridTrack::Fr(_) => tf::auto(),
@@ -556,8 +466,6 @@ fn grid_track_min(t: &GridTrack, ctx: &ConversionContext) -> tf::MinTrackSizingF
         GridTrack::Keyword(GridTrackKeyword::MinContent) => tf::min_content(),
         GridTrack::Keyword(GridTrackKeyword::MaxContent) => tf::max_content(),
         GridTrack::Length(lp) => grid_length_min(lp, ctx),
-        // A `minmax` nested inside a `minmax` isn't valid CSS; degrade
-        // gracefully by taking the inner track's own min side.
         GridTrack::Minmax { min, .. } => grid_track_min(min, ctx),
     }
 }
@@ -574,7 +482,6 @@ fn grid_length_min(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::MinTra
     }
 }
 
-/// `max` side of an explicit `minmax(min, max)`.
 fn grid_track_max(t: &GridTrack, ctx: &ConversionContext) -> tf::MaxTrackSizingFunction {
     match t {
         GridTrack::Fr(n) => tf::fr(*n),
@@ -599,9 +506,6 @@ fn grid_length_max(lp: &LengthPercentage, ctx: &ConversionContext) -> tf::MaxTra
     }
 }
 
-/// Convert a `grid-column` / `grid-row` placement (`{ start, end, span }`)
-/// into a taffy `Line<GridPlacement>`. Named lines / grid areas are out of
-/// scope (issue #105) — only numeric line indices and spans are supported.
 fn grid_placement_line(g: &GridLine) -> tf::Line<tf::GridPlacement> {
     let start = g.start.map(|GridLineEnd::Index(i)| i as i16);
     let end = g.end.map(|GridLineEnd::Index(i)| i as i16);
@@ -743,8 +647,6 @@ mod tests {
         assert_eq!(s.overflow.y, taffy::Overflow::Hidden);
     }
 
-    // ---- Grid (issue #105) ----
-
     #[test]
     fn grid_display_translated() {
         let css = CssStyle {
@@ -767,7 +669,6 @@ mod tests {
 
     #[test]
     fn grid_template_rows_string_fr_tracks_translated() {
-        // Same string-encoded form used by examples/mega-showcase.json.
         let css = CssStyle {
             grid_template_rows: Some(vec![
                 GridTrack::Length(LengthPercentage::String("1fr".into())),
@@ -831,19 +732,10 @@ mod tests {
         assert_eq!(s.gap.height, tf::LengthPercentage::length(24.0));
     }
 
-    /// The audit's core repro: a grid with three `1fr` columns must lay its
-    /// children out side-by-side (distinct x-offsets), matching a
-    /// `flex-direction: row` control — NOT stacked as three full-width rows,
-    /// which is what the engine did before `grid-template-columns` was wired
-    /// through to taffy (grid fell back to taffy's single-implicit-column
-    /// default because it never received any track definitions).
     #[test]
     fn grid_three_fr_columns_produce_distinct_x_offsets() {
         let root_css = CssStyle {
             display: Some(Display::Grid),
-            // The grid container needs a definite size: an `auto`-sized root
-            // (the CssStyle default) has no intrinsic content of its own, so
-            // it collapses to 0×0 and every column ends up at x=0.
             width: Some(Size::Length(LengthPercentage::Px(900.0))),
             height: Some(Size::Length(LengthPercentage::Px(300.0))),
             grid_template_columns: Some(vec![
@@ -896,9 +788,6 @@ mod tests {
         );
     }
 
-    // ── Round 4 audit, lot LAYOUT, constat 3: box-sizing / justify-items /
-    // justify-self are schema-valid but were never translated to taffy. ────
-
     #[test]
     fn box_sizing_content_box_is_translated() {
         let css = CssStyle {
@@ -939,9 +828,6 @@ mod tests {
 
     #[test]
     fn justify_self_auto_falls_back_to_parent_justify_items() {
-        // `auto` computes to the parent's `justify-items` — taffy models
-        // this the same way `align-self: auto` models inheriting
-        // `align-items`: `None`, not an explicit `Start`.
         let css = CssStyle {
             justify_self: Some(JustifySelf::Auto),
             ..Default::default()

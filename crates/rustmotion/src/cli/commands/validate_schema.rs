@@ -1,6 +1,3 @@
-//! Schema-level scenario checks (file existence, dimensions, durations, etc.).
-//! Returns (errors, warnings); errors block rendering, warnings are advisory only.
-
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
     Background, BackgroundLayer, BorderRadius, Color, CssStyle, Display as CssDisplay,
@@ -36,13 +33,6 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
                 errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
             }
 
-            // Issue #336: a syntactically valid `at` (e.g. "@8b") can still
-            // be unresolvable if the scenario never declared `bpm` — that
-            // can only be known once the whole scenario is in scope, unlike
-            // grammar (rejected earlier, at deserialize time — see
-            // `SceneStart`'s custom `Deserialize` impl). `resolve_absolute`
-            // cannot return `Unparseable` here: grammar was already
-            // enforced, so `NoBpm` is the only reachable error.
             if let SceneStart::At(ref time_point) = scene.at {
                 if let Err(e @ TimeError::NoBpm(_)) =
                     time_point.resolve_absolute(&scene.resolved_time_ctx)
@@ -84,8 +74,6 @@ fn validate_children(
     for (j, child) in children.iter().enumerate() {
         let p = format!("{}.children[{}]", path, j);
 
-        // Properties the CSS engine accepts but does not render yet — warn
-        // instead of staying silent so authors don't rely on a no-op.
         let style = child.component.as_styled().style_config();
         if style.overflow_wrap.is_some() {
             warnings.push(format!(
@@ -114,23 +102,8 @@ fn validate_children(
             ));
         }
 
-        // C2 completion (issue #110 / #102): a colour that `parse_css_color`
-        // can't resolve used to fall back to black silently; wave 1 made
-        // that loud at render time (opaque magenta + stderr warning) via the
-        // same frozen `parse_css_color` entry point. This closes the loop by
-        // catching it before anyone renders.
         check_style_colors(style, &p, errors);
 
-        // Generic interpolation (issue: "interpolation générique de
-        // n'importe quelle propriété"): `timeline` + `style.transition`
-        // accepts a transition on any CSS property and used to silently
-        // snap instead of animating it for everything except opacity and
-        // color (text/counter). This turns that silence into a named
-        // diagnostic — see the function's doc comment. (The sibling gap —
-        // an explicit `style.animation` keyframes effect naming an
-        // unrecognized `property` — turned out to already be closed at
-        // deserialize time by `schema/video.rs`'s
-        // `validate_motion_property`; verified, not reopened here.)
         check_transition_smoothing(&child.component, &p, warnings);
 
         if let Some(timed) = child.component.as_timed() {
@@ -142,10 +115,6 @@ fn validate_children(
             }
         }
 
-        // Container time remapping: time_scale must be strictly positive
-        // (0 would freeze the subtree, negative would run it backwards —
-        // neither is supported; the builder clamps defensively but the
-        // author must be told).
         if let Some(scale) = container_time_scale(&child.component) {
             if scale <= 0.0 {
                 errors.push(format!(
@@ -156,22 +125,10 @@ fn validate_children(
             }
         }
 
-        // Animation completion budget check: ensure entrance animations finish within the scene.
-        //
-        // Constat #4: `start_at` is a *visibility* window, not a time
-        // origin — the engine resolves `animation.delay`/`duration` in
-        // absolute scene time regardless of `start_at` (PR #27's frozen
-        // semantics; `geometry.rs`'s `walk_anim` already states and relies
-        // on the same rule). The budget used to add `start_at` in here,
-        // which contradicts that: a scenario where the entrance genuinely
-        // finishes well inside the scene (just before the node becomes
-        // visible, so it appears already-settled) was rejected as if the
-        // animation ran late.
         if let Some(anim) = child.component.as_animatable() {
             for effect in anim.animation_effects() {
                 if let Some((delay, duration)) = entrance_budget(effect) {
                     let finishes_at = delay + duration;
-                    // 50ms tolerance for floating-point edge cases.
                     if finishes_at > scene_duration + 0.05 {
                         let suggested = ((finishes_at + 0.5) * 10.0).ceil() / 10.0;
                         errors.push(format!(
@@ -183,14 +140,6 @@ fn validate_children(
                     }
                 }
 
-                // Constat #6: `SpringConfig` accepts any f64 unchecked — a
-                // preset's own `spring` override (`AnimationTiming::spring`,
-                // reachable via `as_preset()`) or a `keyframes` effect's
-                // per-`Animation` `spring` (used when that segment's easing
-                // is `spring`) both feed `engine::animator::spring_value`,
-                // where `mass <= 0`/`stiffness <= 0` produce NaN and negative
-                // `damping` diverges. Reject both regimes here so a bad
-                // config never reaches the solver.
                 if let Some((_, timing)) = effect.as_preset() {
                     if let Some(spring) = &timing.spring {
                         check_spring_config(spring, &p, errors);
@@ -262,9 +211,6 @@ fn validate_children(
                     errors.push(format!("{}.src: file not found '{}'", p, m.src));
                 }
             }
-            // `Counter` is one of issue #333's eleven frozen-composition
-            // components: deprecating the struct deprecates every field read
-            // on it, and `counter_display_len` reads five of them directly.
             #[allow(deprecated)]
             Component::Counter(c) => {
                 let from_len =
@@ -280,18 +226,6 @@ fn validate_children(
                 }
             }
             Component::Container(container) => {
-                // `div`, `card`, `flex`, `grid` and `positioned` all
-                // deserialize into the same `ContainerComponent` now (see
-                // the alias list on `Component::Container` in `lib.rs`), so
-                // there is no way left to single out a node that was typed
-                // `grid` in the source JSON — only what its `style.display`
-                // actually says survives the merge. A bare `{"type":
-                // "grid"}` with no `display` and no
-                // `grid-template-columns` used to get its own dedicated
-                // error; it no longer can, since it is indistinguishable
-                // from a plain `div`. What still fires: explicit `display:
-                // grid` without `grid-template-columns`, previously the
-                // `card` half of this check.
                 if matches!(container.style.display, Some(CssDisplay::Grid))
                     && container.style.grid_template_columns.is_none()
                 {
@@ -304,22 +238,6 @@ fn validate_children(
     }
 }
 
-/// C2 completion: walk every colour reachable from a component's `style`
-/// (foreground `color`, `background` fills/gradient stops, box/text shadow
-/// colours, border colours, gradient-border colours) and report any
-/// `Color::String` that `parse_css_color` — the single frozen colour-parsing
-/// entry point (`engine/renderer/colors.rs`) — cannot resolve. At render
-/// time an unresolved colour already falls back to opaque magenta with a
-/// stderr warning (wave 1); this makes the same failure a blocking
-/// validation error so it's caught before anyone renders.
-///
-/// Scope: only `CssStyle`'s `Color`-typed fields, which is exactly the
-/// surface `paint_pass::parse_color` resolves through `parse_css_color` for
-/// every component. Component-specific plain-`String` colour fields (e.g.
-/// `Kbd.background_color`, `Table.header_color`, `Marquee.color`,
-/// `Notification.accent_color`) go through a different, more lenient path
-/// (`parse_hex_color`'s bare-hex retry) and are deliberately not covered
-/// here — see the workstream report for the full list.
 fn check_style_colors(style: &CssStyle, path: &str, errors: &mut Vec<String>) {
     if let Some(c) = &style.color {
         check_color(c, "color", path, errors);
@@ -412,53 +330,14 @@ fn check_color_str(s: &str, label: &str, path: &str, errors: &mut Vec<String>) {
     }
 }
 
-// ─── Generic interpolation of timeline/style.transition properties ────────
-//
-// Two independent silent-gap classes existed before this workstream, both
-// rooted in the same fact: `style.animation`/`timeline` accept a transition
-// on *any* named CSS/animation property, but the engine only actually knows
-// how to smoothly interpolate a handful of them. Everything else either (a)
-// snaps at the step's `at` instead of animating (`style.transition` +
-// `timeline` style states — see `box_builder.rs::apply_style_states`'s doc
-// comment), or (b) has no effect whatsoever, not even a snap (an explicit
-// `style.animation: [{ "name": "keyframes", "keyframes": [{ "property":
-// "…" }] }]` targeting a name `animator::apply_property` doesn't recognize).
-// `validate` used to say nothing about either. These two checks do.
-
-/// Classification of a CSS property with respect to `style.transition` +
-/// `timeline` style-state smoothing (`check_transition_smoothing` below).
-/// Mirrors real CSS's own interpolable/discrete split — see each variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransitionPropertyKind {
-    /// Already smoothed: `opacity` (always, when `style.transition` is
-    /// set), `color` (text/counter), `background`/`border-radius` (solid
-    /// colour / uniform absolute px — see the finer shape check in the
-    /// caller for when a *specific* value isn't one of those shapes).
     Smoothed,
-    /// CSS-spec-discrete (keyword/enum-valued) — snapping is the correct,
-    /// expected behaviour, exactly like real CSS `transition-property`
-    /// would do. Still diagnosed (reassuring wording, not an alarm): an
-    /// author who set `style.transition` and sees a hard cut on this
-    /// property deserves a line saying that's expected, not silence either
-    /// way — "sauter et le dire" per the workstream brief.
     Discrete,
-    /// Numeric/continuous but affects the layout box (size/position/flow).
-    /// Interpolating it would require the value to reach `run_layout` on
-    /// every sampled frame — out of reach without changing the frozen
-    /// `layout_pass.rs`/`paint_pass.rs`, and the reason this workstream
-    /// draws a hard line between paint-time and layout-time properties
-    /// (see the workstream report's "piège" section).
     Layout,
-    /// Numeric/continuous, paint-time, but not yet wired up to interpolate
-    /// (includes the empty/unrecognized-name fallback below — a future
-    /// `CssStyle` field this table hasn't been taught about yet fails loud,
-    /// not silent).
     UnsupportedPaint,
 }
 
-/// Classify a `CssStyle` field by its kebab-case JSON key (the wire name —
-/// matches what `apply_style_states`'s own `serde_json` merge keys on, and
-/// what an author actually typed under `style`/a `timeline[*].style`).
 fn classify_transition_property(name: &str) -> TransitionPropertyKind {
     use TransitionPropertyKind::*;
     match name {
@@ -500,34 +379,10 @@ fn classify_transition_property(name: &str) -> TransitionPropertyKind {
         | "max-width" | "max-height" | "margin" | "padding" | "border" | "aspect-ratio" | "gap"
         | "flex-grow" | "flex-shrink" | "flex-basis" | "font-size" | "line-height"
         | "letter-spacing" => Layout,
-        // "animation"/"transition"/"audio-reactive" are config, not visual
-        // state, and are filtered out of the walk before this is ever
-        // called (see `check_transition_smoothing`) — they never reach
-        // this match. Everything else — box-shadow, text-shadow,
-        // gradient-border, filter, backdrop-filter, transform,
-        // transform-origin, perspective, perspective-origin, depth,
-        // backdrop-blur, inner-shadow, and any `CssStyle` field added later
-        // that this table hasn't been taught about — fails loud here by
-        // design: an unrecognized name is treated as "known not to smooth"
-        // rather than silently passed through.
         _ => UnsupportedPaint,
     }
 }
 
-/// `style.transition` promises to smooth whichever CSS properties a
-/// `timeline` step changes — but `box_builder.rs`'s
-/// `apply_style_states`/`resolve_transition_css_overrides`/
-/// `transition_keyframes` only actually smooth `opacity`, `color`
-/// (text/counter), `background` (solid colour), and `border-radius`
-/// (uniform absolute px). Everything else still snaps at the step's `at`.
-///
-/// This walks the declared `timeline` in author order — not tied to any
-/// particular render time, unlike the runtime: a static check must catch
-/// every step-to-step (and base-to-first-step) diff, not just whichever one
-/// happens to be "due" at some sampled `t`. Only runs when `style.transition`
-/// is actually set: if it isn't, nothing was ever promised, and every
-/// property snapping is exactly the documented, expected behaviour (no
-/// diagnostic needed).
 fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut Vec<String>) {
     let style = component.as_styled().style_config();
     if style.transition.is_none() {
@@ -568,15 +423,6 @@ fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut 
             if changed && !warned.contains(k.as_str()) {
                 match classify_transition_property(k) {
                     TransitionPropertyKind::Discrete => {
-                        // Still named, not silent: `display`/`position`/etc.
-                        // have no in-between value (real CSS can't animate
-                        // them either), so this is expected, correct
-                        // behaviour — not a gap. The wording deliberately
-                        // reads as reassurance, not an alarm, but the point
-                        // is that an author who set `style.transition`
-                        // expecting *something* to smooth still gets a line
-                        // telling them exactly which property didn't and
-                        // why, instead of silence either way.
                         warnings.push(format!(
                             "{path}: style.transition is set and timeline changes `{k}`, but \
                              `{k}` is a discrete CSS property (no value exists in between the two \
@@ -586,12 +432,6 @@ fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut 
                         warned.insert(k.clone());
                     }
                     TransitionPropertyKind::Smoothed => {
-                        // `background`/`border-radius` only actually smooth
-                        // for a specific value shape (solid colour / uniform
-                        // absolute px) — anything else in the recognized-
-                        // property bucket must still be caught, or an
-                        // author using per-corner radii or a gradient would
-                        // get silence again, just one level deeper.
                         let resolves = match k.as_str() {
                             "border-radius" => {
                                 let mut probe = merged.clone();
@@ -656,20 +496,6 @@ fn check_transition_smoothing(component: &Component, path: &str, warnings: &mut 
     }
 }
 
-/// Constat #6: reject `SpringConfig` values that would make
-/// `engine::animator::spring_value` produce NaN (`mass <= 0`, `stiffness <=
-/// 0`) or diverge instead of settle (`damping < 0`). The solver itself also
-/// floors these defensively (belt and suspenders — see `spring_value`'s doc
-/// comment), but catching it here gives the author an actionable error
-/// instead of a silently broken render.
-///
-/// Issue #167 lot E adds `duration`/`rest_threshold`: a non-positive
-/// `duration` would make `spring_value`'s remap divide by zero or invert
-/// time (both silently ignored by the solver rather than rejected — see its
-/// `Some(duration) if duration > 0.0` guard), and a `rest_threshold` outside
-/// `(0.0, 1.0)` is either meaningless (<=0: never satisfied except in the
-/// limit) or vacuous (>=1.0: satisfied from t=0, before the spring has
-/// moved at all — the whole 0→1 travel is "close enough").
 fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<String>) {
     if spring.mass <= 0.0 {
         errors.push(format!(
@@ -716,28 +542,6 @@ fn check_spring_config(spring: &SpringConfig, path: &str, errors: &mut Vec<Strin
     }
 }
 
-/// Same "reject before it reaches the solver" posture as `check_spring_config`
-/// (constat #6), applied to `motion_path`.
-///
-/// `duration <= 0` would make `engine::animator::motion_path_progress`
-/// divide by (near-)zero — the solver already floors that defensively via
-/// `safe_div` (belt and suspenders, the same pattern `spring_value` uses for
-/// `mass`/`stiffness`), so this is an actionable author-facing error, not
-/// the only thing standing between a bad config and a degenerate (if still
-/// finite) render.
-///
-/// The path's own syntax/emptiness is already a hard parse-time error
-/// (`schema/video.rs::deserialize_motion_path_data` — a scenario carrying
-/// one would have failed to deserialize before ever reaching here). What
-/// *can* still reach here is a syntactically valid but geometrically
-/// degenerate path — (near-)zero measured length, e.g. a single point or
-/// every segment collapsing onto one — which is well-defined at render time
-/// (the component holds still, see `motion_path_sample`'s doc comment) but
-/// is very likely a typo (duplicated/near-identical coordinates) rather
-/// than an intentional "don't move" effect — especially combined with
-/// `orient: true`, where the tangent is undefined and orientation silently
-/// does nothing. Advisory only (`warnings`, not `errors`): nothing here is
-/// unsound to render, unlike `duration <= 0`.
 fn check_motion_path_config(
     cfg: &MotionPathConfig,
     path: &str,
@@ -769,7 +573,6 @@ fn check_motion_path_config(
     }
 }
 
-/// The `time_scale` declared on a container component, if any.
 fn container_time_scale(component: &Component) -> Option<f64> {
     match component {
         Component::Container(c) => c.time_scale,
@@ -777,11 +580,8 @@ fn container_time_scale(component: &Component) -> Option<f64> {
     }
 }
 
-/// Returns (delay, duration) for animations that have a completion budget,
-/// or None for exit presets, looped animations, and non-timing effects.
 fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
     match effect {
-        // Exit presets intentionally overlap with scene end — skip.
         AnimationEffect::FadeOut(_)
         | AnimationEffect::FadeOutUp(_)
         | AnimationEffect::FadeOutDown(_)
@@ -796,7 +596,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::FlipOutX(_)
         | AnimationEffect::FlipOutY(_) => None,
 
-        // All other presets with AnimationTiming: check if looped.
         AnimationEffect::FadeIn(t)
         | AnimationEffect::FadeInUp(t)
         | AnimationEffect::FadeInDown(t)
@@ -833,8 +632,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
 
         AnimationEffect::TiltIn(t) => Some((t.delay, t.duration)),
 
-        // Char animations: check delay + duration (conservative — stagger not factored since
-        // char count is unknown at validation time).
         AnimationEffect::CharScaleIn(t)
         | AnimationEffect::CharFadeIn(t)
         | AnimationEffect::CharWave(t)
@@ -843,9 +640,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
         | AnimationEffect::CharSlideUp(t)
         | AnimationEffect::CharBlurIn(t) => char_budget(t),
 
-        // A sweep of light is decoration over an element that is already
-        // there — it has a completion time like an entrance does, so it is
-        // budgeted the same way, but a looping one never completes.
         AnimationEffect::Shimmer(s) => {
             if s.repeat {
                 None
@@ -854,7 +648,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
             }
         }
 
-        // Custom keyframes
         AnimationEffect::Keyframes(k) => {
             if k.repeat {
                 None
@@ -863,10 +656,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
             }
         }
 
-        // A non-looping `motion_path` settles onto the path's end at
-        // `delay + duration`, exactly like `Keyframes`/`TiltIn` above —
-        // budget it the same way. A looping one is continuous by nature
-        // (like `Orbit`), so it has no completion budget.
         AnimationEffect::MotionPath(c) => {
             if c.repeat {
                 None
@@ -875,7 +664,6 @@ fn entrance_budget(effect: &AnimationEffect) -> Option<(f64, f64)> {
             }
         }
 
-        // Non-timing effects: continuous by nature, no completion budget.
         AnimationEffect::Glow(_)
         | AnimationEffect::Wiggle(_)
         | AnimationEffect::Orbit(_)
@@ -888,7 +676,6 @@ fn char_budget(t: &CharAnimationTiming) -> Option<(f64, f64)> {
     Some((t.delay, t.duration))
 }
 
-/// Estimate display character count for a counter value including prefix/suffix/separators.
 fn counter_display_len(
     value: f64,
     decimals: u8,
@@ -927,8 +714,6 @@ mod style_warning_tests {
 
     #[test]
     fn warns_on_accepted_but_unrendered_css_properties() {
-        // overflow-wrap and text-overflow parse into CssStyle but are not
-        // rendered yet; validate must say so instead of staying silent.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -951,8 +736,6 @@ mod style_warning_tests {
 
     #[test]
     fn warns_on_legacy_backdrop_blur_and_inner_shadow() {
-        // Legacy glassmorphism fields are accepted for compat but never
-        // rendered; validate must point at the working CSS equivalents.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "card",
             "style": {
@@ -998,9 +781,6 @@ mod style_warning_tests {
 
     #[test]
     fn negative_spring_damping_is_an_error() {
-        // Constat #6: damping < 0 makes the spring solver diverge instead of
-        // settle (a `SpringConfig` accepts any f64 — nothing in
-        // `rustmotion`'s CLI checked `damping`/`stiffness` before this).
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1020,7 +800,6 @@ mod style_warning_tests {
 
     #[test]
     fn zero_spring_stiffness_is_an_error() {
-        // stiffness <= 0 makes `spring_value`'s omega = sqrt(stiffness/mass) NaN.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1040,7 +819,6 @@ mod style_warning_tests {
 
     #[test]
     fn zero_spring_mass_is_an_error() {
-        // mass <= 0 makes omega = sqrt(stiffness/mass) divide by zero -> NaN.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1060,8 +838,6 @@ mod style_warning_tests {
 
     #[test]
     fn spring_inside_a_keyframes_effect_is_also_checked() {
-        // Springs aren't only on presets: a `keyframes` effect's per-Animation
-        // `spring` field feeds the exact same solver.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1102,8 +878,6 @@ mod style_warning_tests {
         validate_children(&[child], "test", 4.0, &mut errors, &mut warnings);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
     }
-
-    // ---- issue #167 lot E: `spring.duration`/`spring.rest_threshold` ----
 
     #[test]
     fn zero_spring_duration_is_an_error() {
@@ -1166,8 +940,6 @@ mod style_warning_tests {
 
     #[test]
     fn absurdly_large_rest_threshold_is_an_error() {
-        // >= 1.0 is satisfied at t=0, before the spring has moved at all —
-        // "at rest" from the first frame is not a meaningful measurement.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1222,13 +994,6 @@ mod style_warning_tests {
 
     #[test]
     fn completion_budget_does_not_add_start_at_to_delay_plus_duration() {
-        // Constat #4: `start_at` gates *visibility* only (PR #27) — the
-        // engine resolves `animation.delay`/`duration` in absolute scene
-        // time regardless of `start_at`, so an entrance that finishes at
-        // delay+duration=1.0s in a 2.0s scene is fine even if the node isn't
-        // visible until start_at=1.5s (it simply appears already-settled).
-        // The old formula added them (`start_at + delay + duration` =
-        // 1.5+0+1.0 = 2.5 > 2.0), rejecting this valid scenario.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "shape",
             "shape": "rect",
@@ -1252,8 +1017,6 @@ mod style_warning_tests {
     }
 }
 
-/// C2 completion (issue #110 / #102): an unresolved colour must fail
-/// validation, not just render as opaque magenta with a stderr warning.
 #[cfg(test)]
 mod color_validation_tests {
     use super::*;
@@ -1344,8 +1107,6 @@ mod color_validation_tests {
 
     #[test]
     fn rgba_object_color_form_never_errors() {
-        // Color::Rgba{r,g,b,a} is always valid by construction — only
-        // Color::String can fail to parse.
         let child: ChildComponent = serde_json::from_value(serde_json::json!({
             "type": "text",
             "content": "hi",
@@ -1373,11 +1134,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn layout_property_change_under_transition_is_diagnosed() {
-        // `width` affects the layout box — smoothing it would require
-        // `run_layout` on every sampled frame, which this workstream leaves
-        // to a future one (see the "piège" in the workstream report). It
-        // must still snap, but `validate` must say so instead of staying
-        // silent about it, the way it always has until now.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "width": "100px", "transition": 0.5 },
@@ -1393,10 +1149,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn unsupported_paint_property_change_under_transition_is_diagnosed() {
-        // `transform` is paint-time but this workstream deliberately did not
-        // implement list-shaped interpolation for it (see workstream
-        // report) — it must be diagnosed, not silently accepted just
-        // because it's "only" paint, not layout.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "transition": 0.5 },
@@ -1412,12 +1164,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn discrete_property_change_under_transition_is_diagnosed_but_reassuringly() {
-        // `display` is CSS-spec-discrete — snapping is the correct,
-        // expected behaviour (real CSS can't animate it either) — but the
-        // brief is explicit that a discrete property must still "sauter et
-        // le dire", not sauter en silence: an author who set
-        // `style.transition` and sees `display` hard-cut deserves a line
-        // explaining that's expected, distinguishable from an actual gap.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "transition": 0.5, "display": "flex" },
@@ -1429,9 +1175,6 @@ mod transition_smoothing_tests {
                 .any(|w| w.contains("`display`") && w.contains("expected")),
             "expected a reassuring discrete-property diagnostic naming `display`: {warnings:?}"
         );
-        // But it must read differently from an actual gap — never the
-        // "snap instead of animating" alarm wording the Layout/
-        // UnsupportedPaint branches use.
         assert!(
             warnings
                 .iter()
@@ -1443,9 +1186,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn newly_smoothed_properties_are_not_diagnosed() {
-        // `border-radius` (uniform, absolute px) and `background` (solid
-        // colour) are exactly the two properties this workstream taught
-        // `box_builder.rs` to interpolate — they must not warn.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "transition": 0.5, "border-radius": 0, "background": "#000000" },
@@ -1461,10 +1201,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn per_corner_border_radius_is_diagnosed_as_an_unresolvable_shape() {
-        // The interpolable set is "border-radius" by name, but only a
-        // uniform, absolute-px value actually resolves
-        // (`BorderRadius::absolute_px`) — a per-corner shape must still be
-        // caught, not pass silently just because the property name matches.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "transition": 0.5, "border-radius": 0 },
@@ -1483,9 +1219,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn no_transition_configured_means_no_diagnostic_at_all() {
-        // Without `style.transition`, nothing was ever promised — every
-        // property snapping (including `width`) is exactly the documented,
-        // expected behaviour. No diagnostic should fire.
         let warnings = warnings_for(serde_json::json!({
             "type": "div",
             "style": { "width": "100px" },
@@ -1499,19 +1232,6 @@ mod transition_smoothing_tests {
 
     #[test]
     fn unknown_explicit_keyframes_property_is_rejected_at_parse_time_not_validate_time() {
-        // A sibling silent-gap hypothesis this workstream investigated and
-        // found already closed: an explicit `style.animation` keyframes
-        // effect naming a `property` `animator::apply_property` doesn't
-        // recognize (e.g. a CSS-ish `"background-color"` instead of the
-        // solver's `"background"`/`"color"`) used to *look* like the same
-        // "known property but not wired up" gap `check_transition_smoothing`
-        // covers above — but it isn't reachable that far: `schema/video.rs`'s
-        // `deserialize_validated_keyframes`/`validate_motion_property`
-        // (constat #4, an earlier workstream) already rejects it during
-        // `Component` deserialization, with a did-you-mean suggestion, well
-        // before a scenario ever reaches `validate_scenario`. This test
-        // pins that down instead of re-diagnosing something `validate`
-        // structurally cannot ever see.
         let err = serde_json::from_value::<ChildComponent>(serde_json::json!({
             "type": "div",
             "style": {
@@ -1585,11 +1305,6 @@ mod motion_path_validation_tests {
         );
     }
 
-    // ---- brief's "single point" / "zero length" degenerate cases: legal at
-    // parse time, but advisory-flagged here since they are very likely a
-    // typo (constat: this mirrors check_spring_config's posture, but as a
-    // warning rather than an error — nothing here is unsound to render). ----
-
     #[test]
     fn a_single_point_path_is_a_warning_not_an_error() {
         let child = motion_path_child(serde_json::json!({
@@ -1631,8 +1346,6 @@ mod motion_path_validation_tests {
         );
     }
 
-    // ---- entrance-budget completion check now covers motion_path too ----
-
     #[test]
     fn a_non_looping_motion_path_finishing_after_the_scene_is_an_error() {
         let child = motion_path_child(serde_json::json!({
@@ -1643,13 +1356,7 @@ mod motion_path_validation_tests {
         }));
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        validate_children(
-            &[child],
-            "test",
-            /*scene_duration=*/ 2.0,
-            &mut errors,
-            &mut warnings,
-        );
+        validate_children(&[child], "test", 2.0, &mut errors, &mut warnings);
         assert!(
             errors.iter().any(|e| e.contains("animation finishes at")),
             "expected the entrance-budget error for delay 3.5 + duration 1.0 > scene 2.0: {errors:?}"
@@ -1667,13 +1374,7 @@ mod motion_path_validation_tests {
         }));
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        validate_children(
-            &[child],
-            "test",
-            /*scene_duration=*/ 2.0,
-            &mut errors,
-            &mut warnings,
-        );
+        validate_children(&[child], "test", 2.0, &mut errors, &mut warnings);
         assert!(
             errors.iter().all(|e| !e.contains("animation finishes at")),
             "a looping motion_path must not be budget-checked, like orbit/wiggle: {errors:?}"
@@ -1681,10 +1382,6 @@ mod motion_path_validation_tests {
     }
 }
 
-/// Issue #336: a grammatically valid `at` that still can't be *resolved*
-/// (a beat unit with no `bpm` declared) must be a named, located, blocking
-/// error — `unresolved_beat_unit` — not a silent fallback to automatic
-/// placement.
 #[cfg(test)]
 mod unresolved_beat_unit_tests {
     use super::*;

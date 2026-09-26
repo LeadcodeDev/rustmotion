@@ -1,13 +1,3 @@
-//! Issue #167 lot E: `SpringConfig::duration`/`rest_threshold` and
-//! `engine::animator::spring_rest_time` are meant to be used from outside
-//! `rustmotion-core` (by `rustmotion`'s `info` command, in particular).
-//! This is a black-box check that the public surface actually works end to
-//! end — the white-box coverage (settle-time correctness against a
-//! brute-force reference, over/under-damped edge cases, shape preservation)
-//! lives in `crates/rustmotion-core/src/engine/animator.rs`'s
-//! `spring_duration_tests` module, since it needs access to private solver
-//! internals that this crate does not expose.
-
 use rustmotion_core::engine::animator::{spring_rest_time, spring_value};
 use rustmotion_core::schema::SpringConfig;
 
@@ -44,9 +34,6 @@ fn spring_config_duration_round_trips_through_json() {
 
 #[test]
 fn a_spring_without_duration_settles_on_its_own_schedule() {
-    // damping=6, stiffness=120, mass=1: the same underdamped spring used
-    // throughout the crate's internal tests (elastic_in / kf_anim_spring's
-    // sibling). Its natural settle time is a couple seconds, not 0.8s.
     let config = spring(6.0, 120.0, 1.0, None);
     let natural_rest = spring_rest_time(&config);
     assert!(

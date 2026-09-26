@@ -1,34 +1,3 @@
-//! HTML/CSS → Rustmotion scenario JSON transpiler (browserless, compiled in).
-//!
-//! ## Variable substitution (`$name`) from the CLI
-//!
-//! HTML scenarios cannot carry a `config` block (there is no element for it),
-//! so they do not declare variables with types and defaults. However, `$name`
-//! references in element text content are still replaced post-transpilation when
-//! variable overrides are provided via `--var` / `--props` on the CLI:
-//!
-//! ```html
-//! <!-- hero.html -->
-//! <rustmotion width="1920" height="1080" fps="30">
-//!   <scene duration="3">
-//!     <h1 style="font-size:96; color:#fff">Welcome, $username!</h1>
-//!   </scene>
-//! </rustmotion>
-//! ```
-//!
-//! ```sh
-//! rustmotion render -f hero.html --var username=Alice -o alice.mp4
-//! ```
-//!
-//! Because there is no `config` block, **unknown override keys are not an error**
-//! — they are simply available for substitution but silently unused if no `$name`
-//! reference matches. Unresolved `$name` references after substitution are also
-//! silently ignored (no `UnresolvedVariable` error), since the document may
-//! contain no variable references at all.
-//!
-//! For type-safe variables with defaults and schema validation, use a JSON
-//! scenario with a `config` block instead.
-
 mod element;
 mod scene;
 mod style;
@@ -40,7 +9,6 @@ use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 
-/// Errors from transpiling HTML to a scenario value.
 #[derive(Debug, thiserror::Error)]
 pub enum HtmlError {
     #[error("no <rustmotion> root element found")]
@@ -61,85 +29,38 @@ pub enum HtmlError {
     InvalidAnimDsl(String),
     #[error("transition-duration and transition-easing require a transition attribute")]
     TransitionParamsWithoutTransition,
-    /// Emitted when `<font>` has neither `path`/`src` nor `source`.
     #[error(
         "<font> requires either 'path'/'src' (local file) or 'source' (e.g. source=\"google\")"
     )]
     MissingFontAttributes,
-    /// Emitted when `<font>` sets both `path`/`src` and `source` — they are mutually exclusive.
     #[error("<font family=\"{family}\">: 'path'/'src' and 'source' are mutually exclusive")]
     FontPathAndSourceConflict { family: String },
-    /// Emitted for `<style>`. Unlike `<script>`/`<title>`/`<noscript>`/`<template>`
-    /// (silently skipped — they never visually render in real HTML either, so
-    /// skipping them matches an author's own expectation), `<style>` DOES have
-    /// real, expected visual effect in HTML. The dialect has no CSS
-    /// selector/cascade engine (only inline `style="..."` attributes), so a
-    /// `<style>` block's rules would never take effect — refused instead of
-    /// silently discarded, so the author's intent isn't dropped without a trace.
     #[error(
         "<style> blocks are not supported by the HTML dialect (no CSS selector/cascade engine) — move these declarations onto the target elements' style=\"...\" attribute"
     )]
     StyleElementUnsupported,
-    /// Emitted for a native HTML tag whose real payload (`src`, nested shape
-    /// markup, …) has no representation via the generic `Container`/`div`
-    /// fallback — that fallback would silently render an empty box. The
-    /// dialect's `rm-*` custom-element mechanism is the way to express these.
     #[error(
         "<{tag}> is not supported by the HTML dialect and would render as an empty container — use <{suggestion} ...> instead"
     )]
     UnsupportedNativeElement { tag: String, suggestion: String },
-    /// Emitted when a `<scene>` is found nested inside an element other than
-    /// `<rustmotion>` itself (or `<font>`, which the transpiler recurses
-    /// through to work around html5ever's formatting-element reconstruction).
-    /// `collect_scenes_and_fonts` only walks direct children, so a nested
-    /// `<scene>` would otherwise vanish from the scenario without a trace.
     #[error(
         "<scene> found nested inside <{parent}> — <scene> elements must be direct children of <rustmotion> (only <font> is recursed into)"
     )]
     NestedScene { parent: String },
-    /// Emitted when an element carries an attribute the transpiler never
-    /// reads. `<rustmotion>`, `<scene>`, and native container/text tags only
-    /// ever consume a fixed, small set of attribute names — anything else
-    /// used to vanish with no trace, invisible to `--strict-attrs` because
-    /// it never reached the emitted JSON in the first place.
     #[error("<{element}> has unsupported attribute(s): {detail} — these are silently ignored today; fix the typo, drop them, or use the attribute the dialect actually reads")]
     UnknownAttributes { element: String, detail: String },
-    /// Emitted for a `<scene>`'s `world-position` attribute that is neither
-    /// `"x,y"` nor a JSON `{"x":..,"y":..}` object.
     #[error("world-position=\"{0}\" is not \"x,y\" or a JSON object {{\"x\":..,\"y\":..}}")]
     InvalidWorldPosition(String),
-    /// Emitted for a `<scene>`'s `animated-background` attribute when its
-    /// value starts with `{`/`[` but fails to parse as JSON.
     #[error("animated-background attribute contains invalid JSON: {0}")]
     InvalidAnimatedBackgroundJson(String),
-    /// Emitted for a `style="..."` declaration whose value has more than one
-    /// top-level (paren-aware) token and isn't one of the shorthands the
-    /// transpiler knows how to expand (`padding`/`margin`/`border-radius`'s
-    /// 1-4 value box form, `grid-template-columns`/`-rows`'s track list with
-    /// `repeat()`/`minmax()`). Every other multi-token value used to become
-    /// an opaque string the core length parser cannot read, silently
-    /// resolving to `0px`.
     #[error("style property '{prop}' has an unsupported multi-token value '{value}' — supported multi-token forms are the padding/margin/border-radius box shorthand and grid-template-columns/-rows track lists with repeat()/minmax(); rewrite as a single value")]
     UnsupportedStyleShorthand { prop: String, value: String },
-    /// Emitted when a `<script>`/`<img>`/`<svg>`/`<rm-*>`/container element
-    /// is found nested inside an inline text element (`p`/`span`/`h1..h6`/
-    /// `strong`/`em`/`label`). Those flatten their whole subtree to a plain
-    /// string — a nested element with real content (a component, a shape, a
-    /// child container) has nowhere to go and used to either bleed its raw
-    /// source into the string or vanish outright.
     #[error("<{tag}> cannot appear inside an inline text element (p/span/h1..h6/strong/em/label) — those flatten their content to a plain string, so <{tag}>'s own content would be silently lost; move it outside as a sibling, or wrap the text in a <div>/<rm-*> container instead")]
     TextContentUnsupportedChild { tag: String },
-    /// Emitted when the HTML serializer itself fails (I/O error into an
-    /// in-memory buffer, or non-UTF-8 output) inside the studio write-back
-    /// path. The write-back functions refuse (return `None`) rather than
-    /// hand the caller a partial or empty buffer to write to disk.
     #[error("failed to serialize the rewritten HTML: {0}")]
     SerializeFailed(String),
 }
 
-/// Transpile an HTML-dialect document into the scenario `serde_json::Value` that
-/// the JSON format uses. The result is fed straight into
-/// `serde_json::from_value::<Scenario>` by the loader.
 pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
     let dom = parse_fragment_dom(html);
     let root = find_element(&dom.document, "rustmotion").ok_or(HtmlError::MissingRoot)?;
@@ -187,8 +108,6 @@ pub fn html_to_scenario_value(html: &str) -> Result<Value, HtmlError> {
     Ok(Value::Object(scenario))
 }
 
-/// Parse a `background` attribute value: if it starts with `{` or `[`, treat it as
-/// JSON and parse it; otherwise return it as a plain string value.
 pub(crate) fn parse_background_attr(raw: &str) -> Result<Value, HtmlError> {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -198,14 +117,6 @@ pub(crate) fn parse_background_attr(raw: &str) -> Result<Value, HtmlError> {
     }
 }
 
-/// Map a `<font>` element to a FontEntry JSON object.
-///
-/// Two modes:
-/// - **Local**: `<font family="Inter" path="fonts/Inter.ttf">` or `src=` alias.
-/// - **Google Fonts**: `<font family="Inter" source="google" weights="400,700">`.
-///
-/// `path`/`src` and `source` are mutually exclusive — an error is returned if
-/// both are present.
 fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     let attrs = element_attrs(handle);
     let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
@@ -215,13 +126,10 @@ fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
     let source = get("source");
 
     match (path, source) {
-        // Conflict: both local path and remote source set.
         (Some(_), Some(_)) => Err(HtmlError::FontPathAndSourceConflict { family }),
 
-        // Google Fonts mode.
         (None, Some(source_val)) => {
             let mut obj = serde_json::json!({ "family": family, "source": source_val });
-            // Parse optional weights="400,700" CSV into a JSON array of integers.
             if let Some(weights_raw) = get("weights") {
                 let parsed: Vec<u16> = weights_raw
                     .split(',')
@@ -234,28 +142,12 @@ fn font_to_value(handle: &Handle) -> Result<Value, HtmlError> {
             Ok(obj)
         }
 
-        // Local file mode.
         (Some(p), None) => Ok(serde_json::json!({ "family": family, "path": p })),
 
-        // Neither path nor source.
         (None, None) => Err(HtmlError::MissingFontAttributes),
     }
 }
 
-/// Walk the immediate children of `parent`, collecting `<scene>` and `<font>`
-/// elements. Because html5ever's HTML5 parser treats `<font>` as a formatting
-/// element and nests subsequent siblings inside it, we recurse into `<font>`
-/// children so that `<scene>` elements placed after `<font>` declarations are
-/// still found at any depth.
-///
-/// Any other child is scanned (at any depth) for a nested `<scene>` — a
-/// wrapper element (typo'd unclosed tag, deliberate `<div>` grouping, or
-/// html5ever's own formatting-element error recovery on tags like `<b>`)
-/// would otherwise make `<scene>` elements vanish from the scenario with no
-/// trace, since this function only descends into direct children. A `<style>`
-/// found at this level is refused for the same reason `element_to_value`
-/// refuses it inside a scene: it has real expected visual effect that the
-/// dialect cannot honor, so it must not be silently dropped either.
 fn collect_scenes_and_fonts(
     parent: &Handle,
     scenes: &mut Vec<Value>,
@@ -266,7 +158,6 @@ fn collect_scenes_and_fonts(
             Some("scene") => scenes.push(scene::scene_to_value(child)?),
             Some("font") => {
                 fonts.push(font_to_value(child)?);
-                // Recurse: html5ever may nest siblings inside the <font> element.
                 collect_scenes_and_fonts(child, scenes, fonts)?;
             }
             Some("style") => return Err(HtmlError::StyleElementUnsupported),
@@ -281,7 +172,6 @@ fn collect_scenes_and_fonts(
     Ok(())
 }
 
-/// Parse an HTML fragment into an RcDom (browserless; html5ever).
 pub(crate) fn parse_fragment_dom(html: &str) -> RcDom {
     parse_fragment(
         RcDom::default(),
@@ -293,7 +183,6 @@ pub(crate) fn parse_fragment_dom(html: &str) -> RcDom {
     .one(html.to_string())
 }
 
-/// The lowercase local tag name of an element handle, or `None` for non-elements.
 pub(crate) fn tag_name(handle: &Handle) -> Option<String> {
     match &handle.data {
         NodeData::Element { name, .. } => Some(name.local.to_string()),
@@ -301,7 +190,6 @@ pub(crate) fn tag_name(handle: &Handle) -> Option<String> {
     }
 }
 
-/// `(name, value)` pairs of an element's attributes (empty for non-elements).
 pub(crate) fn element_attrs(handle: &Handle) -> Vec<(String, String)> {
     match &handle.data {
         NodeData::Element { attrs, .. } => attrs
@@ -313,18 +201,10 @@ pub(crate) fn element_attrs(handle: &Handle) -> Vec<(String, String)> {
     }
 }
 
-/// `class`/`id`/`data-*` are accepted anywhere and never reach the emitted
-/// scenario JSON — deliberately inert, not a signal of an unread attribute.
 fn is_inert_attr(name: &str) -> bool {
     name == "class" || name == "id" || name.starts_with("data-")
 }
 
-/// Fail on any attribute of `element` outside `known` (plus the always-inert
-/// `class`/`id`/`data-*`), naming every offender in one error with a
-/// did-you-mean suggestion against `known`. This is what closes the gap
-/// `check_component_attrs` (`rustmotion`'s `--strict-attrs`) cannot: that
-/// check only sees attributes the transpiler already forwarded into the
-/// scenario JSON, so an attribute dropped here was invisible to it.
 pub(crate) fn check_known_attrs(
     element: &str,
     attrs: &[(String, String)],
@@ -352,8 +232,6 @@ pub(crate) fn check_known_attrs(
     })
 }
 
-/// The closest entry in `known` to `name` (Levenshtein distance <= 2), or
-/// `None` when nothing is close enough to be worth suggesting.
 fn suggest<'a>(name: &str, known: &[&'a str]) -> Option<&'a str> {
     known
         .iter()
@@ -378,7 +256,6 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Depth-first: the first descendant element with the given tag name.
 pub(crate) fn find_element(handle: &Handle, tag: &str) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
         if tag_name(child).as_deref() == Some(tag) {
@@ -391,11 +268,6 @@ pub(crate) fn find_element(handle: &Handle, tag: &str) -> Option<Handle> {
     None
 }
 
-/// Set or replace an inline `style` property on the element addressed by the
-/// JSON pointer (into the transpiled scenario), returning the rewritten HTML.
-/// Used by the studio inspector to persist a property edit back into the HTML
-/// source. The document is re-serialized (formatting is normalized). Returns
-/// `None` if the pointer doesn't resolve to an element.
 pub fn set_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> Option<String> {
     let dom = parse_fragment_dom(html);
     let root = find_element(&dom.document, "rustmotion")?;
@@ -404,10 +276,6 @@ pub fn set_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> O
     splice_rustmotion_subtree(html, &root)
 }
 
-/// Replace the text content of the element addressed by the JSON pointer with
-/// `text`, returning the rewritten HTML. Used by the studio inspector's content
-/// editor (mirrors [`set_inline_style`]). Returns `None` if the pointer doesn't
-/// resolve to an element.
 pub fn set_text_content(html: &str, pointer: &str, text: &str) -> Option<String> {
     let dom = parse_fragment_dom(html);
     let root = find_element(&dom.document, "rustmotion")?;
@@ -416,14 +284,6 @@ pub fn set_text_content(html: &str, pointer: &str, text: &str) -> Option<String>
     splice_rustmotion_subtree(html, &root)
 }
 
-/// Set or replace a plain attribute on the element addressed by the JSON
-/// pointer (into the transpiled scenario), returning the rewritten HTML. Used
-/// by the studio inspector for component root fields (`<rm-counter from=…>`).
-/// Attributes are strings; the transpiler's coercion re-types them on load.
-/// An EMPTY `value` REMOVES the attribute (unset, not empty-string — the
-/// transpiler skips empty attributes anyway). `anim`, `style` and every other
-/// attribute are preserved (mirrors [`set_inline_style`]). Returns `None` if
-/// the pointer doesn't resolve to an element.
 pub fn set_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Option<String> {
     let dom = parse_fragment_dom(html);
     let root = find_element(&dom.document, "rustmotion")?;
@@ -432,10 +292,6 @@ pub fn set_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Opti
     splice_rustmotion_subtree(html, &root)
 }
 
-/// Remove one inline `style` property from the element addressed by the JSON
-/// pointer, returning the rewritten HTML (an emptied inspector control unsets
-/// the declaration). Other declarations and attributes are preserved. Returns
-/// `None` if the pointer doesn't resolve to an element.
 pub fn remove_inline_style(html: &str, pointer: &str, prop: &str) -> Option<String> {
     let dom = parse_fragment_dom(html);
     let root = find_element(&dom.document, "rustmotion")?;
@@ -444,7 +300,6 @@ pub fn remove_inline_style(html: &str, pointer: &str, prop: &str) -> Option<Stri
     splice_rustmotion_subtree(html, &root)
 }
 
-/// Upsert (or, for an empty value, remove) a plain attribute on an element.
 fn set_attr(handle: &Handle, name: &str, value: &str) -> Option<()> {
     let NodeData::Element { attrs, .. } = &handle.data else {
         return None;
@@ -465,14 +320,13 @@ fn set_attr(handle: &Handle, name: &str, value: &str) -> Option<()> {
     Some(())
 }
 
-/// Drop one `prop: value` declaration from an element's `style` attribute.
 fn remove_style_decl(handle: &Handle, prop: &str) -> Option<()> {
     let NodeData::Element { attrs, .. } = &handle.data else {
         return None;
     };
     let mut attrs = attrs.borrow_mut();
     let Some(a) = attrs.iter_mut().find(|a| a.name.local.as_ref() == "style") else {
-        return Some(()); // no style attribute → nothing to remove
+        return Some(());
     };
     let kept: Vec<String> = a
         .value
@@ -492,7 +346,6 @@ fn remove_style_decl(handle: &Handle, prop: &str) -> Option<()> {
     Some(())
 }
 
-/// Replace an element's children with a single text node.
 fn set_text(handle: &Handle, text: &str) -> Option<()> {
     if !matches!(handle.data, NodeData::Element { .. }) {
         return None;
@@ -504,8 +357,6 @@ fn set_text(handle: &Handle, text: &str) -> Option<()> {
     Some(())
 }
 
-/// Numeric segments of a JSON pointer, e.g. `/scenes/0/children/2` → `[0, 2]`.
-/// The first is the scene index; the rest walk content-node children.
 fn parse_indices(pointer: &str) -> Vec<usize> {
     pointer
         .split('/')
@@ -513,8 +364,6 @@ fn parse_indices(pointer: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Walk from `<rustmotion>` to the element a pointer addresses, mirroring the
-/// transpiler's ordering (content nodes = elements + non-whitespace text).
 fn resolve_pointer(root: &Handle, pointer: &str) -> Option<Handle> {
     let idx = parse_indices(pointer);
     let (&scene_i, rest) = idx.split_first()?;
@@ -571,7 +420,6 @@ fn set_style_attr(handle: &Handle, prop: &str, value: &str) -> Option<()> {
     Some(())
 }
 
-/// Set/replace one `prop: value` in a CSS declaration list, preserving order.
 fn upsert_decl(decls: &str, prop: &str, value: &str) -> String {
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut found = false;
@@ -600,18 +448,6 @@ fn upsert_decl(decls: &str, prop: &str, value: &str) -> String {
         .join("; ")
 }
 
-/// Re-serialize `root` (the mutated `<rustmotion>` subtree) and splice it
-/// back into `original` at the exact byte span its `<rustmotion>...
-/// </rustmotion>` element occupies there, leaving everything before and
-/// after — doctype, `<head>`, comments, anything else the author wrote —
-/// byte-for-byte untouched. `original` is used as the source of truth for
-/// that surrounding content rather than `root`'s own parsed document,
-/// because `parse_fragment_dom` parses in a body-fragment context, which
-/// does not retain a doctype at all and does not guarantee round-tripping
-/// `<html>`/`<head>`/`<body>` the way the author wrote them. Refuses
-/// (`None`) rather than write a corrupted file when the span can't be
-/// located (no `<rustmotion>`/`</rustmotion>` literal in `original`, e.g. an
-/// unclosed root) or the serializer itself fails.
 fn splice_rustmotion_subtree(original: &str, root: &Handle) -> Option<String> {
     let open_start = original.find("<rustmotion")?;
     let close_start = original.rfind("</rustmotion")?;
@@ -675,7 +511,6 @@ mod lib_tests {
         let out = crate::set_text_content(html, "/scenes/0/children/0", "Bonjour").unwrap();
         let v = crate::html_to_scenario_value(&out).unwrap();
         assert_eq!(v["scenes"][0]["children"][0]["content"], json!("Bonjour"));
-        // The style attribute is preserved.
         assert_eq!(
             v["scenes"][0]["children"][0]["style"]["font-size"],
             json!(96)
@@ -709,18 +544,14 @@ mod lib_tests {
         assert!(crate::html_to_scenario_value("<div>no root</div>").is_err());
     }
 
-    // --- set_attribute (studio schema inspector) ---
-
     #[test]
     fn set_attribute_updates_counter_from_and_retypes_on_transpile() {
         let html = r##"<rustmotion width="100" height="100"><scene duration="2"><rm-counter from="0" to="100" anim="fade-in" style="font-size:64; color:#fff"></rm-counter></scene></rustmotion>"##;
         let out = crate::set_attribute(html, "/scenes/0/children/0", "from", "250").unwrap();
         let v = crate::html_to_scenario_value(&out).unwrap();
         let child = &v["scenes"][0]["children"][0];
-        // The attribute string is re-typed to a number by the transpiler.
         assert_eq!(child["from"], json!(250));
         assert!(child["from"].is_number());
-        // Other attributes are preserved: to, anim (→ style.animation), style.
         assert_eq!(child["to"], json!(100));
         assert_eq!(child["style"]["font-size"], json!(64));
         assert_eq!(child["style"]["color"], json!("#fff"));
@@ -754,8 +585,6 @@ mod lib_tests {
         assert_eq!(style["font-size"], json!(96), "other declarations kept");
     }
 
-    // --- anim round-trip (studio) ---
-
     #[test]
     fn set_inline_style_preserves_anim_attribute() {
         let html = r##"<rustmotion width="100" height="100"><scene duration="2"><h1 anim="fade-in-up delay:0.3" style="font-size:96">Hi</h1></scene></rustmotion>"##;
@@ -783,8 +612,6 @@ mod lib_tests {
             json!([{ "name": "pulse", "loop": true }])
         );
     }
-
-    // --- font tests ---
 
     #[test]
     fn fonts_are_collected_from_font_elements() {
@@ -839,8 +666,6 @@ mod lib_tests {
         );
     }
 
-    // --- Google Fonts HTML tests ---
-
     #[test]
     fn font_with_source_google_transpiles_correctly() {
         let html = r##"<rustmotion width="1920" height="1080">
@@ -894,8 +719,6 @@ mod lib_tests {
             "expected FontPathAndSourceConflict, got: {err:?}"
         );
     }
-
-    // --- root-level background JSON ---
 
     #[test]
     fn root_background_json_object_is_parsed() {

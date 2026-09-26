@@ -101,14 +101,6 @@ impl Painter for Progress {
         _props: &AnimatedProperties,
         _ctx: &PaintCtx,
     ) {
-        // `self.width`/`self.height` only seed the *intrinsic* size in
-        // `box_builder` (promoted to CSS when `style.width`/`style.height`
-        // are absent) — the box taffy actually assigns can differ whenever
-        // an author sets `style.width`/`style.height` or a flex-grow
-        // idiom directly, which `html-css-mental-model.md` recommends.
-        // Painting at `self.width`/`self.height` regardless left the fill
-        // sized to whichever one happened to be smaller, filling only part
-        // of its own box (or overflowing it) instead of the box.
         let _ = self.paint(canvas, layout.width, layout.height);
     }
 }
@@ -118,7 +110,6 @@ impl Progress {
         let radius = self.border_radius;
         let progress = self.progress.clamp(0.0, 1.0) as f32;
 
-        // Background
         let mut bg_paint = skia_safe::Paint::new(color4f_from_hex(&self.background_color), None);
         bg_paint.set_style(PaintStyle::Fill);
         bg_paint.set_anti_alias(true);
@@ -127,7 +118,6 @@ impl Progress {
         let bg_rrect = RRect::new_rect_xy(bg_rect, radius, radius);
         canvas.draw_rrect(bg_rrect, &bg_paint);
 
-        // Fill (progress)
         if progress > 0.001 {
             let mut fill_paint = skia_safe::Paint::new(color4f_from_hex(&self.fill_color), None);
             fill_paint.set_style(PaintStyle::Fill);
@@ -153,7 +143,6 @@ impl Progress {
         let radius = (cx.min(cy) - self.track_width / 2.0 - 2.0).max(0.0);
         let oval = Rect::from_xywh(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
 
-        // Track
         let mut track_paint = paint_from_hex(&self.background_color);
         track_paint.set_style(PaintStyle::Stroke);
         track_paint.set_stroke_width(self.track_width);
@@ -161,7 +150,6 @@ impl Progress {
         track_paint.set_anti_alias(true);
         canvas.draw_arc(oval, 0.0, 360.0, false, &track_paint);
 
-        // Fill arc
         if progress > 0.001 {
             let sweep = 360.0 * progress;
             let mut fill_paint = paint_from_hex(&self.fill_color);
@@ -172,7 +160,6 @@ impl Progress {
             canvas.draw_arc(oval, -90.0, sweep, false, &fill_paint);
         }
 
-        // Value text
         if self.show_value {
             let text = format!("{}%", (progress * 100.0).round() as i32);
             let font_size = (radius * 0.5).max(10.0);
@@ -278,13 +265,6 @@ mod tests {
 
     #[test]
     fn linear_progress_fills_the_layout_box_not_its_own_width_height() {
-        // #4's exact repro: `render_linear` always drew at `self.width` x
-        // `self.height` (defaults 300x20) regardless of the box taffy
-        // actually assigned it. `box_builder` only promotes `c.width`/
-        // `c.height` to CSS when `style.width`/`style.height` are absent —
-        // so a `progress` sized via `style.width: 800` (the project's
-        // CSS-first idiom) painted a 300px-wide bar sitting inside an
-        // 800px-wide box, filling only 37% of it at `progress: 0.5`.
         let progress = base_progress(ProgressVariant::Linear);
         const BOX_W: f32 = 800.0;
         const BOX_H: f32 = 24.0;
@@ -304,9 +284,6 @@ mod tests {
         }
         let (_minx, maxx, _miny, _maxy) =
             ink_bounds(&mut surface, 900, 200).expect("progress must paint something");
-        // At progress 0.5 the fill should reach roughly the middle of the
-        // 800px box (~400px), not the middle of the component's own
-        // `width` field (300px -> 150px).
         assert!(
             maxx as f32 > BOX_W * 0.4,
             "fill did not scale to the box's own width: max ink x = {maxx}, box width = {BOX_W}"
@@ -334,10 +311,6 @@ mod tests {
         }
         let (minx, maxx, miny, maxy) =
             ink_bounds(&mut surface, 300, 300).expect("progress must paint something");
-        // The ring must be centered on the 60x60 box's own center (30, 30),
-        // not on the component's own `width`/`height` fields' center
-        // (150, 10 for the 300x20 defaults) — the un-fixed painter puts the
-        // whole ring outside a small box entirely.
         let center_x = (minx + maxx) as f32 / 2.0;
         let center_y = (miny + maxy) as f32 / 2.0;
         assert!(

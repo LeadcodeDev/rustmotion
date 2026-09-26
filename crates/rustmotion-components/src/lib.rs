@@ -1,27 +1,3 @@
-// Issue #333 (phase B): the twenty-seven frozen-composition components
-// (`stat`, `badge`, `gauge`, ... — see each type's own `#[deprecated]` note
-// for its replacement recipe) carry a `#[deprecated]` attribute so a Rust
-// consumer of this crate who writes `Badge { .. }`/`Stat { .. }`/etc. by hand
-// is told, at their own call site, what to compose instead.
-//
-// That attribute also fires for every internal reference to the same type —
-// the struct's own derive-generated impls, its `impl Painter`, every field
-// read in `box_builder`'s intrinsic-sizing/style-extraction match arms, and
-// the `Component` enum's own tagged-variant plumbing in this file — because
-// deprecating a struct deprecates its fields too, and Rust does not
-// distinguish "the engine implementing this component" from "an author
-// constructing one". None of that internal traffic is an authoring site:
-// rendering an existing `badge`/`stat`/... scenario byte-identically
-// requires touching every one of those fields exactly as before, and a JSON
-// scenario is deserialized through this crate's own generated
-// `Deserialize` impls, never through hand-written Rust at the call site — so
-// `serde_json::from_str::<Component>(..)` in `rustmotion`'s render path
-// never lints here regardless of this attribute. This single crate-root
-// allow silences only that internal noise; it does not extend to any other
-// crate, so a hand-written construction in `rustmotion-html`,
-// the studio, or this crate's own `tests/` integration suite (each
-// a separate compilation unit) still warns. Verified empirically before
-// relying on it: see the phase-B report for issue #333.
 #![allow(deprecated)]
 pub mod box_builder;
 pub mod intrinsic;
@@ -142,19 +118,6 @@ pub use treemap::Treemap;
 pub use video::Video;
 pub use waveform::Waveform;
 
-// --- Position mode ---
-
-/// Constat #8: `PositionMode::Named(String)` accepts any string, but
-/// [`ChildComponent::absolute_position`] only ever treats the literal
-/// `"absolute"` specially — every other value (including the CSS-legitimate
-/// `"relative"`/`"static"`, which an LLM reasoning in CSS terms naturally
-/// reaches for) silently drops `x`/`y`: the component is taken out of flow
-/// (`is_flow()` is false for any `Some(position)`) but never receives an
-/// absolute offset either, since only `"absolute"` is matched. `x`/`y` are
-/// top-level sibling fields on `ChildComponent`, not on `PositionMode`
-/// itself, so this can't detect *whether* they were actually set — only
-/// that, if they were, they are about to be silently ignored. `"absolute"`
-/// stays completely silent (the common, correct case); anything else warns.
 pub fn is_recognized_position_name(s: &str) -> bool {
     s == "absolute"
 }
@@ -196,14 +159,6 @@ impl<'de> Deserialize<'de> for PositionMode {
     }
 }
 
-/// True the first time this exact `position` value is seen, false afterwards.
-///
-/// `render_scene_frame` calls `prepare_scene` — and therefore re-runs this
-/// `Deserialize` over the whole scene tree — once **per frame**. An unguarded
-/// warning here would print the same line once per offending component per
-/// frame: over a thousand times on a 1200-frame render, drowning out anything
-/// else on stderr. Keyed by the value rather than a plain `Once` so a scenario
-/// with several distinct bad values still hears about each of them.
 pub(crate) fn warn_once_for(value: &str) -> bool {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
@@ -223,8 +178,6 @@ impl Default for PositionMode {
 #[cfg(test)]
 mod position_mode_tests {
     use super::*;
-
-    // ---- constat #8 (RED first) ----
 
     #[test]
     fn absolute_is_recognized() {
@@ -259,14 +212,6 @@ mod position_mode_tests {
 
     #[test]
     fn relative_still_parses_but_drops_x_y_and_the_helper_flags_it() {
-        // The legitimate-CSS trap named in constat #8: an LLM writes
-        // `"position": "relative"` (valid CSS) with `x`/`y` alongside it,
-        // expecting a positioned element. The parse must not fail — this is
-        // legitimate JSON per the schema's own untagged catch-all — but the
-        // coordinates are provably dropped (`absolute_position()` is
-        // `None`), and `is_recognized_position_name` is the named,
-        // independently testable signal the warning path uses to detect
-        // this instead of staying silent.
         let json =
             r#"{ "position": "relative", "x": 5.0, "y": 7.0, "type": "shape", "shape": "circle" }"#;
         let child: ChildComponent = serde_json::from_str(json).unwrap();
@@ -280,13 +225,9 @@ mod position_mode_tests {
             "x/y are indeed dropped for a non-\"absolute\" position — this is the silent \
              behaviour being made loud, not a new regression"
         );
-        // The component is still taken out of flow, same as before.
         assert!(!child.is_flow());
     }
 
-    /// `prepare_scene` re-runs this `Deserialize` over the whole scene tree
-    /// once per frame, so the warning must be deduplicated or a 1200-frame
-    /// render prints it 1200 times. Distinct values still each get a line.
     #[test]
     fn the_warning_fires_once_per_distinct_value_not_once_per_frame() {
         let value = "position-value-used-only-by-this-test";
@@ -311,8 +252,6 @@ mod position_mode_tests {
         assert_eq!(child.absolute_position(), None);
     }
 }
-
-// --- Child wrapper ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ChildComponent {
@@ -369,8 +308,6 @@ impl ChildComponent {
         }
     }
 }
-
-// --- Component enum ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -438,8 +375,6 @@ pub enum Component {
     Container(ContainerComponent),
     Waveform(Waveform),
 }
-
-// --- Dispatch helpers ---
 
 impl Component {
     pub fn as_animatable(&self) -> Option<&dyn Animatable> {
@@ -616,11 +551,6 @@ impl Component {
         }
     }
 
-    /// Returns the Painter trait. Every `Component` variant is migrated to
-    /// the new pipeline; the dispatcher always uses Painter::paint_content.
-    /// `tests/audit_ws_i.rs::cascaded_components_match_the_verified_set`
-    /// exercises every variant — not a count here, which would just go
-    /// stale again the next time a component is added.
     pub fn as_painter(&self) -> Option<&dyn Painter> {
         match self {
             Component::AudioSpectrum(c) => Some(c),
@@ -679,43 +609,6 @@ impl Component {
         }
     }
 
-    /// `Some(clone)` for the components whose `Painter`/intrinsic measurer
-    /// read inherited typography (`color`, `font-*`, `text-align`,
-    /// `white-space`, ...) off their own `style` field with `resolved`'s
-    /// twelve `cascade::inherit_from` properties folded in; `None` for every
-    /// other component, since the cascade cannot affect anything they draw.
-    /// `resolved` is the caller's own `CssStyle` post-cascade (`box_builder`
-    /// and `LegacyPaintDispatcher` both already have it on hand).
-    ///
-    /// The `true` set below was built by reading every component's own
-    /// `paint`/`paint_content` (and, where one exists, its `*Intrinsic`
-    /// measurer) for a direct `self.style.color`/`font_family`/`font_size`/
-    /// `font_weight`/`font_style` read with no cascade in between — not by
-    /// guessing from the component's name. Several read only `font-size`/
-    /// `font-family` and keep their own dedicated field for text colour
-    /// (`Kbd::text_color`, `PillNav::text_color`) — still members, since
-    /// those two properties alone are enough for the same defect: a
-    /// `font-size` set on a card never reaching the child.
-    ///
-    /// Exhaustive on purpose, no wildcard arm: adding a new `Component`
-    /// variant is a compile error here until this match says whether it
-    /// belongs to that set — the same completeness `as_painter`/
-    /// `as_animatable`/`as_timed`/`as_styled` above already enforce for
-    /// their own questions, extended to this one.
-    /// `tests/audit_ws_i.rs::cascaded_components_match_the_verified_set`
-    /// pins the current membership directly, so a variant silently
-    /// reclassified here still fails a test even though the compiler has
-    /// nothing to object to.
-    ///
-    /// Builds the clone via a `serde_json` round-trip rather than `Clone`:
-    /// `Component`'s inner types are already `Serialize + Deserialize` (the
-    /// whole scenario tree is built that way), but not every one of them is
-    /// `Clone` — `Caption`'s `CaptionWord`/`CaptionStyle` (`rustmotion-core`)
-    /// are not, and adding it there is outside this crate. The round trip
-    /// costs more than a field-wise clone would, but only for the
-    /// components in the `Some` arm, and only once per box-tree build /
-    /// paint call — the same per-frame cost class `box_builder` already
-    /// pays elsewhere.
     pub fn with_cascaded_style(&self, resolved: &CssStyle) -> Option<Component> {
         let is_typographic = match self {
             Component::Text(_)

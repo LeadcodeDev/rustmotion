@@ -12,17 +12,14 @@ fn default_border_width() -> f32 {
     1.0
 }
 
-/// Trait for components that support a border.
 pub trait Bordered {
     fn border(&self) -> Option<&Border>;
 }
 
-/// Mutable access to border — needed by builder traits.
 pub trait BorderedMut: Bordered {
     fn set_border(&mut self, border: Option<Border>);
 }
 
-/// Builder API for border.
 pub trait BorderedExt: BorderedMut + Sized {
     fn border_color(mut self, color: impl Into<String>, width: f32) -> Self {
         self.set_border(Some(Border {

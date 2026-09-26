@@ -83,7 +83,6 @@ rustmotion_core::impl_traits!(Particle {
     Styled => style,
 });
 
-/// Deterministic pseudo-random number generator (splitmix64 for good distribution)
 fn prng(seed: u64) -> (f64, u64) {
     let mut s = seed.wrapping_add(0x9E3779B97F4A7C15);
     s = (s ^ (s >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
@@ -93,7 +92,6 @@ fn prng(seed: u64) -> (f64, u64) {
     (value.abs(), s)
 }
 
-/// Generate N random values from a seed
 fn rand_values(seed: u64, n: usize) -> Vec<f64> {
     let mut values = Vec::with_capacity(n);
     let mut s = seed;

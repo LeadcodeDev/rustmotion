@@ -109,14 +109,12 @@ impl Connector {
                 let len = (dx * dx + dy * dy).sqrt();
                 let mid_x = (x1 + x2) / 2.0;
                 let mid_y = (y1 + y2) / 2.0;
-                // Perpendicular offset for curvature
                 let perp_x = -dy / len * self.curvature * len * 0.3;
                 let perp_y = dx / len * self.curvature * len * 0.3;
                 path.quad_to((mid_x + perp_x, mid_y + perp_y), (x2, y2));
             }
             RoutingMode::Elbow => {
                 path.move_to((x1, y1));
-                // Route: horizontal first, then vertical
                 let mid_x = (x1 + x2) / 2.0;
                 path.line_to((mid_x, y1));
                 path.line_to((mid_x, y2));

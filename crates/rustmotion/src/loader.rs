@@ -3,29 +3,6 @@ use crate::schema::{ResolvedScenario, Scenario};
 use crate::{expand, include, variables};
 use std::path::PathBuf;
 
-/// [`include::resolve_includes`], plus (issue #331) rendering `scenario`'s
-/// own synthesised score, if it has one, into a cached WAV and appending it
-/// to the resolved scenario's `audio` — see
-/// `crate::encode::audio::synthesize_score_into_track`'s doc for why that
-/// join happens as a plain [`crate::schema::AudioTrack`] rather than a
-/// second, parallel audio path.
-///
-/// This has to sit here rather than inside `include::resolve_includes`
-/// itself: that function takes `Scenario` by value and moves it away
-/// (recursing into `include`d files), so `scenario`'s own `bpm`/
-/// `beat_offset` and its `audio`'s synth config (if any) are captured
-/// *before* the call — copied out for the two `f64`/`Option<f64>` grid
-/// values, cloned for the config, since `Scenario` itself derives no
-/// `Clone`. `include.rs` does not otherwise change for this issue: a
-/// synthesised score is a root-scenario-only feature, the same boundary
-/// `bpm`/`beat_offset` propagation already draws (see
-/// `Scenario::propagate_time_ctx`'s doc) — an included file's own `audio`
-/// synth block, if it declared one, is not picked up here.
-///
-/// `pub`: this crate's binary target (`cli::commands::validation`, the
-/// shared pipeline behind both `validate` and `render`) calls straight into
-/// `include::resolve_includes` today and needs this same audio-synthesis
-/// step, not a second, independently-drifting copy of it.
 pub fn resolve_includes_and_synthesize_audio(
     scenario: Scenario,
     source: &include::IncludeSource,
@@ -52,9 +29,6 @@ pub fn load_scenario(input: &PathBuf) -> Result<ResolvedScenario> {
     load_scenario_with_vars(input, None)
 }
 
-/// Like [`load_scenario`] but injects runtime variable overrides before substitution.
-/// Delegates to [`variables::apply_variables`] which handles both declared (`config`-based)
-/// and undeclared (HTML/no-config) overrides.
 pub fn load_scenario_with_vars(
     input: &PathBuf,
     overrides: Option<&std::collections::HashMap<String, serde_json::Value>>,
@@ -70,8 +44,6 @@ pub fn load_scenario_with_vars(
     variables::apply_variables(&mut json_value, overrides, &label)?;
     expand::expand_directives(&mut json_value, &label)?;
     fold_static_expressions(&mut json_value, &label)?;
-    // Asset paths are relative to the file that names them, like `include` —
-    // not to wherever the process happens to run.
     if let Some(dir) = input.parent() {
         {
             crate::assets::rebase_relative_paths(&mut json_value, dir);
@@ -82,109 +54,16 @@ pub fn load_scenario_with_vars(
     resolve_includes_and_synthesize_audio(scenario, &include::IncludeSource::File(input.clone()))
 }
 
-/// Static expression folding: the load-time half of the two-tier model
-/// described in [`rustmotion_core::expr`]'s module doc.
-///
-/// Walks the scenario's JSON tree looking for string values that begin with
-/// `=` — an expression, per [`rustmotion_core::expr::Computed`]'s
-/// convention — and replaces the ones whose [`rustmotion_core::expr::Expr::is_static`]
-/// is true with the literal number they evaluate to. A `for-each` over
-/// eight items with `"x": "= cos($i / $count * TAU) * 700"` folds to eight
-/// different literals this way, one per expanded clone — see below for why
-/// that is already true by the time this function runs.
-///
-/// ## Pass ordering (load-bearing, same reasoning as `expand`'s own doc)
-///
-/// This runs immediately *after* [`expand::expand_directives`] and *before*
-/// `Scenario` is deserialized — one step later than `expand`'s own position
-/// in this same pipeline, for a specific reason: `expand_for_each_directive`
-/// binds `$i`/`$index`/`$item`/`$count` (plus each element's own fields) and
-/// substitutes them *textually* into every string in the template — expression
-/// strings included, since that substitution pass does not know expressions
-/// exist, it just does what it always does to any `$name` occurrence it
-/// finds. By the time this function sees a `for-each`-authored expression,
-/// `"= cos($i / $count * TAU) * 700"` has therefore already become e.g.
-/// `"= cos(3 / 8 * TAU) * 700"` in the fourth of eight expanded clones: pure
-/// arithmetic, no scope lookup needed for `i`/`count` at all. This function
-/// never re-implements `for-each` iteration itself — it only ever sees the
-/// already-expanded, already-substituted tree, exactly the same tree
-/// `Scenario` deserialization sees a moment later.
-///
-/// What *is* resolved here, freshly, is `$W`/`$H`/`$fps` — the three
-/// reserved names no upstream pass ever touches, read straight from this
-/// same document's own `video` block by [`LoadScope`] — plus (issue #329)
-/// any *scenario-level* `vars` entry that has no `animation`: a genuine
-/// constant folds exactly the same way `$W`/`$H`/`$fps` do, at exactly the
-/// same cost (zero, per frame). `$t`, `$T`, `$beat` and `$duration` are
-/// deliberately never attempted here (see
-/// `rustmotion_core::expr::Expr::is_static`'s doc on why `duration`
-/// specifically joins the animation-clock names): an expression naming any
-/// of them is left exactly as authored, a `=`-prefixed string, for a future
-/// per-frame consumer to evaluate against the real per-frame context.
-///
-/// ## `vars` this function cannot safely fold (issue #329)
-///
-/// [`rustmotion_core::expr::Expr::is_static`] only special-cases the fixed
-/// `t`/`T`/`beat`/`duration` names — it has no notion of a scenario's own
-/// `vars` block, so an expression naming a declared, *animated* variable
-/// (`"= $keyDraw * 360"`) reports `is_static() == true` just like one
-/// naming a genuine constant does. Folding it anyway would evaluate it
-/// against [`LoadScope`] and fail with a misleading "unknown identifier"
-/// for a name that is not unknown at all — or, worse, once some field
-/// eventually accepts a resolved literal in its place, silently freeze a
-/// variable that was supposed to move for the rest of the render.
-///
-/// [`LoadScope`] can only ever resolve a `vars` name unambiguously when it
-/// is both a *constant* (no `animation`) and declared at the *scenario*
-/// level (see [`LoadScope::constant_scenario_vars`]'s doc for why a
-/// scene-level constant doesn't qualify). Before walking the tree, this
-/// function collects every OTHER name any `vars` block in this document
-/// declares — animated or constant, scenario-level or a scene's own, from a
-/// `vars` object at any depth — and [`fold_value`] refuses to fold any
-/// expression whose free variables intersect that set, leaving it exactly
-/// as authored for the per-frame tier instead of erroring or guessing. This
-/// is deliberately a single flat, document-wide set, not scoped per scene:
-/// `fold_value` has no notion of "which scene is this expression in" to
-/// begin with, and erring towards *not* folding an expression is always
-/// safe — the worst case is a value that could have been folded but instead
-/// survives to be evaluated fresh every frame, never a value that was
-/// folded when it shouldn't have been, and never a spurious "unknown
-/// identifier" for a name that is, in fact, declared.
-///
-/// A parse failure, an unknown identifier, or a result with no JSON
-/// representation (`NaN`/`Infinity` — division by zero, an out-of-domain
-/// `sqrt`/`log`, …) is a hard load error naming the offending expression and
-/// the file, the same way `variables::apply_variables`'s
-/// `UndefinedVariable` and `expand`'s `ForEachDirectiveInvalid` already are.
 pub(crate) fn fold_static_expressions(value: &mut serde_json::Value, label: &str) -> Result<()> {
     let scope = LoadScope::from_document(value);
     let unfoldable_vars = collect_unfoldable_var_names(value, &scope);
     fold_value(value, &scope, &unfoldable_vars, label)
 }
 
-/// Resolves the three reserved names a scenario's own `video` block makes
-/// load-time-known, plus (issue #329) any *scenario-level* `vars` entry
-/// that is itself a constant — see [`fold_static_expressions`]'s doc for
-/// why nothing else is answered here.
 struct LoadScope {
     width: Option<f64>,
     height: Option<f64>,
     fps: Option<f64>,
-    /// The scenario's own top-level `vars`, filtered to the ones with no
-    /// `animation` (`VarDef::is_static`) and reduced to their `default`.
-    /// Deliberately scoped to the *document's top-level* `vars` object
-    /// only, never a scene's own: `LoadScope` is one flat scope shared by
-    /// every expression in the document regardless of which scene it sits
-    /// in, and two scenes are allowed to declare the same variable name
-    /// with different constant values (shadowing is per-scene by design —
-    /// see `rustmotion_core::vars::VarScope`). Folding a scene-level
-    /// constant through this single flat scope would silently apply
-    /// whichever scene's value this map happened to end up with to every
-    /// *other* scene's expression naming that same variable too. A
-    /// scenario-level constant carries no such ambiguity: it names exactly
-    /// one value for the whole document, the same guarantee `$W`/`$H`/
-    /// `$fps` already rely on. A scene-level constant is instead left
-    /// unfolded by [`collect_unfoldable_var_names`] — deferred, not wrong.
     constant_scenario_vars: std::collections::HashMap<String, f64>,
 }
 
@@ -221,14 +100,6 @@ impl rustmotion_core::expr::Scope for LoadScope {
     }
 }
 
-/// Every name [`fold_value`] must not fold an expression through, because
-/// [`LoadScope`] cannot resolve it unambiguously — see
-/// [`fold_static_expressions`]'s doc, "`vars` this function cannot safely
-/// fold". Starts from every name declared anywhere in `value` by a `vars`
-/// object (any depth — the scenario's own, and every scene's), via
-/// [`collect_declared_var_names`], then removes exactly the names
-/// [`LoadScope::constant_scenario_vars`] can already answer, since those
-/// fold correctly and should.
 fn collect_unfoldable_var_names(
     value: &serde_json::Value,
     scope: &LoadScope,
@@ -240,15 +111,6 @@ fn collect_unfoldable_var_names(
     names
 }
 
-/// Every name declared, anywhere in `value`, by a `vars` object — animated
-/// or constant, scenario-level or a scene's own; the caller narrows this
-/// down to the ones that actually need protecting from folding. Collected
-/// leniently: a `vars` object that doesn't deserialize as
-/// [`rustmotion_core::vars::VarSet`] is skipped here rather than reported —
-/// the real, schema-validated error for a malformed `vars` block comes from
-/// `Scenario`'s own deserialization a few lines after this function's
-/// caller returns. This mirrors [`LoadScope::from_document`]'s own
-/// best-effort reads of `video.width`/`height`/`fps`.
 fn collect_declared_var_names(value: &serde_json::Value) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     collect_declared_var_names_into(value, &mut names);
@@ -269,9 +131,6 @@ fn collect_declared_var_names_into(
                 }
             }
             for (key, v) in map {
-                // Same skip `fold_value`/`variables::substitute`/
-                // `expand::find_unresolved` already apply: `config` holds
-                // declarations, never references.
                 if key == "config" {
                     continue;
                 }
@@ -309,16 +168,10 @@ fn fold_value(
                     })?;
                     *value = expr_result_to_json(n, s, label)?;
                 }
-                // Non-static (or naming a `vars` variable this pass can't
-                // safely fold): left as the `=`-prefixed string for the
-                // per-frame tier — see `fold_static_expressions`'s doc.
             }
         }
         serde_json::Value::Object(map) => {
             for (key, v) in map.iter_mut() {
-                // `config` holds variable *declarations*, never references —
-                // same skip `variables::substitute`/`expand::find_unresolved`
-                // already apply, for the same reason.
                 if key == "config" {
                     continue;
                 }
@@ -347,33 +200,6 @@ fn expr_result_to_json(n: f64, src: &str, label: &str) -> Result<serde_json::Val
         })
 }
 
-/// Whether `raw_source` — the exact bytes of a scenario file, before any
-/// pass has touched it — contains a JSON string value using the `= ...`
-/// expression prefix (see [`rustmotion_core::expr`]'s module doc).
-///
-/// Conservative, raw-substring detection, deliberately the same style as
-/// `crates/rustmotion/src/cli/commands/validate.rs`'s existing
-/// `refuse_fix` checks for `"include"`/`"for-each"`/`"use"`: a `for-each`
-/// that places eight expressions on a circle folds every one of them to a
-/// literal by the time `LoadedScenario::raw` is captured (see
-/// [`fold_static_expressions`]), so `--fix` must refuse to write that
-/// folded tree back over a source that still names the expression — the
-/// same reasoning `--fix` already applies to `for-each`/`use`/`include`,
-/// whose expansions are equally unfaithful to write back verbatim.
-///
-/// This crate's `cli/` is out of this workstream's scope (see the issue
-/// this module's fold pass was added for), so this function is exposed for
-/// `refuse_fix` to call rather than wired in directly — a `FixRefusal`
-/// variant plus one added condition is the full remaining change.
-///
-/// Note this is a *completion*, not the first line of defence: an
-/// expression that names a `$variable` (the overwhelming majority in
-/// practice — every example in the issue this exists for does) is already
-/// caught today by `refuse_fix`'s existing `raw_source.contains("$")`
-/// check, before this function would ever need to run. What this catches
-/// is the narrower case that check misses: a fully `$`-free static
-/// expression such as `"= cos(PI/4) * 100"`, which contains no `$` at all
-/// but still must not be written back as its folded literal.
 pub fn source_uses_expression(raw_source: &str) -> bool {
     raw_source.contains("\"=")
 }
@@ -385,7 +211,6 @@ pub fn load_scenario_from_source(
     load_scenario_from_source_with_vars(input, json, None)
 }
 
-/// Like [`load_scenario_from_source`] but injects runtime variable overrides.
 pub fn load_scenario_from_source_with_vars(
     input: Option<&PathBuf>,
     json: Option<&str>,
@@ -408,21 +233,10 @@ pub fn load_scenario_from_source_with_vars(
     }
 }
 
-/// Load a scenario authored in the HTML/CSS dialect: transpile to the scenario
-/// JSON value, merge the annotations sidecar (if any), deserialize into
-/// `Scenario`, then resolve includes — reusing the exact same pipeline as the
-/// JSON loader.
 pub fn load_scenario_from_html(input: &PathBuf) -> Result<ResolvedScenario> {
     load_scenario_from_html_with_vars(input, None)
 }
 
-/// Like [`load_scenario_from_html`] but injects runtime variable overrides.
-///
-/// HTML scenarios have no `config` block, so overrides are applied as raw
-/// substitutions (see [`variables::apply_variables`] — no-config path). Any
-/// `$name` reference in the transpiled value is replaced by the override value
-/// if a matching key is present; unresolved references after this pass are
-/// silently ignored because the document may contain no variable references.
 pub fn load_scenario_from_html_with_vars(
     input: &PathBuf,
     overrides: Option<&std::collections::HashMap<String, serde_json::Value>>,
@@ -444,14 +258,10 @@ pub fn load_scenario_from_html_with_vars(
             }
         }
     }
-    // Variable substitution happens post-transpilation so $name in HTML text
-    // content is resolved. HTML has no config block, so undeclared overrides
-    // are applied as raw value substitutions (no-config path in apply_variables).
     let label = input.display().to_string();
     variables::apply_variables(&mut value, overrides, &label)?;
     expand::expand_directives(&mut value, &label)?;
     fold_static_expressions(&mut value, &label)?;
-    // Same rule as the JSON loader: assets are relative to the file naming them.
     if let Some(dir) = input.parent() {
         crate::assets::rebase_relative_paths(&mut value, dir);
     }
@@ -459,12 +269,6 @@ pub fn load_scenario_from_html_with_vars(
     resolve_includes_and_synthesize_audio(scenario, &include::IncludeSource::File(input.clone()))
 }
 
-/// Read the annotations sidecar next to an HTML-dialect source: for
-/// `foo.html`, `foo.annotations.json` holding `{"annotations": [...]}` (same
-/// annotation object format as JSON scenarios' `annotations` field; the studio
-/// writes it because HTML sources can't carry the array inline). A missing
-/// sidecar is fine (empty); a present-but-invalid one is an error — never
-/// silently ignored.
 pub fn load_html_annotations_sidecar(input: &std::path::Path) -> Result<Vec<serde_json::Value>> {
     let sidecar = input.with_extension("annotations.json");
     let text = match std::fs::read_to_string(&sidecar) {
@@ -491,13 +295,10 @@ pub fn load_html_annotations_sidecar(input: &std::path::Path) -> Result<Vec<serd
         })
 }
 
-/// Dispatch by file extension: `.html`/`.htm` use the HTML transpiler, everything
-/// else uses the JSON loader. Single entry point for all CLI commands.
 pub fn load_input(input: &PathBuf) -> Result<ResolvedScenario> {
     load_input_with_vars(input, None)
 }
 
-/// Like [`load_input`] but injects runtime variable overrides before substitution.
 pub fn load_input_with_vars(
     input: &PathBuf,
     overrides: Option<&std::collections::HashMap<String, serde_json::Value>>,
@@ -508,14 +309,11 @@ pub fn load_input_with_vars(
     }
 }
 
-/// Transpile an HTML-dialect string into the scenario JSON value, for callers
-/// that need the raw value (e.g. the validation pipeline reads it by pointer).
 pub fn html_to_scenario_json(html: &str) -> Result<serde_json::Value> {
     rustmotion_html::html_to_scenario_value(html)
         .map_err(|e| RustmotionError::HtmlParse(e.to_string()))
 }
 
-/// True if the path uses the HTML dialect (`.html`/`.htm`).
 pub fn is_html_path(path: &std::path::Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
@@ -523,27 +321,18 @@ pub fn is_html_path(path: &std::path::Path) -> bool {
     )
 }
 
-/// Apply an inline-style edit to an HTML-dialect source by JSON pointer (used by
-/// the studio inspector to persist a property change into the HTML).
 pub fn set_html_inline_style(html: &str, pointer: &str, prop: &str, value: &str) -> Option<String> {
     rustmotion_html::set_inline_style(html, pointer, prop, value)
 }
 
-/// Replace an element's text content in an HTML-dialect source by JSON pointer
-/// (used by the studio inspector's content editor).
 pub fn set_html_text_content(html: &str, pointer: &str, text: &str) -> Option<String> {
     rustmotion_html::set_text_content(html, pointer, text)
 }
 
-/// Set/replace a plain attribute on an HTML-dialect element by JSON pointer
-/// (studio inspector, component root fields). An empty value removes the
-/// attribute. Attributes are strings; transpile coercion re-types them.
 pub fn set_html_attribute(html: &str, pointer: &str, name: &str, value: &str) -> Option<String> {
     rustmotion_html::set_attribute(html, pointer, name, value)
 }
 
-/// Remove one inline `style` declaration on an HTML-dialect element by JSON
-/// pointer (studio inspector, emptied style control).
 pub fn remove_html_inline_style(html: &str, pointer: &str, prop: &str) -> Option<String> {
     rustmotion_html::remove_inline_style(html, pointer, prop)
 }
@@ -589,7 +378,6 @@ mod html_tests {
         let annotations = load_html_annotations_sidecar(&path).expect("sidecar loads");
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0]["id"], "an_1");
-        // The full pipeline (transpile + merge + deserialize) accepts it too.
         load_input(&path).expect("html with sidecar loads");
 
         let _ = std::fs::remove_file(&path);
@@ -620,8 +408,6 @@ mod html_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// $name in an HTML element's text content is substituted post-transpilation
-    /// when overrides are provided via load_input_with_vars.
     #[test]
     fn html_var_in_text_substituted_via_load_input_with_vars() {
         let html = r##"<rustmotion width="320" height="240" fps="30">
@@ -640,10 +426,7 @@ mod html_tests {
 
         let resolved =
             load_input_with_vars(&path, Some(&overrides)).expect("html var substitution");
-        // The first child of the first scene must have content = "Hello World"
         let content = &resolved.views[0].scenes[0].children[0];
-        // We can't easily inspect ResolvedScenario children types, but loading
-        // without error proves the substitution occurred cleanly.
         let _ = content;
         assert_eq!(resolved.video.width, 320);
         let _ = std::fs::remove_file(&path);
@@ -655,7 +438,6 @@ mod vars_tests {
     use super::*;
     use std::io::Write;
 
-    /// Typed override: a number override keeps its JSON type (number, not string).
     #[test]
     fn json_override_number_preserves_type() {
         let json_str = serde_json::json!({
@@ -685,7 +467,6 @@ mod vars_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Unknown variable in overrides when config is present → actionable error.
     #[test]
     fn unknown_override_with_config_errors_actionably() {
         let json_str = serde_json::json!({
@@ -710,7 +491,6 @@ mod vars_tests {
 
         let err =
             load_input_with_vars(&path, Some(&overrides)).expect_err("unknown var must error");
-        // Error must name the unknown variable
         assert!(
             err.to_string().contains("not_declared"),
             "error must name the unknown variable, got: {err}"
@@ -718,7 +498,6 @@ mod vars_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Precedence: --var (overrides) wins over defaults in config.
     #[test]
     fn override_wins_over_default() {
         let json_str = serde_json::json!({
@@ -743,8 +522,6 @@ mod vars_tests {
         overrides.insert("title".to_string(), serde_json::json!("Override Title"));
 
         let resolved = load_input_with_vars(&path, Some(&overrides)).expect("loads");
-        // If override was applied, the text component's content should be "Override Title".
-        // We verify by confirming no error occurred (override replaced $title before deserialization).
         assert_eq!(resolved.views[0].scenes[0].duration, 0.1);
         let _ = std::fs::remove_file(&path);
     }
@@ -758,10 +535,6 @@ mod expr_fold_tests {
         load_scenario_from_source(None, Some(&json.to_string())).expect("scenario loads")
     }
 
-    /// Acceptance criterion 1: a `for-each` over 8 items with
-    /// `"x": "= cos($i / $count * TAU) * 700"` places them on a circle,
-    /// folded to literals at load — each child's `x` is a plain JSON
-    /// number after loading, and matches the real cosine.
     #[test]
     fn for_each_over_eight_items_folds_to_literals_matching_real_cosines() {
         let items: Vec<serde_json::Value> = (0..8).map(|_| serde_json::json!({})).collect();
@@ -796,8 +569,6 @@ mod expr_fold_tests {
         }
     }
 
-    /// `$W`/`$H`/`$fps` fold from the scenario's own `video` block, with no
-    /// `for-each` involved at all.
     #[test]
     fn plain_expression_folds_w_h_fps_from_video_block() {
         let json = serde_json::json!({
@@ -816,8 +587,6 @@ mod expr_fold_tests {
         assert_eq!(child["opacity"], serde_json::json!(1.0));
     }
 
-    /// Acceptance criterion 2: a hostile (deeply nested) expression is
-    /// rejected at load — a clear error, not a hang.
     #[test]
     fn hostile_expression_is_rejected_at_load_not_hung() {
         let hostile = format!("={}1{}", "(".repeat(500), ")".repeat(500));
@@ -838,9 +607,6 @@ mod expr_fold_tests {
         );
     }
 
-    /// An expression naming a genuinely runtime-only variable (`$t`) is
-    /// never attempted at load time — it survives folding as the original
-    /// `=`-prefixed string, for a future per-frame consumer to evaluate.
     #[test]
     fn expression_naming_scene_time_is_left_unfolded() {
         let json = serde_json::json!({
@@ -857,9 +623,6 @@ mod expr_fold_tests {
         assert_eq!(x, &serde_json::json!("= $t * 10"));
     }
 
-    /// An expression naming an identifier this loader genuinely can't
-    /// resolve (not a reserved name, not a declared `config` variable) is a
-    /// named, located hard error — not a silent pass-through.
     #[test]
     fn unresolvable_identifier_is_a_named_load_error() {
         let json = serde_json::json!({
@@ -879,9 +642,6 @@ mod expr_fold_tests {
         );
     }
 
-    /// `rand(seed)` is a pure function of its argument end-to-end through
-    /// the loader too: two independent loads of the same source fold to the
-    /// identical literal.
     #[test]
     fn rand_folds_deterministically_across_separate_loads() {
         let json = serde_json::json!({
@@ -899,9 +659,6 @@ mod expr_fold_tests {
         assert!(a.is_f64());
     }
 
-    /// `--fix`'s refusal helper: a `$`-free static expression must still be
-    /// detected in the raw source, since `refuse_fix`'s existing `"$"`
-    /// check alone would miss it.
     #[test]
     fn source_uses_expression_detects_dollar_free_expressions() {
         assert!(source_uses_expression(r#"{"x": "= cos(PI/4) * 100"}"#));
@@ -909,9 +666,6 @@ mod expr_fold_tests {
         assert!(!source_uses_expression(r#"{"x": "plain literal"}"#));
     }
 
-    /// Issue #329: a scenario-level `vars` entry with no `animation` is a
-    /// constant and folds exactly like `$W`/`$H`/`$fps` — zero per-frame
-    /// cost, same as any other literal.
     #[test]
     fn scenario_level_constant_var_folds_like_w_h_fps() {
         let json = serde_json::json!({
@@ -929,12 +683,6 @@ mod expr_fold_tests {
         assert_eq!(child["opacity"], serde_json::json!(1.0));
     }
 
-    /// Issue #329, the bug this workstream exists to prevent: an expression
-    /// naming a declared, *animated* variable must not be folded (it would
-    /// either freeze a value that's supposed to move, or fail with a
-    /// misleading "unknown identifier" for a name that is not unknown) —
-    /// it must survive as the original `=`-prefixed string, exactly like
-    /// `$t` already does.
     #[test]
     fn scenario_level_animated_var_is_left_unfolded_not_treated_as_unknown() {
         let json = serde_json::json!({
@@ -957,13 +705,6 @@ mod expr_fold_tests {
         assert_eq!(opacity, &serde_json::json!("= $keyDraw"));
     }
 
-    /// A scene's own `vars` entry — even an un-animated, otherwise-constant
-    /// one — is deliberately *not* folded by this document-wide pass: two
-    /// scenes may declare the same name with different values (shadowing),
-    /// and `LoadScope` has no per-scene context to resolve that
-    /// unambiguously. It must be left unfolded, not silently folded to the
-    /// wrong scene's value and not a hard "unknown identifier" error either
-    /// — deferred to the per-frame tier, same as an animated one.
     #[test]
     fn scene_level_var_is_left_unfolded_even_when_constant() {
         let json = serde_json::json!({
@@ -981,10 +722,6 @@ mod expr_fold_tests {
         assert_eq!(opacity, &serde_json::json!("= $localOnly"));
     }
 
-    /// Regression: an identifier that is genuinely undeclared anywhere
-    /// still hard-errors, even in a document that also declares an
-    /// unrelated `vars` block — the new `vars`-aware guard must not
-    /// swallow a real "unknown identifier" error.
     #[test]
     fn unresolvable_identifier_still_errors_alongside_declared_vars() {
         let json = serde_json::json!({
@@ -1005,12 +742,6 @@ mod expr_fold_tests {
         );
     }
 
-    /// End-to-end through the real loader (not a hand-built `VarSet`):
-    /// scenario-level and scene-level `vars` both survive
-    /// `Scenario::deserialize`'s propagation into the resolved `Scene`
-    /// fields (`Scene::vars`, `Scene::resolved_scenario_vars`) — the same
-    /// mechanism `Scene::resolved_time_ctx` already uses for `bpm`/
-    /// `beat_offset`, reused here for issue #329.
     #[test]
     fn scenario_and_scene_vars_survive_the_real_loader_into_resolved_scene_fields() {
         let json = serde_json::json!({

@@ -91,10 +91,6 @@ rustmotion_core::impl_traits!(PillNav {
 });
 
 impl PillNav {
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -157,7 +153,6 @@ impl PillNav {
             }
             let end_time = tr.at + self.transition_duration;
             if time < end_time {
-                // Mid-transition
                 let progress = (time - tr.at) / self.transition_duration;
                 _prev_index = current;
                 current = tr.to;
@@ -181,7 +176,6 @@ impl PillNav {
         let w = layout_w;
         let h = layout_h;
 
-        // Outer container
         let outer_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let outer_rrect = RRect::new_rect_xy(outer_rect, self.border_radius, self.border_radius);
         let mut bg_paint = paint_from_hex(&self.background_color);
@@ -194,7 +188,6 @@ impl PillNav {
         };
         let (active, transition_info) = self.active_at_time(time);
 
-        // Pill indicator
         let pill_h = h - self.gap * 2.0;
         let pill_y = self.gap;
         let pill_radius = self.border_radius - self.gap;
@@ -220,7 +213,6 @@ impl PillNav {
         pill_paint.set_anti_alias(true);
         canvas.draw_rrect(pill_rrect, &pill_paint);
 
-        // Tab labels
         let Some(font) = self.make_font(false, ctx) else {
             return;
         };
@@ -287,12 +279,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let nav = PillNav {
             items: vec!["Home".to_string(), "About".to_string()],
             active_index: 0,

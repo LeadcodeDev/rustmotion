@@ -11,12 +11,6 @@ use crate::schema::ResolvedScenario as Scenario;
 use super::tasks::{build_frame_tasks, build_frame_tasks_range, render_frame_task};
 use super::EncodeProgress;
 
-/// A hardware encoder family ffmpeg can drive, in probe priority order.
-/// Deliberately not gated by `cfg(target_os)`: the machine that compiled
-/// rustmotion is not necessarily the machine that will run it, a macOS box
-/// can have a VideoToolbox-less ffmpeg build, and a Linux box can have an
-/// nvenc-capable ffmpeg without a working NVIDIA driver. `probe_ffmpeg_encoders`
-/// asks the actual binary instead of guessing from the target triple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HwEncoderFamily {
     VideoToolbox,
@@ -33,11 +27,6 @@ impl HwEncoderFamily {
         HwEncoderFamily::Amf,
     ];
 
-    /// The concrete ffmpeg encoder name for this family + base codec, or
-    /// `None` when this family has no hardware path for that codec. vp9 and
-    /// prores stay software-only here: their hardware paths are far less
-    /// standard across ffmpeg builds than h264/h265's, and getting one
-    /// wrong means a confusing ffmpeg failure instead of a clean fallback.
     fn encoder_name(self, codec: &str) -> Option<&'static str> {
         use HwEncoderFamily::*;
         match (self, codec) {
@@ -54,30 +43,14 @@ impl HwEncoderFamily {
     }
 }
 
-/// What `ffmpeg_args` should do about hardware acceleration, decided once
-/// up front and passed in as a plain value. Kept separate from the probe
-/// (machine-dependent I/O, see `probe_ffmpeg_encoders`) so the *decision*
-/// — which family to pick, and why not when none applies — is a pure
-/// function (`select_hardware_encoder`) testable with a fake availability
-/// set, no ffmpeg binary required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HardwareSelection {
-    /// Use this concrete ffmpeg encoder (e.g. "h264_videotoolbox").
     Use(String),
-    /// `--hardware-acceleration` was not requested.
     NotRequested,
-    /// Requested, but this codec/transparency combination has no hardware
-    /// path at all — no known hardware encoder here produces an alpha
-    /// channel, and vp9/prores have no hardware family wired in.
     Unsupported { reason: String },
-    /// Requested, and the codec supports it in principle, but this
-    /// machine's `ffmpeg -encoders` didn't list any of the candidates.
     Unavailable { tried: Vec<String> },
 }
 
-/// Decide which hardware encoder (if any) to use. Pure: everything
-/// machine-dependent comes in through `is_available`, so this is exercised
-/// in tests with a fake set instead of a real probe.
 fn select_hardware_encoder(
     requested: bool,
     codec: &str,
@@ -111,20 +84,9 @@ fn select_hardware_encoder(
     HardwareSelection::Unavailable { tried }
 }
 
-/// Parse the encoder names out of `ffmpeg -encoders` output. Pure — the
-/// real probe (`probe_ffmpeg_encoders`) is the only caller that touches a
-/// process; this half is exercised with a captured sample of real ffmpeg
-/// output, no binary required.
-///
-/// Each encoder line looks like ` V..... h264_videotoolbox   VideoToolbox
-/// H.264 Encoder` (a flags column, the name, then a free-text description);
-/// the legend above it looks like ` V..... = Video`, which has the same
-/// flags shape but a bare `=` where a name would be — filtered out
-/// explicitly rather than relied on to fail some other check.
 fn parse_encoder_names(text: &str) -> HashSet<String> {
     text.lines()
         .filter_map(|line| {
-            // `split_whitespace` already skips leading whitespace.
             let mut parts = line.split_whitespace();
             let flags = parts.next()?;
             if flags.len() < 2 || !flags.chars().all(|c| c == '.' || c.is_ascii_uppercase()) {
@@ -139,13 +101,6 @@ fn parse_encoder_names(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Ask this machine's actual ffmpeg what it offers, rather than assuming
-/// from the compiled target platform (see `HwEncoderFamily`'s doc comment
-/// for why that assumption is unsafe). Returns an empty set — never an
-/// error — when ffmpeg can't be run or produces unexpected output: an
-/// empty set makes `select_hardware_encoder` report `Unavailable`, which
-/// falls back to software. Probing must never be the reason an encode that
-/// would otherwise have worked in software fails outright.
 fn probe_ffmpeg_encoders() -> HashSet<String> {
     let output = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-encoders"])
@@ -158,18 +113,6 @@ fn probe_ffmpeg_encoders() -> HashSet<String> {
     }
 }
 
-/// Assemble FFmpeg's argument vector.
-///
-/// The order is load-bearing. FFmpeg parses argv positionally: an option applies
-/// to the *next* `-i` that follows it, or to the output when no input follows. So
-/// the whole input section — including the audio input and its `-f s16le -ar -ac`
-/// — has to be emitted before the first output option. Emitting the codec block
-/// between the two inputs makes ffmpeg reject `-profile:v` as an input option for
-/// audio.raw and refuse to start, which silently broke every scenario carrying an
-/// audio track.
-///
-/// Kept separate from the spawn so the ordering invariant is unit-testable without
-/// an ffmpeg binary on the machine.
 #[allow(clippy::too_many_arguments)]
 fn ffmpeg_args(
     width: u32,
@@ -190,7 +133,6 @@ fn ffmpeg_args(
         out.extend(xs.iter().map(|s| (*s).to_string()))
     }
 
-    // ---- inputs ------------------------------------------------------------
     push(&["-y", "-loglevel", "error"], &mut args);
     push(&["-f", "rawvideo", "-pixel_format", "rgba"], &mut args);
     push(&["-video_size", &size], &mut args);
@@ -198,9 +140,6 @@ fn ffmpeg_args(
     push(&["-i", "pipe:0"], &mut args);
 
     if let Some(path) = audio_input {
-        // The PCM `mix_audio_tracks` hands us is fixed at `OUTPUT_SAMPLE_RATE`
-        // (constat #2) — declaring anything else here would desync the muxed
-        // audio track from the video without ffmpeg ever raising an error.
         let sample_rate = super::super::audio::OUTPUT_SAMPLE_RATE.to_string();
         args.extend(
             ["-f", "s16le", "-ar", &sample_rate, "-ac", "2", "-i", path]
@@ -209,7 +148,6 @@ fn ffmpeg_args(
         );
     }
 
-    // ---- output options ----------------------------------------------------
     let alpha_fmt = |with: &'static str, without: &'static str| {
         if transparent {
             with
@@ -218,25 +156,6 @@ fn ffmpeg_args(
         }
     };
     if let Some(hw_name) = hw_encoder {
-        // Hardware encoders are quality/bitrate-driven, not CRF-driven —
-        // VideoToolbox reasons in `-q:v`, NVENC in `-cq`/`-b:v`, QSV/AMF in
-        // `-global_quality`/`-b:v` — and the mapping between "CRF 23" and
-        // each of those is not a clean, verifiable translation. Emitting
-        // none of them and letting the encoder use its own default rate
-        // control is more honest than inventing one; `check_crf` tells the
-        // caller up front that `--crf` has no effect on this path.
-        //
-        // Likewise `-preset`/`-profile:v` are libx264/libx265 AVOptions —
-        // several hardware encoders (VideoToolbox in particular) reject an
-        // unrecognized option outright and abort, so the software knobs are
-        // not reused here at all, not even as a best-effort translation.
-        //
-        // None of the families wired into `HwEncoderFamily` support an
-        // alpha channel, so this branch always targets a fixed opaque
-        // `yuv420p` — `select_hardware_encoder` already refuses to select a
-        // hardware encoder when `transparent` is set, forcing the software
-        // branch below instead, so `transparent` is never silently dropped
-        // here.
         push(&["-c:v", hw_name], &mut args);
         push(&["-pix_fmt", "yuv420p"], &mut args);
     } else {
@@ -290,26 +209,10 @@ fn ffmpeg_args(
     args
 }
 
-/// Name of the scratch directory a single audio-bearing render call writes
-/// its materialised PCM into. `pid` repeats across the machine's uptime and
-/// `seq` is a small monotonic counter starting at zero, so together they are
-/// a key an outside process could realistically pre-compute and occupy
-/// ahead of time; folding in a nanosecond timestamp neither of those two
-/// alone carries closes that gap without needing a random-number
-/// dependency this crate doesn't already have.
 fn audio_tmp_dir_name(pid: u32, seq: u32, nanos: u128) -> String {
     format!("rustmotion_audio_{pid}_{seq}_{nanos:x}")
 }
 
-/// Scratch path ffmpeg actually writes to; promoted (renamed) onto the
-/// caller's real `output_path` only after a clean exit with no `pipe_error`.
-/// Kept as a sibling of `output_path` (same directory, same filesystem, so
-/// the promotion is a plain rename) and keeps `output_path`'s own extension
-/// as the *final* extension — mirrors `video_audio::partial_wav_path`'s doc:
-/// ffmpeg picks its output muxer from the last extension, so a bare
-/// `.partial` suffix appended after it makes ffmpeg refuse to start with
-/// "Unable to choose an output format" instead of the encode failure this
-/// path exists to isolate.
 fn ffmpeg_partial_output_path(output_path: &std::path::Path) -> std::path::PathBuf {
     let stem = output_path
         .file_stem()
@@ -322,11 +225,6 @@ fn ffmpeg_partial_output_path(output_path: &std::path::Path) -> std::path::PathB
     output_path.with_file_name(name)
 }
 
-/// Encode using FFmpeg subprocess (for h265, vp9, prores, webm, mov, transparency).
-///
-/// Software-only. Kept with its original signature so existing callers
-/// (the studio's exporter among them) are unaffected by hardware
-/// acceleration support; see [`encode_with_ffmpeg_hw`] for the switch.
 pub fn encode_with_ffmpeg(
     scenario: &Scenario,
     output_path: &str,
@@ -348,13 +246,6 @@ pub fn encode_with_ffmpeg(
     )
 }
 
-/// Same as [`encode_with_ffmpeg`], with an opt-in `hardware_acceleration`
-/// switch. When set, probes this machine's ffmpeg for a matching hardware
-/// encoder (see `select_hardware_encoder` / `probe_ffmpeg_encoders`) and
-/// uses it if found; otherwise — or when the codec/transparency combination
-/// has no hardware path at all — falls back to the software encoder and
-/// says so on stderr unless `quiet`. Never fails just because hardware
-/// acceleration was requested but unavailable.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_with_ffmpeg_hw(
     scenario: &Scenario,
@@ -379,15 +270,6 @@ pub fn encode_with_ffmpeg_hw(
     )
 }
 
-/// Same as [`encode_with_ffmpeg_hw`], restricted to the inclusive frame
-/// index range `[frame_range.0, frame_range.1]` — the same index space
-/// `--frame N` already addresses via `build_frame_tasks(...).get(N)`. This
-/// is the default (ffmpeg-driven) render path — the one actually used
-/// unless ffmpeg is absent from `PATH` — so it, not just the native
-/// `encode_video_range`, has to window its audio the same way: see
-/// `mix_audio_tracks_segment`'s doc for why a segment carries the audio
-/// that plays at that point in the *full* scenario instead of audio
-/// restarted from t=0.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_with_ffmpeg_hw_range(
     scenario: &Scenario,
@@ -453,11 +335,6 @@ fn encode_with_ffmpeg_hw_impl(
     };
     let total_frames = tasks.len() as u32;
 
-    // Process audio — merge scenario.audio with tracks extracted from embedded
-    // video components. `scenario_total_duration` stays separate from
-    // `segment_duration`: a track with no explicit `end` plays until the end
-    // of the *scenario*, and fades key off that same bound (see
-    // `mix_audio_tracks_segment`'s doc) — not this segment's own edges.
     let scenario_total_duration = full_total_frames as f64 / fps as f64;
     let segment_duration = total_frames as f64 / fps as f64;
     let segment_start = segment_start_frame as f64 / fps as f64;
@@ -468,22 +345,6 @@ fn encode_with_ffmpeg_hw_impl(
         all
     };
 
-    // PID alone is not a unique directory name: several audio-bearing
-    // encodes can run concurrently *within* one process (parallel test
-    // threads today; `--frames` segments rendered concurrently by a future
-    // distributed worker tomorrow — the exact shape this feature exists to
-    // enable). Two calls sharing a PID-only path would each try to create
-    // the same directory, then whichever finishes first would
-    // `remove_dir_all` it out from under the other mid-write, surfacing as
-    // a bare `NotFound` on `std::fs::write` below. A monotonic counter on
-    // top of PID makes every call's directory distinct regardless of
-    // timing; a nanosecond timestamp on top of *that* keeps the full key
-    // from being small enough for something outside this process to
-    // pre-compute and occupy ahead of time — pid space and a
-    // monotonic-from-zero counter both are. `create_dir` below (not
-    // `_all`) is what actually refuses to proceed if something is already
-    // sitting at the computed path, symlink included; the timestamp only
-    // raises the cost of ever landing on that path in the first place.
     static AUDIO_TMP_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
     let audio_tmp_dir = if !merged_audio.is_empty() {
         let seq = AUDIO_TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -509,8 +370,6 @@ fn encode_with_ffmpeg_hw_impl(
         None
     };
 
-    // Materialise the mixed PCM before the command is assembled: the audio input
-    // has to be declared next to the video input, ahead of every output option.
     let audio_input: Option<String> = match (&pcm_data, &audio_tmp_dir) {
         (Some(pcm), Some(tmp_dir)) => {
             let audio_path = tmp_dir.join("audio.raw");
@@ -527,12 +386,8 @@ fn encode_with_ffmpeg_hw_impl(
         _ => None,
     };
 
-    // Build FFmpeg command
     let crf_val = crf.unwrap_or(23);
 
-    // Probing shells out to `ffmpeg -encoders`, so it only runs when
-    // hardware acceleration was actually requested — an unconditional probe
-    // would pay that cost on every encode for nothing.
     let available_encoders = if hardware_acceleration {
         Some(probe_ffmpeg_encoders())
     } else {
@@ -595,9 +450,6 @@ fn encode_with_ffmpeg_hw_impl(
     ));
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::null());
-    // Always capture stderr so failures surface a useful diagnostic. We tee to
-    // the user terminal in non-quiet mode below by reading the captured buffer
-    // only on failure.
     cmd.stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| RustmotionError::FfmpegSpawn {
@@ -606,14 +458,6 @@ fn encode_with_ffmpeg_hw_impl(
 
     let mut stdin = child.stdin.take().ok_or(RustmotionError::FfmpegPipe)?;
 
-    // Drain stderr on a dedicated thread, started immediately after spawn —
-    // not after `child.wait()`. `-loglevel error` keeps ffmpeg's stderr
-    // small in the common case, but a pipe is only ~64KiB: if ffmpeg ever
-    // writes enough to fill it while nobody is reading, it blocks on that
-    // write. We are, at the same moment, blocked writing RGBA frames to its
-    // stdin below — two processes each waiting on the other's pipe is a
-    // deadlock neither side can recover from. Draining concurrently removes
-    // the second pipe from that equation entirely (constat #11).
     let stderr_reader: Option<std::thread::JoinHandle<String>> =
         child.stderr.take().map(|mut h| {
             std::thread::spawn(move || {
@@ -624,7 +468,6 @@ fn encode_with_ffmpeg_hw_impl(
             })
         });
 
-    // Render frames in parallel batches, pipe RGBA sequentially
     let batch_size = (rayon::current_num_threads() * 2).max(4);
     let counter = AtomicU32::new(0);
     let mut pipe_error: Option<RustmotionError> = None;
@@ -654,7 +497,7 @@ fn encode_with_ffmpeg_hw_impl(
                     if let Err(e) = stdin.write_all(&rgba) {
                         pipe_error = Some(RustmotionError::FfmpegWrite {
                             reason: e.to_string(),
-                            stderr: None, // filled in below, once stderr is drained
+                            stderr: None,
                         });
                         break;
                     }
@@ -673,11 +516,6 @@ fn encode_with_ffmpeg_hw_impl(
         cb(EncodeProgress::Muxing);
     }
 
-    // A `pipe_error` means the render already failed and `partial_output_path`
-    // will be discarded either way, so there is nothing left for ffmpeg to
-    // usefully finish — killing it here instead of waiting for it to
-    // gracefully encode and finalize a file nobody will ever read avoids
-    // burning time on a result already known to be thrown away.
     let status = if pipe_error.is_some() {
         let _ = child.kill();
         child.wait()
@@ -688,18 +526,12 @@ fn encode_with_ffmpeg_hw_impl(
         reason: e.to_string(),
     })?;
 
-    // The drain thread finishes once ffmpeg closes its stderr (which
-    // happens no later than process exit, already awaited above), so this
-    // join does not block on anything still running.
     let stderr_text = stderr_reader.and_then(|h| h.join().ok());
 
     if let Some(ref tmp_dir) = audio_tmp_dir {
         let _ = std::fs::remove_dir_all(tmp_dir);
     }
 
-    // ffmpeg's actual complaint sits in the last few lines of stderr. Build the
-    // summary once: every failure path needs it, and `--quiet` must not be the
-    // difference between a diagnosable error and "Broken pipe".
     let stderr_summary = stderr_text
         .as_ref()
         .map(|s| {
@@ -721,8 +553,6 @@ fn encode_with_ffmpeg_hw_impl(
     if let Some(e) = pipe_error {
         tee_stderr();
         let _ = std::fs::remove_file(&partial_output_path);
-        // A broken pipe means ffmpeg is already gone — its own error says why,
-        // ours only says we could not keep writing. Carry both.
         return Err(match e {
             RustmotionError::FfmpegWrite { reason, .. } => RustmotionError::FfmpegWrite {
                 reason,
@@ -740,46 +570,11 @@ fn encode_with_ffmpeg_hw_impl(
         });
     }
 
-    // Only now, with a clean exit and no pipe error, does `output_path` ever
-    // see this render's bytes — promote-on-success, the same discipline
-    // `video_audio::extract_audio_to_wav` already applies to its cached WAVs.
     std::fs::rename(&partial_output_path, output_path)?;
 
     Ok(())
 }
 
-/// Join MP4 segments — such as ones produced by consecutive `render
-/// --frames a-b` calls against the same scenario — into one file via
-/// ffmpeg's concat demuxer, remuxing (`-c copy`) instead of re-encoding.
-///
-/// ## Why the demuxer, not a raw H.264 bitstream join
-///
-/// The other way to concatenate video segments is to concatenate their raw
-/// Annex-B H.264 bitstreams directly and mux the result once. That only
-/// works when every segment's bitstream is independently decodable at its
-/// boundary — in practice, every frame at every segment boundary has to be
-/// a keyframe, and the segments' encoder settings (profile, resolution,
-/// pixel format) have to match exactly. `encode_video_range` (the native
-/// openh264 path) happens to force an intra frame on *every* output frame
-/// already (`encoder.force_intra_frame()`, unrelated to frame ranges — it
-/// predates this feature), so its segments would trivially qualify. But
-/// this function's actual callers go through the ffmpeg path
-/// (`encode_with_ffmpeg_hw_range`), the one `render` actually uses whenever
-/// ffmpeg is on `PATH` (the CLI's default): that path hands GOP structure
-/// to libx264/libx265 with no per-frame intra control at all, so segment
-/// boundaries are not guaranteed keyframes and a raw bitstream join would
-/// silently produce an undecodable or corrupted joint at some cuts. Making
-/// bitstream concatenation reliable needs an encoding-side change (forcing
-/// a keyframe at every segment boundary, or exposing a GOP-alignment knob)
-/// that does not exist yet.
-///
-/// The concat demuxer sidesteps all of that: it trusts each segment's own
-/// container-level framing and restitches the streams, so it works
-/// regardless of GOP layout. The cost is an extra remux pass — cheap
-/// (`-c copy` touches no pixels, so no re-encode and no quality loss) — and
-/// the requirement that every segment share codec, resolution, and pixel
-/// format, which segments of the *same* scenario rendered with the *same*
-/// `render` flags always do.
 pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> Result<()> {
     if inputs.is_empty() {
         return Err(RustmotionError::Generic(
@@ -787,10 +582,6 @@ pub fn concat_mp4_segments(inputs: &[std::path::PathBuf], output_path: &str) -> 
         ));
     }
 
-    // The concat demuxer reads a text list of `file '<path>'` lines. Paths
-    // are canonicalized so the list works regardless of the process's
-    // current directory, and single quotes are escaped the way ffmpeg's own
-    // docs prescribe for its concat protocol.
     let mut list_contents = String::new();
     for input in inputs {
         let abs = input
@@ -862,15 +653,8 @@ mod tests {
         select_hardware_encoder, HardwareSelection,
     };
 
-    // ── audio scratch directory naming: not fully predictable from outside ──
-
     #[test]
     fn audio_tmp_dir_name_differs_across_calls_that_share_pid_and_seq() {
-        // A pid+seq pair is small enough to pre-seed exhaustively from
-        // outside the process; folding in a nanosecond timestamp neither of
-        // those two alone carries means a name computed ahead of time from
-        // pid+seq no longer identifies the exact directory this process
-        // will actually create.
         let a = audio_tmp_dir_name(1234, 0, 111);
         let b = audio_tmp_dir_name(1234, 0, 222);
         assert_ne!(
@@ -884,11 +668,6 @@ mod tests {
         assert_eq!(audio_tmp_dir_name(1, 2, 3), audio_tmp_dir_name(1, 2, 3));
     }
 
-    /// Characterizes the exact property this fix depends on: swapping
-    /// `create_dir_all` for `create_dir` at the audio scratch directory's
-    /// creation site turns "adopt whatever is already there" into "refuse
-    /// outright" the moment something — attacker-planted symlink included —
-    /// already occupies that path.
     #[test]
     fn create_dir_refuses_an_already_occupied_path_that_create_dir_all_would_have_adopted() {
         let path = std::env::temp_dir().join(format!(
@@ -914,8 +693,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&path);
     }
-
-    // ── partial-output-path naming (pure) ────────────────────────────────────
 
     #[test]
     fn partial_path_keeps_the_original_extension_as_its_last_extension() {
@@ -952,9 +729,6 @@ mod tests {
         assert_eq!(got, std::path::PathBuf::from("/tmp/out.partial"));
     }
 
-    /// Every option that describes the *output* has to sit after the last `-i`.
-    /// Put one before it and ffmpeg attaches it to the following input instead,
-    /// then aborts with "Option ... cannot be applied to input url".
     const OUTPUT_OPTS: [&str; 6] = ["-c:v", "-crf", "-preset", "-profile:v", "-c:a", "-b:a"];
 
     fn input_positions(args: &[String]) -> Vec<usize> {
@@ -986,14 +760,10 @@ mod tests {
                 "{codec}: expected a video and an audio input"
             );
 
-            // The audio input keeps its own format options immediately ahead of it.
             let audio_i = inputs[1];
             assert_eq!(args[audio_i - 1], "2", "{codec}: -ac lost before audio -i");
             assert_eq!(args[audio_i + 1], "/tmp/a.raw");
 
-            // Constat #2: the declared PCM rate must match what
-            // `mix_audio_tracks` actually produces (`audio::OUTPUT_SAMPLE_RATE`),
-            // not an independent literal that can drift out of sync with it.
             let ar_pos = args.iter().position(|s| s == "-ar").unwrap();
             assert_eq!(
                 args[ar_pos + 1],
@@ -1043,11 +813,6 @@ mod tests {
         }
     }
 
-    // ── Hardware acceleration: pure argument construction ───────────────────
-    // No ffmpeg binary involved — `hw_encoder` is a plain `Option<&str>` the
-    // caller already resolved, exactly like `select_hardware_encoder`'s
-    // tests below resolve it without a real probe.
-
     #[test]
     fn a_hardware_encoder_replaces_the_software_codec_and_its_rate_control() {
         let args = ffmpeg_args(
@@ -1067,9 +832,6 @@ mod tests {
             .expect("-c:v must be present");
         assert_eq!(args[cv_pos + 1], "h264_videotoolbox");
 
-        // Software-only AVOptions: several hardware encoders (VideoToolbox
-        // among them) reject an unrecognized option outright and abort, so
-        // none of these may be reused as-is on the hardware path.
         for absent in ["-crf", "-preset", "-profile:v"] {
             assert!(
                 !args.iter().any(|s| s == absent),
@@ -1081,9 +843,6 @@ mod tests {
 
     #[test]
     fn a_hardware_encoder_still_sits_after_the_audio_input() {
-        // Same load-bearing ordering invariant as the software path: an
-        // output option before the last `-i` gets attached to that input by
-        // ffmpeg and aborts the process.
         let args = ffmpeg_args(
             320,
             240,
@@ -1105,14 +864,10 @@ mod tests {
 
     #[test]
     fn no_hardware_encoder_falls_back_to_the_existing_software_branch() {
-        // `hw_encoder: None` must reproduce byte-for-byte what the pre-hardware
-        // code emitted — the software branch is untouched, only wrapped.
         let with_none = ffmpeg_args(320, 240, 30, "h264", 23, false, None, None, "o.mp4");
         assert!(with_none.iter().any(|s| s == "libx264"));
         assert!(with_none.iter().any(|s| s == "-crf"));
     }
-
-    // ── Hardware acceleration: encoder selection (pure, no probe) ───────────
 
     #[test]
     fn selection_is_a_noop_when_not_requested() {
@@ -1144,8 +899,6 @@ mod tests {
 
     #[test]
     fn selection_picks_the_first_available_family_in_priority_order() {
-        // Only nvenc and amf "available" — videotoolbox and qsv are tried
-        // first (per `HwEncoderFamily::ALL`) but rejected, so nvenc wins.
         let selection = select_hardware_encoder(true, "h264", false, |name| {
             matches!(name, "h264_nvenc" | "h264_amf")
         });
@@ -1179,14 +932,8 @@ mod tests {
         }
     }
 
-    // ── Hardware acceleration: `ffmpeg -encoders` parsing (pure) ────────────
-
     #[test]
     fn parses_encoder_names_out_of_realistic_ffmpeg_encoders_output() {
-        // A trimmed, representative capture of `ffmpeg -hide_banner -encoders`:
-        // a legend (flags-shaped but no real name, just "="), a separator
-        // line, and a handful of real entries including the hardware ones
-        // this module knows about.
         let sample = "\
 Encoders:
  V..... = Video
@@ -1213,20 +960,9 @@ Encoders:
         ] {
             assert!(names.contains(expect), "missing {expect}: {names:?}");
         }
-        // The legend's bare "=" and the "Encoders:"/"------" scaffolding
-        // must never be mistaken for encoder names.
         assert!(!names.contains("="));
         assert!(names.iter().all(|n| n != "Video" && n != "Audio"));
     }
-
-    // ── Integration test (gated on ffmpeg + ffprobe) ────────────────────────
-    //
-    // Ties constat #1 (audio input declared before every output option — a
-    // scenario with audio must actually produce a file) and constat #2
-    // (the mixer and the muxer must agree on the sample rate) together
-    // end-to-end, matching what the audit's own suggested fix asked for:
-    // "Ajouter un test d'intégration gaté sur ffmpeg qui rend un scénario
-    // avec piste audio et vérifie que le MP4 existe et contient deux flux."
 
     fn ffmpeg_on_path() -> bool {
         std::process::Command::new("ffmpeg")
@@ -1272,8 +1008,6 @@ Encoders:
             .ok()
     }
 
-    /// Write a minimal, hand-rolled canonical PCM WAV file (16-bit, mono) —
-    /// no ffmpeg needed to produce the *input* fixture, only to encode it.
     fn write_minimal_wav(path: &std::path::Path, sample_rate: u32, num_samples: u32) {
         let bits_per_sample: u16 = 16;
         let num_channels: u16 = 1;
@@ -1287,7 +1021,7 @@ Encoders:
         buf.extend_from_slice(b"WAVE");
         buf.extend_from_slice(b"fmt ");
         buf.extend_from_slice(&16u32.to_le_bytes());
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes());
         buf.extend_from_slice(&num_channels.to_le_bytes());
         buf.extend_from_slice(&sample_rate.to_le_bytes());
         buf.extend_from_slice(&byte_rate.to_le_bytes());
@@ -1317,8 +1051,6 @@ Encoders:
                 .unwrap()
                 .as_nanos()
         ));
-        // Source at a rate different from OUTPUT_SAMPLE_RATE, to also
-        // exercise the resampler rather than a same-rate passthrough.
         write_minimal_wav(&wav_path, 22_050, 22_050);
 
         let json = format!(
@@ -1367,16 +1099,6 @@ Encoders:
         let _ = std::fs::remove_file(&wav_path);
         let _ = std::fs::remove_file(&out);
     }
-
-    // ── Hardware acceleration: machine-dependent, gated on ffmpeg ───────────
-    //
-    // These exercise the real probe (`probe_ffmpeg_encoders`) and the real
-    // spawn against whatever this machine's ffmpeg actually offers — unlike
-    // the pure tests above, their outcome legitimately varies by machine, so
-    // neither asserts a specific encoder was picked. What they do assert
-    // (the probe doesn't panic; the encode succeeds and produces a file
-    // either way) holds on any machine, hardware-capable or not, which is
-    // what makes them safe to run in CI even though CI has no GPU.
 
     #[test]
     fn hardware_probe_reports_what_this_machine_actually_offers() {
@@ -1449,16 +1171,6 @@ Encoders:
         let _ = std::fs::remove_file(&out);
     }
 
-    // ── Frame-range render + concat: the brief's "test that matters most" ──
-    //
-    // "rendre un scénario en un seul morceau, puis le même en N segments
-    // concaténés, et comparer. Les deux doivent avoir le même nombre de
-    // frames et la même durée audio." A scenario with an audio track is
-    // part of this test on purpose — it is the only way to exercise the
-    // segment-audio-offset fix (`mix_audio_tracks_segment`) through the
-    // actual default (ffmpeg) render path, not just the pure mixer unit
-    // tests in `encode::audio`.
-
     fn ffprobe_frame_count(path: &str) -> Option<u32> {
         let out = std::process::Command::new("ffprobe")
             .args([
@@ -1484,12 +1196,6 @@ Encoders:
             .ok()
     }
 
-    /// Extract the frame at `time_s` into `path` as a PNG and return its
-    /// center pixel's RGB. Accurate (post-`-i`) seeking, not the fast
-    /// keyframe-snapping `-ss`-before`-i` form — this scenario's scenes are
-    /// each a full second of one flat color, so any frame within a scene's
-    /// window has the same color regardless of exactly which one lands, but
-    /// accurate seeking keeps the test honest about which scene it read.
     fn extract_center_pixel(path: &str, time_s: f64) -> Option<(u8, u8, u8)> {
         let png_path = std::env::temp_dir().join(format!(
             "rm_frame_range_pixel_{}_{}.png",
@@ -1526,10 +1232,6 @@ Encoders:
             return;
         }
 
-        // 3 scenes x 1.0s x 10fps = 30 frames, no transitions, so segment
-        // boundaries land exactly on scene boundaries: (0,9)=red, (10,19)=green,
-        // (20,29)=blue. Frame-range indices are the same index space
-        // `build_frame_tasks` (and `--frame N`) already use.
         let fps = 10u32;
         let width = 64u32;
         let height = 64u32;
@@ -1542,9 +1244,6 @@ Encoders:
                 .unwrap()
                 .as_nanos()
         ));
-        // 3.0s of audio at the video's own duration, so a whole-track (no
-        // explicit `end`) plays across all three segments — exactly the
-        // shape that needs the segment-audio-offset fix to sound right.
         write_minimal_wav(&wav_path, 22_050, 22_050 * 3);
 
         let json = format!(
@@ -1584,7 +1283,6 @@ Encoders:
             let _ = std::fs::remove_file(p);
         }
 
-        // 1. Render the whole scenario in one piece.
         super::encode_with_ffmpeg_hw(
             &scenario,
             full_out.to_str().unwrap(),
@@ -1597,7 +1295,6 @@ Encoders:
         )
         .expect("full render must succeed");
 
-        // 2. Render the same scenario as three independent frame-range segments.
         for (i, (start, end)) in [(0u32, 9u32), (10, 19), (20, 29)].into_iter().enumerate() {
             super::encode_with_ffmpeg_hw_range(
                 &scenario,
@@ -1613,11 +1310,9 @@ Encoders:
             .unwrap_or_else(|e| panic!("segment {i} ({start}-{end}) render must succeed: {e}"));
         }
 
-        // 3. Concatenate the three segments.
         super::concat_mp4_segments(&seg_outs, concat_out.to_str().unwrap())
             .expect("concat must succeed");
 
-        // 4. Same frame count.
         let full_frames = ffprobe_frame_count(full_out.to_str().unwrap())
             .expect("ffprobe must report the full render's frame count");
         let concat_frames = ffprobe_frame_count(concat_out.to_str().unwrap())
@@ -1631,7 +1326,6 @@ Encoders:
             "concatenated segments must have the exact same frame count as the full render"
         );
 
-        // 5. Same audio duration.
         let full_audio_dur = ffprobe_stream_duration(full_out.to_str().unwrap(), "a:0")
             .expect("full render must have an audio stream");
         let concat_audio_dur = ffprobe_stream_duration(concat_out.to_str().unwrap(), "a:0")
@@ -1642,10 +1336,6 @@ Encoders:
              concat={concat_audio_dur:.3}s"
         );
 
-        // 6. Pixel check at the middle of segment 2 (t=1.5s, inside the solid-
-        // green scene): the concatenated output's content there must match
-        // the full render's, proving the split didn't shift which frames
-        // land where.
         let full_px = extract_center_pixel(full_out.to_str().unwrap(), 1.5)
             .expect("must extract a frame from the full render");
         let concat_px = extract_center_pixel(concat_out.to_str().unwrap(), 1.5)

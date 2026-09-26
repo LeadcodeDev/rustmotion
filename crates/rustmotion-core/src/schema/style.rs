@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use super::video::AnimationEffect;
 
-// --- Card types ---
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -207,7 +205,6 @@ impl<'de> Deserialize<'de> for SizeDimension {
     }
 }
 
-/// Deserialize `animation` as either a single AnimationEffect or a Vec.
 pub fn deserialize_animation_effects<'de, D>(
     deserializer: D,
 ) -> Result<Vec<AnimationEffect>, D::Error>

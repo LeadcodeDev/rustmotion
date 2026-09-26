@@ -87,10 +87,6 @@ rustmotion_core::impl_traits!(List {
 });
 
 impl List {
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -290,12 +286,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let list = List {
             items: vec![ListItem {
                 text: "hello".to_string(),

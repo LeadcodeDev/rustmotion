@@ -1,19 +1,5 @@
-//! Regression tests for workstream F's 4 confirmed audit findings on the
-//! HTML dialect transpiler: an attribute outside a hardcoded allowlist
-//! vanishing with no error (RM-03), a CSS shorthand transpiling to a string
-//! the core length parser cannot read and silently resolving to 0px (RM-04),
-//! `<script>`/`<style>` source getting painted as text while `<img>`/`<svg>`
-//! children vanish inside inline text elements (RM-11), and the studio's
-//! HTML write-back deleting everything outside `<rustmotion>` in the
-//! author's file (RM-12).
-
 use rustmotion_html::{html_to_scenario_value, HtmlError};
 use serde_json::json;
-
-// ---------------------------------------------------------------------------
-// RM-03: <scene> and <rustmotion> read a hardcoded attribute allowlist;
-// every other attribute is dropped with no error.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn scene_freeze_at_world_position_and_animated_background_are_reachable() {
@@ -95,11 +81,6 @@ fn inert_attributes_stay_inert_on_container_and_text() {
     let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><div class="wrapper" id="hero" data-testid="x"><p class="lead" data-x="1">Hi</p></div></scene></rustmotion>"##;
     html_to_scenario_value(html).expect("class/id/data-* must remain inert, not flagged");
 }
-
-// ---------------------------------------------------------------------------
-// RM-04: CSS shorthand values transpile to strings the core length parser
-// cannot read, silently resolving to 0px.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn padding_two_value_shorthand_expands_to_edges_object() {
@@ -188,11 +169,6 @@ fn rgba_color_functional_notation_is_not_treated_as_multi_token() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// RM-11: text-tag children bypass every guard — <script>/<style> source gets
-// painted, <img>/<svg>/<rm-*> vanish silently.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn script_nested_inside_paragraph_is_not_painted() {
     let html = r##"<rustmotion width="1920" height="1080"><scene duration="2"><p>Real <script>var secret = 1; alert(2);</script></p></scene></rustmotion>"##;
@@ -263,11 +239,6 @@ fn inline_formatting_tags_still_flatten_into_the_parent_text() {
         json!("Real bold text")
     );
 }
-
-// ---------------------------------------------------------------------------
-// RM-12: studio HTML write-back silently deletes everything outside
-// <rustmotion> in the author's file.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn write_back_preserves_doctype_head_and_surrounding_comments() {

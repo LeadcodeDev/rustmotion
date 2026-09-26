@@ -1,36 +1,8 @@
-//! Recursive-descent parser: `Vec<Token>` in, [`Ast`] out.
-//!
-//! Precedence, low to high: ternary (`?:`, right-associative) → comparison
-//! (`== != < <= > >=`, left-associative chaining) → additive (`+ -`) →
-//! multiplicative (`* / %`) → unary minus → primary (literal, `$var`,
-//! `(expr)`, builtin call, `node("id","prop")`, constant).
-//!
-//! ## The nesting cap
-//!
-//! [`MAX_DEPTH`] bounds how deep the *recursive descent itself* is allowed
-//! to go, checked at every point the grammar re-enters "parse one full
-//! sub-expression": parenthesised groups, each function/`node()` argument,
-//! both ternary branches, and each link of a chained unary minus. Because
-//! every other production in this grammar (comparison, additive,
-//! multiplicative) is an iterative precedence-climb — a `while` loop, not a
-//! function calling itself — those four sites are the *only* ways an
-//! adversarial input can make the parser recurse, so guarding them is
-//! sufficient to guarantee the whole parse (and the `Box<Ast>` tree it
-//! produces) is bounded, without having to thread the check through every
-//! grammar rule individually. A pathological input like 5000 nested parens
-//! or a `pow(pow(pow(...)))` chain hits [`ExprError::TooDeep`] here, at
-//! parse time, rather than blowing the native call stack or building an
-//! unbounded tree that a later pass would have to walk.
-
 use super::ast::{Ast, BinOp, UnOp};
 use super::builtins::{constant, Builtin};
 use super::lexer::{tokenize, Token};
 use super::ExprError;
 
-/// Recursion budget for the four self-recursive grammar entry points (see
-/// module doc). 64 is far beyond any nesting a hand- or LLM-written
-/// expression plausibly needs, and comfortably inside the native stack —
-/// the point is to fail long before that becomes a concern either way.
 const MAX_DEPTH: usize = 64;
 
 pub(crate) fn parse(src: &str) -> Result<Ast, ExprError> {
@@ -99,8 +71,6 @@ impl<'a> Parser<'a> {
         self.depth -= 1;
     }
 
-    /// Top-level rule and the guarded re-entry point for parenthesised
-    /// groups, each ternary branch, and every call argument.
     fn parse_expr(&mut self) -> Result<Ast, ExprError> {
         self.enter()?;
         let result = self.parse_ternary();
@@ -174,9 +144,6 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    /// Guarded separately from [`Parser::parse_expr`] because a chain of
-    /// unary minuses (`----1`) recurses into itself directly, never passing
-    /// back through `parse_expr` — see the module doc.
     fn parse_unary(&mut self) -> Result<Ast, ExprError> {
         if matches!(self.peek(), Some(Token::Minus)) {
             self.advance();
@@ -185,10 +152,6 @@ impl<'a> Parser<'a> {
             self.exit();
             return Ok(Ast::Unary(UnOp::Neg, Box::new(inner?)));
         }
-        // No unary `+`: the frozen grammar names only unary minus. Adding
-        // a second unguarded-by-default recursive entry point here for a
-        // no-op sign isn't worth the extra surface, so `+1` is a parse
-        // error rather than a silent alias for `1`.
         self.parse_primary()
     }
 
@@ -285,7 +248,6 @@ mod tests {
 
     #[test]
     fn parses_precedence() {
-        // 1 + 2 * 3 == 1 + (2 * 3)
         let ast = parse("1 + 2 * 3").unwrap();
         assert_eq!(
             ast,
@@ -379,8 +341,6 @@ mod tests {
 
     #[test]
     fn huge_nested_pow_chain_hits_the_depth_cap() {
-        // A hostile "huge exponent" shape: pow(pow(pow(...2...))), nested
-        // deep enough to be the kind of input that should never reach eval.
         let mut src = "2".to_string();
         for _ in 0..200 {
             src = format!("pow({src}, 2)");

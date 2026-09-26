@@ -1,18 +1,3 @@
-//! `rustmotion sheet`: a contact sheet of timestamped stills.
-//!
-//! The motivating case (issue #334, batch 1 of #326) is an author — human or
-//! an LLM generating a scenario — who cannot watch a rendered video move.
-//! What they *can* do is look at several instants at once and compare them.
-//! Before this command that meant running `rustmotion still` once per
-//! instant and assembling the PNGs by hand; this reuses the exact same
-//! single-frame render path (`encode::build_frame_tasks` +
-//! `encode::render_frame_task_scaled`, as `still` does) and composes the
-//! results into one PNG grid, each cell stamped with its timestamp so a
-//! reader can tell which instant a defect belongs to.
-//!
-//! Deliberately out of scope here (later batches of #326): sampling
-//! transition frames specifically and audio peak/RMS measurement.
-
 use crate::cli::OutputFormat;
 use rustmotion::encode;
 use rustmotion::engine;
@@ -24,10 +9,6 @@ use skia_safe::{
 };
 use std::path::{Path, PathBuf};
 
-/// A scratch path in the same directory as `output`, carrying the same
-/// extension — mirrors `still.rs::temp_sibling_path`. Encoding into this
-/// scratch path first and renaming onto `output` only on success means a
-/// failed encode never leaves a truncated file at `output`.
 fn temp_sibling_path(output: &Path) -> PathBuf {
     let ext = output.extension().and_then(|e| e.to_str());
     let stem = output
@@ -41,10 +22,6 @@ fn temp_sibling_path(output: &Path) -> PathBuf {
     output.with_file_name(name)
 }
 
-/// Parse `--at 3.2,4.8,19.9` into an ordered list of seconds. Preserves the
-/// caller's order (and duplicates) rather than sorting/deduping — the grid
-/// lays cells out in that same order, so a reordered `--at` reorders the
-/// sheet.
 fn parse_at_list(spec: &str) -> Result<Vec<f64>> {
     let mut times = Vec::new();
     for (i, raw) in spec.split(',').enumerate() {
@@ -68,18 +45,12 @@ fn parse_at_list(spec: &str) -> Result<Vec<f64>> {
     Ok(times)
 }
 
-/// Generate `0, step, 2*step, ...` up to and including `last_valid_time`
-/// (the timestamp of the scenario's last rendered frame) — this is what
-/// keeps `--every` from ever tripping the out-of-range check below: it only
-/// ever samples inside the scenario it was asked to sample.
 fn generate_every(step: f64, last_valid_time: f64) -> Result<Vec<f64>> {
     if !step.is_finite() || step <= 0.0 {
         return Err(RustmotionError::Generic(format!(
             "sheet: --every must be a positive number of seconds, got {step}"
         )));
     }
-    // Safety valve against a pathologically small step turning one command
-    // into an unbounded allocation / render loop.
     const MAX_CELLS: usize = 10_000;
     let mut times = Vec::new();
     let mut i: u64 = 0;
@@ -98,18 +69,11 @@ fn generate_every(step: f64, last_valid_time: f64) -> Result<Vec<f64>> {
         }
     }
     if times.is_empty() {
-        // A zero-frame guard elsewhere already rejects `total_frames == 0`;
-        // this only guards a degenerate `last_valid_time < 0.0`, which
-        // should not occur, but an empty sheet is a worse failure mode than
-        // one cell at t=0.
         times.push(0.0);
     }
     Ok(times)
 }
 
-/// Pixel geometry of the grid: cell size (derived from `cell_width` and the
-/// scenario's aspect ratio, so no letterboxing is needed inside a cell),
-/// column/row count, and the full canvas size.
 struct GridLayout {
     columns: usize,
     rows: usize,
@@ -148,18 +112,12 @@ fn compute_layout(
     }
 }
 
-/// A bold sans font sized off the cell width, used for the timestamp stamp.
-/// Falls back through the same Helvetica → Arial → OS chain every other
-/// text painter in the engine uses (`typeface_with_fallback`).
 fn label_font(cell_width: u32) -> Result<Font> {
     let typeface = engine::typeface_with_fallback("", FontStyle::bold())?;
     let size = (cell_width as f32 * 0.06).clamp(14.0, 26.0);
     Ok(Font::from_typeface(typeface, size))
 }
 
-/// Burn `t`'s timestamp into the bottom-left corner of the cell at
-/// `(cell_x, cell_y)` — a small rounded, semi-transparent badge so the label
-/// stays legible over arbitrary frame content, light or dark.
 fn draw_timestamp_stamp(
     canvas: &Canvas,
     font: &Font,
@@ -196,8 +154,6 @@ fn draw_timestamp_stamp(
     }
 }
 
-/// Composite every rendered cell into one RGBA buffer sized
-/// `layout.total_width x layout.total_height`.
 fn compose_grid(cells: &[(f64, image::RgbaImage)], layout: &GridLayout) -> Result<Vec<u8>> {
     let info = ImageInfo::new(
         (layout.total_width as i32, layout.total_height as i32),
@@ -246,20 +202,6 @@ fn compose_grid(cells: &[(f64, image::RgbaImage)], layout: &GridLayout) -> Resul
     Ok(pixels)
 }
 
-/// Render `at`/`every`-selected instants of `scenario` through the existing
-/// single-frame path and compose them into one timestamped contact sheet.
-///
-/// Exactly one of `at`/`every` must be `Some` — the CLI layer
-/// (`conflicts_with` + `required_unless_present` on both flags) already
-/// guarantees this before `cmd_sheet` is ever called.
-///
-/// A requested instant beyond the scenario's last frame is a located,
-/// named error (naming which instant, its value, and the valid range) —
-/// unlike `still --time`, which tolerantly clamps. A contact sheet exists to
-/// let an author or a generator *locate* a defect in time; silently
-/// clamping an out-of-range instant to the last frame would show the same
-/// frame twice under two different timestamps, hiding exactly the mistake
-/// (e.g. a duration typo) this command is meant to catch.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_sheet(
     scenario: ResolvedScenario,
@@ -312,10 +254,6 @@ pub fn cmd_sheet(
         ));
     }
 
-    // Resolve every requested time to a frame index up front — and refuse
-    // the whole sheet, before rendering a single cell, if any one of them
-    // falls outside the scenario. Located by instant index (1-based, as
-    // shown to a human) and value, not just "a time was out of range".
     let mut frame_indices = Vec::with_capacity(times.len());
     for (i, &t) in times.iter().enumerate() {
         if !t.is_finite() {
@@ -428,8 +366,6 @@ mod tests {
         ))
     }
 
-    /// 4s @ 10fps scenario, wide enough that a solid-color rect makes each
-    /// cell trivially distinguishable if something scaled it wrong.
     fn colored_scenario(width: u32, height: u32, fps: u32, duration: f64) -> ResolvedScenario {
         let json = format!(
             r##"{{"video": {{"width": {width}, "height": {height}, "fps": {fps}}},
@@ -452,7 +388,6 @@ mod tests {
             .expect("sheet must succeed");
 
         let img = image::open(&out).expect("must decode as a valid image");
-        // 3 cells, 2 columns -> 2 rows. cell 64x64, gap 10, margin 16.
         let expected_w = 16 * 2 + 64 * 2 + 10;
         let expected_h = 16 * 2 + 64 * 2 + 10;
         assert_eq!(img.width(), expected_w as u32);
@@ -470,9 +405,6 @@ mod tests {
         cmd_sheet(scenario, &out, None, Some(0.5), 2, 32, None, true).expect("sheet must succeed");
 
         let img = image::open(&out).expect("must decode as a valid image");
-        // duration 1.0s @ 10fps -> last_valid_time = 9/10 = 0.9s.
-        // every 0.5s -> t = 0.0, 0.5 -> 2 cells; --columns 2 -> 1 row, both
-        // columns used, so the canvas is exactly as wide as the 2 cells.
         let expected_w = 16 * 2 + 32 * 2 + 10;
         let expected_h = 16 * 2 + 32;
         assert_eq!(img.width(), expected_w as u32);
@@ -483,7 +415,7 @@ mod tests {
 
     #[test]
     fn an_at_time_past_the_scenario_end_is_a_located_error_not_a_panic() {
-        let scenario = colored_scenario(32, 32, 10, 1.0); // last_valid_time = 0.9s
+        let scenario = colored_scenario(32, 32, 10, 1.0);
         let out = scratch_path("oob.png");
         let _ = std::fs::remove_file(&out);
 

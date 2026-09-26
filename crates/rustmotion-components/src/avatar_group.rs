@@ -93,18 +93,15 @@ impl AvatarGroup {
         let overflow = self.overflow_count();
         let cache = asset_cache();
 
-        // Draw avatars in reverse order so first avatar is on top
         for rev_i in (0..visible).rev() {
             let avatar = &self.avatars[rev_i];
             let x = rev_i as f32 * step;
 
-            // Border circle (background ring)
             let mut border_paint = paint_from_hex(&self.border_color);
             border_paint.set_style(PaintStyle::Fill);
             border_paint.set_anti_alias(true);
             canvas.draw_circle((x + s / 2.0, s / 2.0), s / 2.0, &border_paint);
 
-            // Load image
             let img = if let Some(cached) = cache.get(&avatar.src) {
                 cached.clone()
             } else {
@@ -122,7 +119,6 @@ impl AvatarGroup {
                 decoded
             };
 
-            // Clip to circle inset by border_width
             let inset = self.border_width;
             let inner_r = s / 2.0 - inset;
             let cx = x + s / 2.0;
@@ -135,7 +131,6 @@ impl AvatarGroup {
             canvas.save();
             canvas.clip_rrect(clip_rrect, skia_safe::ClipOp::Intersect, true);
 
-            // Draw image with cover fit
             let img_w = img.width() as f32;
             let img_h = img.height() as f32;
             let d = inner_r * 2.0;
@@ -150,26 +145,22 @@ impl AvatarGroup {
             canvas.restore();
         }
 
-        // "+N" overflow badge
         if overflow > 0 {
             let x = visible as f32 * step;
             let cx = x + s / 2.0;
             let cy = s / 2.0;
 
-            // Background circle
             let mut bg_paint = paint_from_hex("#374151");
             bg_paint.set_style(PaintStyle::Fill);
             bg_paint.set_anti_alias(true);
             canvas.draw_circle((cx, cy), s / 2.0, &bg_paint);
 
-            // Border
             let mut border_paint = paint_from_hex(&self.border_color);
             border_paint.set_style(PaintStyle::Stroke);
             border_paint.set_stroke_width(self.border_width);
             border_paint.set_anti_alias(true);
             canvas.draw_circle((cx, cy), s / 2.0 - self.border_width / 2.0, &border_paint);
 
-            // Text
             let text = format!("+{}", overflow);
             let font_size = s * 0.35;
             let font_style = skia_safe::FontStyle::bold();

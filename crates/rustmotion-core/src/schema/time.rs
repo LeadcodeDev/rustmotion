@@ -1,45 +1,13 @@
-//! The beat-grid time vocabulary (issue #336): a single point in time that
-//! can be a plain number of seconds, or a small expression anchored to a
-//! musical beat grid — so a cut can land on a beat instead of a
-//! hand-tuned duration.
-//!
-//! **The one rule for anchoring** (stated once, here, and referenced rather
-//! than repeated elsewhere): [`Scene::at`](super::scenario::Scene::at) is
-//! absolute by definition — it always resolves via
-//! [`TimePoint::resolve_absolute`], regardless of whether its value carries
-//! the `@` prefix. Everything *inside* a scene (a component's `start_at`,
-//! `delay`, and similar fields) is relative to that scene's own start, and
-//! resolves via [`TimePoint::resolve_relative`] — *unless* its `TimePoint`
-//! carries an explicit `@` prefix, which forces it onto the scenario's
-//! absolute timeline regardless of where it is nested.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// What a [`TimePoint`] needs to resolve to a concrete number of seconds:
-/// the scenario's beat grid, and where the enclosing scene starts on the
-/// scenario's absolute timeline.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimeCtx {
-    /// Beats per minute, if the scenario declares a grid. `None` makes any
-    /// `b`-unit term in a [`TimePoint::Spec`] fail with [`TimeError::NoBpm`].
     pub bpm: Option<f64>,
-    /// Where beat 0 sits on the scenario's absolute timeline, in seconds.
-    /// The grid is `beat_offset + n * 60 / bpm` — not decoration: a reel
-    /// whose first kick lands at 2.2s anchors its grid there, not at 0.
     pub beat_offset: f64,
-    /// Where the enclosing scene starts on the scenario's absolute
-    /// timeline, in seconds. Only consulted by
-    /// [`TimePoint::resolve_relative`]/[`TimePoint::resolve_absolute`] for a
-    /// [`TimePoint`] that is *not* itself absolute (no `@` prefix).
     pub scene_start: f64,
 }
 
-/// No grid, no offset, no enclosing scene — the neutral context a plain
-/// number of seconds resolves against unchanged. Exists so
-/// [`crate::schema::Scene`]'s `#[serde(skip)]` copy of this type has
-/// something to default to before `Scenario`'s `Deserialize` impl
-/// overwrites it with the real value.
 impl Default for TimeCtx {
     fn default() -> Self {
         TimeCtx {
@@ -50,15 +18,10 @@ impl Default for TimeCtx {
     }
 }
 
-/// Everything that can go wrong turning a [`TimePoint`] into seconds.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum TimeError {
-    /// A `b`-unit term appeared in `{0}`, but [`TimeCtx::bpm`] is `None` —
-    /// the scenario never declared a beat grid to measure beats against.
     #[error("beat unit in `{0}` but the scenario declares no bpm")]
     NoBpm(String),
-    /// `{0}` is not a valid [`TimePoint::Spec`]: empty, a term with no
-    /// recognised unit (`s`/`ms`/`b`), or a term whose number doesn't parse.
     #[error("cannot parse time `{0}`")]
     Unparseable(String),
 }
@@ -93,24 +56,10 @@ pub enum TimePoint {
 }
 
 impl TimePoint {
-    /// Seconds from `ctx.scene_start` — the natural reading for a value
-    /// nested inside a scene (`start_at`, `delay`, ...). A [`Spec`](TimePoint::Spec)
-    /// carrying the `@` prefix ignores `scene_start` and returns the same
-    /// absolute value [`resolve_absolute`](Self::resolve_absolute) would —
-    /// that is the whole point of the prefix.
     pub fn resolve_relative(&self, ctx: &TimeCtx) -> Result<f64, TimeError> {
-        // `eval_sum` is already the delta from `scene_start` for a
-        // non-absolute value, and already the absolute value (with
-        // `scene_start` deliberately not added) for an `@`-prefixed one —
-        // both cases return it unchanged.
         self.eval_sum(ctx)
     }
 
-    /// Seconds from the scenario's start — the natural reading for
-    /// [`Scene::at`](super::scenario::Scene::at), which is absolute by
-    /// definition. A non-absolute value (no `@`) is anchored onto the
-    /// timeline by adding `ctx.scene_start`; an absolute one (`@`-prefixed,
-    /// or already a beat/second sum with `@`) is returned as-is.
     pub fn resolve_absolute(&self, ctx: &TimeCtx) -> Result<f64, TimeError> {
         let value = self.eval_sum(ctx)?;
         if self.is_absolute() {
@@ -120,11 +69,6 @@ impl TimePoint {
         }
     }
 
-    /// Whether this value is pinned to the scenario's absolute timeline
-    /// regardless of where it is nested — true only for a
-    /// [`Spec`](TimePoint::Spec) whose string starts with `@`. A bare
-    /// [`Seconds`](TimePoint::Seconds) is never absolute: it always resolves
-    /// relative to whatever `scene_start` its caller provides.
     pub fn is_absolute(&self) -> bool {
         match self {
             TimePoint::Seconds(_) => false,
@@ -132,9 +76,6 @@ impl TimePoint {
         }
     }
 
-    /// The parsed value of this `TimePoint` in seconds, with `@` already
-    /// stripped — i.e. before either resolve method decides whether to add
-    /// `ctx.scene_start`.
     fn eval_sum(&self, ctx: &TimeCtx) -> Result<f64, TimeError> {
         match self {
             TimePoint::Seconds(seconds) => Ok(*seconds),
@@ -142,25 +83,6 @@ impl TimePoint {
         }
     }
 
-    /// Checks that this value is syntactically well-formed **without**
-    /// needing `bpm` — every term parses (`<number><unit>`, a recognised
-    /// unit, a non-empty numeric part) whether or not a `b` term could
-    /// actually be *resolved* yet. This is deliberately the weaker of the
-    /// two checks a `b` term is subject to:
-    ///
-    /// - Grammar (this method) never needs `bpm` and can run the moment a
-    ///   scenario is deserialized — a malformed spec like `"banana"` is a
-    ///   typo, true regardless of what the scenario declares.
-    /// - Resolution (`resolve_relative`/`resolve_absolute`) needs `bpm` for
-    ///   any `b` term, and can only run once a whole `Scenario` — not just
-    ///   this value in isolation — is available. A grammatically valid `"@8b"`
-    ///   in a scenario with no `bpm` fails *there*, with
-    ///   [`TimeError::NoBpm`], not here.
-    ///
-    /// Implemented by evaluating against a placeholder context that always
-    /// supplies a `bpm` (so [`TimeError::NoBpm`] can never fire) — any error
-    /// that still comes out is therefore, by construction, a genuine
-    /// [`TimeError::Unparseable`].
     pub fn validate_grammar(&self) -> Result<(), TimeError> {
         match self {
             TimePoint::Seconds(_) => Ok(()),
@@ -189,10 +111,6 @@ enum TimeUnit {
     Beats,
 }
 
-/// Splits `body` (already stripped of any leading `@`) into signed terms —
-/// `('+' | '-' | <first-term-default>, "<number><unit>")` — by scanning for
-/// `+`/`-` operators. A `+`/`-` at position 0 is the first term's own sign,
-/// not an operator between two terms.
 fn split_signed_terms(body: &str) -> Vec<(f64, String)> {
     let mut terms = Vec::new();
     let mut sign = 1.0;
@@ -212,9 +130,6 @@ fn split_signed_terms(body: &str) -> Vec<(f64, String)> {
     terms
 }
 
-/// Splits a single term's trailing unit off its numeric part. Order matters:
-/// `"ms"` is checked before the single-character `"s"`, or every
-/// millisecond term would be misparsed as a malformed seconds term.
 fn split_unit(term: &str) -> Option<(&str, TimeUnit)> {
     if let Some(number) = term.strip_suffix("ms") {
         Some((number, TimeUnit::Millis))
@@ -301,16 +216,14 @@ mod tests {
 
     #[test]
     fn beat_spec_resolves_with_beat_offset() {
-        // bpm=120 -> 0.5s/beat; beat_offset=2.2 (the reel's real anchor).
         let tp = TimePoint::Spec("8b".to_string());
         let c = ctx(Some(120.0), 2.2, 0.0);
-        let expected = 2.2 + 8.0 * 60.0 / 120.0; // 2.2 + 4.0 = 6.2
+        let expected = 2.2 + 8.0 * 60.0 / 120.0;
         assert!((tp.resolve_relative(&c).unwrap() - expected).abs() < 1e-9);
     }
 
     #[test]
     fn compound_beat_plus_millis_spec_resolves() {
-        // bpm=120, beat_offset=0 -> beat 8 lands at 4.0s; +120ms -> 4.12s.
         let tp = TimePoint::Spec("8b+120ms".to_string());
         let c = ctx(Some(120.0), 0.0, 0.0);
         assert!((tp.resolve_relative(&c).unwrap() - 4.12).abs() < 1e-9);
@@ -320,8 +233,7 @@ mod tests {
     fn at_prefix_is_absolute_and_ignores_scene_start() {
         let tp = TimePoint::Spec("@8b".to_string());
         assert!(tp.is_absolute());
-        // bpm=100, beat_offset=2.2 -> beat 8 at 2.2 + 8*0.6 = 7.0s.
-        let c = ctx(Some(100.0), 2.2, 1000.0); // absurd scene_start to prove it's ignored
+        let c = ctx(Some(100.0), 2.2, 1000.0);
         let expected = 2.2 + 8.0 * 60.0 / 100.0;
         assert!((tp.resolve_relative(&c).unwrap() - expected).abs() < 1e-9);
         assert!((tp.resolve_absolute(&c).unwrap() - expected).abs() < 1e-9);
@@ -329,7 +241,6 @@ mod tests {
 
     #[test]
     fn at_prefix_with_subtracted_beat_term() {
-        // bpm=120, beat_offset=0 -> "@2.2s-1b" = 2.2 - (0 + 1*0.5) = 1.7
         let tp = TimePoint::Spec("@2.2s-1b".to_string());
         let c = ctx(Some(120.0), 0.0, 0.0);
         assert!((tp.resolve_absolute(&c).unwrap() - 1.7).abs() < 1e-9);
@@ -415,8 +326,6 @@ mod tests {
 
     #[test]
     fn validate_grammar_never_reports_no_bpm() {
-        // A beat unit's *grammar* is fine with no scenario in scope at all —
-        // only resolving it to a number needs `bpm`.
         let tp = TimePoint::Spec("@8b".to_string());
         assert_eq!(tp.validate_grammar(), Ok(()));
     }

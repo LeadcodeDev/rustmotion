@@ -1,52 +1,14 @@
-//! Peak / RMS / true-peak measurement of a scenario's mixed soundtrack —
-//! the second half of issue #334's second blind spot: "the audio I judged
-//! only through peak and RMS numbers from `ffmpeg`, which is how I found
-//! the mix clipping at 0dB after the fact." This module turns that
-//! after-the-fact `ffmpeg -af astats` reading into a named,
-//! validation-time [`AudioViolation`], surfaced through `--report` next to
-//! [`super::geometry::GeometryViolation`].
-//!
-//! Reuses [`rustmotion::encode::audio::mix_audio_tracks`] — the exact PCM
-//! bytes the muxer writes, synthesised score included: a scenario's
-//! `audio.voices`/`score` is rendered offline and appended to
-//! [`rustmotion::schema::ResolvedScenario::audio`] as an ordinary
-//! `AudioTrack` by `rustmotion::loader::resolve_includes_and_synthesize_audio`
-//! well before this module ever runs (see that function's doc, and
-//! `rustmotion::encode::audio::synthesize_score_into_track`, which it
-//! calls). This module only measures; it never decodes, mixes, or
-//! synthesises anything of its own.
-//!
-//! Wired into `validate.rs`'s `write_report`: every `--report` run measures
-//! the mixed soundtrack and includes the result under the `"audio"` key,
-//! next to `"geometry_violations"`.
-
 use rustmotion::schema::ResolvedScenario;
 use serde::Serialize;
 
-/// dBFS floor substituted for `20*log10(0)` (`-inf`) — silence is reported
-/// at this level rather than as a non-finite float, which JSON cannot
-/// represent and `serde_json` refuses to serialise.
 pub const SILENCE_FLOOR_DB: f32 = -120.0;
 
-/// A sample within this many dB of full scale counts as clipped/saturated.
-/// i16 quantisation means a genuinely full-scale sample reads as
-/// `20*log10(32767/32768)` ≈ -0.00027dB, never exactly `0.0` — this
-/// tolerance is wide enough to catch that without also catching an
-/// intentionally hot but non-clipping mix a few tenths of a dB below the
-/// ceiling.
 const CLIP_EPS_DB: f32 = 0.05;
 
-/// One measurement window's peak / RMS / true-peak, in dBFS, plus how many
-/// individual samples were at or effectively at full scale.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct AudioMeasurement {
     pub peak_db: f32,
     pub rms_db: f32,
-    /// A 4x-oversampled peak (Catmull-Rom cubic interpolation between
-    /// consecutive samples — see [`true_peak_channel`]'s doc), catching the
-    /// inter-sample overs a plain sample-peak reading misses. Not a
-    /// certified ITU-R BS.1770 true-peak meter (that spec's interpolation
-    /// is a specific polyphase FIR) — a heuristic close enough to flag them.
     pub true_peak_db: f32,
     pub clipped_samples: usize,
 }
@@ -66,9 +28,6 @@ impl AudioMeasurement {
     }
 }
 
-/// One beat window's measurement (issue #334 deliverable #2: "per beat
-/// where the scenario declares a `bpm`"), `beat_index` counting up from the
-/// scenario's own `beat_offset`.
 #[derive(Debug, Clone, Serialize)]
 pub struct BeatAudioMeasurement {
     pub beat_index: usize,
@@ -80,21 +39,12 @@ pub struct BeatAudioMeasurement {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioViolationKind {
-    /// The mixed soundtrack (or one beat window of it) contains at least
-    /// one clipped/saturated sample.
     Clipping,
 }
 
-/// One detected audio violation — the audio-side counterpart to
-/// [`super::geometry::GeometryViolation`], intentionally shaped the same
-/// way (a `kind`, a location, a measurement, and a human hint) so it slots
-/// into `--report`'s existing JSON alongside `geometry_violations` rather
-/// than inventing an unrelated second shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioViolation {
     pub kind: AudioViolationKind,
-    /// `None` for a violation measured over the whole mixed track;
-    /// `Some(n)` for one beat window (see [`BeatAudioMeasurement`]).
     pub beat_index: Option<usize>,
     pub start: f64,
     pub end: f64,
@@ -102,10 +52,6 @@ pub struct AudioViolation {
     pub hint: String,
 }
 
-/// The full audio report: the whole-track measurement, a per-beat
-/// breakdown when the scenario declares a `bpm` (empty otherwise), and the
-/// violations found in either. `overall` is `None` only when the scenario
-/// has no audio at all — there is nothing to measure, not silence.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct AudioReport {
     pub overall: Option<AudioMeasurement>,
@@ -113,30 +59,19 @@ pub struct AudioReport {
     pub violations: Vec<AudioViolation>,
 }
 
-/// Measure `scenario`'s mixed soundtrack — the module's single entry point.
 pub fn analyze_scenario_audio_levels(scenario: &ResolvedScenario) -> AudioReport {
     if scenario.audio.is_empty() {
         return AudioReport::default();
     }
 
-    // The exact total-duration formula `synthesize_score_into_track` sizes
-    // a synthesised score's buffer against (see that function's doc) — not
-    // a second, independently-drifting derivation of "how long is this
-    // scenario."
     let total_duration = rustmotion::encode::video_audio::resolved_scenario_duration(scenario);
     if total_duration <= 0.0 {
         return AudioReport::default();
     }
 
-    // The exact PCM the muxer writes — decode/resample/gain/fade all
-    // already applied by `mix_audio_tracks`, so a beat window's samples here
-    // are the same bytes that beat's audio actually is in the rendered file.
     let pcm = match rustmotion::encode::audio::mix_audio_tracks(&scenario.audio, total_duration) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return AudioReport::default(),
-        // A decode/mix failure here is `render`'s problem to surface loudly
-        // when it actually tries to encode; silently producing no audio
-        // report is preferable to duplicating that error path.
         Err(_) => return AudioReport::default(),
     };
     const CHANNELS: usize = 2;
@@ -200,10 +135,6 @@ pub fn analyze_scenario_audio_levels(scenario: &ResolvedScenario) -> AudioReport
     }
 }
 
-/// This scenario's own beat grid — the first scene that declares one, same
-/// lookup `geometry.rs`'s `check_off_grid_cuts` uses (`ResolvedScenario`
-/// itself carries no scenario-level `bpm`/`beat_offset`; see that struct's
-/// doc). `(bpm, beat_offset)`.
 fn scenario_beat_grid(scenario: &ResolvedScenario) -> Option<(f64, f64)> {
     scenario
         .views
@@ -217,12 +148,6 @@ fn scenario_beat_grid(scenario: &ResolvedScenario) -> Option<(f64, f64)> {
         })
 }
 
-/// `(beat_index, start, end)` for every beat window `beat_offset + n *
-/// 60/bpm` that overlaps `[0, total_duration)` — empty when the scenario
-/// declares no `bpm`. A negative-starting first window (a positive
-/// `beat_offset` shifts window 0 before scenario start) is clamped to 0
-/// rather than skipped, so nothing before the first full beat is left
-/// unmeasured.
 fn beat_windows(scenario: &ResolvedScenario, total_duration: f64) -> Vec<(usize, f64, f64)> {
     let Some((bpm, beat_offset)) = scenario_beat_grid(scenario) else {
         return Vec::new();
@@ -245,8 +170,6 @@ fn beat_windows(scenario: &ResolvedScenario, total_duration: f64) -> Vec<(usize,
             windows.push((n, start, end));
         }
         n += 1;
-        // A pathological (near-zero) `bpm`/duration combination must not
-        // spin forever; no real scenario needs more beats than this.
         if n > 100_000 {
             break;
         }
@@ -266,15 +189,10 @@ fn db_to_lin(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// Peak / RMS / true-peak / clipped-sample-count of a whole interleaved i16
-/// PCM buffer.
 fn measure(samples_i16: &[i16], channels: usize) -> AudioMeasurement {
     measure_slice(samples_i16, channels)
 }
 
-/// The same measurement, restricted to `[start, end)` seconds of the mix —
-/// `start`/`end` are scenario-timeline seconds, matching
-/// `mix_audio_tracks`'s own convention that sample 0 is scenario t=0.
 fn measure_range(
     samples_i16: &[i16],
     sample_rate: u32,
@@ -332,19 +250,6 @@ fn measure_slice(samples_i16: &[i16], channels: usize) -> AudioMeasurement {
     }
 }
 
-/// Catmull-Rom-interpolated (4x) oversample of one channel's normalized
-/// `[-1, 1]` samples, returning the maximum absolute value seen across the
-/// original samples plus the 3 interpolated points between every
-/// consecutive pair.
-///
-/// Deliberately not linear interpolation: a linear interpolant is a convex
-/// combination of its two neighbours and can mathematically never exceed
-/// both of them, so it would report the sample peak back unchanged and
-/// catch nothing a plain peak reading didn't already. Catmull-Rom (a
-/// 4-point cubic through each pair, using the point before and after it for
-/// tangent shape) *can* genuinely overshoot near a sharp transition — the
-/// same kind of ringing a bandlimited reconstruction filter produces, which
-/// is what a true-peak measurement exists to catch.
 fn true_peak_channel(samples: &[f32]) -> f32 {
     let n = samples.len();
     if n < 2 {
@@ -431,15 +336,6 @@ mod tests {
         );
     }
 
-    // ─── End-to-end: a synthesised score, driven into clipping ─────────────
-    //
-    // `master.limiter` defaults to `true` (a hard guarantee — see
-    // `rustmotion_core::audio::dsp::apply_limiter`'s doc) specifically so an
-    // author cannot accidentally clip a synthesised score. Deliberately
-    // disabling it plus a large `master.gain` is the one way to construct a
-    // real clipping repro through the schema's own vocabulary — the
-    // equivalent of a human mixing engineer bypassing their own limiter.
-
     const SYNTH_CLIPPING_JSON: &str = r##"{
         "video": { "width": 320, "height": 180, "fps": 30 },
         "bpm": 120,
@@ -498,8 +394,6 @@ mod tests {
             "expected a whole-track clipping violation: {:?}",
             report.violations
         );
-        // At 120bpm every 0.5s scoring event lands exactly on a beat, so a
-        // beat-scoped violation is also expected for at least one beat.
         assert!(
             report
                 .violations

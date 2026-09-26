@@ -1,12 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// `deny_unknown_fields` (reliquat of wave-A's constat, PR #158): closes the
-// last gap in `style.animation[*]` typo detection. Wave A covered the nine
-// effect-config structs in `schema/video.rs`; the types *inside* a
-// `keyframes[*]` entry (this struct and `Keyframe` below) were left
-// uncovered — a typo'd key here (e.g. `duratoin`) used to be silently
-// dropped instead of reported, same as every other struct this wave closed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Animation {
@@ -153,7 +147,6 @@ fn default_mass() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnimationPreset {
-    // Entrées
     FadeIn,
     FadeInUp,
     FadeInDown,
@@ -169,7 +162,6 @@ pub enum AnimationPreset {
     RotateIn,
     ElasticIn,
     PopIn,
-    // Sorties
     FadeOut,
     FadeOutUp,
     FadeOutDown,
@@ -181,24 +173,19 @@ pub enum AnimationPreset {
     BounceOut,
     BlurOut,
     RotateOut,
-    // Effets continus
     Pulse,
     Float,
     Shake,
     Spin,
-    // 3D
     FlipInX,
     FlipInY,
     FlipOutX,
     FlipOutY,
     TiltIn,
-    // Stroke
     DrawIn,
     StrokeReveal,
-    // Floating/orbit
     #[serde(alias = "float_3d")]
     Float3d,
-    // Spéciaux
     Typewriter,
     WipeLeft,
     WipeRight,
@@ -279,14 +266,6 @@ fn default_preset_duration() -> f64 {
 mod deny_unknown_fields_tests {
     use super::*;
     use serde_json::json;
-
-    // ---- reliquat of the wave-A fix (PR #158): `deny_unknown_fields` was
-    // added to the nine effect-config structs in `schema/video.rs`, but the
-    // types *inside* a `keyframes[*]` entry — `Animation` and `Keyframe`,
-    // both in this file — were left uncovered. A typo'd key inside one of
-    // these (e.g. `duratoin` on an `Animation`, or a per-keyframe field
-    // typo) used to be silently ignored instead of reported. This is the
-    // one change this workstream is authorized to make in this file. ----
 
     #[test]
     fn animation_rejects_unknown_fields() {

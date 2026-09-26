@@ -1,18 +1,3 @@
-//! Regression test — animated `width`/`height` must reach the layout pass.
-//!
-//! `engine::animator` has always resolved a `keyframes` effect targeting
-//! `width`/`height` into `AnimatedProperties::{width,height}` (animator.rs,
-//! the `"width" => props.width = …` arm), but `css::animation::
-//! apply_animated_props` deliberately dropped those two on the floor: they
-//! were never translated into `CssStyle`, so taffy never saw them and the box
-//! kept its authored size for the whole scene. The animation resolved to
-//! numbers nobody read.
-//!
-//! That is the difference between a card *resizing* — its children reflowing
-//! inside a new box — and a card being *scaled*, which stretches the pixels it
-//! already had, text included. Only the former is expressible with `scale`'s
-//! absence here; the latter was the only thing authors could actually get.
-
 use rustmotion::engine::render::render_scene_hits;
 use rustmotion::schema::{Scene, VideoConfig};
 
@@ -25,8 +10,6 @@ fn config() -> VideoConfig {
     .expect("video config is schema-valid")
 }
 
-/// A card that grows 330×132 → 560×210 over the first second, holding a text
-/// child whose own box has to follow the parent's new width.
 fn resizing_card_scene() -> Scene {
     serde_json::from_value(serde_json::json!({
         "duration": 2.0,
@@ -36,8 +19,6 @@ fn resizing_card_scene() -> Scene {
                 "width": 330,
                 "height": 132,
                 "background": "#1E293B",
-                // Centred content, so the child's *position* tracks the box's
-                // growth on both axes — not just its stretched height.
                 "justify-content": "center",
                 "align-items": "center",
                 "animation": [{
@@ -82,9 +63,9 @@ fn card_rect(frame: u32) -> (f32, f32) {
 
 #[test]
 fn animated_width_and_height_resize_the_laid_out_box() {
-    let (w0, h0) = card_rect(0); // t = 0.0s
-    let (w_mid, h_mid) = card_rect(15); // t = 0.5s
-    let (w_end, h_end) = card_rect(30); // t = 1.0s
+    let (w0, h0) = card_rect(0);
+    let (w_mid, h_mid) = card_rect(15);
+    let (w_end, h_end) = card_rect(30);
 
     assert!(
         (w0 - 330.0).abs() < 1.0 && (h0 - 132.0).abs() < 1.0,
@@ -94,8 +75,6 @@ fn animated_width_and_height_resize_the_laid_out_box() {
         (w_end - 560.0).abs() < 1.0 && (h_end - 210.0).abs() < 1.0,
         "at t=1s the card should have reached 560×210, got {w_end}×{h_end}"
     );
-    // The interesting frame: strictly between the two, which is what fails
-    // when the animated size never reaches taffy (it would read 330×132).
     assert!(
         w_mid > w0 + 1.0 && w_mid < w_end - 1.0,
         "mid-animation width should sit strictly between 330 and 560, got {w_mid}"
@@ -108,10 +87,6 @@ fn animated_width_and_height_resize_the_laid_out_box() {
 
 #[test]
 fn the_child_reflows_inside_the_resized_card() {
-    // A resize is a layout change, so the child's box has to move with the
-    // parent's new content box. A `scale` transform would leave the child's
-    // laid-out rect untouched and only stretch its pixels — this assertion is
-    // what separates the two.
     let hits_start = render_scene_hits(&config(), &resizing_card_scene(), 0);
     let hits_end = render_scene_hits(&config(), &resizing_card_scene(), 30);
 

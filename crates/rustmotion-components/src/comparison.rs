@@ -137,7 +137,6 @@ impl Comparison {
         let font_size = (h * 0.08).clamp(16.0, 36.0);
         let font_style = skia_safe::FontStyle::bold();
         let Ok(typeface) = typeface_with_fallback("Inter", font_style) else {
-            // Balance the canvas.save() above before bailing out.
             canvas.restore();
             return;
         };

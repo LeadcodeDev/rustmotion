@@ -1,16 +1,3 @@
-/// Macro to implement common traits by delegating to embedded config fields.
-///
-/// Usage:
-/// ```ignore
-/// impl_traits!(Text {
-///     Animatable => animation,  // Vec<AnimationEffect> directly
-///     Timed => timing,
-///     Styled => style,          // CssStyle
-/// });
-/// ```
-///
-/// This generates both the object-safe accessor trait AND the mutable
-/// builder trait (e.g. `Styled` + `StyledMut`).
 #[macro_export]
 macro_rules! impl_traits {
     ($type:ty { $($trait_name:ident => $field:ident),* $(,)? }) => {

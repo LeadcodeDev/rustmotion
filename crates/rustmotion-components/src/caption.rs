@@ -57,13 +57,6 @@ rustmotion_core::impl_traits!(Caption {
 impl Caption {
     fn paint(&self, canvas: &Canvas, layout_width: f32, layout_height: f32, ctx: &PaintCtx) {
         let time = ctx.time;
-        // #9 / lot B (wave S): `font-size` itself now resolves through the
-        // same context-aware machinery as `letter-spacing`/`line-height`
-        // below — it used to stay on the context-free `font_size_px_or`,
-        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
-        // `font-size` itself remain approximate (see
-        // `crate::intrinsic::font_size_ctx`'s doc comment) — cascade.rs
-        // doesn't track the real parent font-size.
         let base_ctx = crate::intrinsic::font_size_ctx(
             ctx.video_width as f32,
             ctx.video_height as f32,
@@ -73,20 +66,11 @@ impl Caption {
         let color = self.style.color_str_or("#FFFFFF");
         let font_family = self.style.font_family_or("Inter");
 
-        // #9: `letter-spacing`/`line-height` `em`/`%` resolve against this
-        // element's own font-size (just above); `vw`/`vh` resolve against
-        // the real viewport, available here via `ctx` (mirrors
-        // `text.rs::paint`'s `type_ctx`).
         let type_ctx = LengthContext {
             font_size,
             ..base_ctx
         };
 
-        // #9: derive weight/slant from `style.font-weight`/`font-style`
-        // instead of always painting bold. `CaptionIntrinsic` (via
-        // `TextIntrinsic`) measures at whatever weight the style declares
-        // (400/normal when unset) — painting an unconditional bold made the
-        // glyphs wider than the box that was centred/measured for them.
         let font_style = Self::resolve_font_style(&self.style);
 
         let Ok(typeface) = typeface_with_fallback(font_family, font_style) else {
@@ -96,28 +80,9 @@ impl Caption {
         let font = Font::from_typeface(typeface, font_size);
         let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
 
-        // Every branch below draws text with its *baseline* at local y=0 and
-        // (for the pill-background presets) a highlight box extending up to
-        // `font_size + padding/2` above that baseline. Treated as the box's
-        // own coordinate space (y=0 = box top, as every other painter
-        // assumes), that put glyphs — and pills further still — above the
-        // assigned box: `CaptionIntrinsic` sizes the box for one line's
-        // ascent+descent starting at y=0, not for a baseline sitting at 0
-        // with ascenders going negative. Shifting the whole paint down by a
-        // margin that covers the tallest pill (WordPop's `font_size*0.35`
-        // padding, ~1.175×font_size) puts the topmost ink at/after y=0
-        // without touching any of the per-preset layout math below.
         let top_offset = font_size * 1.2;
         canvas.save();
         canvas.translate((0.0, top_offset));
-        // Safety net: even with the offset above, an unusually large pill
-        // padding combined with a short assigned box could still spill past
-        // the bottom edge. Clip vertically only (not horizontally) — a
-        // caption in `white-space: nowrap` mode is *meant* to bleed past
-        // its own width when `max_width` doesn't fit the line (see
-        // `box_builder.rs`'s nowrap comment and the geometry validator's
-        // `unwrappable_text_overflow`), so clipping width here would hide a
-        // condition the validator is supposed to catch instead.
         if layout_height > 0.0 {
             const HALF_PLANE: f32 = 1_000_000.0;
             canvas.clip_rect(
@@ -172,13 +137,9 @@ impl Caption {
                             measure_text_with_fallback(&word.text, &font, &emoji_font, 0.0);
                         let cx = layout_width / 2.0;
 
-                        // Spring-like pop: ease-out-back over the first 180ms
-                        // of the word window (overshoots ~1.1 then settles).
                         let t = (((time - word.start) / POP_DURATION).clamp(0.0, 1.0)) as f32;
                         let scale = ease_out_back(t).max(0.01);
 
-                        // Scale around the visual center of the word (the
-                        // baseline sits at y=0, glyphs extend upward).
                         let cy = -font_size * 0.35;
                         canvas.save();
                         canvas.translate((cx, cy));
@@ -213,25 +174,10 @@ impl Caption {
                 }
             }
             CaptionStyle::Highlight | CaptionStyle::Karaoke | CaptionStyle::KaraokePop => {
-                // M1: `white-space: nowrap|pre` keeps every word on one
-                // line — ignore `max_width` entirely so the line can bleed
-                // past it, same rule `text.rs` uses. (`WordByWord`/`WordPop`
-                // above show a single word at a time; wrapping is moot
-                // there, same as the existing kbd/counter/badge "atomic"
-                // components, so they don't need this branch.)
                 let nowrap = matches!(
                     self.style.white_space,
                     Some(CssWhiteSpace::Nowrap | CssWhiteSpace::Pre)
                 );
-                // #1: when `max_width` is unset, wrap at the box `layout`
-                // actually gave this caption (matches `text.rs:442-451`)
-                // instead of never wrapping — `CaptionIntrinsic` measures
-                // (and taffy reserves a box) against that same width, so
-                // painting at `f32::MAX` here painted a single line far
-                // wider than the reserved box, bleeding past it and past
-                // the viewport with `validate` never seeing the mismatch
-                // (it re-measures via the same intrinsic, not this paint
-                // path).
                 let max_width = if nowrap {
                     f32::MAX
                 } else if layout_width.is_finite() && layout_width > 0.0 {
@@ -256,15 +202,6 @@ impl Caption {
                     current_x += word_width + space_width;
                 }
 
-                // #9: honour `style.line-height` like `CaptionIntrinsic`
-                // does (via `TextIntrinsic::from_parts` ->
-                // `line_height_for_ctx`) instead of a hardcoded 1.4 — the
-                // box taffy reserves is sized from the former, so painting
-                // with the latter drifted the line spacing away from what
-                // was measured (7.7% at the unset default, arbitrarily more
-                // with an explicit `line-height`), and the caption's own
-                // vertical clip (below in the outer `paint`) silently crops
-                // whatever spills past the mismatch.
                 let line_height = self.style.line_height_for_ctx(font_size, &type_ctx);
                 let cx = layout_width / 2.0;
 
@@ -303,8 +240,6 @@ impl Caption {
                         let paint = paint_from_hex(word_color);
 
                         if pop {
-                            // Active word scales up ~1.15x around its visual
-                            // center, on top of a pill background.
                             let wcx = x + word_width / 2.0;
                             let wcy = y - font_size * 0.35;
                             canvas.save();
@@ -347,19 +282,12 @@ impl Caption {
 }
 
 impl Caption {
-    /// Draws the rounded pill background used by the pop presets.
     fn draw_pill(&self, canvas: &Canvas, rect: Rect) {
         let radius = rect.height() / 2.0;
         let paint = paint_from_hex(self.pill_color.as_deref().unwrap_or(DEFAULT_PILL_COLOR));
         canvas.draw_rrect(skia_safe::RRect::new_rect_xy(rect, radius, radius), &paint);
     }
 
-    /// #9: the Skia `FontStyle` to paint with, derived from `style.font-
-    /// weight`/`font-style` — mirrors `text.rs`'s weight/slant mapping and
-    /// `intrinsic.rs`'s `weight_to_u16` (used to measure the box), so the
-    /// weight the box was measured at and the weight painted into it always
-    /// agree. Pulled out as its own function so it's directly unit-testable
-    /// without needing to render anything.
     fn resolve_font_style(style: &CssStyle) -> FontStyle {
         let weight = match &style.font_weight {
             Some(CssFontWeight::Keyword(FontWeightKw::Bold | FontWeightKw::Bolder)) => {
@@ -394,16 +322,12 @@ fn default_active_color() -> String {
     "#FFFF00".to_string()
 }
 
-/// Black at 70% opacity — default pill background for the pop presets.
 const DEFAULT_PILL_COLOR: &str = "#000000B3";
 
-/// Duration (seconds) of the word_pop scale-in.
 const POP_DURATION: f64 = 0.18;
 
-/// Scale factor applied to the active word in karaoke_pop.
 const KARAOKE_POP_SCALE: f32 = 1.15;
 
-/// Ease-out-back easing: starts at 0, overshoots ~1.1, settles at 1.
 fn ease_out_back(t: f32) -> f32 {
     const C1: f32 = 1.70158;
     const C3: f32 = C1 + 1.0;
@@ -418,9 +342,6 @@ mod tests {
     use rustmotion_core::css::Length;
     use rustmotion_core::schema::CaptionWord;
 
-    /// A `PaintCtx` for tests that don't care about frame/fps bookkeeping —
-    /// only `time` and, since #9, the viewport dims threaded into the
-    /// `LengthContext` used to resolve `vw`/`vh` typography units.
     fn test_ctx(time: f64) -> PaintCtx {
         PaintCtx {
             time,
@@ -468,8 +389,6 @@ mod tests {
         }
     }
 
-    /// Bounding box (min_x, max_x, min_y, max_y) of every non-transparent
-    /// pixel on the surface, or `None` if nothing was painted.
     fn ink_bounds(
         surface: &mut skia_safe::Surface,
         w: i32,
@@ -507,12 +426,6 @@ mod tests {
 
     #[test]
     fn ink_never_starts_above_the_box_top() {
-        // #127: every branch drew its baseline at local y=0 (the box's own
-        // top edge) — ascenders, and pill backgrounds further still,
-        // painted *above* y=0, bleeding out of whatever box the layout
-        // gave this caption (measured: assigned box top at y=124 in a
-        // card starting at y=100, but ink started at y≈85 — above the
-        // card itself, not just the box).
         let caption = make_caption("Hello world", None);
         const W: i32 = 400;
         const H: i32 = 200;
@@ -528,9 +441,6 @@ mod tests {
 
     #[test]
     fn word_pop_pill_never_starts_above_the_box_top() {
-        // The pill-background presets pad further above the baseline than
-        // plain text (up to `font_size * 0.35` extra) — the worst case
-        // among the four rendering modes.
         let mut caption = make_caption("Hello", None);
         caption.mode = CaptionStyle::WordPop;
         caption.words[0].start = 0.0;
@@ -549,9 +459,6 @@ mod tests {
 
     #[test]
     fn nowrap_paints_one_wide_line_instead_of_wrapping_at_max_width() {
-        // M1 render-level proof, caption (Highlight mode): `white-space:
-        // nowrap` keeps every word on one line — much wider than
-        // `max_width: 80`, and only one line tall — instead of wrapping.
         let caption = make_caption(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -605,21 +512,12 @@ mod tests {
         );
     }
 
-    // ─── #1: wrap at the box's layout_width when max_width is unset ───────
-
     #[test]
     fn wraps_at_layout_width_when_max_width_is_unset() {
-        // Reproduction: no `max_width` on the caption (the common case — a
-        // caption's box comes from wherever it's placed, e.g. a card), but
-        // the layout pass still hands `paint` a real, finite `layout_width`
-        // (mirrors `CaptionIntrinsic`, which measures against exactly this
-        // width). Before the fix, `max_width.unwrap_or(f32::MAX)` ignored
-        // `layout_width` entirely and painted one line stretching far past
-        // the box — and past the viewport in the audit's repro.
         let caption = make_caption_with_max_width(
             "the quick brown fox jumps over the lazy dog again",
             None,
-            None, // no explicit max_width
+            None,
         );
         const W: i32 = 1600;
         const H: i32 = 400;
@@ -627,8 +525,6 @@ mod tests {
         {
             let canvas = surface.canvas();
             canvas.translate((800.0, 200.0));
-            // The box the layout pass assigned: 300px wide, well short of
-            // this sentence's unwrapped width at font-size 28.
             caption.paint(canvas, 300.0, H as f32, &test_ctx(0.5));
         }
         let (minx, maxx, miny, maxy) =
@@ -648,8 +544,6 @@ mod tests {
 
     #[test]
     fn nowrap_still_ignores_layout_width_when_max_width_is_unset() {
-        // Regression guard: the #1 fix must not touch `white-space:
-        // nowrap`'s existing "always ignore any width constraint" contract.
         let caption = make_caption_with_max_width(
             "the quick brown fox jumps over the lazy dog",
             Some(CssWhiteSpace::Nowrap),
@@ -678,17 +572,8 @@ mod tests {
         );
     }
 
-    // ─── #9: line-height / font-weight measure-vs-paint parity ────────────
-
     #[test]
     fn honours_style_line_height_instead_of_hardcoded_1_4() {
-        // Reproduction: `style.line-height: 0.9` must change the vertical
-        // gap between wrapped lines. Before the fix, the painter always
-        // used `font_size * 1.4` regardless of `style.line-height`, while
-        // `CaptionIntrinsic` (the box taffy reserves) honoured it — a
-        // caption author following rules/typography-readability.md's
-        // guidance to set `line-height` got a box sized for their value but
-        // glyphs painted at a fixed 1.4.
         let mut tight = make_caption_with_max_width(
             "one two three four five six seven eight",
             None,
@@ -732,13 +617,8 @@ mod tests {
         );
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px on the
-        // context-free `font_size_px_or` path — `CaptionIntrinsic` (via
-        // `TextIntrinsic`) measured a 0-height box and nothing painted.
         let mut caption = make_caption_with_max_width("hello world", None, Some(300.0));
         caption.style.font_size = Some(Length::String("2rem".into()));
         const W: i32 = 400;
@@ -755,22 +635,8 @@ mod tests {
         );
     }
 
-    // `Caption::resolve_font_style` is the exact weight/slant computation
-    // `paint` uses; testing it directly is deterministic regardless of
-    // whether the system's resolved "bold" and "normal" typefaces happen to
-    // have visually/metrically distinct advance widths on this particular
-    // host (on this machine, Helvetica's bold and normal share identical
-    // glyph metrics — a pixel-width comparison would pass whether or not
-    // `paint` used the right weight, which isn't a real check of the fix).
-
     #[test]
     fn resolve_font_style_defaults_to_normal_matching_the_intrinsic_measurement() {
-        // #9 (weight half): `CaptionIntrinsic` (via `TextIntrinsic`'s
-        // `weight_to_u16`) measures at weight 400 when `style.font-weight`
-        // is unset. Before the fix, `paint` ignored `style.font-weight`
-        // entirely and always painted `FontStyle::bold()` (weight 700) — a
-        // silent measure-vs-paint weight mismatch on every caption that
-        // doesn't set an explicit font-weight (the common case).
         let style = CssStyle::default();
         let resolved = Caption::resolve_font_style(&style);
         assert_eq!(
@@ -788,9 +654,6 @@ mod tests {
         };
         assert_eq!(*Caption::resolve_font_style(&bold).weight(), 700);
 
-        // Below the >=600 "treat as bold" threshold (same threshold
-        // `text.rs`'s equivalent mapping uses), so the exact numeric value
-        // passes through unchanged.
         let numeric = CssStyle {
             font_weight: Some(CssFontWeight::Number(350)),
             ..Default::default()

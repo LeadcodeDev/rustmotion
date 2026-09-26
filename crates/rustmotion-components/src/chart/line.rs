@@ -6,13 +6,6 @@ use rustmotion_core::engine::renderer::{paint_from_hex, parse_hex_color};
 
 use super::Chart;
 
-/// `(min, max, normalize)` for a min–max scaled series.
-///
-/// `normalize` maps a value to `0.0..=1.0` (0 = bottom of the plot area).
-/// When every value is identical the series is centred rather than pinned to
-/// the axis: dividing by a `max(0.001)` floor mapped a constant series to 0,
-/// so a flat line at, say, 7 rendered sitting exactly on the zero gridline and
-/// read as a series of zeroes.
 pub(super) fn series_scale(
     values: impl Iterator<Item = f64> + Clone,
 ) -> (f64, f64, impl Fn(f64) -> f32) {
@@ -53,9 +46,6 @@ impl Chart {
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );
         if n < 2 {
-            // A one-point series has no line to draw, but returning before the
-            // axes were painted made the whole component render nothing at all
-            // (measured: 0 ink pixels, and `validate` clean). Plot the point.
             if let Some(dp) = self.data.first() {
                 let x = ml + chart_w / 2.0;
                 let y = mt + chart_h - norm(dp.value) * chart_h;
@@ -89,7 +79,6 @@ impl Chart {
         fill_path.line_to((last_x, mt + chart_h));
         fill_path.close();
 
-        // Clip for animation
         let clip_w = w * progress;
         canvas.save();
         canvas.clip_rect(
@@ -98,21 +87,18 @@ impl Chart {
             false,
         );
 
-        // Fill under line
         let line_color = self.get_color(0);
         let mut fill_paint = paint_from_hex(line_color);
         fill_paint.set_style(PaintStyle::Fill);
         fill_paint.set_alpha_f(0.15);
         canvas.draw_path(&fill_path.detach(), &fill_paint);
 
-        // Line stroke
         let mut line_paint = paint_from_hex(line_color);
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
         canvas.draw_path(&path.detach(), &line_paint);
 
-        // Dots
         for (i, dp) in self.data.iter().enumerate() {
             let x = ml + (i as f32 / (n - 1) as f32) * chart_w;
             let y = mt + chart_h - norm(dp.value) * chart_h;
@@ -145,7 +131,6 @@ impl Chart {
             canvas, ml, mt, chart_w, chart_h, min_val, max_val, &x_labels, false,
         );
         if n < 2 {
-            // See `render_line`: draw the lone point rather than nothing.
             if let Some(dp) = self.data.first() {
                 let x = ml + chart_w / 2.0;
                 let y = mt + chart_h - norm(dp.value) * chart_h;
@@ -157,7 +142,6 @@ impl Chart {
             return Ok(());
         }
 
-        // Compute points
         let pts: Vec<(f32, f32)> = self
             .data
             .iter()
@@ -173,7 +157,6 @@ impl Chart {
         let mut fill_path = PathBuilder::new();
 
         if self.smooth && pts.len() >= 3 {
-            // Catmull-Rom -> cubic bezier for smooth curves
             line_path.move_to(pts[0]);
             fill_path.move_to((pts[0].0, mt + chart_h));
             fill_path.line_to(pts[0]);
@@ -213,7 +196,6 @@ impl Chart {
         fill_path.line_to((last_x, mt + chart_h));
         fill_path.close();
 
-        // Clip for animation
         let clip_w = w * progress;
         canvas.save();
         canvas.clip_rect(
@@ -222,7 +204,6 @@ impl Chart {
             false,
         );
 
-        // Gradient fill
         let line_color = self.get_color(0);
         let (r, g, b, _) = parse_hex_color(line_color);
         let top_color = Color::from_argb((self.fill_opacity * 255.0) as u8, r, g, b);
@@ -245,14 +226,12 @@ impl Chart {
             canvas.draw_path(&fill_path.detach(), &fill_paint);
         }
 
-        // Line stroke
         let mut line_paint = paint_from_hex(line_color);
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(2.5);
         line_paint.set_anti_alias(true);
         canvas.draw_path(&line_path.detach(), &line_paint);
 
-        // Dots
         for &(x, y) in &pts {
             let mut dot_paint = paint_from_hex(line_color);
             dot_paint.set_style(PaintStyle::Fill);

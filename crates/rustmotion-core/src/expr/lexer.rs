@@ -1,23 +1,10 @@
-//! Character-level scanning: `&str` in, `Vec<Token>` out, or an
-//! [`ExprError::Parse`] naming exactly what byte offset choked.
-//!
-//! Deliberately hand-rolled rather than pulled in as a dependency — the
-//! token set is tiny (numbers, `$name` references, bare identifiers, string
-//! literals for `node(...)`, and a fixed punctuation set) and a generated
-//! lexer would cost more to read than it saves to write.
-
 use super::ExprError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Token {
     Num(f64),
-    /// `$name` — the `$` is consumed here, `name` is the bare identifier.
     Var(String),
-    /// A bare identifier: a builtin name, a constant (`PI`/`TAU`/`E`), or
-    /// the `node` keyword. Which one it is gets resolved by the parser.
     Ident(String),
-    /// A double-quoted string literal — only meaningful as a `node(...)`
-    /// argument; the parser rejects it anywhere else.
     Str(String),
     Plus,
     Minus,
@@ -37,11 +24,6 @@ pub(crate) enum Token {
     Ge,
 }
 
-/// A generous but finite cap on source length, independent of the nesting
-/// cap `parser.rs` enforces on structure: a pathological flat input (a
-/// million `+` signs, no nesting at all) would sail through the depth guard
-/// but still shouldn't be handed to the tokenizer — reject it up front with
-/// a plain, cheap length check instead of discovering the cost mid-scan.
 const MAX_SOURCE_LEN: usize = 8192;
 
 pub(crate) fn tokenize(src: &str) -> Result<Vec<Token>, ExprError> {
@@ -177,12 +159,6 @@ pub(crate) fn tokenize(src: &str) -> Result<Vec<Token>, ExprError> {
                             j += 2;
                         }
                         Some(_) => {
-                            // Safe: we only ever step by one *byte* when it's
-                            // part of a UTF-8 continuation too, but to keep
-                            // this simple and correct for the identifier/
-                            // number cases above we only claim ASCII there.
-                            // String bodies may be full UTF-8, so decode via
-                            // the original &str instead of raw bytes here.
                             let ch = src[j..].chars().next().unwrap();
                             s.push(ch);
                             j += ch.len_utf8();

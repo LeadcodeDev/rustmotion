@@ -2,14 +2,6 @@ use serde_json::{Map, Value};
 
 use crate::HtmlError;
 
-/// Coerce a CSS value string into JSON. `true`/`false` become a JSON boolean
-/// (aligned with [`coerce_dsl_value`] — without this, no `bool` schema field
-/// is reachable from HTML: `auto_scroll`, `diff`, `loop`, `show_grid`,
-/// `show_borders`, `pulse`, … all reject the JSON string `"true"`/`"false"`
-/// that a naive coercion would otherwise produce). A bare number or `<n>px`
-/// becomes a JSON number (integral → integer, so it deserializes into
-/// `u32`/`f32` fields); everything else (`%`, `auto`, `fr`, colors, keywords)
-/// stays a string.
 pub fn coerce_value(raw: &str) -> Value {
     let t = raw.trim();
     if t == "true" {
@@ -28,15 +20,6 @@ pub fn coerce_value(raw: &str) -> Value {
     Value::from(t.to_string())
 }
 
-/// Parse an inline `style="a:b; c:d"` declaration list into a JSON style
-/// object. `padding`/`margin`/`border-radius` accept the CSS 1/2/3/4-value
-/// box shorthand, expanded into the `{top,right,bottom,left}` /
-/// `{top-left,top-right,bottom-right,bottom-left}` object the core CSS
-/// engine's `Edges`/`BorderRadius` types deserialize. `grid-template-columns`/
-/// `-rows` accept a track list, `repeat()`/`minmax()` included. Any other
-/// property whose value is more than one top-level (paren-aware) token is
-/// refused rather than passed through as an opaque string the core length
-/// parser cannot read (see [`HtmlError::UnsupportedStyleShorthand`]).
 pub fn parse_inline_style(decls: &str) -> Result<Map<String, Value>, HtmlError> {
     let mut map = Map::new();
     for decl in decls.split(';') {
@@ -104,11 +87,6 @@ pub fn parse_inline_style(decls: &str) -> Result<Map<String, Value>, HtmlError> 
     Ok(map)
 }
 
-/// Split a CSS value on top-level whitespace: whitespace inside a `(...)`
-/// span (e.g. the argument list of `rgba(0, 0, 0, 0.5)` or `repeat(3, 1fr)`)
-/// does not count as a separator, so a single functional-notation value
-/// stays one token while a genuine multi-value shorthand (`24px 48px`)
-/// splits into its parts.
 fn split_top_level_tokens(s: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut depth = 0i32;
@@ -133,9 +111,6 @@ fn split_top_level_tokens(s: &str) -> Vec<&str> {
     tokens
 }
 
-/// Expand a 2/3/4-value `padding`/`margin` shorthand into the
-/// `{top,right,bottom,left}` object `Edges::Sides` deserializes, following
-/// the standard CSS clockwise-from-top expansion rule.
 fn expand_box_edges(tokens: &[&str]) -> Value {
     let (top, right, bottom, left) = match tokens {
         [a, b] => (*a, *b, *a, *b),
@@ -151,11 +126,6 @@ fn expand_box_edges(tokens: &[&str]) -> Value {
     Value::Object(edges)
 }
 
-/// Expand a 2/3/4-value `border-radius` shorthand into the
-/// `{top-left,top-right,bottom-right,bottom-left}` object
-/// `BorderRadius::Corners` deserializes, following the standard CSS
-/// clockwise-from-top-left expansion rule (a different starting corner than
-/// [`expand_box_edges`], per the CSS box-shorthand spec).
 fn expand_border_radius_corners(tokens: &[&str]) -> Value {
     let (top_left, top_right, bottom_right, bottom_left) = match tokens {
         [a, b] => (*a, *b, *a, *b),
@@ -171,12 +141,6 @@ fn expand_border_radius_corners(tokens: &[&str]) -> Value {
     Value::Object(corners)
 }
 
-/// Parse a `grid-template-columns`/`-rows` track list into the flat
-/// `Vec<GridTrack>` JSON the core CSS engine expects: `repeat(n, track)`
-/// expands into `n` copies of `track`, `minmax(min, max)` becomes
-/// `{"min":..,"max":..}`, and every other token passes through
-/// [`coerce_value`] unchanged (a bare number for `fr`, a keyword string, or
-/// an explicit length).
 fn parse_grid_template(prop: &str, value: &str) -> Result<Vec<Value>, HtmlError> {
     let mut out = Vec::new();
     for token in split_top_level_tokens(value) {
@@ -243,17 +207,6 @@ fn parse_single_grid_track(prop: &str, token: &str) -> Result<Value, HtmlError> 
     Ok(coerce_value(token))
 }
 
-/// Parse an `anim` attribute into the `style.animation` JSON array.
-///
-/// Two forms:
-/// - JSON: `[{"name":"fade_in_up","delay":0.3}]` (array, inserted as-is) or
-///   `{"name":"pulse"}` (single object, wrapped in an array);
-/// - compact DSL: `fade-in-up delay:0.3 duration:0.8; pulse loop:true` —
-///   effects separated by `;`, each effect is a preset name (kebab-case is
-///   converted to snake_case) followed by space-separated `key:value` pairs.
-///
-/// Unknown preset names are not validated here (no schema dependency); the
-/// typed deserialization of `style.animation` rejects them at validation time.
 pub fn parse_anim_attr(raw: &str) -> Result<Value, HtmlError> {
     let t = raw.trim();
     if t.is_empty() {
@@ -297,10 +250,6 @@ pub fn parse_anim_attr(raw: &str) -> Result<Value, HtmlError> {
                 )));
             }
             let key = kebab_to_snake(k);
-            // `spring` is an object in the schema; the compact DSL cannot
-            // express one, so `spring:true` coerces to `{}` (all SpringConfig
-            // defaults) and `spring:false` is simply absent. Fine-grained
-            // damping/stiffness/mass requires the JSON `anim` form.
             if key == "spring" {
                 match v {
                     "true" => {
@@ -324,13 +273,10 @@ pub fn parse_anim_attr(raw: &str) -> Result<Value, HtmlError> {
     Ok(Value::Array(effects))
 }
 
-/// `fade-in-up` → `fade_in_up` (snake_case passes through unchanged).
 fn kebab_to_snake(s: &str) -> String {
     s.replace('-', "_")
 }
 
-/// Coerce a DSL value: `true`/`false` → bool, number → JSON number
-/// (integral → integer), anything else → string (e.g. easing names).
 fn coerce_dsl_value(raw: &str) -> Value {
     match raw {
         "true" => Value::Bool(true),

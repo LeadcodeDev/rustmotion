@@ -1,20 +1,3 @@
-//! Regression test — audit round 4, lot LAYOUT, constat 5.
-//!
-//! `.claude/skills/rustmotion/rules/html-css-mental-model.md` — a rules file
-//! read by the LLMs that generate rustmotion scenarios — documented
-//! `"margin-top"` / `"margin-left"` as valid per-child JSON keys, and
-//! `"padding": [40, 60]` as a valid CSS-shorthand-style array. Neither is:
-//! `CssStyle` only exposes `margin: Option<Edges>` / `padding: Option<Edges>`
-//! (`#[serde(deny_unknown_fields)]`), and `Edges` is `Uniform(LengthPercentage)`
-//! or a `{top, right, bottom, left}` object — never a per-key kebab-case field,
-//! never an array. Following the old doc verbatim makes the whole component
-//! fail typed deserialization, so it silently disappears from the render
-//! instead of being spaced as intended.
-//!
-//! These tests pin both failure modes (so a future change can't quietly
-//! re-introduce them) and confirm the corrected syntax the doc now teaches
-//! actually round-trips.
-
 use rustmotion_components::Component;
 
 fn component_json_parses(json: serde_json::Value) -> bool {
@@ -23,8 +6,6 @@ fn component_json_parses(json: serde_json::Value) -> bool {
 
 #[test]
 fn old_doc_margin_top_shorthand_fails_to_deserialize() {
-    // What the doc used to teach (html-css-mental-model.md, old line 87):
-    // `"margin-top": 16` as a direct style key.
     let json = serde_json::json!({
         "type": "text",
         "content": "hi",
@@ -41,8 +22,6 @@ fn old_doc_margin_top_shorthand_fails_to_deserialize() {
 
 #[test]
 fn old_doc_margin_left_auto_shorthand_fails_to_deserialize() {
-    // What the doc used to teach (html-css-mental-model.md, old line 90):
-    // `"margin-left": "auto"` as a direct style key.
     let json = serde_json::json!({
         "type": "badge",
         "text": "NEW",
@@ -56,9 +35,6 @@ fn old_doc_margin_left_auto_shorthand_fails_to_deserialize() {
 
 #[test]
 fn old_doc_padding_array_shorthand_fails_to_deserialize() {
-    // What the doc used to teach (html-css-mental-model.md, old line 177):
-    // `"padding": [40, 60]`, a CSS `padding: 40px 60px` -style array shorthand
-    // `Edges` does not implement.
     let json = serde_json::json!({
         "type": "card",
         "style": { "padding": [40, 60] },

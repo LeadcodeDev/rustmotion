@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-/// Crate-wide result type using `RustmotionError`.
 pub type Result<T> = std::result::Result<T, RustmotionError>;
 
 #[derive(Debug, Error)]
@@ -8,25 +7,21 @@ pub enum RustmotionError {
     #[error("{0}")]
     Generic(String),
 
-    // --- IO / File errors ---
     #[error("Failed to read '{path}': {source}")]
     FileRead {
         path: String,
         source: std::io::Error,
     },
 
-    // --- JSON parsing ---
     #[error("Failed to parse JSON: {source}")]
     JsonParse {
         #[from]
         source: serde_json::Error,
     },
 
-    // --- HTML transpile ---
     #[error("HTML transpile error: {0}")]
     HtmlParse(String),
 
-    // --- Asset loading ---
     #[error("Failed to load image '{path}': {reason}")]
     ImageLoad { path: String, reason: String },
 
@@ -69,7 +64,6 @@ pub enum RustmotionError {
     #[error("No fonts available on this system")]
     FontNotFound,
 
-    // --- Google Fonts ---
     #[error(
         "FontEntry for '{family}' has source=\"google\" but also sets 'path' — use one or the other"
     )]
@@ -104,7 +98,6 @@ pub enum RustmotionError {
         reason: String,
     },
 
-    // --- Include system ---
     #[error("Include depth limit ({limit}) exceeded while resolving '{path}'")]
     IncludeDepthExceeded { limit: u8, path: String },
 
@@ -135,7 +128,6 @@ pub enum RustmotionError {
     #[error("Unknown heropattern '{name}' — see heropatterns.com for available patterns")]
     UnknownHeropattern { name: String },
 
-    // --- Variables ---
     #[error("Variable '${name}' is not defined in '{path}'")]
     UndefinedVariable { name: String, path: String },
 
@@ -148,7 +140,6 @@ pub enum RustmotionError {
     #[error("Cannot interpolate non-string variable '${name}' into string in '{path}'")]
     VariableInterpolationTypeError { name: String, path: String },
 
-    // --- Templates: `components` / `use` / `for-each` (see rustmotion_core::expand) ---
     #[error("'components' at '{path}' must be an object mapping names to definitions")]
     ComponentsBlockNotObject { path: String },
 
@@ -203,13 +194,9 @@ pub enum RustmotionError {
     )]
     ExpansionDepthExceeded { limit: u32, path: String },
 
-    // --- Encoding ---
     #[error("No frames to render (total duration is 0)")]
     NoFrames,
 
-    // ffmpeg is otherwise the one that finds out, and only after every frame
-    // has been rendered: it exits with "Nothing was written into output file"
-    // and a raw -22 dump. Naming the working combination costs one line.
     #[error("codec '{codec}' cannot be written into a .{container} file — {fix}")]
     CodecContainerMismatch {
         codec: String,
@@ -226,9 +213,6 @@ pub enum RustmotionError {
     #[error("Failed to open FFmpeg stdin pipe")]
     FfmpegPipe,
 
-    // A broken pipe here nearly always means ffmpeg already died on its own
-    // arguments, so the useful diagnostic is ffmpeg's stderr rather than our
-    // write error. Carry it in the error so it survives `--quiet`.
     #[error("Failed to write to FFmpeg pipe: {reason}{}", .stderr.as_ref().map(|s| format!("\nffmpeg reported:\n{}", s)).unwrap_or_default())]
     FfmpegWrite {
         reason: String,
@@ -250,7 +234,6 @@ pub enum RustmotionError {
     #[error("Failed to write GIF frame: {reason}")]
     GifFrame { reason: String },
 
-    // --- Audio ---
     #[error("Failed to open audio file '{path}': {reason}")]
     AudioOpen { path: String, reason: String },
 
@@ -263,7 +246,6 @@ pub enum RustmotionError {
     #[error("Failed to create decoder for '{path}': {reason}")]
     AudioDecoder { path: String, reason: String },
 
-    // --- Audio synthesis (issue #331) ---
     #[error("audio.score: {source}")]
     AudioSynthScore {
         #[from]
@@ -273,7 +255,6 @@ pub enum RustmotionError {
     #[error("failed to write synthesised audio to a temporary file '{path}': {reason}")]
     AudioSynthWrite { path: String, reason: String },
 
-    // --- Rendering ---
     #[error("Failed to create Skia surface")]
     SurfaceCreation,
 
@@ -286,7 +267,6 @@ pub enum RustmotionError {
     #[error("Failed to create motion blur surface")]
     MotionBlurSurface,
 
-    // --- CLI ---
     #[error("Cannot use both input file and --json")]
     ConflictingInput,
 
@@ -327,11 +307,9 @@ pub enum RustmotionError {
     #[error("Path is not valid UTF-8: '{path}'")]
     NonUtf8Path { path: String },
 
-    // --- Preview ---
     #[error("Failed to create preview window: {reason}")]
     PreviewWindow { reason: String },
 
-    // --- Lottie ---
     #[error("Failed to read Lottie file '{path}': {reason}")]
     LottieRead { path: String, reason: String },
 
@@ -347,17 +325,14 @@ pub enum RustmotionError {
     #[error("Lottie render failed: {reason}")]
     LottieRender { reason: String },
 
-    // --- Skills ---
     #[error(
         "Unknown skill or rule: '{name}'. Run `rustmotion skills list` to see available rules."
     )]
     UnknownSkill { name: String },
 
-    // --- IO ---
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
-    // --- External library errors ---
     #[error("Image processing error: {0}")]
     Image(#[from] image::ImageError),
 

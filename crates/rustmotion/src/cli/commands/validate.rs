@@ -6,20 +6,6 @@ use super::audio_report::analyze_scenario_audio_levels;
 use super::geometry::{GeometryViolation, ViolationKind};
 use super::validation::{self, ValidationReport, ValidationSource, VarOverrides};
 
-/// #128 item 4: the duration `validate` announces must match what `render`
-/// actually produces frame-for-frame. Summing `scene.duration` directly
-/// (the old behaviour) over-counts: a transition *overlaps* two adjacent
-/// scenes rather than adding sequential time — `encode/video/tasks.rs`'s
-/// frame scheduler subtracts each transition's frames from the receiving
-/// scene's own budget (`build_slide_view_tasks`'s `incoming_transition_frames`),
-/// while a *view*-level transition (`build_frame_tasks`'s `ViewTransition`)
-/// is genuinely additive on top of both views' own scenes. Re-deriving that
-/// arithmetic here would be a second implementation the frame scheduler
-/// doesn't know about and can drift from (that file belongs to a different
-/// workstream — read, not edited, here). Instead, reuse the exact frame
-/// count `render` itself schedules via `build_frame_tasks` and divide by
-/// fps: this is definitionally identical to the rendered duration, not an
-/// approximation of it.
 fn announced_duration(scenario: &ResolvedScenario) -> f64 {
     let fps = scenario.video.fps as f64;
     if fps <= 0.0 {
@@ -28,27 +14,6 @@ fn announced_duration(scenario: &ResolvedScenario) -> f64 {
     rustmotion::encode::build_frame_tasks(scenario).len() as f64 / fps
 }
 
-/// Why `--fix` must not write over this input.
-///
-/// `--fix` serialises `LoadedScenario::raw`, which is the document *after*
-/// variable substitution, `for-each`/`use` expansion, and `include` resolution
-/// — not the document on disk. For a plain JSON scenario the two coincide and
-/// writing back is faithful. For anything templated they do not, and the write
-/// silently replaces the source with its own expansion: the `config` block and
-/// every `$var` disappear, includes get inlined into the parent, `for-each`/
-/// `use` get inlined into their repeated/instantiated output, a static
-/// `= ...` expression is replaced by the one literal it folded to, and an
-/// HTML input is replaced by JSON outright.
-///
-/// One rule covers all five: only write back a source `--fix` can reproduce.
-///
-/// `pub(crate)` rather than private: `rustmotion migrate` refuses a
-/// templated/`include`/`for-each`/`use` source on exactly this ground (see
-/// `migrate.rs`'s own doc comment) — a migrated file whose path indices no
-/// longer match its source is worse than an unmigrated one, the same reason
-/// `--fix` refuses. Reusing this type and `refuse_fix` below, rather than a
-/// second copy, is what keeps the two commands from silently drifting apart
-/// on what counts as "templated".
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FixRefusal {
     HtmlSource,
@@ -94,10 +59,6 @@ impl FixRefusal {
         }
     }
 
-    /// Same refusal, `rustmotion migrate`'s own wording: the noun changes
-    /// ("the migrator" instead of "the fixer") but the reasoning — path
-    /// indices no longer matching the source — is identical, which is why
-    /// this shares [`refuse_fix`] rather than re-deriving its own detection.
     pub(crate) fn explain_for_migrate(&self, path: &Path) -> String {
         let p = path.display();
         match self {
@@ -134,17 +95,12 @@ impl FixRefusal {
     }
 }
 
-/// `None` when `--fix` (or `rustmotion migrate`, which reuses this same
-/// check — see [`FixRefusal`]'s doc comment) may write over `input`.
 pub(crate) fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     if rustmotion::loader::is_html_path(input) {
         return Some(FixRefusal::HtmlSource);
     }
-    // Inspect the bytes on disk, not the loaded tree: by then substitution has
-    // already erased the very markers that make the write unfaithful.
     let source: serde_json::Value = match serde_json::from_str(raw_source) {
         Ok(v) => v,
-        // Unparseable source is not something we should be overwriting either.
         Err(_) => return Some(FixRefusal::Templated),
     };
     if source.get("config").is_some() || raw_source.contains("$") {
@@ -153,44 +109,18 @@ pub(crate) fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     if raw_source.contains("\"include\"") {
         return Some(FixRefusal::UsesInclude);
     }
-    // Same conservative, raw-substring detection as `UsesInclude` above (not
-    // a full walk of the tree): `components`/`for-each`/`use` can appear at
-    // any depth, and `--fix` must refuse before it ever gets far enough to
-    // find out whether they're actually reachable.
     if source.get("components").is_some()
         || raw_source.contains("\"for-each\"")
         || raw_source.contains("\"use\"")
     {
         return Some(FixRefusal::UsesTemplateDirectives);
     }
-    // Every expression containing a `$name` (the common case — every
-    // example in the issue this exists for does) is already caught by the
-    // `raw_source.contains("$")` check above; this closes the narrower gap
-    // of a fully `$`-free static expression like `"= cos(PI/4) * 100"`,
-    // which would otherwise fold to a literal and be refused nowhere.
     if rustmotion::loader::source_uses_expression(raw_source) {
         return Some(FixRefusal::UsesExpression);
     }
     None
 }
 
-/// The JSON `--fix` writes back, sourced independently of
-/// `LoadedScenario::raw`.
-///
-/// `loaded.raw` is captured *after* `rustmotion::assets::rebase_relative_paths`
-/// runs (`validation.rs`), which rewrites every `src`/`track` naming an
-/// existing file next to the scenario into a canonicalised ABSOLUTE path —
-/// serialising it back would silently replace `"assets/logo.png"` with
-/// this machine's own absolute path, which resolves nowhere else. By the
-/// time `refuse_fix` has let a file reach this function, it carries no
-/// `config`/`$var`/`include`/`for-each`/`use`, so variable substitution and
-/// directive expansion are no-ops on it too — parsing `raw_source` (the
-/// exact bytes still on disk) fresh yields the identical tree
-/// `apply_fixes`/`navigate`'s path indices were computed against, minus the
-/// rebase.
-///
-/// `pub(crate)`: `rustmotion migrate` re-parses the same on-disk bytes for
-/// the same reason, once `refuse_fix` has cleared them.
 pub(crate) fn fixable_source(raw_source: &str) -> Result<serde_json::Value> {
     serde_json::from_str(raw_source).map_err(|e| {
         RustmotionError::Generic(format!("re-parse source for --fix/--migrate: {}", e))
@@ -246,8 +176,6 @@ pub fn cmd_validate(
                 input.display()
             );
 
-            // Re-run checks after the fixes so the rest of the function reflects
-            // the on-disk state.
             let reloaded = validation::load_with_vars(ValidationSource::File(input), overrides)?;
             report_out = validation::run_checks(&reloaded, strict_anim);
             if strict_attrs {
@@ -287,11 +215,6 @@ pub fn cmd_validate(
 }
 
 fn write_report(path: &Path, report: &ValidationReport, scenario: &ResolvedScenario) -> Result<()> {
-    // Issue #334's second blind spot, closed: a mixed soundtrack that clips
-    // used to be a discovery made after the fact with an external tool
-    // (`ffmpeg -af astats`) — see `audio_report`'s module doc. Measuring it
-    // here, unconditionally, means every `--report` carries it next to
-    // `geometry_violations` instead of requiring a second pass.
     let audio = analyze_scenario_audio_levels(scenario);
     let json = serde_json::json!({
         "schema_errors": report.schema_errors,
@@ -310,8 +233,6 @@ fn write_report(path: &Path, report: &ValidationReport, scenario: &ResolvedScena
     Ok(())
 }
 
-/// Apply safe auto-fixes directly in the raw JSON. Returns the number of
-/// successful mutations.
 fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -> usize {
     let mut applied = 0;
     for v in violations {
@@ -321,12 +242,6 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
         };
         match v.kind {
             ViolationKind::UnwrappableTextOverflow => {
-                // `wrap` is not a `CssStyle` field — `CssStyle` is
-                // `deny_unknown_fields`, so writing it silently drops the
-                // whole component at the next parse (C1). The real property
-                // is `white-space`; removing `nowrap`/`pre` falls back to
-                // the schema default (`normal`, i.e. wrapping), which is
-                // always a valid, non-destructive mutation.
                 if let Some(style_obj) = target.get_mut("style").and_then(|s| s.as_object_mut()) {
                     if style_obj.remove("white-space").is_some() {
                         applied += 1;
@@ -334,20 +249,6 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
                 }
             }
             ViolationKind::ContentOverflowsBox => {
-                // Growing the box, shrinking the font and shortening the copy
-                // are all legitimate answers with very different visual
-                // outcomes, so this arm used to do nothing rather than pick
-                // one. `style.text-autofit` removed that dilemma for the two
-                // components whose painters implement it: it declares the
-                // author's intent ("this must fit") without touching the
-                // declared box or the content, so nothing the author wrote is
-                // overwritten or lost — the same risk category as the two
-                // fixes above, both of which also change the render.
-                //
-                // Scoped to `text`/`gradient_text` deliberately. Every other
-                // component ignores the field, so writing it there would be a
-                // no-op the author could reasonably read as a fix, which is
-                // worse than leaving the violation to them.
                 let kind = target.get("type").and_then(|t| t.as_str());
                 if matches!(kind, Some("text") | Some("gradient_text")) {
                     if let Some(style) = target
@@ -364,17 +265,12 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
             }
             ViolationKind::ViewportOverflow
             | ViolationKind::AnimatedTextOverflow
-            | ViolationKind::ContentOverflowsCard => {
-                // Position/size clamping is too risky to auto-fix without
-                // losing intent — leave it for the user.
-            }
+            | ViolationKind::ContentOverflowsCard => {}
         }
     }
     applied
 }
 
-/// Walk a path like `views[0].scenes[1].children[2].children[0]` against the
-/// raw JSON, transparently handling the legacy `scenes` and `composition` shapes.
 fn navigate<'a>(root: &'a mut serde_json::Value, path: &str) -> Option<&'a mut serde_json::Value> {
     let segments = parse_segments(path);
     let mut cursor: &mut serde_json::Value = root;
@@ -388,7 +284,6 @@ fn navigate<'a>(root: &'a mut serde_json::Value, path: &str) -> Option<&'a mut s
                 } else if cursor.get("composition").is_some() {
                     cursor.get_mut("composition")?.get_mut(*n)?
                 } else if *n == 0 {
-                    // Implicit single-slide view: stay on root.
                     cursor
                 } else {
                     return None;
@@ -468,10 +363,6 @@ mod tests {
         }
     }
 
-    /// `ContentOverflowsBox` had no fix because growing the box, shrinking
-    /// the font and shortening the copy are all legitimate and pick
-    /// different outcomes. `text-autofit` states the intent instead, without
-    /// overwriting anything the author declared.
     #[test]
     fn fix_declares_text_autofit_on_an_overflowing_text() {
         let mut json: serde_json::Value = serde_json::from_str(NARROW_CARD_JSON).unwrap();
@@ -484,18 +375,12 @@ mod tests {
             target.get("style").and_then(|s| s.get("text-autofit")),
             Some(&serde_json::Value::Bool(true))
         );
-        // The declared box and the content are what the author wrote; a fix
-        // that rewrote either would be picking one of the outcomes this arm
-        // exists to avoid picking.
         assert!(
             target.get("content").is_some(),
             "content must be untouched: {target}"
         );
     }
 
-    /// Every component other than `text`/`gradient_text` ignores the field.
-    /// Writing it there would look like a fix while changing nothing, which
-    /// is worse than leaving the violation visible.
     #[test]
     fn fix_leaves_overflowing_components_that_cannot_autofit_alone() {
         let json_src = r##"{
@@ -522,11 +407,6 @@ mod tests {
         );
     }
 
-    /// C1: `apply_fixes` must never write `style.wrap` (not a `CssStyle`
-    /// field — writing it drops the whole component at the next parse
-    /// because `CssStyle` is `deny_unknown_fields`). It must instead remove
-    /// `white-space: nowrap`, and the fixed file must still parse with the
-    /// text component intact.
     #[test]
     fn fix_removes_white_space_and_never_writes_the_nonexistent_wrap_field() {
         let mut json: serde_json::Value = serde_json::from_str(NARROW_CARD_JSON).unwrap();
@@ -548,9 +428,6 @@ mod tests {
             style
         );
 
-        // The fixed file must still parse, and the text must still be
-        // present — a `deny_unknown_fields` rejection would have silently
-        // dropped it (C1's original failure mode).
         let pretty = serde_json::to_string(&json).unwrap();
         let scenario =
             load_scenario_from_source(None, Some(&pretty)).expect("fixed scenario still parses");
@@ -565,7 +442,6 @@ mod tests {
             "text child must survive the fix, not be dropped"
         );
 
-        // The fix must also clear the geometry violation it targeted.
         let after = validate_geometry(&scenario);
         assert!(
             after
@@ -576,10 +452,6 @@ mod tests {
         );
     }
 
-    /// H3: the violation path (produced by geometry.rs's raw-index-preserving
-    /// walker) must reference the RAW JSON position of the offending node,
-    /// so `navigate()`/`apply_fixes` mutate the right sibling even when an
-    /// earlier child never became a `ChildComponent`.
     #[test]
     fn fix_patches_the_raw_json_sibling_even_when_an_earlier_child_failed_to_deserialize() {
         let raw = r##"{
@@ -608,12 +480,10 @@ mod tests {
         let applied = apply_fixes(&mut json, &violations);
         assert_eq!(applied, 1);
 
-        // children[0] (the broken sibling) must be untouched.
         assert_eq!(
             json["scenes"][0]["children"][0]["type"],
             "not_a_real_component_kind"
         );
-        // children[1] (the card) is the one that got fixed.
         let style = &json["scenes"][0]["children"][1]["children"][0]["style"];
         assert!(style.get("white-space").is_none());
         assert!(style.get("wrap").is_none());
@@ -627,19 +497,9 @@ mod tests {
         assert_eq!(target.unwrap()["type"], "text");
     }
 
-    // ─── #128 item 4: announced duration matches the rendered one ────────────
-
     #[test]
     fn announced_duration_subtracts_the_overlapping_transition_instead_of_summing_scene_durations()
     {
-        // Two 2.0s scenes at 30fps with a 0.5s transition entering the
-        // second one: naively summing `scene.duration` gives 4.0s (the old,
-        // wrong behaviour — reproduces #128 item 4's "22% wrong" report).
-        // The transition *overlaps* the two scenes rather than adding
-        // sequential time: scene 0 contributes 60 frames minus the 15 frames
-        // it hands off to the transition (45), the transition itself
-        // contributes 15, and scene 1 contributes 60 minus the 15 incoming
-        // frames it doesn't repeat (45) — 45 + 15 + 45 = 105 frames = 3.5s.
         let json = r##"{
             "video": { "width": 640, "height": 360, "fps": 30 },
             "scenes": [
@@ -665,8 +525,6 @@ mod tests {
             "expected the transition-overlap-corrected 3.5s, got {duration}"
         );
 
-        // The value must be definitionally the rendered frame count, not a
-        // hand-derived approximation of it.
         let expected_from_frame_count =
             rustmotion::encode::build_frame_tasks(&scenario).len() as f64 / 30.0;
         assert_eq!(duration, expected_from_frame_count);
@@ -674,9 +532,6 @@ mod tests {
 
     #[test]
     fn announced_duration_matches_scene_duration_sum_when_there_are_no_transitions() {
-        // No transitions at all: the corrected formula must degrade back to
-        // exactly the naive sum — this is a regression guard, not a special
-        // case the fix is allowed to get wrong.
         let json = r##"{
             "video": { "width": 640, "height": 360, "fps": 30 },
             "scenes": [
@@ -692,9 +547,6 @@ mod tests {
         );
     }
 
-    /// `--fix` writes back the *resolved* tree. Anything the resolution erased is
-    /// erased on disk too, so these inputs must be refused rather than
-    /// silently rewritten.
     mod fix_refusals {
         use super::super::{refuse_fix, FixRefusal};
         use std::path::Path;
@@ -709,7 +561,6 @@ mod tests {
 
         #[test]
         fn an_html_source_is_refused() {
-            // Writing here replaces the author's markup with transpiled JSON.
             assert_eq!(
                 refuse_fix(Path::new("s.html"), "<rustmotion></rustmotion>"),
                 Some(FixRefusal::HtmlSource)
@@ -718,7 +569,6 @@ mod tests {
 
         #[test]
         fn a_templated_scenario_is_refused() {
-            // The write would bake in the substitution and make --var a no-op.
             let with_config = r#"{"config":{"title":"hi"},"video":{"width":320,"height":240,
                 "fps":30},"scenes":[{"duration":1.0,"children":[]}]}"#;
             assert_eq!(
@@ -737,8 +587,6 @@ mod tests {
 
         #[test]
         fn a_scenario_using_include_is_refused() {
-            // The resolved tree inlines the include, so a path-based patch lands on
-            // a node the source file does not contain.
             let with_include = r#"{"video":{"width":320,"height":240,"fps":30},
                 "scenes":[{"include":"part.json"}]}"#;
             assert_eq!(
@@ -749,9 +597,6 @@ mod tests {
 
         #[test]
         fn a_scenario_using_for_each_is_refused() {
-            // No `$` anywhere in this fixture on purpose — proves the
-            // detection is driven by the `for-each` marker itself, not by
-            // piggybacking on the pre-existing `$`-content check.
             let with_for_each = r##"{"video":{"width":320,"height":240,"fps":30},
                 "scenes":[{"duration":1.0,"children":[
                 {"for-each":[1,2],"template":{"type":"text","content":"static"}}
@@ -775,10 +620,6 @@ mod tests {
 
         #[test]
         fn a_scenario_using_a_dollar_free_static_expression_is_refused() {
-            // No `$` anywhere in this fixture on purpose, same reasoning as
-            // `a_scenario_using_for_each_is_refused` above: proves the
-            // detection does not piggyback on the pre-existing `$`-content
-            // check, which a fully static `= ...` expression can slip past.
             let with_expression = r##"{"video":{"width":320,"height":240,"fps":30},
                 "scenes":[{"duration":1.0,"children":[
                 {"type":"text","content":"hi","x":"= cos(PI/4) * 100"}
@@ -791,12 +632,6 @@ mod tests {
 
         #[test]
         fn a_scenario_using_a_dollar_expression_is_refused_as_templated_not_expression() {
-            // `refuse_fix` checks the generic `$`-content rule before the
-            // expression-specific one, so an expression referencing a scope
-            // variable is refused as `Templated` — still refused, just
-            // attributed to the check that runs first. Documented here so a
-            // future reordering doesn't silently change this without a test
-            // noticing.
             let with_var_expression = r##"{"video":{"width":320,"height":240,"fps":30},
                 "scenes":[{"duration":1.0,"children":[
                 {"type":"text","content":"hi","x":"= $W/2"}
@@ -824,27 +659,6 @@ mod tests {
         }
     }
 
-    /// Round 4 audit, constat 1: PR #145 introduced `refuse_fix`, gated on
-    /// the raw bytes on disk (not `loaded.raw`), and `apply_fixes`/`navigate`
-    /// already walk raw-preserving indices (H3, see
-    /// `geometry.rs::deserialize_children_indexed`'s doc comment). This
-    /// workstream's job is not to redo that fix — it's to prove, end to
-    /// end through `cmd_validate` (not just unit-testing `refuse_fix` in
-    /// isolation, as `fix_refusals` above does), that the refusal actually
-    /// engages for the two concrete failure modes constat 1 names:
-    /// - validate.rs:60 — `--fix` would otherwise serialise the
-    ///   *post-substitution* document, dropping `config` and baking in
-    ///   `$var` resolutions, silently destroying the template.
-    /// - validate.rs:198 — a violation path carries the *resolved* scene
-    ///   index (post `include::resolve_entries` inlining), which does not
-    ///   line up with the RAW `scenes` array `navigate` walks as soon as an
-    ///   `include` expands to a scene count that shifts later positions.
-    ///
-    /// Both are already covered by the existing `refuse_fix` gate (a
-    /// `Templated`/`UsesInclude` scenario is refused outright, before
-    /// `apply_fixes` ever runs) — these two tests are the proof, not a new
-    /// fix. No RED phase: this constat is "verify existing behaviour", not
-    /// "here is a bug"; both tests pass on first run.
     mod fix_refusals_end_to_end {
         use super::super::cmd_validate;
 
@@ -855,9 +669,6 @@ mod tests {
                 "rm_validate_fix_templated_{}.json",
                 std::process::id()
             ));
-            // `config` + a whole-string `$title` reference, plus a real
-            // geometry violation (nowrap text far too wide for its card) so
-            // `--fix` actually attempts to write.
             let original = r##"{
                 "config": { "title": { "type": "string", "default": "hi" } },
                 "video": { "width": 1920, "height": 1080 },
@@ -877,7 +688,7 @@ mod tests {
             }"##;
             std::fs::write(&path, original).expect("write fixture");
 
-            let result = cmd_validate(&path, None, /*fix=*/ true, false, false, false, None);
+            let result = cmd_validate(&path, None, true, false, false, false, None);
 
             let after = std::fs::read_to_string(&path).expect("read back fixture");
             std::fs::remove_file(&path).ok();
@@ -904,12 +715,6 @@ mod tests {
             let part_path = dir.join("part.json");
             let parent_path = dir.join("parent.json");
 
-            // The included file resolves to TWO scenes; the offending
-            // narrow-card/nowrap-text violation lives in the SECOND one, so
-            // its *resolved* scene index (1) does not correspond to any
-            // scene in the parent's own RAW `scenes` array (which has a
-            // single entry: the include directive) — the concrete index
-            // skew constat 1 names.
             let part = r##"{
                 "video": { "width": 1920, "height": 1080 },
                 "scenes": [
@@ -936,15 +741,7 @@ mod tests {
             std::fs::write(&part_path, part).expect("write part fixture");
             std::fs::write(&parent_path, parent).expect("write parent fixture");
 
-            let result = cmd_validate(
-                &parent_path,
-                None,
-                /*fix=*/ true,
-                false,
-                false,
-                false,
-                None,
-            );
+            let result = cmd_validate(&parent_path, None, true, false, false, false, None);
 
             let parent_after = std::fs::read_to_string(&parent_path).expect("read back parent");
             let part_after = std::fs::read_to_string(&part_path).expect("read back part");
@@ -961,11 +758,6 @@ mod tests {
             assert_eq!(part_after, part, "included file must be untouched too");
         }
 
-        /// Same failure mode as `include`, for the sibling mechanism: `for-each`
-        /// expanding to more than one node shifts every later `children[N]`
-        /// index, so a path-based `--fix` patch would land on the wrong
-        /// (or a nonexistent) sibling if it were allowed to write back the
-        /// expanded tree. It must be refused outright instead.
         #[test]
         fn cmd_validate_fix_refuses_to_overwrite_a_scenario_using_for_each_and_leaves_the_file_untouched(
         ) {
@@ -997,7 +789,7 @@ mod tests {
             }"##;
             std::fs::write(&path, original).expect("write fixture");
 
-            let result = cmd_validate(&path, None, /*fix=*/ true, false, false, false, None);
+            let result = cmd_validate(&path, None, true, false, false, false, None);
 
             let after = std::fs::read_to_string(&path).expect("read back fixture");
             std::fs::remove_file(&path).ok();

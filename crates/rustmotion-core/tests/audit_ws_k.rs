@@ -1,23 +1,11 @@
-//! Regression tests for the workstream K (docs, schema, CI) audit findings:
-//! RM-02, RM-47, RM-52.
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Text immediately following the component count in the README's
-/// Architecture section (see `README.md`'s "rustmotion ships N components,
-/// each implementing the `Painter` trait" sentence).
 const README_COUNT_MARKER: &str = " components, each implementing the `Painter` trait";
 
-/// Text immediately following the component count in
-/// `crates/rustmotion-components/Cargo.toml`'s `description` — the string
-/// crates.io displays for the published crate.
 const CARGO_TOML_COUNT_MARKER: &str = " components)\"";
 
-/// Read the integer that appears immediately before `marker` in `haystack`,
-/// skipping trailing whitespace. Panics with the marker text on failure so a
-/// reworded sentence names exactly what moved instead of a bare parse error.
 fn number_before(haystack: &str, marker: &str, haystack_name: &str) -> u32 {
     let idx = haystack.find(marker).unwrap_or_else(|| {
         panic!(
@@ -37,11 +25,6 @@ fn number_before(haystack: &str, marker: &str, haystack_name: &str) -> u32 {
     })
 }
 
-/// Count the variants of `pub enum Component` in
-/// `crates/rustmotion-components/src/lib.rs`, by counting non-empty,
-/// non-attribute lines between its opening `{` and closing `}`. Every
-/// variant in that enum is declared on its own line (`Name(Type),`); the
-/// only other lines in the block are `#[serde(...)]` attributes.
 fn count_component_variants(lib_rs: &str) -> usize {
     let start_marker = "pub enum Component {";
     let start = lib_rs.find(start_marker).unwrap_or_else(|| {
@@ -58,12 +41,6 @@ fn count_component_variants(lib_rs: &str) -> usize {
         .count()
 }
 
-/// RM-02 / RM-47: README.md and `rustmotion-components/Cargo.toml` (the text
-/// crates.io shows for the published crate) both claimed "51 components"
-/// while `Component` actually had 60 variants — and nothing kept the two in
-/// sync. Locks the documented counts to the real one so a future component
-/// addition/removal that forgets to update the docs fails CI instead of
-/// drifting silently again.
 #[test]
 fn documented_component_count_matches_enum_variant_count() {
     let lib_rs = include_str!("../../rustmotion-components/src/lib.rs");
@@ -93,13 +70,6 @@ fn documented_component_count_matches_enum_variant_count() {
     );
 }
 
-/// Public schema fields that parse successfully but are not read anywhere
-/// outside `crates/rustmotion-core/src/schema/` — kept out of
-/// `every_public_schema_field_is_read_somewhere_or_allowlisted`'s failure so
-/// a *known, tracked* gap doesn't block CI, while a *new* one still does.
-/// Each entry names the finding that tracks closing it and the reason it
-/// isn't closed by workstream K itself. Removing an entry once the field is
-/// wired (or deleted) is the expected way this list shrinks.
 const KNOWN_INERT_FIELDS: &[(&str, &str)] = &[
     (
         "codec",
@@ -158,7 +128,6 @@ const KNOWN_INERT_FIELDS: &[(&str, &str)] = &[
     ),
 ];
 
-/// `crates/rustmotion-core` -> `crates` -> `<workspace root>`.
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -167,7 +136,6 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Recursively collect every `.rs` file under `dir`, skipping `target/`.
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
     for entry in entries {
@@ -184,13 +152,6 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Extract the names of `pub <name>: <Type>,`-style struct fields from Rust
-/// source text. Deliberately crude (no parser): looks for lines whose
-/// trimmed text starts with `"pub "` and contains a `:` before any
-/// non-identifier character, which matches plain field declarations
-/// (`pub width: u32,`) while excluding `pub fn`/`pub struct`/`pub enum`
-/// (no top-level `:`, or one buried behind non-identifier characters like
-/// `(`/`<`/`&`/spaces that fail the identifier check below).
 fn extract_pub_field_names(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     for line in source.lines() {
@@ -213,14 +174,6 @@ fn extract_pub_field_names(source: &str) -> Vec<String> {
     names
 }
 
-/// RM-52: nothing stopped a schema field from parsing successfully and then
-/// being read by no code path — RM-50 (`VideoConfig.codec`) and RM-51
-/// (`MotionBlurConfig.intensity`) are exactly that defect, and the format's
-/// credibility as an LLM generation target rests on a field either doing
-/// something or failing to parse. This test greps the workspace for a
-/// member-access on every public schema field name and fails if one isn't
-/// found anywhere outside its own definition — unless it's in
-/// `KNOWN_INERT_FIELDS`, so a newly introduced inert field still fails CI.
 #[test]
 fn every_public_schema_field_is_read_somewhere_or_allowlisted() {
     let root = workspace_root();

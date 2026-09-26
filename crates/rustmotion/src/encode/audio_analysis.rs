@@ -8,12 +8,6 @@ use rustmotion_core::schema::ResolvedScenario;
 const FFT_SIZE: usize = 2048;
 const NUM_BANDS: usize = 16;
 
-/// A track that could not be analysed, and why.
-///
-/// Returned rather than logged so each caller decides how loud to be: an
-/// encode prints a warning and carries on, the studio shows it in the topbar.
-/// Swallowing it leaves `waveform`/`audio_spectrum` drawing their flat
-/// fallback with nothing anywhere saying why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioAnalysisFailure {
     pub src: String,
@@ -26,16 +20,6 @@ impl std::fmt::Display for AudioAnalysisFailure {
     }
 }
 
-/// What a cached analysis was computed from: file size, mtime, and the fps it
-/// was bucketed at. The cache is keyed by path alone (the painters look tracks
-/// up that way), so without this a track whose *content* changed under a stable
-/// path — the normal case when someone re-exports a mix while the studio is
-/// open — would keep serving the old envelope forever.
-/// File identity (length, mtime), the fps it was bucketed at, and a hash of
-/// everything about the *track* that changes the result: `start`/`end` move the
-/// lookup, and `volume`/`volume_keyframes`/the fades are baked into the
-/// amplitudes. An entry computed for one of those must never be served for
-/// another — two scenarios can name the same file with different mixes.
 type SourceFingerprint = (u64, u128, u32, u64);
 
 static FINGERPRINTS: OnceLock<Mutex<HashMap<String, SourceFingerprint>>> = OnceLock::new();
@@ -44,9 +28,6 @@ fn fingerprints() -> &'static Mutex<HashMap<String, SourceFingerprint>> {
     FINGERPRINTS.get_or_init(Default::default)
 }
 
-/// `None` when the file cannot be stat'ed — treated as "changed", so the next
-/// analysis attempt runs and reports a real decode error instead of silently
-/// reusing a stale entry.
 fn source_fingerprint(
     src: &str,
     fps: u32,
@@ -62,9 +43,6 @@ fn source_fingerprint(
     Some((meta.len(), mtime, fps, track_hash(track)))
 }
 
-/// Hash the track's placement and volume envelope. Serialised rather than
-/// hashed field by field so adding a field to `AudioTrack` cannot silently
-/// leave it out of the key.
 fn track_hash(track: &rustmotion_core::schema::AudioTrack) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -74,7 +52,6 @@ fn track_hash(track: &rustmotion_core::schema::AudioTrack) -> u64 {
     hasher.finish()
 }
 
-/// Build the 16 log-spaced band frequency boundaries (Hz) from 20..16000.
 fn band_boundaries() -> [(f32, f32); NUM_BANDS] {
     let mut bounds = [(0.0f32, 0.0f32); NUM_BANDS];
     let low = 20.0f32.log2();
@@ -87,17 +64,12 @@ fn band_boundaries() -> [(f32, f32); NUM_BANDS] {
     bounds
 }
 
-/// Compute a Hann window of length `n`.
 fn hann_window(n: usize) -> Vec<f32> {
     (0..n)
         .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos()))
         .collect()
 }
 
-/// Analyze all audio tracks in the scenario and populate the global cache.
-/// Idempotent: a track is re-analysed only when its file changed on disk or
-/// the fps did. Returns the tracks that could not be analysed — an empty vec
-/// means every track in the scenario now has an entry in the cache.
 pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisFailure> {
     let mut failures = Vec::new();
     let tracks = &scenario.audio;
@@ -127,7 +99,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             continue;
         }
 
-        // Decode to PCM f32
         let (samples, sample_rate, channels) = match crate::encode::audio::decode_audio_file(src) {
             Ok(v) => v,
             Err(e) => {
@@ -139,7 +110,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             }
         };
 
-        // Downmix to mono
         let mono: Vec<f32> = match channels {
             1 => samples.clone(),
             _ => samples
@@ -148,12 +118,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
                 .collect(),
         };
 
-        // Follow the *mix*, not the source. `volume`, `volume_keyframes` and the
-        // fades are what comes out of the speakers, and since #182 the studio
-        // plays exactly that — a waveform drawing the raw file's envelope while
-        // a fade takes the sound down contradicts what the viewer hears. The
-        // gain comes from the encoder's own `track_gain_at`, so the picture
-        // cannot drift from the audio.
         let audible = {
             let file_seconds = mono.len() as f64 / sample_rate as f64;
             match track.end {
@@ -181,7 +145,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             let end = (start + samples_per_frame).min(mono.len());
             let frame_samples = &mono[start..end];
 
-            // RMS amplitude
             let rms = if frame_samples.is_empty() {
                 0.0f32
             } else {
@@ -190,7 +153,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             };
             amplitude.push(rms);
 
-            // FFT: take FFT_SIZE samples from this frame (with zero-padding)
             let mut buf: Vec<Complex<f32>> = (0..FFT_SIZE)
                 .map(|i| {
                     let s = if i < frame_samples.len() {
@@ -206,7 +168,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
                 .collect();
             fft.process(&mut buf);
 
-            // Map FFT bins to bands
             let bin_hz = sample_rate as f32 / FFT_SIZE as f32;
             let half = FFT_SIZE / 2;
             let mut frame_bands = [0.0f32; NUM_BANDS];
@@ -225,7 +186,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             bands_all.push(frame_bands);
         }
 
-        // Normalize amplitude to 0..1
         let amp_max = amplitude.iter().cloned().fold(0.0f32, f32::max);
         if amp_max > 1e-8 {
             for a in &mut amplitude {
@@ -233,8 +193,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             }
         }
 
-        // Normalize bands with a single global max so cross-band energy
-        // ratios stay meaningful (a quiet band stays quiet on screen).
         let bands_max = bands_all
             .iter()
             .flat_map(|fr| fr.iter().copied())
@@ -260,9 +218,6 @@ pub fn analyze_scenario_audio(scenario: &ResolvedScenario) -> Vec<AudioAnalysisF
             Some(fp) => {
                 fps_of.insert(src.clone(), fp);
             }
-            // Un-stat'able but decodable: don't record a fingerprint, so the
-            // next call re-analyses rather than trusting an entry it cannot
-            // check.
             None => {
                 fps_of.remove(src);
             }

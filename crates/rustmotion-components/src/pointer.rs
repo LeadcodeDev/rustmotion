@@ -1,14 +1,3 @@
-//! A simulated mouse pointer — the arrow, plus the ring that pulses out of
-//! its tip when it clicks.
-//!
-//! Not to be confused with [`crate::cursor::Cursor`], which is a *text* caret
-//! (a blinking bar). Its `cursor_style: "pointer"` field has never drawn
-//! anything but that bar. Product walkthroughs and agent demos need the other
-//! thing: an arrow that travels to a control and visibly clicks it.
-//!
-//! Waypoint choreography — hold, glide, pause on the click — is shared with
-//! `cursor` via [`crate::cursor::waypoint_offset`], so the two stay in step.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::{Canvas, Paint, PaintStyle, Path, PathBuilder};
@@ -49,7 +38,6 @@ pub enum ClickRing {
 }
 
 impl ClickRing {
-    /// `(stroke width, travel)` as multiples of the pointer's `size`.
     fn metrics(self) -> Option<(f32, f32)> {
         match self {
             Self::Subtle => Some((0.05, 0.55)),
@@ -132,15 +120,12 @@ impl Pointer {
         }
     }
 
-    /// The click running at `time`, as progress 0..1, if any.
     fn click_progress(&self, time: f64) -> Option<f32> {
         if self.click_duration <= 0.0 {
             return None;
         }
         self.click_times()
             .into_iter()
-            // The *last* qualifying click, so overlapping clicks resolve to
-            // the most recent rather than to whichever happens to be first.
             .rfind(|&t| time >= t && time < t + self.click_duration as f64)
             .map(|t| ((time - t) / self.click_duration as f64) as f32)
     }
@@ -158,10 +143,6 @@ impl Pointer {
         )
     }
 
-    /// The classic arrow — tip, left edge, tail notch, and back up the right
-    /// shoulder — drawn tip-first at the origin and scaled to `size`.
-    /// Coordinates are in units of the pointer's height, so the glyph keeps
-    /// its proportions at any size.
     fn arrow_path(size: f32) -> Path {
         const OUTLINE: [(f32, f32); 7] = [
             (0.0, 0.0),
@@ -205,9 +186,6 @@ impl Painter for Pointer {
         canvas.save();
         canvas.translate((dx, dy));
 
-        // The ring expands out of the tip and fades as it goes, so the eye
-        // reads the click as happening *at* the tip rather than around the
-        // whole pointer. Painted under the arrow so it never veils it.
         if let (Some(p), Some((stroke_f, travel_f))) = (click, self.click_ring.metrics()) {
             let (r, g, b, _) = parse_hex_color(self.ring_color.as_deref().unwrap_or(&fill));
             let alpha = ((1.0 - p) * 200.0) as u8;
@@ -221,9 +199,6 @@ impl Painter for Pointer {
             }
         }
 
-        // A small dip on the press, released as the click finishes — the
-        // arrow's own acknowledgement, independent of the ring (which
-        // `click_ring: "none"` can switch off).
         if let Some(p) = click {
             let scale = if p < 0.35 {
                 1.0 - 0.12 * (p / 0.35)
@@ -268,8 +243,6 @@ mod tests {
 
     #[test]
     fn clicks_come_from_the_waypoints_when_a_path_is_given() {
-        // `click_at` is for a stationary pointer; a travelling one clicks on
-        // arrival, so listing both must not produce two overlapping sets.
         let p = pointer(serde_json::json!({
             "click_at": [9.0],
             "path": [
@@ -301,8 +274,6 @@ mod tests {
 
     #[test]
     fn overlapping_clicks_resolve_to_the_most_recent() {
-        // Two clicks closer together than `click_duration`: the second must
-        // restart the animation, not be swallowed by the first still running.
         let p = pointer(serde_json::json!({
             "click_at": [1.0, 1.2],
             "click_duration": 0.5

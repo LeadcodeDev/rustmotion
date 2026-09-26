@@ -194,16 +194,8 @@ impl Timeline {
         ascent: f32,
     ) {
         let total_w = self.width;
-        let bar_y = r; // Center of nodes
+        let bar_y = r;
 
-        // Node 0 used to sit at local x=0 and node n-1 at x=total_w, so
-        // their circles (radius `r`) bled `r` px past both edges of the
-        // assigned box — and further still wherever a step's label was
-        // wider than the node itself (issue #127 measured ink starting
-        // 33px left of the box, 9px outside the card). Insetting every
-        // node by `max(r, widest_label / 2)` keeps both the circles and
-        // their centered labels inside `[0, total_w]` regardless of which
-        // step has the longest label.
         let max_label_half_w = self
             .steps
             .iter()
@@ -217,7 +209,6 @@ impl Timeline {
             0.0
         };
 
-        // Draw background bar
         let bar_rect =
             Rect::from_xywh(0.0, bar_y - self.bar_height / 2.0, total_w, self.bar_height);
         let mut bar_paint = paint_from_hex(&self.bar_color);
@@ -229,7 +220,6 @@ impl Timeline {
             &bar_paint,
         );
 
-        // Draw filled bar
         if fill_progress > 0.001 {
             let fill_w = total_w * fill_progress.clamp(0.0, 1.0);
             let fill_rect =
@@ -251,7 +241,6 @@ impl Timeline {
             canvas.restore();
         }
 
-        // Draw nodes and labels
         for (i, step) in self.steps.iter().enumerate() {
             let cx = if n > 1 {
                 inset + i as f32 * spacing
@@ -260,7 +249,6 @@ impl Timeline {
             };
             let cy = bar_y;
 
-            // Determine if this step is "active" (filled bar has reached it)
             let step_progress = if n > 1 {
                 i as f32 / (n - 1) as f32
             } else {
@@ -268,7 +256,6 @@ impl Timeline {
             };
             let is_active = fill_progress >= step_progress;
 
-            // Node circle
             let node_color = if is_active {
                 &step.color
             } else {
@@ -279,7 +266,6 @@ impl Timeline {
             node_paint.set_anti_alias(true);
             canvas.draw_circle((cx, cy), r, &node_paint);
 
-            // Icon/text inside node
             if let Some(ref icon) = step.icon {
                 let icon_w = measure_text_with_fallback(icon, icon_font, emoji_font, 0.0);
                 let (_, icon_metrics) = icon_font.metrics();
@@ -301,7 +287,6 @@ impl Timeline {
                 );
             }
 
-            // Label below
             let label_w = measure_text_with_fallback(&step.label, font, &None, 0.0);
             let lx = cx - label_w / 2.0;
             let ly = cy + r + 8.0 + ascent;
@@ -309,7 +294,6 @@ impl Timeline {
             label_paint.set_anti_alias(true);
             draw_text_with_fallback(canvas, &step.label, font, &None, 0.0, lx, ly, &label_paint);
 
-            // Sublabel
             if let Some(ref sublabel) = step.sublabel {
                 let sub_w = measure_text_with_fallback(sublabel, sublabel_font, &None, 0.0);
                 let sx = cx - sub_w / 2.0;
@@ -345,15 +329,8 @@ impl Timeline {
         let spacing = 80.0;
         let bar_x = r;
         let total_h = if n > 1 { (n - 1) as f32 * spacing } else { 0.0 };
-        // Node 0 used to sit at local y=0, so its circle (radius `r`) bled
-        // `r` px above the assigned box's top edge — same class of bug as
-        // the horizontal direction's left/right overflow. Insetting every
-        // node's `cy` by `r` keeps the whole column inside `[0, box height]`
-        // (box_builder.rs already reserves `r*2 + 64` px per step, well
-        // past what this needs).
         let top_inset = r;
 
-        // Background bar
         let bar_rect = Rect::from_xywh(
             bar_x - self.bar_height / 2.0,
             top_inset,
@@ -369,7 +346,6 @@ impl Timeline {
             &bar_paint,
         );
 
-        // Filled bar
         if fill_progress > 0.001 {
             let fill_h = total_h * fill_progress.clamp(0.0, 1.0);
             let fill_rect = Rect::from_xywh(
@@ -430,7 +406,6 @@ impl Timeline {
                 );
             }
 
-            // Label to the right
             let lx = cx + r + 12.0;
             let (_, font_metrics) = font.metrics();
             let ly = cy + (-font_metrics.ascent - font_metrics.descent) / 2.0;
@@ -503,11 +478,6 @@ mod tests {
 
     #[test]
     fn horizontal_nodes_and_labels_stay_within_the_declared_width() {
-        // #127: node 0's circle used to be centered at local x=0 (and node
-        // n-1 at x=width), so the circle — and a wide first/last label —
-        // bled `node_radius` (or more) past both edges of the box the
-        // layout gave this component. A long first label and a long last
-        // label both push on the insets from either side.
         let tl = Timeline {
             steps: vec![
                 step("Design phase kickoff"),

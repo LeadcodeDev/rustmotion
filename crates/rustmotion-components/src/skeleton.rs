@@ -97,16 +97,13 @@ impl Skeleton {
     fn draw_shimmer_rect(&self, canvas: &Canvas, rect: Rect, radius: f32, time: f64) {
         let w = rect.width();
 
-        // Base color
         let mut base_paint = paint_from_hex(&self.base_color);
         base_paint.set_style(PaintStyle::Fill);
         base_paint.set_anti_alias(true);
         let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
         canvas.draw_rrect(rrect, &base_paint);
 
-        // Shimmer gradient sweep
         let cycle = (time as f32 / self.speed).fract();
-        // The shimmer band sweeps from left to right
         let shimmer_w = w * 0.4;
         let shimmer_x = rect.left + (w + shimmer_w) * cycle - shimmer_w;
 

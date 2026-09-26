@@ -76,7 +76,6 @@ impl Painter for Waveform {
         };
 
         let Some(analysis) = analysis else {
-            // Graceful degradation: flat line at mid-height
             let mut paint = Paint::default();
             paint.set_color(color);
             paint.set_style(PaintStyle::Stroke);
@@ -94,7 +93,6 @@ impl Painter for Waveform {
         let t_start = (ctx.scenario_time - half_window).max(0.0);
         let t_end = ctx.scenario_time + half_window;
 
-        // Sample N points along the window
         let n_points = w as usize;
         let mut points: Vec<(f32, f32)> = Vec::with_capacity(n_points);
         for i in 0..n_points {
@@ -124,7 +122,6 @@ impl Painter for Waveform {
                 canvas.draw_path(&path.detach(), &paint);
             }
             DrawStyle::Filled => {
-                // Filled area
                 let (r2, g2, b2, _) = parse_hex_color(&self.color);
                 let fill_color = Color::from_argb(100, r2, g2, b2);
                 paint.set_style(PaintStyle::Fill);
@@ -141,7 +138,6 @@ impl Painter for Waveform {
                 fill_path.close();
                 canvas.draw_path(&fill_path.detach(), &paint);
 
-                // Outline
                 paint.set_style(PaintStyle::Stroke);
                 paint.set_stroke_width(1.5);
                 paint.set_color(color);

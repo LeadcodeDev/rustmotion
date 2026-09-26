@@ -68,10 +68,6 @@ rustmotion_core::impl_traits!(Counter {
 });
 
 impl Counter {
-    /// Where the count sits on its 0..1 ramp at `time`, before easing.
-    ///
-    /// The ramp starts at `start_at` and runs for `duration`, falling back to
-    /// the rest of the scene when no duration is given.
     fn ramp_progress(&self, time: f64, scene_duration: f64) -> f64 {
         let start = self.timing.start_at.unwrap_or(0.0);
         let elapsed = (time - start).max(0.0);
@@ -97,20 +93,12 @@ impl Counter {
     ) -> Result<()> {
         use rustmotion_core::engine::animator::ease;
 
-        // Lot B (wave S): `font-size` now resolves through the same
-        // context-aware machinery `text-shadow` already used below (see
-        // `lctx`) — it used to stay on the context-free `font_size_px_or`,
-        // silently dropping `rem`/`vw`/`vh` font-size to 0px. `em`/`%` on
-        // `font-size` itself remain approximate — see
-        // `crate::intrinsic::font_size_ctx`'s doc comment.
         let base_ctx = crate::intrinsic::font_size_ctx(
             ctx.video_width as f32,
             ctx.video_height as f32,
             layout_width.max(0.0),
         );
         let font_size = self.style.font_size_px_ctx(&base_ctx, 48.0);
-        // Animated color (timeline style-state transitions) overrides the
-        // static style color.
         let color = props
             .color
             .as_deref()
@@ -164,9 +152,6 @@ impl Counter {
         let mut paint = paint_from_hex(color);
         paint.set_alpha_f(1.0);
 
-        // This element's own resolved font-size as the `em`/`%` base for
-        // `letter-spacing` and (below) `text-shadow` — same context reused
-        // for both instead of each rebuilding an equivalent one.
         let own_ctx = rustmotion_core::css::units::LengthContext {
             font_size,
             ..base_ctx
@@ -176,10 +161,6 @@ impl Counter {
         let advance_width =
             measure_text_with_fallback(&content, &font, &emoji_font, letter_spacing);
 
-        // For center/right alignment, anchor positioning on the same `absmax`
-        // width that `measure()` reserved. This keeps the right edge (or
-        // bounding box midpoint) of the counter stable across frames instead
-        // of letting it shift sub-pixel as the digit count changes.
         let stable_width = if matches!(align, TextAlign::Center | TextAlign::Right) {
             let absmax = self.from.abs().max(self.to.abs());
             let signed = if self.from < 0.0 || self.to < 0.0 {
@@ -206,8 +187,6 @@ impl Counter {
             }
             TextAlign::Right => layout_width - advance_width,
         };
-        // Snap to whole pixels to eliminate the sub-pixel jitter that the
-        // glyph rasterizer would otherwise introduce on a moving counter.
         let x = raw_x.round();
         let (_, metrics) = font.metrics();
         let line_height = font_size * 1.3;
@@ -215,8 +194,6 @@ impl Counter {
         let descent = metrics.descent;
         let y = (line_height + ascent - descent) / 2.0;
 
-        // Draw shadows — component field wins, else the bridged CSS
-        // `style.text-shadow` list (reverse order: first shadow on top).
         let shadows: Vec<rustmotion_core::schema::TextShadow> = if let Some(s) = &self.text_shadow {
             vec![s.clone()]
         } else if let Some(list) = &self.style.text_shadow {
@@ -248,7 +225,6 @@ impl Counter {
             );
         }
 
-        // Draw stroke
         if let Some(ref stroke) = self.stroke {
             let mut sp = paint_from_hex(&stroke.color);
             sp.set_style(PaintStyle::Stroke);
@@ -327,8 +303,6 @@ mod tests {
 
     #[test]
     fn without_duration_the_count_only_lands_on_the_last_frame() {
-        // The behaviour that made counters unreadable: nothing settles early,
-        // so the figure is still moving when the scene cuts away.
         let c = counter(None, None);
         assert!(c.ramp_progress(3.9, 4.0) < 1.0);
         assert_eq!(c.ramp_progress(4.0, 4.0), 1.0);
@@ -338,7 +312,6 @@ mod tests {
     fn duration_makes_the_count_land_early_and_hold() {
         let c = counter(Some(1.5), None);
         assert_eq!(c.ramp_progress(1.5, 4.0), 1.0);
-        // Held for the rest of the scene, which is the point.
         assert_eq!(c.ramp_progress(3.0, 4.0), 1.0);
         assert!((c.ramp_progress(0.75, 4.0) - 0.5).abs() < 1e-9);
     }
@@ -353,8 +326,6 @@ mod tests {
 
     #[test]
     fn a_duration_outlasting_the_scene_is_honoured_not_clamped() {
-        // Deliberate: the author asked for a slow count, and silently speeding
-        // it up would be a surprise. It simply never reaches `to`.
         let c = counter(Some(10.0), None);
         assert!(c.ramp_progress(4.0, 4.0) < 0.5);
     }
@@ -365,12 +336,8 @@ mod tests {
         assert!((c.ramp_progress(2.0, 4.0) - 0.5).abs() < 1e-9);
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px on the
-        // context-free `font_size_px_or` path.
         let mut c = counter(None, None);
         c.style.font_size = Some(rustmotion_core::css::Length::String("2rem".into()));
         c.style.color = Some(rustmotion_core::css::style::Color::String("#FFFFFF".into()));

@@ -1,53 +1,9 @@
-//! Where a `"= ..."` expression on a style property actually lands once it
-//! survives past `rustmotion::loader::fold_static_expressions` — i.e. once
-//! it reads something only known per frame (`$t`, `$T`, `$beat`, a declared
-//! `vars` name, or a `node(...)` reference) and therefore cannot be folded
-//! to a literal at load time. See [`crate::expr`]'s module doc for the full
-//! two-tier model this is the dynamic half of (issue #338).
-//!
-//! [`Computed<T>`](crate::expr::Computed) already solves "a JSON value is
-//! either a literal `T` or an `"= ..."` expression" *per field*, but
-//! retyping [`crate::css::CssStyle`]'s existing fields (`opacity: Option<f32>`,
-//! ...) to `Computed<f32>` would change their Rust type for every one of the
-//! many consumers across this workspace that read them directly — not this
-//! workstream's call to make. [`ComputedStyle`] is the alternative: a
-//! sibling, additive field on `CssStyle` that holds the *parsed* [`Expr`]
-//! for whichever of a small, fixed set of properties carried one, leaving
-//! every existing typed field exactly as it was (either a literal, or
-//! simply unset when the author wrote an expression instead). See
-//! [`extract`] for how a `"= ..."` string moves from the raw JSON into this
-//! side channel, and `CssStyle`'s own hand-written `Deserialize` impl
-//! (`style.rs`) for where that happens — exactly once, at load, never
-//! per frame.
-
 use serde_json::{Map, Value};
 
 use crate::engine::animator::AnimatedProperties;
 use crate::engine::deps::NodeRef;
 use crate::expr::{Expr, ExprError, Scope};
 
-/// Parsed, not-yet-evaluated `"= ..."` expressions pulled off a
-/// [`crate::css::CssStyle`] at deserialize time — one [`Expr`] per style
-/// property that accepts one. A property is either a literal (its normal
-/// typed field on `CssStyle`) or an expression (a field here), never both:
-/// [`extract`] removes the `"= ..."` string from the JSON before the typed
-/// field is deserialized, so the typed field is simply absent when this one
-/// is populated.
-///
-/// Every [`Expr`] here was parsed exactly once, by [`extract`], when the
-/// scenario was loaded — [`Self::resolve`] only ever calls [`Expr::eval`]
-/// on it afterwards, once per sampled frame. See [`crate::expr`]'s "Two
-/// evaluation tiers" doc: this struct is that second tier's landing zone.
-///
-/// # Coverage
-///
-/// `opacity`, `width`, `height`, and — inside a `style.transform` array
-/// entry — the `x`/`y` of `translate`/`translate-x`/`translate-y`/`scale`/
-/// `scale-x`/`scale-y` and the `deg` of `rotate`. Every other `CssStyle`
-/// property (colors, other lengths, enums, `z`/3d transform functions,
-/// `skew*`, `perspective`, `matrix`/`matrix3d`, ...) does not accept an
-/// expression yet — a `"= ..."` string there still fails deserialization
-/// exactly as it did before this module existed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ComputedStyle {
     pub opacity: Option<Expr>,
@@ -58,30 +14,10 @@ pub struct ComputedStyle {
     pub scale_x: Option<Expr>,
     pub scale_y: Option<Expr>,
     pub rotate: Option<Expr>,
-    /// Every `node("id", "prop")` call found across this node's own
-    /// populated expressions above — the `(String, Vec<NodeRef>)` shape
-    /// [`crate::engine::deps::DepGraph::build`] wants, pre-computed once at
-    /// [`extract`] time (issue #328's join to #338). [`Expr`] itself
-    /// compiles the same information internally but does not expose it
-    /// (see `engine::deps`'s module doc, "Why text metrics are a trait" —
-    /// no, rather its `scan_node_refs` doc — for why this crate re-derives
-    /// it from the raw `"= ..."` source text instead of reaching into
-    /// `Expr`'s private fields), so [`extract`] runs
-    /// [`crate::engine::deps::scan_node_refs`] on each expression's source
-    /// the moment it has it in hand, right before that source is discarded.
-    /// Empty for the overwhelming common case (no expression at all, or an
-    /// expression that only reads `$name`s) — same zero-cost-when-unused
-    /// shape as every other field here.
     pub node_refs: Vec<NodeRef>,
 }
 
 impl ComputedStyle {
-    /// True when this node's style carries no expression at all — the
-    /// common case. `box_builder.rs` checks this before building a
-    /// [`Scope`] or calling [`Self::resolve`], so a scenario that never
-    /// writes `"= ..."` on a style property pays nothing beyond this one
-    /// field-count check, per node, per frame — no `Expr::eval`, no `Scope`
-    /// construction, no [`AnimatedProperties`] built or applied.
     pub fn is_empty(&self) -> bool {
         self.opacity.is_none()
             && self.width.is_none()
@@ -93,27 +29,7 @@ impl ComputedStyle {
             && self.rotate.is_none()
     }
 
-    /// `self`'s own populated fields win; `base`'s fill in whatever `self`
-    /// left `None`. Used by `box_builder.rs::apply_style_states`, whose
-    /// timeline-style-state merge round-trips `CssStyle` through
-    /// `Serialize`/`Deserialize` — `expr` is `#[serde(skip)]` on that round
-    /// trip (see `style.rs`), so the node's original expressions would
-    /// otherwise vanish the instant it has any `timeline` style state. A
-    /// state's own `style` block can itself carry a fresh expression on the
-    /// same property (rare, but not disallowed) — that one is `self` here,
-    /// and takes precedence.
     pub fn prefer(self, base: ComputedStyle) -> ComputedStyle {
-        // `node_refs` is a per-field-agnostic union rather than a
-        // per-field "self wins" pick like every field above: knowing
-        // *which* of the 8 slots each `NodeRef` came from would need
-        // per-field storage this struct doesn't keep (see the field's own
-        // doc). A union can only ever add a dependency-graph edge that a
-        // precise per-field pick wouldn't have — never drop a real one —
-        // so the worst case is an unnecessary ordering constraint, never a
-        // reference silently failing to resolve. Duplicate `NodeRef`s
-        // across `self`/`base` are harmless: `DepGraph::build` counts an
-        // edge once per occurrence on both sides of Kahn's algorithm, so a
-        // duplicate self-corrects instead of leaving a dangling count.
         let mut node_refs = self.node_refs;
         node_refs.extend(base.node_refs.iter().cloned());
         ComputedStyle {
@@ -129,20 +45,6 @@ impl ComputedStyle {
         }
     }
 
-    /// Evaluate every populated expression against `scope` and return the
-    /// result shaped as an [`AnimatedProperties`] — ready for
-    /// [`crate::css::apply_animated_props`], the exact same per-frame
-    /// override path a resolved animation already goes through (see
-    /// `css::animation`'s module doc and issue #338). `AnimatedProperties`'s
-    /// own `Default` already carries the correct neutral/identity value for
-    /// every field this touches (opacity 1.0, scale 1.0, translate/rotation
-    /// 0.0, width/height the `-1.0` "unset" sentinel — see that type's own
-    /// `Default` impl), so an unpopulated field here is simply left at that
-    /// default rather than needing its own sentinel logic.
-    ///
-    /// Stops at the first property whose expression fails to evaluate,
-    /// naming which one in [`ComputedError::property`] — never a silent
-    /// zero, never a panic (issue #338's deliverable #4).
     pub fn resolve(&self, scope: &dyn Scope) -> Result<AnimatedProperties, ComputedError> {
         let mut props = AnimatedProperties::default();
         if let Some(e) = &self.opacity {
@@ -180,12 +82,6 @@ fn eval_named(expr: &Expr, scope: &dyn Scope, property: &str) -> Result<f64, Com
     })
 }
 
-/// A named, located expression failure — either at extraction (a `"= ..."`
-/// string that doesn't parse) or at per-frame evaluation (a `Scope` that
-/// can't answer one of the expression's free variables or `node(...)`
-/// calls). Always says which style property it was on and why
-/// ([`ExprError`]'s own message) — issue #338's deliverable #4: never a
-/// silent zero, never a panic.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("style.{property}: {source}")]
 pub struct ComputedError {
@@ -194,26 +90,6 @@ pub struct ComputedError {
     pub source: ExprError,
 }
 
-/// Pull every `"= ..."` expression out of a raw style JSON object, in
-/// place, replacing each with a value its normal typed field can still
-/// deserialize successfully:
-/// - `opacity`/`width`/`height`: the key is removed outright, so the typed
-///   field simply deserializes as unset (`None`) — [`ComputedStyle::resolve`]
-///   supplies the per-frame value later, through the same override path a
-///   literal-then-overridden-by-animation value already goes through.
-/// - A covered `transform` leaf (see this module's doc, "Coverage"): the
-///   key's value is replaced with that function's neutral/identity literal
-///   (`0` for a translate/rotate component, `1` for a scale component).
-///   This is what lets [`ComputedStyle::resolve`]'s result be *appended* as
-///   a fresh `TransformFn` (via `apply_animated_props`) rather than needing
-///   to patch the original array entry in place: composing an identity
-///   transform with the expression's per-frame value is the same net
-///   transform as if the original entry had held that value directly, for
-///   every one of these single-axis functions.
-///
-/// Called exactly once per node, from `CssStyle`'s own `Deserialize` impl
-/// (`style.rs`) — never from the per-frame path, which only ever calls
-/// [`ComputedStyle::resolve`] on the result.
 pub fn extract(obj: &mut Map<String, Value>) -> Result<ComputedStyle, ComputedError> {
     let mut node_refs = Vec::new();
     let mut out = ComputedStyle {
@@ -306,32 +182,9 @@ fn take_leaf(
     Ok(())
 }
 
-/// A minimal, self-contained [`Scope`] answering exactly the reserved
-/// scenario-clock names [`crate::expr::eval`]'s own `is_dynamic_var_name`
-/// treats specially (`t`, `T`, `duration` — see [`crate::expr`]'s "Two
-/// evaluation tiers" doc) plus `W`/`H`/`fps`, all derivable from the same
-/// per-frame context `box_builder.rs` already threads through the box tree
-/// (`BuildAnimationCtx` plus the viewport size) — no `vars` table, no
-/// `node(...)` dependency graph. `box_builder.rs` builds one of these for
-/// every frame that has any expression to resolve at all, with zero new
-/// parameters on any of its existing, publicly-called functions — see that
-/// file's own doc for why that constraint mattered.
-///
-/// `beat` is deliberately not answered here: nothing reaching this scope
-/// knows the scenario's BPM. An expression naming `$beat` (or a declared
-/// `vars` name, or a `node(...)` call) gets a real
-/// [`crate::expr::ExprError::UnknownIdent`] back from [`Scope::var`]/
-/// [`Scope::node_prop`]'s default `None` — the same "not defined in this
-/// scope" contract every [`Scope`] impl in this codebase already uses, not
-/// a special case. A caller with a richer context (a `vars::VarScope`, a
-/// `node(...)` dependency graph) answers those by composing its own `Scope`
-/// impl instead of this one — see `vars::scope`'s module doc for exactly
-/// this composition pattern.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameClock {
-    /// Scene-local time in seconds — resets to 0 at the start of each scene.
     pub t: f64,
-    /// Scenario-absolute time in seconds — never resets.
     pub t_abs: f64,
     pub duration: f64,
     pub width: f64,
@@ -353,32 +206,6 @@ impl Scope for FrameClock {
     }
 }
 
-/// Composes [`FrameClock`] with a caller-supplied outer [`Scope`] — the
-/// join issue #326's decomposition left open: a declared `vars` name and a
-/// `node(...)` reference both answer through *some* richer `Scope`, but
-/// nothing upstream of `box_builder.rs`'s per-node [`ComputedStyle::resolve`]
-/// call had one to hand it. [`vars::scope`](crate::vars::scope)'s own module
-/// doc explains why this is a struct holding both rather than one `Scope`
-/// wrapping another: a `Scope` is only ever consumed behind `&dyn Scope`,
-/// and trait objects don't nest.
-///
-/// # Order
-///
-/// [`Scope::var`] tries `clock` first, `outer` second. The six names
-/// [`FrameClock`] answers (`t`, `T`, `duration`, `W`, `H`, `fps`) are
-/// reserved — see that type's own doc — and must always win over a
-/// same-named declared variable rather than being shadowable by one; trying
-/// `clock` first is what makes that true regardless of what `outer`
-/// happens to answer. [`Scope::node_prop`] only ever reaches `outer` —
-/// `FrameClock` has no notion of another node's state and never will (it is
-/// built fresh, per node, from data with no dependency-graph position of
-/// its own).
-///
-/// `outer` is `None` for a build that has no richer context to offer (no
-/// declared `vars`, no node ids in the scene) — [`Scope::var`] then behaves
-/// exactly as a bare [`FrameClock`] would, byte for byte, which is what
-/// keeps an expression-free-of-`vars`-and-`node(...)` scenario's render
-/// unaffected by this type existing at all.
 pub struct ComposedScope<'a> {
     pub clock: FrameClock,
     pub outer: Option<&'a dyn Scope>,
@@ -592,7 +419,7 @@ mod tests {
         fn var(&self, name: &str) -> Option<f64> {
             match name {
                 "fade" => Some(0.25),
-                "t" => Some(999.0), // must never win: `clock` is reserved.
+                "t" => Some(999.0),
                 _ => None,
             }
         }

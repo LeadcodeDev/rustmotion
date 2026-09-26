@@ -5,11 +5,6 @@ use rustmotion_core::engine::renderer::paint_from_hex;
 
 use super::Chart;
 
-/// Skia's `Path::arc_to` emits an *empty* arc when the sweep is exactly 360°,
-/// so a slice that owns 100% of the total silently disappears at the end of
-/// the animation (measured: a single-slice pie rendered 116336 ink pixels at
-/// frame 44 and 0 at frame 45, the first frame where `progress` reaches 1.0).
-/// Sweeps at or above this threshold are drawn as a full disc/ring instead.
 const FULL_SWEEP: f32 = 359.99;
 
 impl Chart {
@@ -28,14 +23,6 @@ impl Chart {
         self.render_pie_ring(canvas, w, h, progress, inner)
     }
 
-    /// Paint the data as a disc (`inner_ratio == 0`) or a ring.
-    ///
-    /// The ring is built from annulus-sector paths rather than by painting a
-    /// full pie and punching the centre out with `BlendMode::Clear`: `Clear`
-    /// writes transparent pixels straight through the shared canvas, so the
-    /// hole erased the parent card *and* the video background — measured as
-    /// 19380 fully transparent pixels in a 158x157 box in the shipped
-    /// `examples/mega-showcase.json`.
     fn render_pie_ring(
         &self,
         canvas: &Canvas,
@@ -44,9 +31,6 @@ impl Chart {
         progress: f32,
         inner_ratio: f32,
     ) -> Result<()> {
-        // A negative share is meaningless in a part-of-whole chart, and letting
-        // one through poisons `total` for every other slice (measured: values
-        // [10, -6] gave slice sweeps of 900 and -540 degrees). Clamp at 0.
         let values: Vec<f64> = self.data.iter().map(|d| d.value.max(0.0)).collect();
         let total: f64 = values.iter().sum();
         if total <= 0.0 {
@@ -83,8 +67,6 @@ impl Chart {
 
             if sweep >= FULL_SWEEP {
                 if inner_r > 0.0 {
-                    // Stroking the mid-radius circle gives an exact annulus
-                    // without relying on path winding rules.
                     let mut ring = paint;
                     ring.set_style(PaintStyle::Stroke);
                     ring.set_stroke_width(outer_r - inner_r);
@@ -95,7 +77,6 @@ impl Chart {
             } else {
                 let mut path = PathBuilder::new();
                 if inner_r > 0.0 {
-                    // Outer arc forward, inner arc back: a closed annulus sector.
                     path.arc_to(outer, start_angle, sweep, false);
                     path.arc_to(inner, start_angle + sweep, -sweep, false);
                 } else {

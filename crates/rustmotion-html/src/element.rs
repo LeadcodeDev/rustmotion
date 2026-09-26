@@ -9,15 +9,7 @@ const KNOWN_NATIVE_ATTRS: &[&str] = &["style", "anim"];
 enum TagKind {
     Container,
     Text,
-    /// Tags that never visually render in real HTML either (`<script>`,
-    /// `<title>`, `<noscript>`, `<template>`, `<head>`) — skipped to match
-    /// that expectation, rather than painted as a stray `text` component.
-    /// `<style>` is deliberately NOT in this bucket: see `element_to_value`.
     Ignored,
-    /// A native HTML tag with no representation beyond an empty `div`: its
-    /// real payload (`src`, nested shape markup, …) would be silently
-    /// dropped by the generic `Container` fallback. Refused instead, naming
-    /// the dialect's `rm-*` custom-element equivalent.
     UnsupportedNative(&'static str),
     Custom(String),
 }
@@ -37,13 +29,6 @@ fn tag_kind(tag: &str) -> TagKind {
     }
 }
 
-/// Concatenated text of an element and all its descendants. Nested inline
-/// formatting tags (`strong`/`em`/`label`/…) flatten in, matching real HTML;
-/// `<script>`/`<title>`/`<noscript>`/`<template>`/`<head>` are skipped
-/// (never visually render either); `<style>` and any element with real,
-/// non-flattenable content (`<img>`, `<svg>`, `<video>`, `<rm-*>`, a nested
-/// container) are refused rather than having their source painted or their
-/// content silently vanish — see [`HtmlError::TextContentUnsupportedChild`].
 pub(crate) fn inner_text(handle: &Handle) -> Result<String, HtmlError> {
     let mut out = String::new();
     collect_text(handle, &mut out)?;
@@ -81,10 +66,6 @@ fn collect_text(handle: &Handle, out: &mut String) -> Result<(), HtmlError> {
     Ok(())
 }
 
-/// Pull `style="..."` and `anim="..."` from an element's attributes into one
-/// JSON style object. `anim` (JSON or compact DSL, see
-/// [`crate::style::parse_anim_attr`]) lands in `style.animation` — inline CSS
-/// cannot express animation arrays, so `anim` is the only writer of that key.
 fn style_object(attrs: &[(String, String)]) -> Result<Option<Value>, HtmlError> {
     let mut map = match attrs.iter().find(|(k, _)| k == "style") {
         Some((_, raw)) => parse_inline_style(raw)?,
@@ -100,14 +81,10 @@ fn style_object(attrs: &[(String, String)]) -> Result<Option<Value>, HtmlError> 
     }
 }
 
-/// Map a single element handle to its component JSON value, or `None` to skip.
 pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlError> {
     let Some(tag) = tag_name(handle) else {
         return Ok(None);
     };
-    // `<style>` has real, expected visual effect in HTML (unlike the tags in
-    // `TagKind::Ignored`), so silently dropping it would defeat the author's
-    // intent without a trace — refused instead. See `HtmlError::StyleElementUnsupported`.
     if tag == "style" {
         return Err(HtmlError::StyleElementUnsupported);
     }
@@ -148,15 +125,6 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
                 if k == "style" || k == "class" || k == "anim" {
                     continue;
                 }
-                // A bare HTML boolean attribute (`<rm-codeblock diff>`) is
-                // indistinguishable, at the DOM level, from an explicit empty
-                // value (`diff=""`) — html5ever normalizes both to the same
-                // empty attribute value. Per HTML's own boolean-attribute
-                // convention (`<video controls>`, `<input disabled>`), treat
-                // an empty value as `true` rather than silently dropping the
-                // attribute: for a bool schema field this is exactly the
-                // author's intent; for any other field type, `validate`
-                // reports a named type-mismatch instead of a silent no-op.
                 let value = if v.is_empty() {
                     Value::Bool(true)
                 } else {
@@ -176,8 +144,6 @@ pub(crate) fn element_to_value(handle: &Handle) -> Result<Option<Value>, HtmlErr
     }
 }
 
-/// Map a container's children: element children via `element_to_value`, and
-/// non-whitespace bare text nodes into `text` components.
 pub(crate) fn children_to_values(handle: &Handle) -> Result<Vec<Value>, HtmlError> {
     let mut out = Vec::new();
     for child in handle.children.borrow().iter() {
@@ -219,8 +185,6 @@ mod tests {
         element_to_value(&first).expect_err("expected a transpile error")
     }
 
-    // Skips the html/head/body wrappers html5ever inserts around a fragment,
-    // returning the first real content element.
     fn find_first_element(handle: &Handle) -> Option<Handle> {
         for child in handle.children.borrow().iter() {
             if let Some(tag) = crate::tag_name(child) {
@@ -284,8 +248,6 @@ mod tests {
         assert_eq!(v["children"][0]["type"], json!("text"));
         assert_eq!(v["children"][0]["content"], json!("inside"));
     }
-
-    // --- anim attribute ---
 
     #[test]
     fn anim_json_array_goes_to_style_animation() {
@@ -398,8 +360,6 @@ mod tests {
         assert_eq!(v["from"], json!(0));
     }
 
-    // --- <style>/ignored elements (constat 1) ---
-
     #[test]
     fn style_element_is_refused() {
         let e = map_first_err(r#"<style>h1 { color: #0f0 }</style>"#);
@@ -437,15 +397,8 @@ mod tests {
 
     #[test]
     fn tag_kind_head_is_ignored() {
-        // <head> content never survives as a distinct DOM node when authored
-        // inline (html5ever drops the wrapper per HTML5 "in body" parsing
-        // rules and lets its text bleed into the parent), so this can only be
-        // exercised at the `tag_kind` unit level, not through the full
-        // element_to_value/html_to_scenario_value pipeline.
         assert!(matches!(tag_kind("head"), TagKind::Ignored));
     }
-
-    // --- unsupported native elements (constat 3) ---
 
     #[test]
     fn img_element_is_refused_with_rm_image_suggestion() {
@@ -482,8 +435,6 @@ mod tests {
             other => panic!("expected UnsupportedNativeElement, got: {other:?}"),
         }
     }
-
-    // --- boolean attributes on custom elements (constat 4) ---
 
     #[test]
     fn custom_element_bool_attribute_true_and_false() {

@@ -7,10 +7,8 @@ use rustmotion_core::engine::renderer::{
 
 use super::Chart;
 
-/// Returns "#000000" or "#FFFFFF" depending on the perceived luminance of `hex`.
 pub(super) fn contrast_text_color(hex: &str) -> String {
     let (r, g, b, _) = parse_hex_color(hex);
-    // Relative luminance (sRGB)
     let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
     if lum > 150.0 {
         "#000000".to_string()
@@ -32,14 +30,6 @@ pub(super) fn format_number(val: f64) -> String {
 }
 
 impl Chart {
-    /// Draw grid lines and axis labels for cartesian charts.
-    ///
-    /// When `categorical` is true, x-labels are placed at the center of evenly
-    /// distributed slots (`(i+0.5)/n * chart_w`) — appropriate for bar charts
-    /// where labels belong to a discrete bar slot. When false, labels are
-    /// placed at proportional positions (`i/(n-1) * chart_w`), spanning the
-    /// full chart width — appropriate for line/scatter where labels mark
-    /// points on a continuous axis.
     pub(super) fn draw_axes(
         &self,
         canvas: &Canvas,
@@ -60,7 +50,6 @@ impl Chart {
         let (_, metrics) = font.metrics();
         let ascent = -metrics.ascent;
 
-        // Grid lines + Y labels
         let grid_steps = 5;
         let range = max_val - min_val;
 
@@ -97,7 +86,6 @@ impl Chart {
             }
         }
 
-        // X labels
         if self.show_x_labels && !x_labels.is_empty() {
             let mut label_paint = paint_from_hex(&self.label_color);
             label_paint.set_anti_alias(true);
@@ -112,11 +100,6 @@ impl Chart {
                     chart_x + (i as f32 / (n - 1).max(1) as f32) * chart_w
                 };
                 let label_w = measure_text_with_fallback(label, &font, &emoji_font, 0.0);
-                // Centring the first/last label on the axis end pushes half of
-                // it outside the component's own box (measured: the last label
-                // of a 5-point line chart bled 5px past the right edge). Clamp
-                // into [0, box_width] — `chart_margins()` always returns a
-                // right margin of 8, so the box ends at chart_x + chart_w + 8.
                 let box_w = chart_x + chart_w + 8.0;
                 let lx = (x - label_w / 2.0).clamp(0.0, (box_w - label_w).max(0.0));
                 let ly = chart_y + chart_h + ascent + 6.0;
@@ -134,13 +117,6 @@ impl Chart {
         }
     }
 
-    /// Draw the *value* axis of a transposed (horizontal) cartesian chart:
-    /// vertical grid lines and value tick labels along the bottom.
-    ///
-    /// [`draw_axes`] assumes the value axis is vertical (grid lines
-    /// horizontal, values down the left gutter), which is wrong for
-    /// `horizontal_bar` — there the value axis runs left-to-right and the
-    /// category axis is the vertical one.
     pub(super) fn draw_value_axis_x(
         &self,
         canvas: &Canvas,

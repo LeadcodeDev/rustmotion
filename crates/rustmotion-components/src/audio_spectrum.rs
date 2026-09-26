@@ -78,13 +78,10 @@ impl AudioSpectrum {
 
         let n = self.bars.max(1) as usize;
 
-        // Empty cache / missing track → all-zero values; the painter clamps
-        // each bar to `min_height`, so this degrades to a flat baseline.
         let Some(analysis) = analysis else {
             return vec![0.0; n];
         };
 
-        // Resample from 16 bands to n bars
         let num_bands = 16usize;
         (0..n)
             .map(|i| {

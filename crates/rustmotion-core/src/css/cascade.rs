@@ -1,30 +1,5 @@
-//! CSS cascade & inheritance.
-//!
-//! Walks the BoxTree and propagates inheritable properties from parent to
-//! child when the child has not specified them. Properties not in the
-//! inheritable list are left untouched (initial values applied at paint time).
-//!
-//! Inheritable properties (per CSS spec, restricted to our scope):
-//! - `color`
-//! - `font-family`
-//! - `font-size`
-//! - `font-weight`
-//! - `font-style`
-//! - `line-height`
-//! - `letter-spacing`
-//! - `text-align`
-//! - `white-space`
-//! - `overflow-wrap`
-//! - `visibility`
-//! - `text-decoration` (not strictly inheritable but used as such here)
-//!
-//! All other properties (background, padding, border, transform, etc.) are
-//! NOT inherited.
-
 use super::style::CssStyle;
 
-/// Inherit unset child properties from the parent. `parent` is the already
-/// resolved style (post-cascade) of the parent node.
 pub fn inherit_from(parent: &CssStyle, child: &mut CssStyle) {
     if child.color.is_none() {
         child.color = parent.color.clone();
@@ -105,7 +80,6 @@ mod tests {
         };
         let mut child = CssStyle::default();
         inherit_from(&parent, &mut child);
-        // display is not inherited
         assert!(child.display.is_none());
     }
 

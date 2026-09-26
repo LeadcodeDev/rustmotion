@@ -1,20 +1,3 @@
-//! Paint pass — walks the BoxTree post-layout and paints each node.
-//!
-//! Order per node (top-down):
-//!   1. canvas.save()
-//!   2. apply transform (CSS `transform` → Skia matrix)
-//!   3. open opacity layer if `opacity < 1.0`
-//!   4. clip to padding-box if `overflow != visible`
-//!   5. paint outset box-shadow
-//!   6. paint background
-//!   7. paint border (border-radius aware)
-//!   8. delegate component-specific paint via `PaintDispatcher`
-//!   9. recurse children sorted by z-index
-//!  10. canvas.restore()
-//!
-//! The dispatcher hook lets the higher-level crate plug component-specific
-//! paint without coupling `rustmotion-core` to all 51 component types.
-
 use std::cell::RefCell;
 
 use skia_safe::gradient::{self, Colors as GradientColors, Gradient};
@@ -31,52 +14,28 @@ use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage,
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
 use crate::engine::layout_pass::{BoxLayout, LayoutResult};
 
-/// Frame-level paint context (timing + viewport).
 #[derive(Debug, Clone, Copy)]
 pub struct PaintFrame {
     pub time: f64,
-    /// Seconds since the start of the *scenario* (of the view, for a `world`
-    /// view), as opposed to `time`, which restarts at every scene.
-    ///
-    /// Only the audio-reactive painters want this: an audio analysis is
-    /// indexed on the scenario's own timeline, so reading it with `time` gave
-    /// a scene starting at t=73 s the analysis at 73 s *into that scene*.
-    /// Everything else — animation progress, reveals, transitions — is
-    /// correctly scene-local and must stay on `time`.
     pub scenario_time: f64,
     pub frame_index: u32,
     pub fps: u32,
     pub video_width: u32,
     pub video_height: u32,
-    /// Total duration of the scene in seconds — used by the dispatcher to
-    /// compute animation progress (`time / scene_duration`).
     pub scene_duration: f64,
-    /// Resolved scene camera for per-plane parallax (issue #90). `Some` only
-    /// when the scene declares a camera AND at least one top-level child has
-    /// an explicit `style.depth` — the paint pass then applies the camera per
-    /// plane (each direct child of the root, scaled by its depth) and the
-    /// caller must NOT apply the global camera transform.
     pub camera: Option<PlaneCamera>,
 }
 
-/// Scene camera resolved at a fixed time, ready for per-plane application.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlaneCamera {
     pub pan_x: f32,
     pub pan_y: f32,
     pub zoom: f32,
     pub rotation: f32,
-    /// Focal point in frame pixels (already resolved; default = frame centre).
     pub origin_x: f32,
     pub origin_y: f32,
 }
 
-/// Apply the scene camera scaled by a plane `depth` (issue #90):
-/// pan' = pan·d, zoom' = 1 + (zoom−1)·d, rotation' = rotation·d, around the
-/// camera origin. `depth == 1` reproduces the global camera matrix exactly;
-/// `depth == 0` is the identity (locked plane). The content-space viewport
-/// clip mirrors the global path's clip-after-camera so plane content is cut
-/// at the scene rectangle exactly like the single-transform path.
 fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: (f32, f32)) {
     let zoom = 1.0 + (cam.zoom - 1.0) * depth;
     let rotation = cam.rotation * depth;
@@ -98,7 +57,6 @@ fn apply_plane_camera(canvas: &Canvas, cam: &PlaneCamera, depth: f32, viewport: 
     );
 }
 
-/// Axis-aligned bounding box of a painted node, in device (video-pixel) coords.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitRect {
     pub x: f32,
@@ -107,35 +65,23 @@ pub struct HitRect {
     pub h: f32,
 }
 
-/// One clickable node: its layout id and on-screen bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitNode {
     pub node_id: NodeId,
     pub rect: HitRect,
 }
 
-/// Hit-test map for a single painted frame, in paint order (so later entries
-/// are visually on top).
 pub type HitMap = Vec<HitNode>;
 
-/// A hit enriched with a component kind label, ready for the studio overlay.
-/// `node_id` is stable within a single rendered frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnrichedHit {
     pub node_id: NodeId,
     pub kind: String,
     pub rect: HitRect,
-    /// JSON path relative to the scene's `children`, e.g. "/children/2".
     pub pointer: Option<String>,
 }
 
-/// Hook to delegate component-specific painting. Implemented by the
-/// higher-level crate that owns the actual `Component` enum.
 pub trait PaintDispatcher {
-    /// Called for `BoxKind::Component(payload)`. Implementations downcast
-    /// `payload` to the concrete component type and paint into `canvas`.
-    /// The canvas is already translated to the content-box origin and
-    /// clipped if `overflow: hidden`.
     fn dispatch(
         &self,
         canvas: &Canvas,
@@ -146,7 +92,6 @@ pub trait PaintDispatcher {
     );
 }
 
-/// No-op dispatcher (useful for tests where only generic box decoration is exercised).
 pub struct NoopDispatcher;
 
 impl PaintDispatcher for NoopDispatcher {
@@ -161,7 +106,6 @@ impl PaintDispatcher for NoopDispatcher {
     }
 }
 
-/// Paint a fully-laid-out box tree onto a Skia canvas.
 pub fn paint_tree(
     canvas: &Canvas,
     root: &BoxNode,
@@ -179,9 +123,6 @@ pub fn paint_tree(
     paint_node(canvas, root, &ctx, 0);
 }
 
-/// Like [`paint_tree`] but also returns the per-frame hit-map: the on-screen
-/// bounding box of every component-backed node, in paint order. Used by the
-/// studio for click-to-select; the video render path uses [`paint_tree`].
 pub fn paint_tree_with_hits(
     canvas: &Canvas,
     root: &BoxNode,
@@ -209,11 +150,7 @@ struct PaintContext<'a> {
     hits: Option<&'a RefCell<HitMap>>,
 }
 
-/// `tree_depth` counts levels below the synthetic scene root (root = 0,
-/// direct children = 1). Per-plane parallax cameras apply at level 1 only.
 fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: usize) {
-    // Visibility window (start_at/end_at): the node keeps its layout space
-    // but paints nothing — subtree included — outside the window.
     if let Some(window) = &node.window {
         if !window.contains(ctx.frame.time) {
             return;
@@ -233,13 +170,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         font_size: node.css.font_size_px_or(16.0),
         root_font_size: 16.0,
     };
-    // Per-axis contexts for `transform`'s translate percentages: CSS
-    // resolves a `translate`/`translate3d` x-component percentage against
-    // the box's own WIDTH and the y-component against its own HEIGHT — never
-    // `max(width, height)` on both axes (that's only correct for square
-    // boxes). Mirrors what `resolve_origin` already does for
-    // `transform-origin` below. `z`/`perspective()` keep the general
-    // (shared) context — CSS has no per-axis convention for them.
     let length_ctx_x = LengthContext {
         parent_size: box_layout.width,
         ..length_ctx
@@ -251,9 +181,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
 
     canvas.save();
 
-    // 1.5 per-plane scene camera (issue #90): every direct child of the scene
-    // root is a plane; its explicit `depth` (default 1.0) scales the camera.
-    // Deeper nodes inherit their plane's transform via the canvas matrix.
     if tree_depth == 1 {
         if let Some(cam) = &ctx.frame.camera {
             let depth = node.css.depth.unwrap_or(1.0);
@@ -261,7 +188,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
-    // 2. transform
     if node.css.transform.is_some() || node.css.perspective.is_some() {
         let (tx, ty, _tz) =
             resolve_origin(node.css.transform_origin.as_ref(), box_layout, &length_ctx);
@@ -299,11 +225,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         );
     }
 
-    // Hit-map: record the on-screen bbox of component-backed nodes. The canvas
-    // matrix here already includes this node's and all ancestors' transforms,
-    // so mapping the (absolute) layout rect yields the device-space AABB.
-    // Ghost nodes are intentionally excluded — they are temporal echoes for
-    // motion-blur/trail effects and must never be selectable in the studio.
     if let (Some(hits), BoxKind::Component(_)) = (ctx.hits, &node.kind) {
         let local = Rect::from_xywh(
             box_layout.x,
@@ -323,22 +244,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         });
     }
 
-    // 3. backdrop-filter: filter what is *already painted behind this node*
-    // (earlier siblings, ancestor backgrounds), clipped to its own (rounded)
-    // border-box — the glassmorphism pattern. This must run BEFORE this
-    // node's own opacity/filter layer (step 4) opens: if it ran after (as it
-    // used to), the backdrop's `SaveLayerRec::backdrop()` would sample the
-    // freshly-opened, still-empty opacity layer instead of the real scene
-    // beneath it, making the blur a total no-op the instant `opacity < 1.0`
-    // or a `filter` is also present on the same node — exactly the
-    // glassmorphism + fade_in combination rules/glassmorphism.md recommends.
-    // Self-contained bracket (save/clip/layer/restore/restore): the panel is
-    // baked directly onto the canvas below, so this node's own opacity later
-    // fades its own background/border/content on top of it without
-    // re-fading the panel itself (avoiding a second, unrelated ordering
-    // hazard: a shared clip+layer would also have to stay open across
-    // background/border painting, reintroducing the overflow/shadow bug
-    // fixed below for those steps too).
     if let Some(filters) = node.css.backdrop_filter.as_deref() {
         if let Some(backdrop) = filters_to_image_filter(filters, &length_ctx) {
             let radius = node
@@ -356,28 +261,8 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         }
     }
 
-    // Hoisted from step 8 below: the layer-bounds computation right after
-    // this needs it too, to decide whether descendant ink painted outside
-    // the border-box (legitimate under `overflow: visible`) must stay
-    // reachable by the opacity/filter layer opened next.
     let overflow = node.css.overflow.unwrap_or(Overflow::Visible);
 
-    // 4. opacity / filter layer — one shared layer carries both the group
-    // alpha and the CSS `filter` chain (applies to the node and its
-    // subtree). Bounded to the node's own box, padded by: the filter
-    // chain's blur/drop-shadow bleed, this node's own outset box-shadow
-    // extent (painted inside this same layer at step 5, outside the
-    // border-box), and — when `overflow` leaves descendant ink free to
-    // paint past the border-box — the union of the whole subtree's layout
-    // boxes. An unbounded `SaveLayerRec` sizes the layer against the
-    // current clip — usually the whole viewport — so every faded/filtered
-    // node allocates and composites a full-frame layer regardless of how
-    // small it is (measured on this repo's release binary, 1080x1920/60
-    // frames, 30 small `opacity: 0.5` shapes, `--threads 1`: ~42-60s wall
-    // time unbounded vs. ~0.5s bounded — roughly two orders of magnitude,
-    // not a rounding error; cost scales with viewport area, not node
-    // size), so the bound stays tight to the content that can actually
-    // paint rather than falling back to the viewport.
     let opacity = node.css.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
     let content_filter = node
         .css
@@ -423,14 +308,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         false
     };
 
-    // 5. outset box-shadow, 6. background, 7. border — the box's own
-    // decorations. Painted BEFORE any overflow clip (step 8): CSS `overflow`
-    // clips a box's *descendants*, never the box's own border-box
-    // decorations (an outset box-shadow exists precisely outside the
-    // border-box; background/border are already shaped by border-radius on
-    // their own and gain nothing from an extra clip). They still sit inside
-    // the opacity/filter layer above so a faded node fades its whole
-    // appearance uniformly, background included.
     if let Some(shadows) = node.css.box_shadow.as_ref() {
         for shadow in shadows {
             if shadow.inset.unwrap_or(false) {
@@ -442,18 +319,12 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     if let Some(bg) = node.css.background.as_ref() {
         paint_background(canvas, box_layout, &node.css, bg, &length_ctx);
     }
-    // `gradient-border` replaces the standard border when present (a box
-    // has one border, not two stacked ones).
     if let Some(gb) = node.css.gradient_border.as_ref() {
         paint_gradient_border(canvas, box_layout, &node.css, gb, &length_ctx);
     } else if let Some(border) = node.css.border.as_ref() {
         paint_border(canvas, box_layout, &node.css, border, &length_ctx);
     }
 
-    // 7.5. shimmer layer. The band composites against the pixels this node
-    // paints, which do not exist yet — so an isolated layer is opened here,
-    // filled by steps 9 and 10 below, and the band is stamped onto it with
-    // `SrcATop` just before it closes.
     let shimmer = active_shimmer(&node.css, ctx.frame.time);
     let opened_shimmer_layer = if shimmer.is_some() {
         let bounds = Rect::from_xywh(
@@ -469,10 +340,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         false
     };
 
-    // 8. clip overflow:hidden / clip — scoped to this node's own content and
-    // its children only (see step 5-7's comment for why the box's own
-    // decorations must stay outside this clip). `overflow` was hoisted
-    // above step 4.
     let opened_overflow_clip = if matches!(
         overflow,
         Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
@@ -491,8 +358,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         false
     };
 
-    // 9. component-specific content (Ghost is painted identically to Component;
-    // the only difference is that Ghost is excluded from the hit-map above).
     let payload_opt = match &node.kind {
         BoxKind::Component(p) | BoxKind::Ghost(p) => Some(p),
         BoxKind::Container => None,
@@ -502,7 +367,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
             .dispatch(canvas, payload.as_ref(), &node.css, box_layout, ctx.frame);
     }
 
-    // 10. children (z-index ordered, then source order)
     let mut indices: Vec<usize> = (0..node.children.len()).collect();
     indices.sort_by_key(|&i| node.children[i].css.z_index.unwrap_or(0));
     for &i in &indices {
@@ -513,7 +377,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         canvas.restore();
     }
 
-    // inset shadows (after children so they overlay content)
     if let Some(shadows) = node.css.box_shadow.as_ref() {
         for shadow in shadows {
             if shadow.inset.unwrap_or(false) {
@@ -535,11 +398,6 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
     canvas.restore();
 }
 
-/// The shimmer effect on this node and how far through its sweep it is at
-/// `time`, or `None` when there is none or the sweep is not running.
-///
-/// Returning `None` outside the sweep window is what keeps the cost off every
-/// other node and every other frame: no window, no isolated layer.
 fn active_shimmer(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShimmerConfig, f32)> {
     let cfg = css.animation.iter().find_map(|e| match e {
         crate::schema::AnimationEffect::Shimmer(c) => Some(c),
@@ -562,8 +420,6 @@ fn active_shimmer(css: &CssStyle, time: f64) -> Option<(&crate::schema::ShimmerC
     Some((cfg, progress as f32))
 }
 
-/// Stamp the sweeping band onto the layer built by steps 9-10, restricted to
-/// the pixels that layer actually painted.
 fn paint_shimmer_band(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -578,9 +434,6 @@ fn paint_shimmer_band(
     let transparent = SColor::from_argb(0, r, g, b);
     let highlight = SColor::from_argb(peak_alpha, r, g, b);
 
-    // The band's axis, and the extent of the box measured along it. Using the
-    // projected extent rather than the width keeps an angled band sweeping
-    // fully off both ends instead of stopping short on the diagonal.
     let theta = cfg.angle.to_radians();
     let (dx, dy) = (theta.cos(), theta.sin());
     let cx = layout.x + layout.width / 2.0;
@@ -588,8 +441,6 @@ fn paint_shimmer_band(
     let half_extent = (layout.width * dx).abs() / 2.0 + (layout.height * dy).abs() / 2.0;
 
     let band = (cfg.width.max(0.01) * half_extent * 2.0).max(1.0);
-    // Travel from fully off one end to fully off the other, so the element is
-    // clean at both ends of the sweep rather than starting mid-glint.
     let start = -half_extent - band;
     let centre = start + progress * (2.0 * half_extent + 2.0 * band);
 
@@ -611,9 +462,6 @@ fn paint_shimmer_band(
     paint.set_style(PaintStyle::Fill);
     paint.set_anti_alias(true);
     paint.set_shader(shader);
-    // The whole point: light only the pixels the element itself painted, so
-    // the sheen reads as catching the glyphs rather than as a rectangle
-    // sliding past them.
     paint.set_blend_mode(skia_safe::BlendMode::SrcATop);
     canvas.draw_rect(
         Rect::from_xywh(layout.x, layout.y, layout.width, layout.height),
@@ -621,15 +469,6 @@ fn paint_shimmer_band(
     );
 }
 
-/// Conservative outward bleed (px) a `filter` chain can paint beyond the
-/// node's own box — used to size the opacity/filter layer's `SaveLayerRec`
-/// bounds generously enough that `blur`/`drop-shadow` never get clipped at
-/// the box edge (see the perf fix in step 4 above: an unbounded layer costs
-/// ~5.9x render time, but a *too-tight* one would silently clip filter
-/// bleed, trading a perf bug for a correctness one). `1.5x` the nominal
-/// radius covers the visible falloff of `image_filters::blur`'s Gaussian
-/// (sigma = radius/2, and ~3*sigma is the point the kernel is visually
-/// negligible).
 fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f32 {
     use crate::css::style::FilterFn;
     let mut bleed = 0.0f32;
@@ -655,12 +494,6 @@ fn filter_bleed(list: &[crate::css::style::FilterFn], ctx: &LengthContext) -> f3
     bleed
 }
 
-/// Conservative outward bleed (px) a node's own outset `box_shadow` list
-/// paints beyond its border-box — the same role `filter_bleed` plays for
-/// `filter`, and sized the same way (offset + spread pushes the shadow rect
-/// out, `1.5x` blur radius covers the Gaussian falloff). Inset shadows are
-/// clipped to the padding-box by `paint_box_shadow` and never bleed outward,
-/// so they are skipped here.
 fn box_shadow_bleed(shadows: &[BoxShadow], ctx: &LengthContext) -> f32 {
     let mut bleed = 0.0f32;
     for shadow in shadows {
@@ -687,14 +520,6 @@ fn box_shadow_bleed(shadows: &[BoxShadow], ctx: &LengthContext) -> f32 {
     bleed
 }
 
-/// Bounding box (viewport coordinates) of every descendant's own layout box,
-/// recursively — the same "leave the layer big enough to hold what can
-/// legitimately paint outside the border-box" contract as `filter_bleed`,
-/// applied to `overflow: visible` subtrees instead of a filter chain. Each
-/// descendant contributes only its plain layout rect (not its own
-/// filter/shadow bleed or transform): a tight bound for the common cases —
-/// absolutely-positioned children, `marquee`, a taller-than-parent flow —
-/// without walking the whole subtree's CSS.
 fn subtree_layout_bounds(node: &BoxNode, layout: &LayoutResult) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for child in &node.children {
@@ -714,12 +539,6 @@ fn subtree_layout_bounds(node: &BoxNode, layout: &LayoutResult) -> Option<Rect> 
     bounds
 }
 
-// ---- CSS filters ----
-
-/// Build a Skia `ImageFilter` chain from a CSS `filter`/`backdrop-filter`
-/// list. Color functions use the CSS Filter Effects spec matrices; Skia's
-/// `color_filters::matrix_row_major` expects the translation column in
-/// normalized 0..1 space (verified by `css_filter_invert_flips_colors`).
 fn filters_to_image_filter(
     list: &[crate::css::style::FilterFn],
     ctx: &LengthContext,
@@ -755,19 +574,12 @@ fn filters_to_image_filter(
                     None,
                 )
             }
-            FilterFn::Noise { intensity, seed } => {
-                match noise_image_filter(*intensity, *seed) {
-                    // Sequential CSS composition: the chain so far is the
-                    // background, the grain layer blends on top of it.
-                    Some(noise) => image_filters::blend(
-                        skia_safe::BlendMode::Overlay,
-                        chain,
-                        Some(noise),
-                        None,
-                    ),
-                    None => chain,
+            FilterFn::Noise { intensity, seed } => match noise_image_filter(*intensity, *seed) {
+                Some(noise) => {
+                    image_filters::blend(skia_safe::BlendMode::Overlay, chain, Some(noise), None)
                 }
-            }
+                None => chain,
+            },
             other => color_matrix_for(other)
                 .map(|m| skia_safe::color_filters::matrix_row_major(&m, None))
                 .and_then(|cf| image_filters::color_filter(cf, chain, None)),
@@ -776,18 +588,6 @@ fn filters_to_image_filter(
     chain
 }
 
-/// Build the film-grain layer for `FilterFn::Noise` as an `ImageFilter`.
-///
-/// Composition formula:
-///   1. `fractal_noise(base_frequency = (0.9, 0.9), octaves = 2, seed)` —
-///      high frequency ⇒ fine per-pixel grain; the Skia Perlin shader is a
-///      pure function of (x, y, seed): no implicit time, so the grain is
-///      byte-identical across frames/renders for a given seed.
-///   2. A 4×5 color matrix collapses RGB to luminance (0.213/0.715/0.072) for
-///      monochrome grain and scales alpha by `intensity` (0..1).
-///   3. The caller blends the result over the chain input with
-///      `BlendMode::Overlay` — grain brightens/darkens the underlying pixels
-///      proportionally to the noise-layer alpha (`intensity`).
 fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilter> {
     use skia_safe::image_filters;
 
@@ -796,7 +596,6 @@ fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilte
         return None;
     }
     let noise = skia_safe::shaders::fractal_noise((0.9, 0.9), 2, seed as f32, None)?;
-    // Luminance conversion + alpha scaling in one matrix.
     let (r, g, b) = (0.213, 0.715, 0.072);
     #[rustfmt::skip]
     let m = [
@@ -810,13 +609,10 @@ fn noise_image_filter(intensity: f32, seed: u64) -> Option<skia_safe::ImageFilte
     image_filters::shader(mono, None)
 }
 
-/// 4x5 row-major color matrix for a CSS color filter function (translation
-/// column in normalized 0..1 space), or `None` for the non-matrix functions.
 fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
     use crate::css::style::FilterFn;
     #[rustfmt::skip]
     fn saturation(s: f32) -> [f32; 20] {
-        // Luminance weights per the CSS Filter Effects spec.
         let (r, g, b) = (0.213, 0.715, 0.072);
         [
             r + (1.0 - r) * s, g * (1.0 - s),       b * (1.0 - s),       0.0, 0.0,
@@ -903,30 +699,12 @@ fn color_matrix_for(f: &crate::css::style::FilterFn) -> Option<[f32; 20]> {
     }
 }
 
-// ---- Transform ----
-
-/// Resolve a `transform-origin` / `perspective-origin` value to absolute
-/// viewport coordinates `(x, y)`.
-///
-/// # Resolution rules
-///
-/// - Absent `origin` → centre of the box (the pre-existing hard-coded behaviour,
-///   preserved byte-identically).
-/// - `x` / `y` values follow the CSS spec: percentages are relative to the box
-///   **width** (for x) and **height** (for y); px values are relative to the
-///   box top-left corner. The result is in absolute viewport coordinates.
-/// - Keywords (`left`, `center`, `right`, `top`, `bottom`) are handled by
-///   `parse_origin_component` which maps them to 0%/50%/100%.
-/// - An absent component (`None`) defaults to 50% on that axis.
-/// - The `z` component is returned as `f32` for use in the 3-D path (defaults
-///   to 0.0 when absent).
 fn resolve_origin(
     origin: Option<&TransformOrigin>,
     layout: &BoxLayout,
     ctx: &LengthContext,
 ) -> (f32, f32, f32) {
     let Some(o) = origin else {
-        // Default: 50% 50% 0 — dead-centre of the box.
         return (
             layout.x + layout.width / 2.0,
             layout.y + layout.height / 2.0,
@@ -934,7 +712,6 @@ fn resolve_origin(
         );
     };
 
-    // Resolve x against box width.
     let ox = if let Some(lp) = &o.x {
         let parsed = match lp {
             LengthPercentage::String(s) => {
@@ -951,7 +728,6 @@ fn resolve_origin(
         layout.x + layout.width / 2.0
     };
 
-    // Resolve y against box height.
     let oy = if let Some(lp) = &o.y {
         let parsed = match lp {
             LengthPercentage::String(s) => {
@@ -968,7 +744,6 @@ fn resolve_origin(
         layout.y + layout.height / 2.0
     };
 
-    // Resolve z (optional; only used in 3D path).
     let oz = o.z.as_ref().map(|l| l.resolve(ctx)).unwrap_or(0.0);
 
     (ox, oy, oz)
@@ -990,12 +765,6 @@ fn has_3d_transform(list: &[TransformFn]) -> bool {
     })
 }
 
-/// Per-axis length-resolution contexts for `transform`. CSS resolves a
-/// `translate`/`translate3d` percentage's x-component against the box's own
-/// width and its y-component against its own height — never `max(width,
-/// height)` on both axes (see `apply_transform`/`transform_to_m44`).
-/// `z`/`perspective()` have no established per-axis CSS convention, so they
-/// keep the general (pre-existing) context.
 #[derive(Clone, Copy)]
 struct TransformAxes {
     x: LengthContext,
@@ -1003,16 +772,6 @@ struct TransformAxes {
     general: LengthContext,
 }
 
-/// Apply CSS transform + perspective to the canvas.
-///
-/// # Parameters
-///
-/// - `transform_pivot`: the origin for the `transform` property (resolved from
-///   `transform-origin`, defaults to box centre).
-/// - `perspective_pivot`: the origin for the perspective projection (resolved
-///   from `perspective-origin`). When `perspective-origin` is absent this equals
-///   `transform_pivot` and we use the cheaper single-translate path. When they
-///   differ we bracket the perspective matrix with its own translate pair.
 fn apply_transform(
     canvas: &Canvas,
     list: &[TransformFn],
@@ -1021,12 +780,10 @@ fn apply_transform(
     perspective_pivot: (f32, f32),
     axes: &TransformAxes,
 ) {
-    // Detect whether perspective and transform pivots differ.
     let pivots_equal = (transform_pivot.0 - perspective_pivot.0).abs() < 0.001
         && (transform_pivot.1 - perspective_pivot.1).abs() < 0.001;
 
     if perspective_d.is_none() && !has_3d_transform(list) {
-        // Fast path: 2D-only, use the native Skia 2D canvas API.
         let pivot = transform_pivot;
         canvas.translate(Point::new(pivot.0, pivot.1));
         for tr in list {
@@ -1075,8 +832,6 @@ fn apply_transform(
         }
         canvas.translate(Point::new(-pivot.0, -pivot.1));
     } else if pivots_equal {
-        // 3D path, single-pivot (fast): perspective + transforms share the same pivot.
-        // Structure: T(pivot) · Persp · Transforms · T(-pivot)
         let pivot = transform_pivot;
         let mut m = M44::new_identity();
         m.pre_concat(&M44::translate(pivot.0, pivot.1, 0.0));
@@ -1089,23 +844,16 @@ fn apply_transform(
         m.pre_concat(&M44::translate(-pivot.0, -pivot.1, 0.0));
         canvas.concat_44(&m);
     } else {
-        // 3D path, dual-pivot: perspective-origin ≠ transform-origin.
-        // Structure: T(pp) · Persp · T(-pp) · T(tp) · Transforms · T(-tp)
-        //
-        // This matches the CSS spec where `perspective-origin` shifts the
-        // vanishing point while `transform-origin` sets the local pivot.
         let tp = transform_pivot;
         let pp = perspective_pivot;
         let mut m = M44::new_identity();
 
-        // Outer perspective bracket (perspective-origin).
         m.pre_concat(&M44::translate(pp.0, pp.1, 0.0));
         if let Some(d) = perspective_d {
             m.pre_concat(&css_perspective_m44(d));
         }
         m.pre_concat(&M44::translate(-pp.0, -pp.1, 0.0));
 
-        // Inner transform bracket (transform-origin).
         m.pre_concat(&M44::translate(tp.0, tp.1, 0.0));
         for tr in list {
             m.pre_concat(&transform_to_m44(tr, axes));
@@ -1116,33 +864,6 @@ fn apply_transform(
     }
 }
 
-/// Decomposes a node's already-resolved `CssStyle.transform`/`opacity` into
-/// the five scalars a `node("id", "tx"|"ty"|"scale"|"rotation"|"opacity")`
-/// expression reads (issue #328) — the "animated transform" family, the one
-/// the eight orbiting-badge lines this workstream exists for actually need.
-///
-/// Reads straight off `css`/`layout`, both already resolved for the current
-/// frame by the time this is called (animation resolution happens once per
-/// frame, before the box tree is built — see `rustmotion-components`'
-/// `box_builder::build_scene_at_time`), so this never reaches back into the
-/// animator itself and never risks reading a stale frame.
-///
-/// Compound transforms (more than one `translate`/`scale`/`rotate` function
-/// on a single node, or a raw `matrix`/`matrix3d`) are approximated by
-/// folding the individual functions in list order — summing translations,
-/// multiplying scale factors, summing rotation degrees — rather than
-/// composing an actual matrix and decomposing it. That is exact for the
-/// single-function-per-frame case every `AnimationEffect` preset in this
-/// engine produces (an orbiting badge's `orbit`/keyframe animation resolves
-/// to one `translate`, not several), and is the documented limit for a
-/// hand-authored `transform` list beyond that. `scale` collapses `scale_x`/
-/// `scale_y` to their average — exact for the overwhelmingly common uniform
-/// case (`scale_x == scale_y`) and a reasonable single-scalar stand-in
-/// otherwise, since the expression grammar has no vector return type to
-/// hand back `(scale_x, scale_y)` separately. `rotation` sums only
-/// `rotate`/`rotate_z`/`rotate3d`'s own `deg` — `rotate_x`/`rotate_y` tilt
-/// out of the 2D plane a `line` endpoint lives in, so folding them into the
-/// same scalar would misrepresent what's actually visible on screen.
 pub fn animated_transform(
     css: &CssStyle,
     layout: &BoxLayout,
@@ -1201,8 +922,6 @@ pub fn animated_transform(
     (tx, ty, scale, rotation, opacity)
 }
 
-/// CSS `perspective(d)` projection matrix in row-major form.
-/// Maps (x, y, z, 1) → w' = 1 - z/d; perspective divide yields depth scaling.
 fn css_perspective_m44(d: f32) -> M44 {
     M44::row_major(&[
         1.0,
@@ -1314,8 +1033,6 @@ fn transform_to_m44(tr: &TransformFn, axes: &TransformAxes) -> M44 {
     }
 }
 
-// ---- Background ----
-
 fn paint_background(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -1339,7 +1056,6 @@ fn paint_background(
         }
         Background::Single(layer) => paint_bg_layer(canvas, &rrect, layer),
         Background::Layers(layers) => {
-            // Painted bottom-up per CSS spec (last layer = bottom).
             for layer in layers.iter().rev() {
                 paint_bg_layer(canvas, &rrect, layer);
             }
@@ -1385,7 +1101,6 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
             }
         }
         BackgroundLayer::ConicGradient { stops, .. } => {
-            // Skia has SweepGradient = conic.
             let bounds = rrect.bounds();
             let center = Point::new(
                 bounds.left + bounds.width() / 2.0,
@@ -1395,8 +1110,6 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
             let gradient_colors =
                 GradientColors::new(&colors, Some(&positions), skia_safe::TileMode::Clamp, None);
             let grad = Gradient::new(gradient_colors, gradient::Interpolation::default());
-            // `None` angles on the deprecated API defaulted to a full 0..360
-            // sweep; the new signature makes that range mandatory.
             if let Some(shader) =
                 gradient::shaders::sweep_gradient(center, (0.0, 360.0), &grad, None)
             {
@@ -1404,9 +1117,7 @@ fn paint_bg_layer(canvas: &Canvas, rrect: &RRect, layer: &BackgroundLayer) {
                 canvas.draw_rrect(rrect, &paint);
             }
         }
-        BackgroundLayer::Image { .. } => {
-            // TODO: image background — needs a resource resolver.
-        }
+        BackgroundLayer::Image { .. } => {}
     }
 }
 
@@ -1422,12 +1133,6 @@ fn gradient_stops(stops: &[crate::css::style::GradientStop]) -> (Vec<Color4f>, V
     (colors, positions)
 }
 
-/// Gradient-line endpoints for a CSS `<angle>`: `0deg` points the line "to
-/// top" (first stop at the bottom, travelling up to the last stop), and the
-/// angle increases clockwise, so `90deg` is "to right" and `180deg` (the
-/// default) is "to bottom" (first stop at the top). Skia's
-/// `linear_gradient` places `colors[0]` at `p0`, so `p0` is always the end
-/// the angle points *away from*.
 fn gradient_endpoints(bounds: Rect, angle_deg: f32) -> (Point, Point) {
     let cx = bounds.left + bounds.width() / 2.0;
     let cy = bounds.top + bounds.height() / 2.0;
@@ -1439,8 +1144,6 @@ fn gradient_endpoints(bounds: Rect, angle_deg: f32) -> (Point, Point) {
     (p0, p1)
 }
 
-// ---- Border ----
-
 fn paint_border(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -1448,7 +1151,6 @@ fn paint_border(
     border: &BorderEdges,
     ctx: &LengthContext,
 ) {
-    // Uniform fast-path: same width on all sides + same color + solid style.
     let style = border.style.unwrap_or(BorderStyle::Solid);
     if matches!(style, BorderStyle::None) {
         return;
@@ -1459,7 +1161,6 @@ fn paint_border(
         .map(parse_color)
         .unwrap_or(SColor::BLACK);
 
-    // Compute per-side widths (already resolved into BoxLayout.border by taffy).
     let widths = layout.border;
     let max_w = widths
         .top
@@ -1476,7 +1177,6 @@ fn paint_border(
         .map(|r| resolve_border_radius(r, layout, ctx))
         .unwrap_or([0.0; 4]);
 
-    // Outer rrect (border box) and inner rrect (padding box).
     let outer = border_rrect(layout, radius);
     let inner = inner_rrect(layout, radius);
 
@@ -1485,20 +1185,9 @@ fn paint_border(
     paint.set_style(PaintStyle::Fill);
     paint.set_color(color);
 
-    // Use DRRect = outer minus inner for an accurate stroked border with radius.
     canvas.draw_drrect(outer, inner, &paint);
 }
 
-/// Paint a gradient-colored border ring (issue #87).
-///
-/// Painted **instead of** the standard `border` when both are set. Unlike
-/// `border`, `gradient-border` is a pure paint decoration: it does not consume
-/// layout space (taffy never sees it), the ring is inset from the border-box
-/// edge by `gb.width`.
-///
-/// The gradient is linear along `gb.angle` with the **same angle convention as
-/// `background` linear gradients** (see [`gradient_endpoints`]) so the two
-/// stay visually consistent within one style block. Colors are evenly spaced.
 fn paint_gradient_border(
     canvas: &Canvas,
     layout: &BoxLayout,
@@ -1517,7 +1206,6 @@ fn paint_gradient_border(
         .map(|r| resolve_border_radius(r, layout, ctx))
         .unwrap_or([0.0; 4]);
 
-    // Outer ring edge = border box; inner edge = inset by the border width.
     let outer = border_rrect(layout, radius);
     let inner_rect = Rect::from_xywh(
         layout.x + width,
@@ -1567,7 +1255,6 @@ fn border_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
 fn padding_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
     let (x, y, w, h) = layout.padding_box();
     let rect = Rect::from_xywh(x, y, w, h);
-    // Inner radius: max(0, outer_radius - border_width).
     let r = [
         (radius[0] - layout.border.left.max(layout.border.top)).max(0.0),
         (radius[1] - layout.border.right.max(layout.border.top)).max(0.0),
@@ -1582,7 +1269,6 @@ fn inner_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
 }
 
 fn rrect_from_corners(rect: Rect, radius: [f32; 4]) -> RRect {
-    // Order: top-left, top-right, bottom-right, bottom-left.
     let radii = [
         Point::new(radius[0], radius[0]),
         Point::new(radius[1], radius[1]),
@@ -1613,8 +1299,6 @@ fn resolve_border_radius(r: &BorderRadius, layout: &BoxLayout, ctx: &LengthConte
         ],
     }
 }
-
-// ---- Box-shadow ----
 
 fn paint_box_shadow(
     canvas: &Canvas,
@@ -1665,8 +1349,6 @@ fn paint_box_shadow(
         let rrect = rrect_from_corners(rect, radius);
         canvas.draw_rrect(rrect, &paint);
     } else {
-        // Inset: invert — paint the area outside the inner rect within the box.
-        // Approximation: draw a stroked rrect inside the padding box.
         let (px, py, pw, ph) = layout.padding_box();
         let outer = rrect_from_corners(Rect::from_xywh(px, py, pw, ph), radius);
         canvas.save();
@@ -1688,7 +1370,6 @@ fn paint_box_shadow(
                 clear.set_mask_filter(filter);
             }
         }
-        // Cheap approximation — TODO: proper inset shadow with subtraction path.
         let mut path = PathBuilder::new();
         path.add_rrect(outer, None, None);
         path.add_rrect(inner, None, None);
@@ -1697,23 +1378,6 @@ fn paint_box_shadow(
         canvas.restore();
     }
 }
-
-// ---- Color parsing ----
-//
-// Both functions below route through `renderer::parse_css_color` — the
-// single frozen entry point (see `renderer/colors.rs`) — rather than
-// duplicating hex/rgb/hsl/named-colour parsing here. That parser accepts
-// every common CSS colour form (3/4/6/8-digit hex, rgb()/rgba(), hsl()/
-// hsla(), the full CSS named-colour set) and returns `None` for anything
-// else.
-//
-// A `Color::String` that fails to parse is a real authoring bug — the
-// previous behaviour (`unwrap_or(SColor::BLACK)`) rendered it as invisible
-// text on this tool's dark-background target style. It now falls back to
-// `renderer::UNRESOLVED_COLOR` (opaque magenta) and logs a warning instead,
-// so the failure is visible on screen and in the render logs. Wiring a
-// hard validation-time error for this is out of scope here (sibling
-// workstream); this only stops the render path from lying.
 
 pub fn parse_color(c: &Color) -> SColor {
     match c {
@@ -1729,8 +1393,6 @@ fn parse_color_string(s: &str) -> Option<SColor> {
     crate::engine::renderer::parse_css_color(s).map(|(r, g, b, a)| SColor::from_argb(a, r, g, b))
 }
 
-/// Loud, non-black fallback for a colour string that couldn't be resolved.
-/// See the module note above `parse_color`.
 fn unresolved_color(original: &str) -> SColor {
     eprintln!(
         "Warning: unrecognized color '{original}' — rendering as opaque magenta instead of \
@@ -1740,7 +1402,6 @@ fn unresolved_color(original: &str) -> SColor {
     SColor::from_argb(a, r, g, b)
 }
 
-// Suppress unused import warnings for items only used in trait-bound paths.
 #[allow(dead_code)]
 fn _unused_marker(_e: &Edges, _l: &LengthPercentage, _p: &ParsedLength, _f: Color4f) {}
 
@@ -1770,8 +1431,6 @@ mod hit_tests {
 
     #[test]
     fn hitmap_reports_component_rect_for_untransformed_node() {
-        // A component leaf, absolutely positioned at (40, 30), sized 100x80,
-        // inside a flex-column root that fills a 400x400 viewport.
         let leaf = BoxNode {
             id: 0,
             kind: BoxKind::Component(Arc::new(1u32)),
@@ -1815,7 +1474,6 @@ mod hit_tests {
             &NoopDispatcher,
         );
 
-        // Only the component leaf is reported, not the synthetic container root.
         assert_eq!(hits.len(), 1, "expected exactly one component hit");
         let h = &hits[0];
         assert_eq!(h.node_id, root.children[0].id);
@@ -1830,9 +1488,6 @@ mod hit_tests {
         use crate::css::style::{Background, Color as CssColor, FilterFn};
         use crate::css::units::Length;
 
-        // Top half black on a white root; a backdrop-blur panel straddles
-        // the boundary. Inside the panel the boundary must smear into greys;
-        // outside it stays a hard black/white edge.
         let black_top = BoxNode {
             id: 0,
             kind: BoxKind::Container,
@@ -1906,10 +1561,8 @@ mod hit_tests {
         assert!(surface.read_pixels(&info, &mut buf, 200 * 4, (0, 0)));
         let red = |x: usize, y: usize| buf[(y * 200 + x) * 4] as i32;
 
-        // Outside the panel: hard edge preserved.
         assert!(red(10, 97) < 10, "outside/above must stay black");
         assert!(red(10, 103) > 245, "outside/below must stay white");
-        // Inside the panel: boundary smeared to intermediate greys.
         let above = red(100, 97);
         let below = red(100, 103);
         assert!(
@@ -1924,17 +1577,6 @@ mod hit_tests {
 
     #[test]
     fn backdrop_filter_survives_sibling_opacity_below_one() {
-        // Same scene as `backdrop_filter_blurs_content_behind`, but the panel
-        // also carries `opacity: 0.99` — a visually-imperceptible change that
-        // must NOT disable the blur. Bug: the opacity/filter SaveLayerRec
-        // (paint_pass step 3) used to open BEFORE the backdrop-filter's own
-        // save_layer(backdrop) (old step 5.5), so the backdrop sampled the
-        // freshly-opened, still-empty opacity layer instead of the real
-        // scene beneath it — a total no-op. `opacity` alone (no
-        // `backdrop_filter`) is not the trigger; only nodes that combine
-        // both are affected, which is exactly the documented glassmorphism
-        // template (glassmorphism.md pairs `backdrop-filter` with a
-        // `fade_in`/`fade_in_up` entrance animation that drives `opacity`).
         use crate::css::style::{Background, Color as CssColor, FilterFn};
         use crate::css::units::Length;
 
@@ -2012,11 +1654,8 @@ mod hit_tests {
         assert!(surface.read_pixels(&info, &mut buf, 200 * 4, (0, 0)));
         let red = |x: usize, y: usize| buf[(y * 200 + x) * 4] as i32;
 
-        // Outside the panel: hard edge preserved.
         assert!(red(10, 97) < 10, "outside/above must stay black");
         assert!(red(10, 103) > 245, "outside/below must stay white");
-        // Inside the panel: boundary must still smear into greys — the bug
-        // makes this a hard 0/255 edge identical to the outside columns.
         let above = red(100, 97);
         let below = red(100, 103);
         assert!(
@@ -2033,9 +1672,6 @@ mod hit_tests {
     fn hitmap_reflects_node_transform() {
         use crate::css::style::TransformFn;
 
-        // Same leaf as the untransformed test, but with transform: scale(2).
-        // The engine applies transforms around the node's center, so a 100x80
-        // box scaled 2x grows to 200x160 (centered on the same point).
         let leaf = BoxNode {
             id: 0,
             kind: BoxKind::Component(Arc::new(1u32)),
@@ -2082,8 +1718,6 @@ mod hit_tests {
 
         assert_eq!(hits.len(), 1);
         let h = &hits[0];
-        // Scaled 2x: width 100->200, height 80->160. Assert the dimensions
-        // (these prove the canvas transform is reflected in the hit rect).
         assert!((h.rect.w - 200.0).abs() < 1.0, "w = {}", h.rect.w);
         assert!((h.rect.h - 160.0).abs() < 1.0, "h = {}", h.rect.h);
     }
@@ -2091,10 +1725,6 @@ mod hit_tests {
 
 #[cfg(test)]
 mod transform_origin_tests {
-    //! TDD tests for `resolve_origin` and the pivot integration in `paint_node`.
-    //!
-    //! Strategy: paint a coloured rect, read back pixel centroids / columns, and
-    //! verify that the transformed position matches the expected pivot behaviour.
 
     use super::*;
 
@@ -2120,7 +1750,6 @@ mod transform_origin_tests {
         }
     }
 
-    /// Render a tree and return the pixel buffer (RGBA8888).
     fn render_pixels(root: &mut BoxNode, w: u32, h: u32) -> Vec<u8> {
         root.assign_ids(0);
         let layout = run_layout(root, (w as f32, h as f32), &ConversionContext::default());
@@ -2143,19 +1772,16 @@ mod transform_origin_tests {
         buf
     }
 
-    /// Red channel at pixel (x, y) in a w-wide buffer.
     fn r(buf: &[u8], w: u32, x: u32, y: u32) -> u8 {
         buf[((y * w + x) * 4) as usize]
     }
 
-    /// Count pixels in `buf` where red > 200 (i.e., predominantly red).
     fn count_red(buf: &[u8]) -> usize {
         buf.chunks(4)
             .filter(|px| px[0] > 200 && px[1] < 50 && px[2] < 50)
             .count()
     }
 
-    /// Compute column centroid (weighted x) of pixels where red > 200.
     fn red_centroid_x(buf: &[u8], w: u32, h: u32) -> f32 {
         let mut sum_x = 0.0f64;
         let mut count = 0.0f64;
@@ -2177,7 +1803,6 @@ mod transform_origin_tests {
         }
     }
 
-    /// Compute row centroid (weighted y) of pixels where red > 200.
     fn red_centroid_y(buf: &[u8], w: u32, h: u32) -> f32 {
         let mut sum_y = 0.0f64;
         let mut count = 0.0f64;
@@ -2237,32 +1862,24 @@ mod transform_origin_tests {
         }
     }
 
-    // ---- Test 1: no transform — pixel-identical to reference baseline ----
-
     #[test]
     fn no_transform_origin_unchanged_non_regression() {
-        // A red 100x100 box at (50, 50) with no transform: pixels must appear
-        // exactly at (50..150, 50..150) — no origin logic involved.
         let mut root = root_node(
             300.0,
             300.0,
             vec![{
                 let mut n = red_box(Position::Absolute, 50.0, 50.0, 100.0, 100.0);
                 n.css.transform = Some(vec![TransformFn::Scale { x: 1.0, y: 1.0 }]);
-                // transform-origin absent → should default to center (no change)
                 n
             }],
         );
         let buf = render_pixels(&mut root, 300, 300);
 
-        // Centroid must be ~100, ~100 (center of the 50..150 range).
         let cx = red_centroid_x(&buf, 300, 300);
         let cy = red_centroid_y(&buf, 300, 300);
         assert!((cx - 99.5).abs() < 2.0, "cx={cx}");
         assert!((cy - 99.5).abs() < 2.0, "cy={cy}");
     }
-
-    // ---- Test 2: 50% 50% == absent (byte-identical behavior) ----
 
     #[test]
     fn transform_origin_50pct_is_center_identity() {
@@ -2288,13 +1905,8 @@ mod transform_origin_tests {
         );
     }
 
-    // ---- Test 3: rotate 90° around left-top vs center — different quadrants ----
-
     #[test]
     fn rotate_90_left_top_vs_center_occupy_different_quadrants() {
-        // A red 100x100 box at (100, 100) rotated 90° around:
-        //   - center (150, 150): box stays centered on itself, centroid ~(150, 150)
-        //   - left-top (100, 100): the box pivots around top-left; centroid moves
         let make_root_with_origin = |ox: Option<CLP>, oy: Option<CLP>| -> Vec<u8> {
             let mut n = red_box(Position::Absolute, 100.0, 100.0, 100.0, 100.0);
             n.css.transform = Some(vec![TransformFn::Rotate { deg: 90.0 }]);
@@ -2309,9 +1921,7 @@ mod transform_origin_tests {
             render_pixels(&mut root, 400, 400)
         };
 
-        // Center pivot (default).
         let buf_center = make_root_with_origin(None, None);
-        // Left-top pivot: x=0px (relative to box left), y=0px.
         let buf_left_top = make_root_with_origin(
             Some(CLP::String("0%".into())),
             Some(CLP::String("0%".into())),
@@ -2322,7 +1932,6 @@ mod transform_origin_tests {
         let cx_lt = red_centroid_x(&buf_left_top, 400, 400);
         let cy_lt = red_centroid_y(&buf_left_top, 400, 400);
 
-        // With center pivot (150, 150), rotate 90° CW → box centroid stays at ~(150, 150).
         assert!(
             (cx_center - 150.0).abs() < 5.0,
             "center-pivot cx should be ~150, got {cx_center}"
@@ -2332,22 +1941,16 @@ mod transform_origin_tests {
             "center-pivot cy should be ~150, got {cy_center}"
         );
 
-        // With left-top pivot (100, 100), rotating 90° CW around that point:
-        //   box center (150,150) maps to (50, 150) — centroid moves left.
-        //   cx_lt ≈ 50, while cx_center ≈ 150. The x-shift is the distinguishing axis.
         assert!(
             cx_lt < cx_center - 50.0,
             "left-top pivot cx ({cx_lt}) should be well left of center-pivot cx ({cx_center})"
         );
-        // The overall pixel-centroid distance should be large.
         let dist = ((cx_lt - cx_center).powi(2) + (cy_lt - cy_center).powi(2)).sqrt();
         assert!(
             dist > 50.0,
             "pivots should produce clearly distinct positions (dist={dist})"
         );
     }
-
-    // ---- Test 4: keyword "left top" == "0% 0%" ----
 
     #[test]
     fn keyword_left_top_equals_zero_percent() {
@@ -2371,8 +1974,6 @@ mod transform_origin_tests {
         );
     }
 
-    // ---- Test 5: keyword "right bottom" == "100% 100%" ----
-
     #[test]
     fn keyword_right_bottom_equals_100_percent() {
         let make_root = |origin_x: CLP, origin_y: CLP| -> Vec<u8> {
@@ -2395,14 +1996,8 @@ mod transform_origin_tests {
         );
     }
 
-    // ---- Test 6: 3D rotate_y with left-center origin — left edge stays fixed ----
-
     #[test]
     fn rotate_y_left_origin_left_edge_is_stable() {
-        // A 200x200 red box at (100, 100). RotateY with origin "left center"
-        // means the left edge (x=100) is the pivot — so the leftmost painted
-        // column should always be near x=100 regardless of angle.
-        // With center origin, the center (x=200) is the pivot and the left edge moves.
         let make_root = |origin_x: Option<CLP>| -> Vec<u8> {
             let mut n = red_box(Position::Absolute, 100.0, 100.0, 200.0, 200.0);
             n.css.transform = Some(vec![TransformFn::RotateY { deg: 45.0 }]);
@@ -2420,7 +2015,6 @@ mod transform_origin_tests {
         let buf_left = make_root(Some(CLP::String("0%".into())));
         let buf_center = make_root(None);
 
-        // Find the leftmost red pixel x for each render.
         fn leftmost_red(buf: &[u8], w: u32, h: u32) -> Option<u32> {
             for x in 0..w {
                 for y in 0..h {
@@ -2440,20 +2034,16 @@ mod transform_origin_tests {
         let left_edge_center = leftmost_red(&buf_center, 500, 500)
             .expect("no red pixels in center-origin render") as f32;
 
-        // Left-origin: left edge stays near x=100 (pivot is exactly there).
         assert!(
             left_edge_left > 90.0 && left_edge_left < 115.0,
             "left-origin left edge should be near 100, got {left_edge_left}"
         );
 
-        // Center-origin: left edge moves away from 100.
         assert!(
             left_edge_center > left_edge_left + 20.0,
             "center-origin left edge ({left_edge_center}) should be further right than left-origin ({left_edge_left})"
         );
     }
-
-    // ---- Test 7: perspective_origin ≠ transform_origin — must not panic ----
 
     #[test]
     fn different_perspective_and_transform_origins_no_panic() {
@@ -2461,7 +2051,6 @@ mod transform_origin_tests {
         let mut n = red_box(Position::Absolute, 100.0, 100.0, 200.0, 200.0);
         n.css.transform = Some(vec![TransformFn::RotateY { deg: 30.0 }]);
         n.css.perspective = Some(Length::Px(800.0));
-        // perspective-origin at top-left, transform-origin at bottom-right
         n.css.transform_origin = Some(TransformOrigin {
             x: Some(CLP::String("100%".into())),
             y: Some(CLP::String("100%".into())),
@@ -2473,7 +2062,6 @@ mod transform_origin_tests {
             z: None,
         });
         let mut root = root_node(500.0, 500.0, vec![n]);
-        // Must not panic and must produce at least some red pixels.
         let buf = render_pixels(&mut root, 500, 500);
         let red_count = count_red(&buf);
         assert!(
@@ -2482,17 +2070,8 @@ mod transform_origin_tests {
         );
     }
 
-    // ---- Test 8: translate percentages resolve per-axis, not max(w,h) ----
-
     #[test]
     fn translate_percent_resolves_against_own_axis_not_max_dimension() {
-        // A 200x100 red box at (0,0), `transform: translate(50%, 50%)`.
-        // CSS resolves a translate-x percentage against the box's own WIDTH
-        // and translate-y against its own HEIGHT — never `max(width,
-        // height)` on both axes (only correct for square boxes). Expected:
-        // x shifts by 100 (50% of 200) -> [100,299]; y shifts by 50 (50% of
-        // 100) -> [50,149]. The bug instead resolved y against max(200,100)
-        // = 200, doubling the vertical shift to +100 -> [100,199].
         let mut n = red_box(Position::Absolute, 0.0, 0.0, 200.0, 100.0);
         n.css.transform = Some(vec![TransformFn::Translate {
             x: CLP::String("50%".into()),
@@ -2533,8 +2112,6 @@ mod transform_origin_tests {
 
 #[cfg(test)]
 mod glassmorphism_tests {
-    //! TDD tests for issue #87: gradient-border painting and the `noise`
-    //! filter function (film grain, deterministic per seed).
 
     use super::*;
 
@@ -2588,7 +2165,6 @@ mod glassmorphism_tests {
         (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
     }
 
-    /// Unique (r,g,b,a) values within a rectangular region.
     fn unique_colors_in(
         buf: &[u8],
         w: u32,
@@ -2647,13 +2223,8 @@ mod glassmorphism_tests {
         leaf(css)
     }
 
-    // ---- gradient-border ----
-
     #[test]
     fn gradient_border_paints_both_colors_on_perimeter_center_intact() {
-        // 200x200 box at (100, 100) on a white root; gradient-border 12px
-        // red→blue along the horizontal axis (angle 90). Expect: one vertical
-        // border edge red-dominant, the other blue-dominant, centre untouched.
         let node = abs_box(
             100.0,
             100.0,
@@ -2671,11 +2242,9 @@ mod glassmorphism_tests {
         let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
         let buf = render_pixels(&mut root, 400, 400);
 
-        // Sample border midpoints: left edge (x=106, y=200), right edge (x=294, y=200).
         let left = px(&buf, 400, 106, 200);
         let right = px(&buf, 400, 294, 200);
 
-        // One side red-dominant, the other blue-dominant (convention-agnostic).
         let red_side = if left.0 > left.2 { left } else { right };
         let blue_side = if left.0 > left.2 { right } else { left };
         assert!(
@@ -2686,13 +2255,11 @@ mod glassmorphism_tests {
             blue_side.2 > 150 && blue_side.0 < 100,
             "expected a blue-dominant border edge, got {blue_side:?}"
         );
-        // Both extremes must actually differ (it's a gradient, not a flat color).
         assert_ne!(
             left, right,
             "border edges must show different gradient stops"
         );
 
-        // Centre of the box stays the root background (white).
         let center = px(&buf, 400, 200, 200);
         assert_eq!(
             center,
@@ -2700,7 +2267,6 @@ mod glassmorphism_tests {
             "box centre must not be painted by the gradient border"
         );
 
-        // Top border midpoint is painted (not background).
         let top_mid = px(&buf, 400, 200, 106);
         assert_ne!(
             top_mid,
@@ -2712,8 +2278,6 @@ mod glassmorphism_tests {
     #[test]
     fn gradient_border_respects_border_radius() {
         use crate::css::style::BorderRadius;
-        // Rounded 200x200 box: the square corner pixel must stay background,
-        // while edge midpoints are painted.
         let node = abs_box(
             100.0,
             100.0,
@@ -2732,14 +2296,12 @@ mod glassmorphism_tests {
         let mut root = root_node(400.0, 400.0, Some("#ffffff"), vec![node]);
         let buf = render_pixels(&mut root, 400, 400);
 
-        // Square corner (inside the box bounds but outside the rounded path).
         let corner = px(&buf, 400, 104, 104);
         assert_eq!(
             corner,
             (255, 255, 255, 255),
             "square corner must stay background with border-radius"
         );
-        // Edge midpoints painted.
         let left_mid = px(&buf, 400, 104, 200);
         let top_mid = px(&buf, 400, 200, 104);
         assert_ne!(left_mid, (255, 255, 255, 255), "left edge must be painted");
@@ -2749,8 +2311,6 @@ mod glassmorphism_tests {
     #[test]
     fn gradient_border_replaces_standard_border() {
         use crate::css::style::{BorderEdges, BorderStyle, Edges};
-        // A node with BOTH border (solid green) and gradient-border (red/blue):
-        // the gradient border wins; no green pixels appear.
         let node = abs_box(
             100.0,
             100.0,
@@ -2783,8 +2343,6 @@ mod glassmorphism_tests {
             "standard border must not be painted when gradient-border is set"
         );
     }
-
-    // ---- noise filter ----
 
     fn gray_box_with_filter(filter: Option<Vec<FilterFn>>) -> BoxNode {
         abs_box(
@@ -2821,7 +2379,6 @@ mod glassmorphism_tests {
         );
         let buf_noise = render_pixels(&mut root_noise, 300, 300);
 
-        // Sample well inside the box to avoid AA edges.
         let plain = unique_colors_in(&buf_plain, 300, 70, 70, 230, 230);
         let noisy = unique_colors_in(&buf_noise, 300, 70, 70, 230, 230);
         assert!(
@@ -2876,9 +2433,6 @@ mod glassmorphism_tests {
 
     #[test]
     fn backdrop_noise_grains_only_the_panel_region() {
-        // Uniform gray root; a panel at (50, 50, 100, 100) with
-        // backdrop-filter noise. Inside the panel: grain (many colors).
-        // Outside: untouched uniform gray.
         let panel = abs_box(
             50.0,
             50.0,
@@ -2910,8 +2464,6 @@ mod glassmorphism_tests {
         );
     }
 
-    // ---- serde ----
-
     #[test]
     fn css_gradient_border_and_noise_deserialize() {
         let json = r##"{
@@ -2931,7 +2483,6 @@ mod glassmorphism_tests {
                 seed: 9
             }]) if (intensity - 0.3).abs() < 1e-6
         ));
-        // Defaults: intensity 0.15, seed 42.
         assert!(matches!(
             s.backdrop_filter.as_deref(),
             Some([FilterFn::Noise {
@@ -2943,8 +2494,6 @@ mod glassmorphism_tests {
 
     #[test]
     fn css_legacy_zombies_accepted() {
-        // backdrop-blur / inner-shadow parse into CssStyle (accepted for
-        // compat) — rendering is intentionally not wired; validate warns.
         let json = r##"{
             "backdrop-blur": 20,
             "inner-shadow": { "color": "#000000", "offset_x": 0, "offset_y": 2, "blur": 8 }
@@ -2957,12 +2506,6 @@ mod glassmorphism_tests {
 
 #[cfg(test)]
 mod paint_order_tests {
-    //! TDD tests for two paint-pass audit findings:
-    //!   - overflow:hidden must never clip a node's OWN outset box-shadow
-    //!     (CSS clips descendants, never the box's own decorations).
-    //!   - the opacity/filter SaveLayerRec must be bounded to the node's box
-    //!     (+ filter bleed), not left to size against the ambient clip
-    //!     (usually the whole viewport) — without clipping visible blur.
 
     use super::*;
 
@@ -3029,9 +2572,6 @@ mod paint_order_tests {
         }
     }
 
-    /// Count of "probe" red pixels (spread-only, blur:0, so a hard-edged
-    /// halo) in a rectangular region — used to compare before/after pixel
-    /// counts for the paint-order fix.
     fn count_red_in(buf: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> usize {
         let mut n = 0;
         for y in y0..y1 {
@@ -3079,10 +2619,6 @@ mod paint_order_tests {
 
     #[test]
     fn overflow_hidden_does_not_clip_own_outset_box_shadow() {
-        // 100x100 white card at (50,50) on a 200x200 black canvas, outset
-        // box-shadow (red, spread 20, blur 0 -> hard-edged halo rect from
-        // (30,30) to (170,170)). Probe points (100,45) and (100,155) sit in
-        // the halo band above/below the card, outside its own border-box.
         let without = {
             let mut root = root_node(200.0, 200.0, "#000000", vec![card_with_shadow(false)]);
             render_pixels(&mut root, 200, 200)
@@ -3119,7 +2655,6 @@ mod paint_order_tests {
             "overflow:hidden must not erase the node's own outset shadow, got {below_hidden:?}"
         );
 
-        // Probe-pixel count over the full halo band, before/after overflow.
         let halo_count_plain = count_red_in(&without, 200, 25, 25, 175, 175);
         let halo_count_hidden = count_red_in(&with_hidden, 200, 25, 25, 175, 175);
         assert_eq!(
@@ -3131,13 +2666,6 @@ mod paint_order_tests {
 
     #[test]
     fn filter_layer_bounds_do_not_clip_blur_bleed() {
-        // A 60x60 opaque red square with `opacity: 0.999` (forces the
-        // SaveLayerRec open) AND `filter: blur(24px)` on a 300x300 black
-        // canvas. Bounding the layer to the node's box (issue #4 fix) must
-        // still leave room for the blur to bleed outward — if the bounds
-        // were the bare box rect, Skia would hard-clip the blurred fringe
-        // at the box edge, and the region just outside the box would stay
-        // pure black instead of picking up a soft red glow.
         let n = BoxNode {
             id: 0,
             kind: BoxKind::Container,
@@ -3166,14 +2694,11 @@ mod paint_order_tests {
             let i = (y * 300 + x) * 4;
             buf[i]
         };
-        // 8px outside the left edge of the box (box left edge = x=120),
-        // vertically centered (y=150): must show blur bleed (red > black).
         let bled = probe(112, 150);
         assert!(
             bled > 15,
             "blur must bleed past the box edge under bounded SaveLayerRec, got r={bled}"
         );
-        // Far outside any plausible bleed radius: must stay black.
         let far = probe(20, 20);
         assert_eq!(far, 0, "far corner must stay untouched, got r={far}");
     }
@@ -3221,9 +2746,6 @@ mod tests {
 
     #[test]
     fn parse_white_forms_all_agree() {
-        // Regression test for the C2 audit finding: `#fff`, `#FFF`, `white`
-        // and `rgb(255,255,255)` must all resolve to the same opaque white,
-        // never to black.
         let white = SColor::from_argb(255, 255, 255, 255);
         assert_eq!(parse_color_string("#fff").unwrap(), white);
         assert_eq!(parse_color_string("#FFF").unwrap(), white);
@@ -3235,9 +2757,6 @@ mod tests {
 
     #[test]
     fn parse_color_string_supports_extended_named_set() {
-        // Only 11 names were hardcoded before; spot-check a few outside
-        // that set to prove it now routes through the full CSS keyword
-        // table in `renderer::colors`.
         assert!(parse_color_string("rebeccapurple").is_some());
         assert!(parse_color_string("cornflowerblue").is_some());
         assert!(parse_color_string("dodgerblue").is_some());
@@ -3319,13 +2838,6 @@ mod animated_transform_tests {
 
     #[test]
     fn an_orbiting_node_at_two_different_frames_reports_two_different_positions() {
-        // The exact shape of the "eight lines to orbiting badges" scenario:
-        // a node whose `transform` is a single `translate` recomputed every
-        // frame by the (unowned) animator. Simulating two frames' worth of
-        // already-resolved CSS here proves `animated_transform` reads
-        // whatever it is handed, frame-fresh, with no memory of the last
-        // call — the property the per-frame, topological resolution in
-        // `engine::deps` depends on.
         let orbit = |angle_deg: f32| {
             let mut css = CssStyle::default();
             let (s, c) = angle_deg.to_radians().sin_cos();

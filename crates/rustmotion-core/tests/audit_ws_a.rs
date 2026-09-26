@@ -1,6 +1,3 @@
-//! Regression tests for the workstream A (animation & paint) audit findings
-//! tracked in issue #220: RM-01, RM-09, RM-10, RM-37.
-
 use rustmotion_core::css::style::{
     Background, BackgroundLayer, BoxShadow, Color as CssColor, CssStyle, Display, FlexDirection,
     GradientStop, Position, Size as CSize,
@@ -72,8 +69,6 @@ fn probe(buf: &[u8], w: u32, x: usize, y: usize) -> (u8, u8, u8) {
     (buf[i], buf[i + 1], buf[i + 2])
 }
 
-// ---- RM-01: opacity layer must not clip the node's own outset box-shadow ----
-
 fn card_with_shadow(opacity: Option<f32>) -> BoxNode {
     let css = CssStyle {
         position: Some(Position::Absolute),
@@ -106,12 +101,6 @@ fn card_with_shadow(opacity: Option<f32>) -> BoxNode {
 
 #[test]
 fn opacity_layer_does_not_clip_own_outset_box_shadow() {
-    // 100x100 white card at (50,50) on a 200x200 black canvas, outset
-    // box-shadow (red, spread 20, blur 0 -> hard-edged halo rect from
-    // (30,30) to (170,170)). Probe point (100,45) sits in the halo band
-    // above the card, outside its own border-box. `opacity: 0.999` forces
-    // the opacity/filter SaveLayerRec open without visibly dimming the
-    // probed color.
     let opaque = {
         let mut root = root_node(200.0, 200.0, "#000000", vec![card_with_shadow(None)]);
         render_pixels(&mut root, 200, 200)
@@ -134,8 +123,6 @@ fn opacity_layer_does_not_clip_own_outset_box_shadow() {
     );
 }
 
-// ---- RM-09: underdamped spring step response must start from rest ----
-
 fn spring_config(damping: f64, stiffness: f64, mass: f64) -> SpringConfig {
     SpringConfig {
         damping,
@@ -148,10 +135,6 @@ fn spring_config(damping: f64, stiffness: f64, mass: f64) -> SpringConfig {
 
 #[test]
 fn underdamped_spring_step_response_starts_at_rest() {
-    // Shipped defaults named in the audit finding: damping=15, stiffness=100,
-    // mass=1 -> zeta=0.75 (underdamped). A step response that starts from
-    // rest has ~0 velocity at t=0; a wrong sine-argument formula produces a
-    // jolt of about 6.21/s instead.
     let config = spring_config(15.0, 100.0, 1.0);
     let h = 1e-5;
     let v0 = spring_value(0.0, &config);
@@ -167,9 +150,6 @@ fn underdamped_spring_step_response_starts_at_rest() {
 
 #[test]
 fn underdamped_spring_matches_the_analytic_closed_form() {
-    // Reference computed independently of the engine's implementation from
-    // the textbook closed form for an underdamped step response:
-    //   1 - e^{-zeta*omega*t} * [cos(omega_d*t) + (zeta*omega/omega_d)*sin(omega_d*t)]
     let damping = 15.0_f64;
     let stiffness = 100.0_f64;
     let mass = 1.0_f64;
@@ -191,8 +171,6 @@ fn underdamped_spring_matches_the_analytic_closed_form() {
         );
     }
 }
-
-// ---- RM-10: linear-gradient(180deg, ...) must put the first stop at the top ----
 
 fn gradient_card(w: f32, h: f32, angle: f32) -> BoxNode {
     let css = CssStyle {
@@ -226,8 +204,6 @@ fn gradient_card(w: f32, h: f32, angle: f32) -> BoxNode {
 
 #[test]
 fn linear_gradient_180deg_puts_the_first_stop_at_the_top() {
-    // CSS: `angle: 180` ("to bottom") points the gradient line downward, so
-    // the first stop lands at the top and the last stop at the bottom.
     let mut root = gradient_card(100.0, 100.0, 180.0);
     let buf = render_pixels(&mut root, 100, 100);
 
@@ -243,18 +219,8 @@ fn linear_gradient_180deg_puts_the_first_stop_at_the_top() {
     );
 }
 
-// ---- RM-37: `spring_settle_time` must not be rescanned on every `spring_value` call ----
-
 #[test]
 fn spring_settle_time_is_memoized_not_rescanned_every_call() {
-    // `SpringConfig::duration` routes every `spring_value` sample through
-    // `spring_settle_time`'s 2k-20k-step coarse-then-bisect scan (see
-    // animator.rs). The scan result depends only on the spring's own
-    // (damping, stiffness, mass, threshold) — invariant across every frame
-    // an animation is sampled at — so repeating it per call is pure waste.
-    // Measured uncached on this parameter set: 2000 calls take ~530ms in a
-    // debug build; memoized, the same 2000 calls (one real scan, the rest
-    // cache hits) complete in well under a tenth of that.
     let config = SpringConfig {
         damping: 37.0,
         stiffness: 733.0,

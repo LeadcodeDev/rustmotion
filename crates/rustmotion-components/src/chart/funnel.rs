@@ -27,7 +27,6 @@ impl Chart {
 
     fn render_funnel_vertical(&self, canvas: &Canvas, w: f32, h: f32, progress: f32) -> Result<()> {
         let n = self.data.len();
-        // Clamp negatives: a negative ratio flipped the trapezoid inside out.
         let max_val = self
             .data
             .iter()
@@ -108,7 +107,6 @@ impl Chart {
         progress: f32,
     ) -> Result<()> {
         let n = self.data.len();
-        // Clamp negatives: a negative ratio flipped the trapezoid inside out.
         let max_val = self
             .data
             .iter()

@@ -55,7 +55,6 @@ rustmotion_core::impl_traits!(RichText {
     Styled => style,
 });
 
-/// Resolve a font for a span, inheriting from parent style defaults.
 fn make_font(
     family: &str,
     weight: &FontWeight,
@@ -77,24 +76,12 @@ fn make_font(
     Some(Font::from_typeface(typeface, size))
 }
 
-/// Resolved font/paint metadata for one span.
 struct SpanFontInfo {
     font: Font,
     color: String,
     letter_spacing: f32,
 }
 
-/// Resolve each span's font/color/letter-spacing, falling back to the
-/// component-level style for anything a span doesn't override. `None` at
-/// index `i` means the span's font failed to load — that span is skipped
-/// during tokenization (same behaviour as the original `filter_map`).
-///
-/// `default_size` is resolved by the caller (once, against a real
-/// `LengthContext` where one is available) rather than re-derived here —
-/// this used to call the context-free `style.font_size_px_or(48.0)`
-/// independently of `compute_layout`'s own resolution of the same value, a
-/// duplicate computation that silently diverged for relative units (lot B,
-/// wave S).
 fn resolve_span_fonts(
     spans: &[RichTextSpan],
     style: &CssStyle,
@@ -132,7 +119,6 @@ fn resolve_span_fonts(
         .collect()
 }
 
-/// One word-wrapped token ready to be measured or drawn.
 pub struct RichTextToken {
     pub span_idx: usize,
     pub text: String,
@@ -140,15 +126,11 @@ pub struct RichTextToken {
     pub width: f32,
 }
 
-/// One wrapped line of a [`RichText`] layout.
 pub struct RichTextLine {
     pub tokens: Vec<RichTextToken>,
     pub width: f32,
 }
 
-/// Word-wrapped layout for a [`RichText`], shared by
-/// [`crate::intrinsic::RichTextIntrinsic`] and the painter so the box taffy
-/// reserves always matches what gets drawn.
 pub struct RichTextLayout {
     pub lines: Vec<RichTextLine>,
     pub max_width: f32,
@@ -157,30 +139,6 @@ pub struct RichTextLayout {
 }
 
 impl RichText {
-    /// Word-wrap `spans` at `wrap_width` (`None` = unconstrained/natural
-    /// width). `visible_chars_progress >= 0.0` truncates the content for the
-    /// typewriter effect (same char-count semantics as `text`); `-1.0` shows
-    /// everything (used for intrinsic/natural-size measurement, which must
-    /// not shrink as the typewriter plays out — layout space is reserved for
-    /// the full content up front).
-    ///
-    /// Unlike the original implementation (which only ever broke a line at a
-    /// span boundary — a single long span never wrapped internally), this
-    /// tokenizes every span's text into words and packs them greedily across
-    /// span boundaries, so a long single span wraps like any other text.
-    /// Whitespace runs collapse to a single rendered space (CSS
-    /// `white-space: normal` semantics, matching `text`'s default wrap
-    /// behaviour); the exact inter-word spacing of source whitespace is not
-    /// preserved, matching how `wrap_text_with_fallback` already treats
-    /// plain `text` content.
-    ///
-    /// `viewport_width`/`viewport_height` resolve `rem`/`vw`/`vh` on
-    /// `style.font-size` (lot B, wave S — this used to go through the
-    /// context-free `font_size_px_or`, which silently resolved those units
-    /// to 0px). Callers with no real per-frame viewport (intrinsic
-    /// measurement, which runs before layout) should pass a stand-in — see
-    /// `intrinsic::measure_time_font_size_ctx`'s doc comment for why 0px is
-    /// worse than an approximation.
     pub fn compute_layout(
         spans: &[RichTextSpan],
         style: &CssStyle,
@@ -199,9 +157,6 @@ impl RichText {
         let span_fonts = resolve_span_fonts(spans, style, default_size);
         let emoji_tf = emoji_typeface();
 
-        // Typewriter truncation operates on each span's text by char count
-        // (mirrors `text`'s approach), producing a truncated copy that is
-        // then tokenized below exactly like the full content would be.
         let texts: Vec<String> = if visible_chars_progress >= 0.0 {
             let total_chars: usize = spans.iter().map(|s| s.text.chars().count()).sum();
             let visible =
@@ -227,11 +182,6 @@ impl RichText {
             spans.iter().map(|s| s.text.clone()).collect()
         };
 
-        // Tokenize into words, tracking whether a rendered space separates
-        // each token from the previous one (within a span: any whitespace
-        // run; across spans: only if either side's source text had
-        // whitespace at the boundary — otherwise the spans are "glued", e.g.
-        // `"Total: "` followed by `"42"` followed by `" items"`).
         struct Tok {
             span_idx: usize,
             text: String,
@@ -261,9 +211,6 @@ impl RichText {
             prev_trailing_ws = text.chars().last().is_none_or(char::is_whitespace);
         }
 
-        // Greedy line packing, mirroring `wrap_text_with_fallback`'s rule: a
-        // token always fits on an otherwise-empty line, even if it alone
-        // exceeds `wrap_width` (never split a single word).
         let effective_wrap = wrap_width.unwrap_or(f32::INFINITY);
         let mut lines: Vec<RichTextLine> = vec![RichTextLine {
             tokens: Vec::new(),
@@ -364,12 +311,6 @@ impl RichText {
             return;
         }
 
-        // Same `default_size` resolution `compute_layout` used above (real
-        // viewport, same `wrap_width`-derived parent size) — kept as a
-        // second call rather than threading `span_fonts` back out of
-        // `RichTextLayout`, but now via the same context-aware accessor so
-        // the two can no longer diverge on a relative `font-size` the way
-        // they structurally could before (lot B, wave S).
         let base_ctx = crate::intrinsic::font_size_ctx(
             ctx.video_width as f32,
             ctx.video_height as f32,
@@ -457,8 +398,6 @@ mod tests {
 
     #[test]
     fn single_long_span_wraps_into_multiple_lines_at_constrained_width() {
-        // M2's second ask: line-breaking must not be limited to span
-        // boundaries — a single long span must wrap word-by-word.
         let spans = vec![span(
             "the quick brown fox jumps over the lazy dog and keeps going",
         )];
@@ -487,10 +426,6 @@ mod tests {
 
     #[test]
     fn spans_glue_without_extra_space_when_source_has_none() {
-        // "Total: " + "42" + " items" — no extra space should appear between
-        // "Total:" and "42" beyond the one already in the first span's text,
-        // and none at all between "42" and " items" beyond the leading space
-        // already in the third span.
         let glued = vec![span("Total:"), span("42"), span(" items")];
         let s = style(20.0);
         let layout = RichText::compute_layout(&glued, &s, 1920.0, 1080.0, None, -1.0);
@@ -500,12 +435,7 @@ mod tests {
             tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
             vec!["Total:", "42", "items"]
         );
-        // "Total:" is glued directly to "42" (no whitespace at the
-        // boundary), so token 1 starts exactly where token 0's glyphs end.
         assert_eq!(tokens[1].x, tokens[0].width, "no space between glued spans");
-        // "42" and " items" DO have a boundary space (leading space in the
-        // third span's source text), so token 2 must start strictly after
-        // token 1 ends.
         assert!(
             tokens[2].x > tokens[1].x + tokens[1].width,
             "a space must separate '42' and 'items' (source had a leading space)"

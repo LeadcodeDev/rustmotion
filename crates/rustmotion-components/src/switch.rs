@@ -141,12 +141,6 @@ impl From<SwitchRaw> for Switch {
     }
 }
 
-/// Extra width (gap + label text) `paint()` needs past the track — mirrors
-/// its `font_size = (h*0.5).max(12.0)` / `text_x = w + 8.0` exactly, so the
-/// box reserved here always matches what gets drawn. `None` on font-load
-/// failure (e.g. a headless test env with no fonts) — `style.width` is then
-/// left unset and `box_builder.rs`'s plain `c.width` fallback applies, same
-/// as before this fix.
 fn switch_label_extra_width(label: &str, height: f32) -> Option<f32> {
     let font_size = (height * 0.5).max(12.0);
     let typeface = typeface_with_fallback("Inter", skia_safe::FontStyle::normal()).ok()?;
@@ -195,14 +189,12 @@ impl Switch {
         let radius = h / 2.0;
         let state = self.current_state_at(time) as f32;
 
-        // Interpolate track color
         let track_color = if state > 0.5 {
             &self.track_color_on
         } else {
             &self.track_color_off
         };
 
-        // Track
         let mut track_paint = paint_from_hex(track_color);
         track_paint.set_style(PaintStyle::Fill);
         track_paint.set_anti_alias(true);
@@ -211,7 +203,6 @@ impl Switch {
         let track_rrect = RRect::new_rect_xy(track_rect, radius, radius);
         canvas.draw_rrect(track_rrect, &track_paint);
 
-        // Thumb
         let thumb_radius = (h - 4.0) / 2.0;
         let thumb_x_min = 2.0 + thumb_radius;
         let thumb_x_max = w - 2.0 - thumb_radius;
@@ -223,7 +214,6 @@ impl Switch {
         thumb_paint.set_anti_alias(true);
         canvas.draw_circle((thumb_cx, thumb_cy), thumb_radius, &thumb_paint);
 
-        // Label
         if let Some(label) = &self.label {
             let font_size = (h * 0.5).max(12.0);
             let font_style = skia_safe::FontStyle::normal();
@@ -278,18 +268,12 @@ mod tests {
 
     #[test]
     fn no_label_leaves_style_width_unset() {
-        // No extra room needed — box_builder.rs's plain `c.width` fallback
-        // should still apply, exactly as before this fix.
         let s = parse(r#"{"type":"switch"}"#);
         assert!(s.style.width.is_none());
     }
 
     #[test]
     fn label_widens_style_width_past_the_track() {
-        // #127: `paint()` draws the label at `self.width + 8`, entirely
-        // outside a box sized only for the track (64×34 assigned vs.
-        // 155×34 painted in the audit). `style.width` must now reserve at
-        // least `width` (the track) plus *some* label room.
         let s = parse(r#"{"type":"switch","label":"Dark mode","width":64,"height":34}"#);
         let SzCheck::Length(rustmotion_core::css::LengthPercentage::Px(w)) =
             s.style.width.expect("label should reserve style.width")

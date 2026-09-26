@@ -1,10 +1,3 @@
-//! [`Voice`]: one instrument definition in a [`super::score::Score`] — the
-//! `"kick"`/`"hat"` entries of the issue's `voices` map. A `Voice` is
-//! stateless data; [`Voice::render_grain`] is the only place it turns into
-//! samples, producing one self-contained "grain" (attack through release,
-//! silence before and after) that [`super::synth::render`] then stamps
-//! onto the timeline once per resolved hit.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +18,6 @@ pub enum FreqSpec {
 }
 
 fn default_q() -> f32 {
-    // Butterworth Q — maximally flat passband, the least surprising
-    // default when a score gives a filter's `freq` but not its `q` (the
-    // issue's `hat` example does exactly this).
     0.707
 }
 
@@ -44,9 +34,6 @@ pub struct FilterSpec {
 }
 
 fn default_attack() -> f32 {
-    // 2ms: enough to avoid a hard-edge click on a one-shot trigger,
-    // short enough to still read as instant next to `decay` (tens/hundreds
-    // of ms) on a drum voice.
     0.002
 }
 
@@ -111,11 +98,6 @@ impl Voice {
         }
     }
 
-    /// Renders exactly one trigger of this voice — a self-contained mono
-    /// grain, `envelope().total_duration()` seconds long at `sample_rate`,
-    /// starting and ending at silence. Identical every time (no dependency
-    /// on *when* it is triggered), so [`super::synth::render`] renders it
-    /// once per voice and reuses it for every resolved hit.
     pub fn render_grain(&self, sample_rate: u32) -> Vec<f32> {
         let envelope = self.envelope();
         let sr = sample_rate as f32;

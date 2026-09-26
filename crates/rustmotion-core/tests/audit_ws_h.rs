@@ -1,10 +1,4 @@
-//! Regression tests for the workstream H (untrusted scenario ingestion)
-//! audit findings that live in `rustmotion-core`: RM-41, RM-42, RM-43.
-
 use rustmotion_core::engine::renderer::{extract_video_frame, http_agent};
-
-// ---- RM-41: no timeout on any HTTP call — a bare `ureq::get` always uses
-// the default, untimed agent, so a stalled host hangs a render forever ----
 
 #[test]
 fn shared_http_agent_has_finite_global_and_connect_timeouts() {
@@ -20,17 +14,8 @@ fn shared_http_agent_has_finite_global_and_connect_timeouts() {
     );
 }
 
-// ---- RM-42: a scenario's `video.src` reaches `ffmpeg -i` verbatim, with no
-// protocol allowlist — a remote-looking src turns into an SSRF primitive ----
-
 #[test]
 fn extract_video_frame_rejects_a_remote_src_before_it_ever_reaches_ffmpeg() {
-    // Asserting `is_err()` alone would also pass for the wrong reason: on a
-    // machine with no route to this address, ffmpeg itself fails to connect
-    // and returns a non-zero exit status. The fix under test is that the
-    // src is refused *before* any subprocess runs at all — so the assertion
-    // has to be on the specific rejection message, which only the fix
-    // produces; an ffmpeg spawn/exit failure would carry a different one.
     let err = extract_video_frame(
         "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         0.0,
@@ -56,10 +41,6 @@ fn extract_video_frame_does_not_reject_a_plain_local_path() {
     );
 }
 
-// ---- RM-43: `for-each` expansion has a depth ceiling but no node budget —
-// nesting is multiplicative, so a handful of small arrays nested a few
-// levels deep can declare a product in the millions ----
-
 #[test]
 fn for_each_node_budget_rejects_a_declared_product_that_exceeds_the_cap() {
     fn items(n: usize) -> serde_json::Value {
@@ -70,12 +51,6 @@ fn for_each_node_budget_rejects_a_declared_product_that_exceeds_the_cap() {
         )
     }
 
-    // Three levels of 200 elements nested directly in each other's
-    // `template.children`: a declared product of 200^3 = 8,000,000 nodes,
-    // comfortably past a low-millions cap. The array literals themselves
-    // (200 small JSON objects, three times) are cheap to build — the
-    // assertion is that expansion refuses the *product*, not that it
-    // finishes computing it.
     let mut doc = serde_json::json!({
         "video": { "width": 100, "height": 100 },
         "scenes": [{

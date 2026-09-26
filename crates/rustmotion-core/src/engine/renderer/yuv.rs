@@ -1,5 +1,3 @@
-/// Convert RGBA pixels to YUV420 (I420) for H.264 encoding.
-/// Uses integer BT.601 arithmetic and rayon parallelization for performance.
 pub fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     use rayon::prelude::*;
 
@@ -14,7 +12,6 @@ pub fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let (y_plane, uv_planes) = yuv.split_at_mut(y_size);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_size);
 
-    // Compute Y plane in parallel (one row per task)
     y_plane
         .par_chunks_mut(w)
         .enumerate()
@@ -29,7 +26,6 @@ pub fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
             }
         });
 
-    // Compute U and V planes in parallel (one row-pair per task)
     let uv_combined: Vec<(u8, u8)> = (0..uv_h)
         .into_par_iter()
         .flat_map(|uv_row| {

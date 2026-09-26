@@ -85,37 +85,30 @@ rustmotion_core::impl_traits!(Arrow {
 });
 
 impl Arrow {
-    /// Build the bezier path for this arrow (without arrowheads).
     fn build_path(&self) -> Path {
         let mut path = PathBuilder::new();
         path.move_to((self.x1, self.y1));
 
         if let (Some(cp1), Some(cp2)) = (&self.cp1, &self.cp2) {
-            // Cubic bezier
             path.cubic_to((cp1.x, cp1.y), (cp2.x, cp2.y), (self.x2, self.y2));
         } else if let Some(cp) = &self.cp {
-            // Quadratic bezier
             path.quad_to((cp.x, cp.y), (self.x2, self.y2));
         } else if let Some(curve) = self.curve {
-            // Auto-generate a quadratic control point based on curve intensity
             let mid_x = (self.x1 + self.x2) / 2.0;
             let mid_y = (self.y1 + self.y2) / 2.0;
             let dx = self.x2 - self.x1;
             let dy = self.y2 - self.y1;
             let len = (dx * dx + dy * dy).sqrt();
-            // Perpendicular offset
             let perp_x = -dy / len * curve * len * 0.3;
             let perp_y = dx / len * curve * len * 0.3;
             path.quad_to((mid_x + perp_x, mid_y + perp_y), (self.x2, self.y2));
         } else {
-            // Straight line
             path.line_to((self.x2, self.y2));
         }
 
         path.detach()
     }
 
-    /// Draw an arrowhead at the given position along the path.
     fn draw_arrowhead(
         canvas: &Canvas,
         path: &Path,
@@ -144,7 +137,7 @@ impl Arrow {
         };
 
         let angle = tangent.y.atan2(tangent.x);
-        let half_angle = std::f32::consts::PI / 6.0; // 30 degrees
+        let half_angle = std::f32::consts::PI / 6.0;
 
         let mut arrow_path = PathBuilder::new();
         arrow_path.move_to(pos);

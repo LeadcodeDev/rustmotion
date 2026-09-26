@@ -165,11 +165,6 @@ impl From<CountdownRaw> for Countdown {
     }
 }
 
-/// Total ink width `paint()`'s cursor walk produces: each visible group is
-/// two digit boxes plus one inner gap (`gap*0.3`), and every group after
-/// the first is preceded by a separator that consumes a full `gap`. Shared
-/// by `From<CountdownRaw>` (to size the box) and `paint()`'s own `total_w`
-/// so the two can never drift apart again.
 fn countdown_total_width(
     box_w: f32,
     gap: f32,
@@ -214,7 +209,6 @@ impl Countdown {
     ) {
         let (box_w, box_h) = self.digit_box_size();
 
-        // Background rounded rect
         let mut bg_paint = paint_from_hex(&self.digit_background);
         bg_paint.set_style(PaintStyle::Fill);
         bg_paint.set_anti_alias(true);
@@ -222,13 +216,12 @@ impl Countdown {
         let rrect = RRect::new_rect_xy(rect, self.border_radius, self.border_radius);
         canvas.draw_rrect(rrect, &bg_paint);
 
-        // Flip-clock horizontal line across the middle
         let (r, g, b, _) = parse_hex_color(&self.digit_background);
         let mut line_paint = skia_safe::Paint::default();
         line_paint.set_style(PaintStyle::Stroke);
         line_paint.set_stroke_width(1.0);
         line_paint.set_anti_alias(true);
-        line_paint.set_color(skia_safe::Color::from_argb(76, r, g, b)); // alpha ~0.3
+        line_paint.set_color(skia_safe::Color::from_argb(76, r, g, b));
         let mid_y = y + box_h / 2.0;
         canvas.draw_line(
             skia_safe::Point::new(x, mid_y),
@@ -236,7 +229,6 @@ impl Countdown {
             &line_paint,
         );
 
-        // Digit text centered in box
         let digit_str = digit.to_string();
         let mut text_paint = paint_from_hex(&self.digit_color);
         text_paint.set_anti_alias(true);
@@ -301,11 +293,6 @@ impl Countdown {
 
         let (box_w, _box_h) = self.digit_box_size();
 
-        // Safety net: `style.width`/`style.height` on this struct are
-        // already sized (see `From<CountdownRaw>`) to match this exact
-        // cursor walk, so this shouldn't ever clip in practice — it's a
-        // backstop against drift if the two formulas are ever edited
-        // separately again.
         canvas.save();
         if layout.width > 0.0 && layout.height > 0.0 {
             canvas.clip_rect(
@@ -395,16 +382,9 @@ mod tests {
 
     #[test]
     fn countdown_total_width_matches_paints_own_cursor_walk() {
-        // #127: box_builder.rs's width formula (`visible*2*box_w +
-        // (visible-1)*gap`) omits the small inner gap `paint()` inserts
-        // *within* each digit pair, so the box came out narrower than
-        // what actually got drawn (153×67 assigned vs. 187×68 painted).
-        // Recompute by hand here (independent of `countdown_total_width`
-        // itself) so this test would catch drift in either direction.
-        let box_w = 42.0_f32; // digit_size 56 * 0.75
+        let box_w = 42.0_f32;
         let gap = default_gap();
         let inner_gap = gap * 0.3;
-        // two visible groups (minutes, seconds): two pairs + one separator
         let by_hand = (box_w * 2.0 + inner_gap) * 2.0 + gap;
         let got = countdown_total_width(box_w, gap, false, true, true);
         assert!(
@@ -428,8 +408,6 @@ mod tests {
 
     #[test]
     fn no_visible_groups_is_zero_not_negative() {
-        // Defensive: `(visible - 1.0)` must not go negative and blow up
-        // `separators` when nothing is shown.
         assert_eq!(countdown_total_width(42.0, 12.0, false, false, false), 0.0);
     }
 }

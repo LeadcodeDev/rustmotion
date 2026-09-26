@@ -1,26 +1,6 @@
-//! Pure-Rust frame-buffer post-processing effects.
-//!
-//! All functions operate on a flat RGBA8888 byte slice (`w * h * 4` bytes, row-major).
-//! They are deterministic: same parameters and `frame_index` always yield the same
-//! output. Alpha is always preserved unchanged by every effect.
-//!
-//! # Performance notes
-//! - **grain / vignette / pixelate**: O(w·h), no allocation.
-//! - **progressive_blur**: O(w·h·max_radius). For a 1920×1080 frame with
-//!   `max_radius = 12`, this is roughly 25M iterations (two-pass separable box blur
-//!   with a variable window per row). Expect ~10–30ms on a modern core.  Use only
-//!   when encoding offline; avoid on the studio preview hot path if performance matters.
-
 use rustmotion_core::schema::scenario::{BlurDirection, PostEffect};
 use rustmotion_core::schema::time::{TimeCtx, TimePoint};
 
-/// Apply a sequence of post-processing effects in order to an RGBA frame buffer.
-///
-/// `buf` must be exactly `w * h * 4` bytes (RGBA8888, row-major).
-///
-/// `time` is the scene-local instant this buffer represents, in seconds. Only
-/// `Flash` reads it; every other effect is time-invariant and depends on
-/// `frame_index` alone.
 pub fn apply_post_effects(
     buf: &mut [u8],
     w: u32,
@@ -63,11 +43,6 @@ pub fn apply_post_effects(
     }
 }
 
-/// Blend a full-frame colour over the buffer, at full `intensity` on the
-/// flash's own instant and decaying linearly to nothing over `duration`.
-///
-/// Outside `[at, at + duration)` this is a no-op, so an effect list carrying
-/// several flashes costs one comparison each on every other frame.
 pub fn apply_flash(
     buf: &mut [u8],
     at: &TimePoint,
@@ -111,14 +86,6 @@ fn parse_hex_rgb(hex: &str) -> (u8, u8, u8) {
     (byte(0), byte(2), byte(4))
 }
 
-// ─── Grain ───────────────────────────────────────────────────────────────────
-
-/// Overlay film-grain noise on every pixel.
-///
-/// Uses a deterministic splitmix64-style hash keyed on `(seed_effective, x, y)`
-/// to produce a per-pixel offset in [−intensity·64, +intensity·64] added to R, G, B.
-/// When `animated = true`, `seed_effective = seed ^ frame_index` so successive frames
-/// show different noise patterns.
 pub fn apply_grain(
     buf: &mut [u8],
     w: u32,
@@ -142,18 +109,15 @@ pub fn apply_grain(
     for y in 0..h {
         for x in 0..w {
             let h_val = splitmix_hash(seed_eff, x as u64, y as u64);
-            // Map to [−amplitude, +amplitude]
             let offset = (h_val % (2 * amplitude as u64 + 1)) as i32 - amplitude;
             let base = ((y * w + x) * 4) as usize;
             buf[base] = (buf[base] as i32 + offset).clamp(0, 255) as u8;
             buf[base + 1] = (buf[base + 1] as i32 + offset).clamp(0, 255) as u8;
             buf[base + 2] = (buf[base + 2] as i32 + offset).clamp(0, 255) as u8;
-            // alpha [base + 3] untouched
         }
     }
 }
 
-/// Deterministic hash for grain: three-round splitmix64 over a compound key.
 #[inline(always)]
 fn splitmix_hash(seed: u64, x: u64, y: u64) -> u64 {
     let mut z = seed
@@ -164,13 +128,6 @@ fn splitmix_hash(seed: u64, x: u64, y: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-// ─── Vignette ────────────────────────────────────────────────────────────────
-
-/// Darken pixels towards the corners using a smooth radial falloff.
-///
-/// `radius` is the fraction of the half-diagonal at which darkening begins (default 0.75).
-/// The multiplier at each pixel is `1 - intensity × smoothstep(radius, 1.0, d)`,
-/// where `d` is the normalised distance from the image centre (0=centre, 1=corner).
 pub fn apply_vignette(buf: &mut [u8], w: u32, h: u32, intensity: f32, radius: f32) {
     let intensity = intensity.clamp(0.0, 1.0);
     if intensity == 0.0 {
@@ -179,7 +136,6 @@ pub fn apply_vignette(buf: &mut [u8], w: u32, h: u32, intensity: f32, radius: f3
     let radius = radius.clamp(0.0, 1.0);
     let cx = (w as f32 - 1.0) / 2.0;
     let cy = (h as f32 - 1.0) / 2.0;
-    // Half-diagonal (normalisation factor so distance = 1 at the corner)
     let diag = (cx * cx + cy * cy).sqrt();
 
     for y in 0..h {
@@ -192,24 +148,16 @@ pub fn apply_vignette(buf: &mut [u8], w: u32, h: u32, intensity: f32, radius: f3
             buf[base] = (buf[base] as f32 * factor) as u8;
             buf[base + 1] = (buf[base + 1] as f32 * factor) as u8;
             buf[base + 2] = (buf[base + 2] as f32 * factor) as u8;
-            // alpha untouched
         }
     }
 }
 
-/// Hermite-based smooth step between `edge0` and `edge1`.
 #[inline(always)]
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
-// ─── Pixelate ────────────────────────────────────────────────────────────────
-
-/// Reduce spatial resolution by averaging `size×size` blocks.
-///
-/// Partial blocks at the right/bottom edges are handled correctly.
-/// Alpha is averaged too for consistency (no special treatment).
 pub fn apply_pixelate(buf: &mut [u8], w: u32, h: u32, size: u32) {
     let size = size.clamp(1, 256);
     if size <= 1 {
@@ -226,7 +174,6 @@ pub fn apply_pixelate(buf: &mut [u8], w: u32, h: u32, size: u32) {
             let x1 = (x0 + size).min(w);
             let y1 = (y0 + size).min(h);
 
-            // Compute block average
             let mut sum = [0u32; 4];
             let mut count = 0u32;
             for py in y0..y1 {
@@ -246,7 +193,6 @@ pub fn apply_pixelate(buf: &mut [u8], w: u32, h: u32, size: u32) {
                 (sum[3] / count) as u8,
             ];
 
-            // Write average to every pixel in the block
             for py in y0..y1 {
                 for px in x0..x1 {
                     let base = ((py * w + px) * 4) as usize;
@@ -260,24 +206,6 @@ pub fn apply_pixelate(buf: &mut [u8], w: u32, h: u32, size: u32) {
     }
 }
 
-// ─── Progressive blur ────────────────────────────────────────────────────────
-
-/// Apply a separable box blur whose radius grows linearly from 0 at `start·h`
-/// to `max_radius` at the frame edge in the given `direction`.
-///
-/// # Algorithm
-/// Two-pass separable blur (horizontal then vertical). Each pass iterates every
-/// pixel and for each row computes the blur radius at that row's distance from the
-/// `start` boundary. The radius is 0 (no-op) above `start` and increases linearly
-/// to `max_radius` at the far edge.
-///
-/// # Cost
-/// O(w·h·max_radius) — two passes, each O(w·h) with an inner sliding-window of
-/// max size `2*max_radius+1`. For 1920×1080 with `max_radius=12` that is roughly
-/// 50M byte reads/writes per effect, taking ~15–40ms on a typical core.
-///
-/// # Rows untouched above `start`
-/// Any row where the computed radius rounds to 0 is copied verbatim (identity).
 pub fn apply_progressive_blur(
     buf: &mut [u8],
     w: u32,
@@ -292,8 +220,6 @@ pub fn apply_progressive_blur(
 
     let max_radius = max_radius.max(0.0);
 
-    // For each row, compute the blur radius based on distance from start boundary.
-    // Returns radius in pixels (0 means no blur for that row).
     let radius_for_row = |y: u32| -> u32 {
         let yf = y as f32;
         let hf = h as f32;
@@ -318,20 +244,17 @@ pub fn apply_progressive_blur(
         (frac * max_radius).round() as u32
     };
 
-    // Pass 1: horizontal box blur into a temporary buffer.
     let len = (w * h * 4) as usize;
     let mut tmp = vec![0u8; len];
 
     for y in 0..h {
         let r = radius_for_row(y);
         if r == 0 {
-            // Identity row — copy directly
             let row_start = (y * w * 4) as usize;
             let row_end = row_start + (w * 4) as usize;
             tmp[row_start..row_end].copy_from_slice(&buf[row_start..row_end]);
             continue;
         }
-        // Sliding window horizontal blur for this row
         for x in 0..w {
             let x0 = x.saturating_sub(r);
             let x1 = (x + r).min(w - 1);
@@ -352,11 +275,9 @@ pub fn apply_progressive_blur(
         }
     }
 
-    // Pass 2: vertical box blur from tmp back into buf.
     for y in 0..h {
         let r = radius_for_row(y);
         if r == 0 {
-            // Identity row
             let row_start = (y * w * 4) as usize;
             let row_end = row_start + (w * 4) as usize;
             buf[row_start..row_end].copy_from_slice(&tmp[row_start..row_end]);
@@ -383,16 +304,11 @@ pub fn apply_progressive_blur(
     }
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustmotion_core::schema::scenario::{BlurDirection, PostEffect};
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    /// Solid-colour 4×4 RGBA buffer (all pixels set to (r, g, b, 255)).
     fn solid(w: u32, h: u32, r: u8, g: u8, b: u8) -> Vec<u8> {
         let mut buf = vec![0u8; (w * h * 4) as usize];
         for i in 0..(w * h) as usize {
@@ -404,7 +320,6 @@ mod tests {
         buf
     }
 
-    /// Count distinct RGBA colours in a buffer.
     fn unique_colors(buf: &[u8]) -> usize {
         use std::collections::HashSet;
         let mut set = HashSet::new();
@@ -413,8 +328,6 @@ mod tests {
         }
         set.len()
     }
-
-    // ── Grain ────────────────────────────────────────────────────────────────
 
     #[test]
     fn grain_intensity_zero_is_identity() {
@@ -454,7 +367,6 @@ mod tests {
     #[test]
     fn grain_alpha_preserved() {
         let mut buf = solid(4, 4, 200, 200, 200);
-        // Set non-255 alpha to verify it is untouched
         for i in 0..16 {
             buf[i * 4 + 3] = 100;
         }
@@ -464,17 +376,13 @@ mod tests {
         }
     }
 
-    // ── Vignette ─────────────────────────────────────────────────────────────
-
     #[test]
     fn vignette_center_pixel_unchanged() {
-        // Use a large odd-dimension canvas so the centre pixel is exact.
         let w = 101u32;
         let h = 101u32;
         let mut buf = solid(w, h, 200, 200, 200);
         apply_vignette(&mut buf, w, h, 0.8, 0.5);
 
-        // Centre pixel: distance = 0 → smoothstep = 0 → factor = 1 → unchanged
         let cx = w / 2;
         let cy = h / 2;
         let base = ((cy * w + cx) * 4) as usize;
@@ -490,9 +398,7 @@ mod tests {
         let mut buf = solid(w, h, 200, 200, 200);
         apply_vignette(&mut buf, w, h, 0.8, 0.5);
 
-        // Top-left corner (0, 0)
         let corner_r = buf[0] as u16;
-        // Centre pixel
         let cx = w / 2;
         let cy = h / 2;
         let center_base = ((cy * w + cx) * 4) as usize;
@@ -516,8 +422,6 @@ mod tests {
         }
     }
 
-    // ── Pixelate ─────────────────────────────────────────────────────────────
-
     #[test]
     fn pixelate_size_one_is_identity() {
         let orig = solid(8, 8, 100, 150, 200);
@@ -528,7 +432,6 @@ mod tests {
 
     #[test]
     fn pixelate_reduces_unique_colors() {
-        // Checkerboard 1×1 pattern: alternating red/blue pixels
         let w = 8u32;
         let h = 8u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -558,7 +461,6 @@ mod tests {
 
     #[test]
     fn pixelate_uniform_block() {
-        // Solid red 8×8; after pixelate every block is still the same (red).
         let mut buf = solid(8, 8, 255, 0, 0);
         apply_pixelate(&mut buf, 8, 8, 4);
         for chunk in buf.chunks(4) {
@@ -568,11 +470,8 @@ mod tests {
         }
     }
 
-    // ── Progressive blur ─────────────────────────────────────────────────────
-
     #[test]
     fn progressive_blur_rows_above_start_untouched() {
-        // Checkerboard 1×1 pattern: each pixel alternates between two colors.
         let w = 8u32;
         let h = 8u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -592,10 +491,8 @@ mod tests {
             }
         }
         let orig = buf.clone();
-        // start=0.75: only the bottom 25% (rows 6..8) get blur.
         apply_progressive_blur(&mut buf, w, h, &BlurDirection::Bottom, 0.75, 8.0);
 
-        // Rows 0..5 (above start=0.75*8=6) must be pixel-exact.
         for y in 0..6u32 {
             for x in 0..w {
                 let base = ((y * w + x) * 4) as usize;
@@ -610,7 +507,6 @@ mod tests {
 
     #[test]
     fn progressive_blur_bottom_reduces_variance() {
-        // Checkerboard pattern; bottom half should have reduced color variance after blur.
         let w = 16u32;
         let h = 16u32;
         let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -624,7 +520,6 @@ mod tests {
                 buf[base + 3] = 255;
             }
         }
-        // Save original variance in bottom rows
         let variance_before: f64 = {
             let mut sum = 0u64;
             let mut sum_sq = 0u64;
@@ -667,8 +562,6 @@ mod tests {
         );
     }
 
-    // ── Effect ordering ───────────────────────────────────────────────────────
-
     #[test]
     fn grain_then_pixelate_differs_from_pixelate_then_grain() {
         let base_buf = solid(8, 8, 128, 100, 80);
@@ -709,8 +602,6 @@ mod tests {
 
         assert_ne!(a, b, "grain+pixelate must differ from pixelate+grain");
     }
-
-    // ── apply_post_effects no-op on empty slice ───────────────────────────────
 
     #[test]
     fn no_effects_is_identity() {

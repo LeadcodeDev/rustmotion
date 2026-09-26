@@ -164,11 +164,6 @@ pub struct Scenario {
     pub vars: crate::vars::VarSet,
 }
 
-/// The wire shape of [`Scenario`] — identical field-for-field, attribute-for-
-/// attribute — used only to give `Scenario` a `Deserialize` impl that runs
-/// [`Scenario::propagate_time_ctx`] before handing the value to its caller.
-/// Kept private: nothing outside this module should ever construct or see
-/// one directly.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioDe {
@@ -235,22 +230,6 @@ impl<'de> Deserialize<'de> for Scenario {
 }
 
 impl Scenario {
-    /// Stamps every scene reachable from this `Scenario` — its own
-    /// top-level `scenes`, and every view's `scenes` under `composition` —
-    /// with this scenario's own `bpm`/`beat_offset`/`timing`/`snap`, via
-    /// [`Scene::resolved_time_ctx`]/[`Scene::resolved_timing`]/
-    /// [`Scene::resolved_snap`], and (issue #329) with this scenario's own
-    /// `vars` via [`Scene::resolved_scenario_vars`] — same reasoning, same
-    /// mechanism, reused rather than duplicated. Runs once, inside
-    /// [`Scenario::deserialize`], so it applies uniformly whether the
-    /// scenario came from a file, a remote `include`, or an inline `--json`
-    /// string.
-    ///
-    /// An `include`d file is deserialized as its own `Scenario` (see
-    /// `include.rs`), so this only ever propagates a scenario's own
-    /// declared grid — and its own `vars` — to its own scenes: an included
-    /// file that wants beat-synced content must declare its own `bpm`, and
-    /// one that wants scenario-level variables must declare its own `vars`.
     fn propagate_time_ctx(&mut self) {
         let ctx = super::time::TimeCtx {
             bpm: self.bpm,
@@ -269,11 +248,6 @@ impl Scenario {
     }
 }
 
-/// Stamps every [`Scene`] in `entries` (skipping `Include` directives, which
-/// carry no `Scene` yet) with the given beat-grid context and scenario-level
-/// variables. Free function rather than a closure over `&mut self` so it can
-/// be called once for the top-level `scenes` and once per `composition` view
-/// without fighting the borrow checker over `self`.
 fn stamp_entries(
     entries: &mut [SceneEntry],
     ctx: super::time::TimeCtx,
@@ -393,15 +367,6 @@ pub struct View {
     #[serde(default)]
     pub transition: Option<Transition>,
     /// (world) Shared background: color string, animated entry, or array.
-    // Constat #5: `background`'s `deserialize_with` bypasses the normal
-    // derive, so schemars had nothing to infer a schema from — hence the
-    // `#[schemars(skip)]` this used to carry. But `View` is also
-    // `deny_unknown_fields` (-> `additionalProperties: false` in the
-    // exported schema), so skipping the property didn't just leave it
-    // undocumented: it made the exported schema declare invalid every view
-    // that actually sets `background`. `BackgroundValue` now has a real
-    // (manual) `JsonSchema` impl — see `background.rs` — so this can be a
-    // normal declared property again.
     #[serde(default, deserialize_with = "deserialize_background_value")]
     pub background: Option<BackgroundValue>,
     /// (world) Legacy shared animated backgrounds.
@@ -419,34 +384,20 @@ pub struct View {
     pub camera_pan_duration: f64,
 }
 
-/// A scenario with all includes expanded — safe to pass to the rendering pipeline.
-///
-/// Deliberately does **not** carry `bpm`/`beat_offset`/`timing`/`snap`
-/// itself (issue #336): `include.rs`, which builds this struct, is a file
-/// no single workstream owns in this wave, so those scenario-level values
-/// are threaded through per-[`Scene`] instead —
-/// [`Scene::resolved_time_ctx`], [`Scene::resolved_timing`],
-/// [`Scene::resolved_snap`] — populated once, for every scene reachable
-/// from a `Scenario` (including through `composition`), by
-/// `Scenario`'s own `Deserialize` impl. That happens before `include.rs`
-/// ever runs, so it needs no cooperation from that file.
 #[derive(Debug)]
 pub struct ResolvedScenario {
     pub video: VideoConfig,
     pub audio: Vec<AudioTrack>,
     pub fonts: Vec<FontEntry>,
     pub views: Vec<ResolvedView>,
-    /// Local file paths that were included during resolution (for watch mode).
     pub included_paths: Vec<std::path::PathBuf>,
 }
 
 impl ResolvedScenario {
-    /// Iterate over all scenes across all views (for prefetch, validation, etc.)
     pub fn all_scenes(&self) -> impl Iterator<Item = &Scene> {
         self.views.iter().flat_map(|v| v.scenes.iter())
     }
 
-    /// Collect all scenes into a flat Vec (for indexed access)
     #[allow(dead_code)]
     pub fn all_scenes_vec(&self) -> Vec<&Scene> {
         self.all_scenes().collect()
@@ -473,7 +424,7 @@ pub struct ResolvedView {
 /// (see its doc comment for why — M6, issue #110).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
-#[allow(clippy::large_enum_variant)] // untagged serde enum; boxing Scene would break all match arms
+#[allow(clippy::large_enum_variant)]
 pub enum SceneEntry {
     /// A regular scene defined inline.
     Scene(Scene),
@@ -481,28 +432,6 @@ pub enum SceneEntry {
     Include(IncludeDirective),
 }
 
-/// Deserializer for `Scenario.scenes` / `View.scenes`, used in place of
-/// `SceneEntry`'s derived `#[serde(untagged)]` deserialization (M6, issue
-/// #110 / #102).
-///
-/// `#[serde(untagged)]` deserializes by trying each variant in declaration
-/// order and keeping the first one that succeeds; when *all* variants fail
-/// (e.g. a scene missing its required `duration`, or a `transition.type`
-/// typo three levels down) serde discards every per-variant error and
-/// reports only `data did not match any variant of untagged enum
-/// SceneEntry` — no scene index, no field name. The wave-2 audit called
-/// this the worst diagnostic in the product.
-///
-/// The two variants are unambiguous by shape — `IncludeDirective`'s only
-/// required field is `include`; a `Scene` never has that key — so this
-/// classifies each entry explicitly instead of trying-and-discarding, then
-/// deserializes it as its concrete type and reports *that* type's real
-/// error, prefixed with the entry's index in the `scenes` array.
-///
-/// Note on precision: this still deserializes from an already-parsed
-/// [`serde_json::Value`] (as the untagged path did too), which has no
-/// source line/column to report — the fix here is naming the scene index
-/// and field, not a source position that doesn't exist at this layer.
 fn deserialize_scene_entries<'de, D>(deserializer: D) -> Result<Vec<SceneEntry>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -582,8 +511,6 @@ pub enum AudioValue {
     Config(Box<AudioConfig>),
 }
 
-/// Not derivable: `#[derive(Default)]`'s `#[default]` attribute only
-/// accepts a unit variant, and [`AudioValue::Tracks`] carries a `Vec`.
 impl Default for AudioValue {
     fn default() -> Self {
         AudioValue::Tracks(Vec::new())
@@ -591,12 +518,6 @@ impl Default for AudioValue {
 }
 
 impl AudioValue {
-    /// The file-based tracks this value carries — all of them for
-    /// [`AudioValue::Tracks`], just the `tracks` field for
-    /// [`AudioValue::Config`]. What `include::resolve_includes` (outside
-    /// this workstream's owned files) merges across `include`d scenarios;
-    /// the object form's `voices`/`score`/`master` are deliberately not
-    /// part of that merge — see [`AudioValue::config`]'s doc.
     pub fn tracks(&self) -> &[AudioTrack] {
         match self {
             AudioValue::Tracks(tracks) => tracks,
@@ -611,14 +532,6 @@ impl AudioValue {
         }
     }
 
-    /// The object form's full config, when `audio` is one — `None` for the
-    /// legacy array form. A synthesised score only ever comes from the
-    /// *root* scenario's own `audio`: `include.rs` merges `tracks()` across
-    /// `include`d files (same as before this issue), but has no equivalent
-    /// merge for a score, the same boundary `Scenario::bpm`/`beat_offset`
-    /// already draw (see `Scenario::propagate_time_ctx`'s doc) — an
-    /// included file that wants its own synthesised audio would need its
-    /// own render pass, out of scope here.
     pub fn config(&self) -> Option<&AudioConfig> {
         match self {
             AudioValue::Tracks(_) => None,
@@ -657,18 +570,10 @@ pub struct AudioConfig {
 }
 
 impl AudioConfig {
-    /// Whether this config declares anything to synthesise — `false` for a
-    /// value that only uses the object form to carry `tracks` (e.g. to set
-    /// `bpm` alongside a purely file-based scenario, before `voices`/
-    /// `score` are ever added).
     pub fn has_synth(&self) -> bool {
         !self.voices.is_empty() || !self.score.is_empty()
     }
 
-    /// Packages `voices`/`score`/`master` into a [`crate::audio::Score`]
-    /// for [`crate::audio::synth::render`]. Does not resolve `bpm`/
-    /// `beat_offset` — see this struct's doc for why that fallback lives
-    /// with the caller instead.
     pub fn as_score(&self) -> crate::audio::Score {
         crate::audio::Score {
             voices: self.voices.clone(),
@@ -736,10 +641,6 @@ pub struct WorldPosition {
 pub struct Scene {
     pub duration: f64,
     /// Unified background: color string, animated entry (with optional $ref), or array.
-    // Constat #5: see the identical note on `View::background` — same
-    // `#[schemars(skip)]` + `deny_unknown_fields` combination made the
-    // exported schema declare invalid every `examples/*.json` scene that
-    // sets `background` (which is most of them).
     #[serde(default, deserialize_with = "deserialize_background_value")]
     pub background: Option<BackgroundValue>,
     #[serde(default)]
@@ -875,9 +776,6 @@ pub enum SceneStart {
     At(TimePoint),
 }
 
-/// The wire shape of [`SceneStart`] — see that type's doc for why this
-/// exists instead of a derive. Kept private: nothing outside this module
-/// should ever see one directly.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SceneStartDe {
@@ -969,14 +867,6 @@ pub struct CameraOrigin {
     pub y: f32,
 }
 
-/// Every camera property `interpolate_camera_property`
-/// (`crates/rustmotion/src/engine/render/scene.rs`, owned by the sibling
-/// GEO workstream this wave — read-only here) actually looks up via
-/// `camera.keyframes.iter().find(|k| k.property == property)`. Constat #4:
-/// a `CameraKeyframe.property` outside this fixed set (or the dotted
-/// `origin.x`/`origin.y` convention misspelled as `origin_x`/`originX`)
-/// never matches that lookup — the keyframe track is silently ignored and
-/// the camera just uses its static value for that property, with no error.
 const KNOWN_CAMERA_PROPERTIES: &[&str] = &["x", "y", "zoom", "rotation", "origin.x", "origin.y"];
 
 fn validate_camera_property<E: serde::de::Error>(value: &str) -> Result<(), E> {
@@ -1317,8 +1207,6 @@ pub enum VideoCodec {
     Prores,
 }
 
-// --- Default functions ---
-
 fn default_version() -> String {
     "1.0".to_string()
 }
@@ -1403,12 +1291,6 @@ mod annotation_tests {
     }
 }
 
-/// M6 (issue #110 / #102): `SceneEntry` used to be a bare `#[serde(untagged)]`
-/// enum, so a bad `scenes[]` entry collapsed to "data did not match any
-/// variant of untagged enum SceneEntry" — no scene index, no field name.
-/// `deserialize_scene_entries` replaces the auto-try-each-variant behaviour
-/// with an explicit classify-then-deserialize pass that keeps the real
-/// per-scene error and prefixes it with the entry's index.
 #[cfg(test)]
 mod scene_entry_error_tests {
     use super::*;
@@ -1481,8 +1363,6 @@ mod scene_entry_error_tests {
 
     #[test]
     fn broken_include_directive_names_itself() {
-        // `scenes` on IncludeDirective must be an array of indices — a typo'd
-        // shape should not silently be mistaken for a Scene.
         let json = r#"{
             "video": { "width": 100, "height": 100 },
             "scenes": [
@@ -1514,12 +1394,6 @@ mod scene_entry_error_tests {
     }
 }
 
-/// M5 (issue #110 / #102): the unknown-attribute checker only ever inspected
-/// the top level of each *component*; a typo in `Scenario`/`Scene`/`View`/
-/// `VideoConfig`/`SceneLayout`/`Transition`/`Camera` (e.g. `durration` on a
-/// scene, `framerate` on `video`) passed silently because nothing checked
-/// those structs at all. `deny_unknown_fields` closes that gap directly at
-/// parse time, for every one of them.
 #[cfg(test)]
 mod strict_schema_tests {
     use super::*;
@@ -1595,9 +1469,6 @@ mod strict_schema_tests {
 
     #[test]
     fn valid_scenario_with_every_covered_struct_still_parses() {
-        // Regression guard: deny_unknown_fields must not reject any
-        // currently-valid field across Scenario/Scene/View/VideoConfig/
-        // SceneLayout/Transition/Camera.
         let json = r##"{
             "version": "1.0",
             "video": { "width": 100, "height": 100, "fps": 30, "background": "#000000" },
@@ -1614,16 +1485,6 @@ mod strict_schema_tests {
     }
 }
 
-/// Constat #4 (camera half): `CameraKeyframe.property` is consumed by
-/// `interpolate_camera_property` in `crates/rustmotion/src/engine/render/
-/// scene.rs` (read-only for this workstream — owned by the sibling GEO
-/// workstream this wave), which looks up
-/// `camera.keyframes.iter().find(|k| k.property == property)` for each of a
-/// *fixed* set of six properties (`"x"`, `"y"`, `"zoom"`, `"rotation"`,
-/// `"origin.x"`, `"origin.y"`). A misspelled or wrongly-cased
-/// `CameraKeyframe.property` simply never matches that lookup — the track
-/// silently falls back to the camera's static value and never animates,
-/// with no error anywhere.
 #[cfg(test)]
 mod camera_keyframe_property_tests {
     use super::*;
@@ -1651,11 +1512,6 @@ mod camera_keyframe_property_tests {
 
     #[test]
     fn misspelled_origin_property_is_a_named_error() {
-        // The documented dotted-compound-property convention
-        // (`origin.x`/`origin.y`) is easy to get wrong (`originX`,
-        // `origin_x`) — before this fix, any of those silently never
-        // animated the camera origin, with the keyframes block accepted
-        // and simply ignored.
         let json = r#"{ "property": "origin_x", "values": [ { "time": 0.0, "value": 1.0 } ] }"#;
         let err = serde_json::from_str::<CameraKeyframe>(json)
             .expect_err("origin_x must be rejected — the real property is origin.x");
@@ -1668,11 +1524,6 @@ mod camera_keyframe_property_tests {
     }
 }
 
-/// Issue #336 follow-up: an unresolvable `Scene.at` must be a hard,
-/// located error, not a silent fallback — grammar at deserialize time,
-/// `unresolved_beat_unit` (needs `bpm`) at `rustmotion validate`'s schema
-/// pass (`crates/rustmotion/src/cli/commands/validate_schema.rs`, not
-/// exercised from this crate).
 #[cfg(test)]
 mod scene_at_grammar_tests {
     use super::*;
@@ -1704,8 +1555,6 @@ mod scene_at_grammar_tests {
 
     #[test]
     fn grammatically_valid_beat_unit_deserializes_even_with_no_bpm() {
-        // Resolving "@8b" needs `bpm`; the grammar alone does not, and
-        // resolution is a separate, later step (validate's schema pass).
         let json = scenario_with_at(r#""@8b""#);
         let scenario: Scenario =
             serde_json::from_str(&json).expect("grammar-valid `at` must deserialize");
@@ -1733,7 +1582,6 @@ mod scene_at_grammar_tests {
     }
 }
 
-/// Issue #330: `Scene.shake` and `PostEffect::Flash`.
 #[cfg(test)]
 mod scene_shake_and_flash_tests {
     use super::*;
@@ -1774,9 +1622,6 @@ mod scene_shake_and_flash_tests {
 
     #[test]
     fn scene_shake_and_camera_coexist_on_the_same_scene() {
-        // Additive over `camera` (issue #330's own requirement): a scene
-        // must be able to declare both without either being rejected or
-        // silently dropping the other.
         let json = r#"{
             "duration": 2.0,
             "children": [],

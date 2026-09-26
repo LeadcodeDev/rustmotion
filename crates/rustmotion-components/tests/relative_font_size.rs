@@ -1,14 +1,3 @@
-//! Reproduction + regression test for relative `font-size` units (`rem`/
-//! `vw`/`vh`) resolving to 0px silently (Lot B, wave S).
-//!
-//! Routes a `text` component through the real pipeline (box_builder →
-//! run_layout → paint_tree) so both the intrinsic measurement (the box taffy
-//! reserves) and the painter (what actually gets drawn) are exercised
-//! together — the geometry validator's overflow checks depend on the two
-//! agreeing, so a fix that only touches one side is not a real fix (see
-//! `crates/rustmotion-components/tests/caption_presets.rs` for the same
-//! pipeline pattern).
-
 use rustmotion_components::box_builder::{build_scene_with_anim, BuildAnimationCtx};
 use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
 use rustmotion_components::{ChildComponent, Component, PositionMode};
@@ -83,11 +72,6 @@ fn lit_pixels(buf: &[u8]) -> usize {
 
 #[test]
 fn text_with_rem_font_size_paints_visible_pixels() {
-    // Reproduction: `rustmotion validate` on this exact style passes (exit
-    // 0, "Valid scenario") with only warnings — `2rem` silently resolves to
-    // 0px, so `TextIntrinsic` measures a 0-height box, `paint_pass`'s
-    // `height <= 0.0` guard skips painting the node entirely, and the
-    // rendered frame has no text at all.
     let json = serde_json::json!({
         "type": "text",
         "content": "HELLO",
@@ -105,13 +89,9 @@ fn text_with_rem_font_size_paints_visible_pixels() {
 
 #[test]
 fn text_with_vh_font_size_paints_visible_pixels() {
-    // `vh` needs the real viewport (video_height), not just the root
-    // font-size — a separate resolution path from `rem` inside
-    // `LengthContext::resolve`.
     let json = serde_json::json!({
         "type": "text",
         "content": "HELLO",
-        // 10vh of a 300px-tall frame = 30px.
         "style": { "font-size": "10vh", "color": "#FFFFFF" }
     });
     let buf = render(json);

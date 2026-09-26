@@ -234,7 +234,6 @@ fn default_hero_scale() -> f32 {
     1.0
 }
 
-/// Typed background preset with its config.
 #[derive(Debug, Clone)]
 pub enum BackgroundPreset {
     GradientShift(GradientShiftConfig),
@@ -260,17 +259,12 @@ impl BackgroundPreset {
     }
 }
 
-/// Animated background configuration for scenes.
 #[derive(Debug, Clone)]
 pub struct AnimatedBackground {
     pub preset: BackgroundPreset,
-    /// Horizontal offset (pixels).
     pub x: f32,
-    /// Vertical offset (pixels).
     pub y: f32,
-    /// Animation speed (px/sec for tiled presets, deg/sec for gradient_shift).
     pub speed: f32,
-    /// Scroll direction.
     pub direction: Option<ScrollDirection>,
 }
 
@@ -279,7 +273,6 @@ impl Serialize for AnimatedBackground {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("preset", self.preset.name())?;
-        // Serialize preset-specific config under its name key
         match &self.preset {
             BackgroundPreset::GradientShift(cfg) => map.serialize_entry("gradient_shift", cfg)?,
             BackgroundPreset::GridDots(cfg) => map.serialize_entry("grid_dots", cfg)?,
@@ -305,10 +298,6 @@ impl Serialize for AnimatedBackground {
     }
 }
 
-/// Every preset name the engine actually recognises. A `preset` value
-/// outside this list — including the empty string produced when the key is
-/// missing entirely — is rejected below instead of silently becoming
-/// `gradient_shift` (constat #3, sink 1).
 const KNOWN_BACKGROUND_PRESETS: &[&str] = &[
     "gradient_shift",
     "grid_dots",
@@ -324,12 +313,8 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
         let map: serde_json::Map<String, serde_json::Value> =
             serde_json::Map::deserialize(deserializer)?;
 
-        // Common fields
         let x = map.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let y = map.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        // Constat #3 (related sink, fixed alongside): a mistyped `direction`
-        // used to be swallowed by `.ok()` into a silent `None` — same class
-        // as the preset/zones/colors sinks below, just on a smaller field.
         let direction: Option<ScrollDirection> = match map.get("direction") {
             Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
                 serde::de::Error::custom(format!("animated-background.direction: {e}"))
@@ -345,17 +330,14 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             )));
         }
 
-        // Detect new vs legacy format: new format has a sub-object keyed by preset name
         let is_new_format = map.get(preset_str).is_some_and(|v| v.is_object());
 
         let (preset, speed) = if is_new_format {
-            // New format: config in sub-object
             let sub = map.get(preset_str).unwrap().clone();
             let speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             let preset = deserialize_preset_config::<D::Error>(preset_str, sub)?;
             (preset, speed)
         } else {
-            // Legacy flat format
             let legacy_speed = map.get("speed").and_then(|v| v.as_f64()).unwrap_or(30.0) as f32;
             let preset = match preset_str {
                 "grid_dots" => {
@@ -401,14 +383,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
                     })
                 }
                 "halo" => {
-                    // Constat #3, sink 2: was `.ok().unwrap_or_default()` —
-                    // a malformed (or entirely missing) `zones` silently
-                    // became an empty halo instead of erroring. Route
-                    // through the same validated-struct path as the
-                    // new-format branch: `HaloConfig::zones` is required
-                    // (no `#[serde(default)]`), so a missing/malformed value
-                    // now produces a real "missing/invalid field zones"
-                    // error instead.
                     let mut obj = serde_json::Map::new();
                     if let Some(z) = map.get("zones") {
                         obj.insert("zones".to_string(), z.clone());
@@ -420,12 +394,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
                     BackgroundPreset::Halo(cfg)
                 }
                 "heropattern" => {
-                    // Constat #3 (related sink, fixed alongside): the legacy
-                    // branch never had an arm for `heropattern` at all, so a
-                    // *correctly spelled* `"preset": "heropattern"` written
-                    // in the legacy flat form (no `heropattern: {...}`
-                    // sub-object) fell through the old `_ =>` wildcard and
-                    // silently became `gradient_shift` with `colors: []`.
                     let mut obj = serde_json::Map::new();
                     for key in ["pattern", "color", "opacity", "scale"] {
                         if let Some(v) = map.get(key) {
@@ -441,13 +409,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
                     BackgroundPreset::Heropattern(cfg)
                 }
                 "gradient_shift" => {
-                    // Constat #3, sink 3: `colors`/`gradient_type` were each
-                    // parsed with `.ok().unwrap_or_default()` /
-                    // `.ok().unwrap_or_else(default_bg_type)` — so even with
-                    // `preset` spelled *correctly*, a missing or malformed
-                    // `colors` silently produced `colors: []`, i.e. a fully
-                    // empty gradient that paints black with no diagnostic at
-                    // all — the exact worst-case symptom the audit names.
                     let mut obj = serde_json::Map::new();
                     if let Some(c) = map.get("colors") {
                         obj.insert("colors".to_string(), c.clone());
@@ -463,8 +424,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
                         })?;
                     BackgroundPreset::GradientShift(cfg)
                 }
-                // Unreachable: `preset_str` was already checked against
-                // `KNOWN_BACKGROUND_PRESETS` above.
                 other => {
                     return Err(serde::de::Error::custom(format!(
                         "internal error: unhandled animated-background preset '{other}'"
@@ -474,7 +433,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
             (preset, legacy_speed)
         };
 
-        // Infer legacy direction if not specified
         let direction = direction.or({
             if speed > 0.0 && !is_new_format {
                 match &preset {
@@ -497,10 +455,6 @@ impl<'de> Deserialize<'de> for AnimatedBackground {
     }
 }
 
-/// Deserialize the preset-specific config object for the "new" nested
-/// format (`{"preset": "halo", "halo": {...}}`) — shared by
-/// `AnimatedBackground::deserialize` and available for reuse. `preset_str`
-/// must already be one of [`KNOWN_BACKGROUND_PRESETS`].
 fn deserialize_preset_config<E: serde::de::Error>(
     preset_str: &str,
     sub: serde_json::Value,
@@ -625,7 +579,6 @@ pub struct BackgroundTransition {
     pub easing: EasingType,
 }
 
-/// A background entry with optional template reference and transition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundEntry {
     #[serde(rename = "$ref", default)]
@@ -636,18 +589,6 @@ pub struct BackgroundEntry {
     pub overrides: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Constat #5: no derived `JsonSchema` here (the `#[serde(flatten)]` map
-/// makes a fully-accurate derive impossible anyway — the point of `flatten`
-/// is "any other keys"), which is exactly why `Scene`/`View` reached for
-/// `#[schemars(skip)]` on `background` in the first place: skip was the
-/// only option with no `JsonSchema` impl to call. But `Scene`/`View` are
-/// also `deny_unknown_fields` (schemars emits `additionalProperties: false`
-/// for that), so skipping `background` didn't just leave it undocumented —
-/// it made the *exported schema* declare invalid any scenario that actually
-/// sets `scene.background` / `view.background`, which is most of them. This
-/// manual impl describes the real accepted shape (`$ref` + `transition` +
-/// "anything else", matching the `flatten`) so `background` can be a real
-/// declared property instead.
 impl JsonSchema for BackgroundEntry {
     fn schema_name() -> String {
         "BackgroundEntry".to_string()
@@ -667,9 +608,6 @@ impl JsonSchema for BackgroundEntry {
             instance_type: Some(InstanceType::Object.into()),
             object: Some(Box::new(ObjectValidation {
                 properties: props,
-                // Mirrors `#[serde(flatten)] overrides: serde_json::Map<..>`:
-                // any other key (the preset config, `x`/`y`/`speed`/...) is
-                // genuinely accepted, not a schema gap to close.
                 additional_properties: Some(Box::new(Schema::Bool(true))),
                 ..Default::default()
             })),
@@ -679,7 +617,6 @@ impl JsonSchema for BackgroundEntry {
     }
 }
 
-/// The unified background field: color string, single entry, or multiple entries.
 #[derive(Debug, Clone)]
 pub enum BackgroundValue {
     Color(String),
@@ -700,9 +637,6 @@ impl Serialize for BackgroundValue {
     }
 }
 
-/// See [`BackgroundEntry`]'s `JsonSchema` impl doc comment — same reason:
-/// `deserialize_background_value` is a hand-written `deserialize_with`, not
-/// a derive, so there is no schema for schemars to infer without this.
 impl JsonSchema for BackgroundValue {
     fn schema_name() -> String {
         "BackgroundValue".to_string()
@@ -734,12 +668,10 @@ impl JsonSchema for BackgroundValue {
     }
 }
 
-/// Resolved background after template expansion — ready for rendering.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResolvedBackground {
     pub color: Option<String>,
     pub animated: Vec<AnimatedBackground>,
-    /// Transition for interpolation from the previous scene's background.
     pub transition: Option<BackgroundTransition>,
 }
 
@@ -772,7 +704,6 @@ fn default_bg_type() -> GradientType {
     GradientType::Linear
 }
 
-/// Deserialize `animated-background` as either a single AnimatedBackground or a Vec.
 pub(crate) fn deserialize_animated_backgrounds<'de, D>(
     deserializer: D,
 ) -> Result<Vec<AnimatedBackground>, D::Error>
@@ -809,7 +740,6 @@ where
     deserializer.deserialize_any(OneOrMany)
 }
 
-/// Deserialize `background` as a color string, a single BackgroundEntry object, or an array.
 pub(crate) fn deserialize_background_value<'de, D>(
     deserializer: D,
 ) -> Result<Option<BackgroundValue>, D::Error>
@@ -907,9 +837,6 @@ mod halo_zone_opacity_tests {
             opacity: 0.6,
         };
         let v = serde_json::to_value(&zone).unwrap();
-        // Compare as f64 with a tolerance: 0.6f32 widened to f64 is
-        // 0.6000000238418579, not exactly 0.6 — an f32 precision artifact,
-        // not a bug in the field itself.
         let got = v["opacity"]
             .as_f64()
             .expect("opacity must serialize as a number");
@@ -918,7 +845,6 @@ mod halo_zone_opacity_tests {
 
     #[test]
     fn animated_background_new_format_halo_zone_defaults_opacity() {
-        // New nested format: {"preset":"halo","halo":{"zones":[...]}}
         let bg: AnimatedBackground = serde_json::from_value(serde_json::json!({
             "preset": "halo",
             "halo": { "zones": [{ "color": "#1E3A8A55", "x": 0.5, "y": 0.5, "radius": 0.4 }] },
@@ -929,7 +855,6 @@ mod halo_zone_opacity_tests {
             BackgroundPreset::Halo(cfg) => {
                 assert_eq!(cfg.zones.len(), 1);
                 assert_eq!(cfg.zones[0].opacity, 1.0);
-                // Alpha-in-hex is untouched by the schema layer — it stays in `color`.
                 assert_eq!(cfg.zones[0].color, "#1E3A8A55");
             }
             _ => panic!("expected Halo preset"),
@@ -938,7 +863,6 @@ mod halo_zone_opacity_tests {
 
     #[test]
     fn animated_background_legacy_flat_format_halo_zone_defaults_opacity() {
-        // Legacy flat format: {"preset":"halo","zones":[...]} with no sub-object.
         let bg: AnimatedBackground = serde_json::from_value(serde_json::json!({
             "preset": "halo",
             "zones": [{ "color": "#1E3A8A55", "x": 0.5, "y": 0.5, "radius": 0.4 }]
@@ -953,20 +877,6 @@ mod halo_zone_opacity_tests {
     }
 }
 
-/// Constat #3: `AnimatedBackground::deserialize` had (at least) three silent
-/// sinks — an unknown `preset` name silently became `gradient_shift` with
-/// `colors: []`; a malformed/mistyped `zones` array in the legacy `halo`
-/// form silently emptied via `.ok().unwrap_or_default()`; and a
-/// malformed/missing `colors` (or `gradient_type`) on the legacy
-/// `gradient_shift` form did the exact same `.ok().unwrap_or_default()`
-/// silent-empty even when `preset` was spelled *correctly* — which is the
-/// worst-case symptom named in the audit: an entirely black video with zero
-/// diagnostics, because an empty-colors gradient paints black. Also found
-/// (and fixed alongside, same root cause: the legacy branch's `_ =>`
-/// wildcard): a *correctly spelled* `"heropattern"` preset written in the
-/// legacy flat form (no `heropattern: {...}` sub-object) silently fell
-/// through to `gradient_shift` too, because the legacy match only had
-/// explicit arms for `grid_dots`/`concentric_circles`/`halo`.
 #[cfg(test)]
 mod animated_background_silent_sink_tests {
     use super::*;
@@ -1049,10 +959,6 @@ mod animated_background_silent_sink_tests {
 
     #[test]
     fn legacy_gradient_shift_missing_colors_is_a_named_error_not_a_silent_black_gradient() {
-        // This is the exact worst-case symptom the audit names: preset is
-        // spelled *correctly*, but colors is missing/malformed -> silently
-        // empty colors -> a fully transparent gradient that paints black,
-        // with no diagnostic at all.
         let err = serde_json::from_value::<AnimatedBackground>(json!({
             "preset": "gradient_shift",
             "speed": 5

@@ -4,17 +4,6 @@ use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
 
-/// A scratch path in the same directory as `output`, carrying the same
-/// extension so extension-sniffing encoders (the `image::save` fallback arm)
-/// still resolve the codec they would have resolved for `output` itself.
-///
-/// Constat #8: `File::create(output)` used to run *before* the encoder that
-/// could fail (JPEG always failed on the RGBA buffer), so every failure left
-/// a 0-byte file sitting at `output` — indistinguishable from a real, empty
-/// render to a downstream script. Encoding into this scratch path first and
-/// renaming onto `output` only on success means a failure never touches
-/// `output` at all: an old file there is left untouched, and no new
-/// truncated file appears.
 fn temp_sibling_path(output: &Path) -> PathBuf {
     let ext = output.extension().and_then(|e| e.to_str());
     let stem = output
@@ -28,10 +17,6 @@ fn temp_sibling_path(output: &Path) -> PathBuf {
     output.with_file_name(name)
 }
 
-/// Flatten RGBA onto an opaque background for encoders that cannot
-/// represent alpha (JPEG). Compositing onto `video.background` — the color
-/// the frame actually renders against — rather than dropping the alpha
-/// channel outright (which would implicitly composite onto black).
 fn flatten_to_rgb(img: &image::RgbaImage, bg: (u8, u8, u8)) -> Vec<u8> {
     let (bg_r, bg_g, bg_b) = bg;
     let mut rgb = Vec::with_capacity(img.as_raw().len() / 4 * 3);
@@ -54,7 +39,6 @@ pub fn cmd_still(
     format: Option<String>,
     quality: u8,
 ) -> Result<()> {
-    // Load custom fonts if defined
     if !scenario.fonts.is_empty() {
         engine::renderer::load_custom_fonts(&scenario.fonts);
     }
@@ -62,23 +46,12 @@ pub fn cmd_still(
     let config = &scenario.video;
     let fps = config.fps;
 
-    // Constat #4: pick the frame the same way the encoder does. Summing
-    // scene durations linearly (the previous approach) ignores that
-    // `build_frame_tasks` truncates the entering scene's tail to make room
-    // for a transition's overlap — so `--time` landed on a frame that never
-    // appears, composited or otherwise, in the rendered video. Reusing
-    // `build_frame_tasks` + `render_frame_task_scaled` also picks up
-    // `apply_post_effects` (vignette, grain, ...) for free, which the old
-    // per-scene walk never applied at all.
     let tasks = encode::build_frame_tasks(&scenario);
     let total = tasks.len() as u32;
     if total == 0 {
         return Err(RustmotionError::NoFrames);
     }
 
-    // Preserve the previous command's tolerant behavior: negative time
-    // clamps to frame 0, time beyond the video's duration clamps to the
-    // last frame, instead of erroring.
     let raw_index = (time.max(0.0) * fps as f64).round();
     let frame_index = if raw_index.is_finite() {
         (raw_index as i64).clamp(0, total as i64 - 1) as u32
@@ -89,7 +62,6 @@ pub fn cmd_still(
     let task = &tasks[frame_index as usize];
     let rgba = encode::render_frame_task_scaled(config, &scenario, task, 1.0)?;
 
-    // Create parent directories
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -172,14 +144,6 @@ mod tests {
         load_scenario_from_source(None, Some(&json)).expect("load")
     }
 
-    /// `name` (e.g. "still.jpg") must stay the *last* path component so its
-    /// extension survives — putting the uniqueness suffix after it (as an
-    /// earlier version of this helper did) turned "still.jpg" into
-    /// "still.jpg_1234_5678", whose "extension" per `Path::extension()`
-    /// becomes "jpg_1234_5678": unrecognized by every format-sniffing
-    /// encoder, so every test using it failed on a spurious
-    /// `Unsupported(PathExtension(..))` instead of exercising the code
-    /// under test at all.
     fn scratch_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "rm_still_test_{}_{}_{}",
@@ -192,8 +156,6 @@ mod tests {
         ))
     }
 
-    /// Constat #8: JPEG stills used to fail unconditionally (the `image`
-    /// crate's JPEG encoder rejects `Rgba8`) and leave a 0-byte file behind.
     #[test]
     fn still_jpeg_encodes_successfully_and_writes_a_nonempty_valid_file() {
         let scenario = minimal_scenario(16, 16, 10, 1.0);
@@ -211,8 +173,6 @@ mod tests {
         let _ = std::fs::remove_file(&out);
     }
 
-    /// Constat #8 (aggravation noted by the verification pass): `--format
-    /// jpeg` must succeed regardless of the output path's own extension.
     #[test]
     fn still_format_flag_forces_jpeg_even_with_a_png_extension() {
         let scenario = minimal_scenario(16, 16, 10, 1.0);
@@ -228,12 +188,6 @@ mod tests {
         let _ = std::fs::remove_file(&out);
     }
 
-    /// `temp_sibling_path` is the mechanism constat #8's "never leave a
-    /// truncated file" fix relies on: encode into a scratch path first,
-    /// rename onto `output` only on success. Lock in its naming contract —
-    /// distinct from `output`, same directory (so the later rename is a
-    /// same-filesystem, near-atomic op), extension preserved so
-    /// extension-sniffing encoders still resolve the right codec.
     #[test]
     fn temp_sibling_path_is_distinct_same_directory_and_keeps_the_extension() {
         let output = PathBuf::from("/some/dir/still.jpg");
@@ -255,13 +209,6 @@ mod tests {
         );
     }
 
-    /// Constat #4: `still --time` must match the frame the encoder actually
-    /// emits at that timestamp, not a linear per-scene walk that ignores
-    /// transition overlap. Scene A (2s) + scene B (2s, incoming 1s fade):
-    /// the rendered stream truncates scene A's tail by 1s, so `--time 2.5`
-    /// must resolve to the composited transition frame at global index
-    /// round(2.5 * fps), the same index `build_frame_tasks` would hand the
-    /// encoder — not scene B's raw, uncomposited frame at local time 0.5s.
     #[test]
     fn still_time_matches_the_encoders_frame_stream_across_a_transition() {
         let fps = 30u32;
@@ -280,8 +227,6 @@ mod tests {
             ]
         }}"##
         );
-        // `ResolvedScenario` isn't `Clone`, and `cmd_still` takes it by
-        // value — load it twice from the same JSON instead.
         let scenario = load_scenario_from_source(None, Some(&json)).expect("load");
         let scenario_for_expected = load_scenario_from_source(None, Some(&json)).expect("load");
 

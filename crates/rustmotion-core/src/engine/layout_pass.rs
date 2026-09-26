@@ -1,5 +1,3 @@
-//! Layout pass — runs taffy on the BoxTree to produce per-node geometry.
-
 use std::collections::HashMap;
 
 use taffy::prelude as tf;
@@ -9,7 +7,6 @@ use crate::css::taffy_bridge::{content_box_inset, to_taffy_style, ConversionCont
 use crate::css::units::LengthContext;
 use crate::engine::box_tree::{BoxNode, IntrinsicMeasure, NodeId};
 
-/// Resolved geometry for a single node, in absolute viewport coordinates.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BoxLayout {
     pub x: f32,
@@ -29,24 +26,18 @@ pub struct Insets {
 }
 
 impl BoxLayout {
-    /// Horizontal centre of the border box, in absolute viewport
-    /// coordinates. One of the geometry properties a `node("id", "cx")`
-    /// expression reads post-`layout_pass` (issue #328).
     pub fn cx(&self) -> f32 {
         self.x + self.width / 2.0
     }
 
-    /// Vertical centre of the border box. See [`Self::cx`].
     pub fn cy(&self) -> f32 {
         self.y + self.height / 2.0
     }
 
-    /// Right edge of the border box (`x + width`). See [`Self::cx`].
     pub fn right(&self) -> f32 {
         self.x + self.width
     }
 
-    /// Bottom edge of the border box (`y + height`). See [`Self::cx`].
     pub fn bottom(&self) -> f32 {
         self.y + self.height
     }
@@ -78,7 +69,6 @@ impl BoxLayout {
     }
 }
 
-/// Result of a layout pass: layout per node, indexed by `NodeId`.
 #[derive(Debug, Clone, Default)]
 pub struct LayoutResult {
     pub layouts: HashMap<NodeId, BoxLayout>,
@@ -90,16 +80,6 @@ impl LayoutResult {
     }
 }
 
-/// Per-node user data stored in the taffy tree to keep the link between
-/// taffy nodes and our `BoxNode` ids + intrinsic measurers.
-///
-/// `inset_width`/`inset_height` are this node's own resolved padding+border
-/// (RM-27): taffy's `compute_leaf_layout` already subtracts them from
-/// `available_space` before calling the measure function, but forwards
-/// `known_dimensions` — the outer border-box size — untouched, handing an
-/// `IntrinsicMeasure` implementor two arguments in different coordinate
-/// spaces. The measure closure below subtracts the same inset from `known`
-/// so both arguments describe the content box.
 struct NodeData {
     #[allow(dead_code)]
     box_id: NodeId,
@@ -108,16 +88,11 @@ struct NodeData {
     inset_height: f32,
 }
 
-/// Run taffy on a [`BoxNode`] tree and return the resolved layouts.
 pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext) -> LayoutResult {
     let mut tree: TaffyTree<NodeData> = TaffyTree::new();
-    // Disable taffy's pixel rounding: it floors widths/heights to integers,
-    // but our painters use sub-pixel Skia metrics. A width of 710.376 rounded
-    // to 710 makes the painter re-wrap onto an extra line.
     tree.disable_rounding();
     let mut node_map: HashMap<NodeId, tf::NodeId> = HashMap::new();
 
-    // Build the taffy tree top-down.
     let root_tf = build(&mut tree, &mut node_map, root, ctx, ctx.length.font_size);
 
     let viewport_size = tf::Size {
@@ -149,25 +124,12 @@ pub fn run_layout(root: &BoxNode, viewport: (f32, f32), ctx: &ConversionContext)
         },
     );
 
-    // Walk the tree to collect absolute layouts.
     let mut layouts: HashMap<NodeId, BoxLayout> = HashMap::new();
     collect(&tree, root, &node_map, 0.0, 0.0, &mut layouts);
 
     LayoutResult { layouts }
 }
 
-/// Build one taffy node and, recursively, its subtree.
-///
-/// `inherited_font_size` is the already-resolved (px) font-size of `node`'s
-/// parent (RM-26): CSS resolves `em` on every layout property against the
-/// element's *own* computed font-size, and font-size itself inherits down
-/// the tree unless overridden. `to_taffy_style` and [`content_box_inset`]
-/// only ever see the single `ConversionContext` handed to them, so their
-/// `em` resolution is only as correct as the per-node context built here —
-/// a call site building one shared `ConversionContext` for the whole tree
-/// (as every production caller of `to_taffy_style` still does directly)
-/// resolves every node's `em` against that one context's `font_size`
-/// instead.
 fn build(
     tree: &mut TaffyTree<NodeData>,
     map: &mut HashMap<NodeId, tf::NodeId>,
@@ -323,7 +285,6 @@ mod tests {
         assert_eq!(c1.x, 0.0);
         assert_eq!(c1.y, 0.0);
         assert_eq!(c2.x, 0.0);
-        // 50px first child + 10px gap = 60
         assert_eq!(c2.y, 60.0);
     }
 
@@ -371,7 +332,6 @@ mod tests {
         root.assign_ids(1);
         let res = run_layout(&root, (200.0, 200.0), &ctx());
         let child = res.get(2).expect("child");
-        // (200 - 50) / 2 = 75
         assert_eq!(child.x, 75.0);
     }
 

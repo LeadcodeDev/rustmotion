@@ -79,7 +79,6 @@ impl Avatar {
         let w = layout_w;
         let h = layout_h;
 
-        // Load image
         let cache = asset_cache();
         let img = if let Some(cached) = cache.get(&self.src) {
             cached.clone()
@@ -98,7 +97,6 @@ impl Avatar {
             decoded
         };
 
-        // Circular clip + draw image with cover fit
         let oval_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let oval_rrect = RRect::new_oval(oval_rect);
 
@@ -118,7 +116,6 @@ impl Avatar {
 
         canvas.restore();
 
-        // Border
         let border_width = self.border_width.unwrap_or(0.0);
         if border_width > 0.0 {
             if let Some(border_color) = &self.border_color {
@@ -133,7 +130,6 @@ impl Avatar {
             }
         }
 
-        // Status indicator
         if !matches!(self.status, AvatarStatus::NoStatus) {
             let dot_radius = w * 0.15;
             let dot_color = self
@@ -149,7 +145,6 @@ impl Avatar {
             let cy = h - dot_radius;
             canvas.draw_circle((cx, cy), dot_radius, &dot_paint);
 
-            // White border around dot
             let mut border_paint = paint_from_hex("#FFFFFF");
             border_paint.set_style(PaintStyle::Stroke);
             border_paint.set_stroke_width(2.0);

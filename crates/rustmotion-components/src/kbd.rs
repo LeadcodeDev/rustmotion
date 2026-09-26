@@ -73,9 +73,6 @@ fn default_kbd_style() -> CssStyle {
     }
 }
 
-/// Deserializes `style` normally, then defaults `align-self` to
-/// `flex-start` when the author didn't set it explicitly — see the doc
-/// comment on [`Kbd::style`].
 fn deserialize_no_stretch_style<'de, D>(deserializer: D) -> Result<CssStyle, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -94,10 +91,6 @@ rustmotion_core::impl_traits!(Kbd {
 });
 
 impl Kbd {
-    /// Resolves `font-size` against a real per-frame viewport (`rem`/`vw`/
-    /// `vh` now resolve instead of silently dropping to 0px — lot B, wave
-    /// S). `em`/`%` on `font-size` itself remain approximate — see
-    /// `crate::intrinsic::font_size_ctx`'s doc comment.
     fn resolved_font_size(&self, ctx: &PaintCtx) -> f32 {
         self.style.font_size_px_ctx(
             &crate::intrinsic::font_size_ctx(ctx.video_width as f32, ctx.video_height as f32, 0.0),
@@ -125,12 +118,6 @@ impl Kbd {
             .background_color_str()
             .unwrap_or(&self.background_color);
 
-        // Shadow (bottom edge to simulate physical key depth), and the key
-        // face sitting on top of it. Both are inset to `h - shadow_h` tall
-        // so the "3D lip" the shadow peeks out from under the face stays
-        // inside the assigned box — the face used to be drawn full-height
-        // with the shadow offset *below* it, bleeding `shadow_h` px past
-        // the box bottom every frame.
         let shadow_h = 3.0_f32.min(h);
         let cap_h = (h - shadow_h).max(0.0);
         let shadow_rect = Rect::from_xywh(0.0, shadow_h, w, cap_h);
@@ -140,7 +127,6 @@ impl Kbd {
         shadow_paint.set_anti_alias(true);
         canvas.draw_rrect(shadow_rrect, &shadow_paint);
 
-        // Key face background
         let face_rect = Rect::from_xywh(0.0, 0.0, w, cap_h);
         let face_rrect = skia_safe::RRect::new_rect_xy(face_rect, radius, radius);
         let mut face_paint = paint_from_hex(bg_color);
@@ -148,14 +134,12 @@ impl Kbd {
         face_paint.set_anti_alias(true);
         canvas.draw_rrect(face_rrect, &face_paint);
 
-        // Border
         let mut border_paint = paint_from_hex(&self.border_color);
         border_paint.set_style(PaintStyle::Stroke);
         border_paint.set_stroke_width(1.0);
         border_paint.set_anti_alias(true);
         canvas.draw_rrect(face_rrect, &border_paint);
 
-        // Text centered
         let Some(font) = self.make_font(ctx) else {
             return;
         };
@@ -219,9 +203,6 @@ mod tests {
 
     #[test]
     fn style_defaults_to_flex_start_when_absent() {
-        // #127: same fix as `badge` — a keycap must keep its intrinsic
-        // width (`KbdIntrinsic`) instead of stretching to the flex
-        // container's full cross-axis size.
         let kbd = parse(r#"{"type":"kbd","key":"K"}"#);
         assert_eq!(kbd.style.align_self, Some(AlignSelf::FlexStart));
     }
@@ -241,13 +222,6 @@ mod tests {
 
     #[test]
     fn shadow_never_extends_past_the_assigned_box() {
-        // The shadow "lip" used to be offset 3px *below* a full-height
-        // face (`shadow_rect` at y=3 with height=h), so its bottom edge
-        // sat at `h + 3` — 3px past whatever box the layout gave this
-        // component. `paint()` now insets the face to `h - shadow_h` and
-        // draws the shadow directly beneath it, so nothing should paint
-        // past `h` any more. Render at a tiny height where a 3px miss
-        // would be highly visible relative to the box.
         let kbd = Kbd {
             key: "K".to_string(),
             font_size: default_font_size(),
@@ -262,7 +236,7 @@ mod tests {
         const W: i32 = 100;
         const H: i32 = 20;
         let box_w = 60.0_f32;
-        let box_h = 10.0_f32; // shorter than the 3px shadow inset would tolerate if unfixed by a wide margin
+        let box_h = 10.0_f32;
         let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
         {
             let canvas = surface.canvas();
@@ -285,8 +259,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Box bottom edge is at absolute y = 5 (translate) + 10 (box_h) = 15.
-        // Nothing painted should reach row 16 or beyond.
         let box_bottom = 15;
         for y in (box_bottom + 1)..H {
             for x in 0..W {
@@ -299,12 +271,8 @@ mod tests {
         }
     }
 
-    // ─── Lot B, wave S: relative `font-size` units ─────────────────────────
-
     #[test]
     fn rem_font_size_paints_visible_ink() {
-        // Reproduction: `font-size: "2rem"` used to resolve to 0px via the
-        // context-free `font_size_px_or`.
         let kbd = Kbd {
             key: "K".to_string(),
             font_size: default_font_size(),
@@ -342,9 +310,6 @@ mod tests {
             skia_safe::image::CachingHint::Disallow,
         );
         assert!(ok, "pixel read should succeed");
-        // Text is near-white (#E2E8F0 default `text_color`) on a dark key
-        // face — probe for near-white ink specifically, since the face/
-        // border/shadow paint regardless of font-size.
         let text_ink = buf
             .as_chunks::<4>()
             .0

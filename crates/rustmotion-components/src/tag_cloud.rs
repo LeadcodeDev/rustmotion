@@ -87,8 +87,6 @@ impl TagCloud {
         1.0 - (1.0 - p).powi(3)
     }
 
-    /// Never empty: callers index into it with `%`, and `"colors": []` — which a
-    /// generator emits to mean "no custom palette" — otherwise divides by zero.
     fn palette(&self) -> Vec<&str> {
         match &self.colors {
             Some(colors) if !colors.is_empty() => colors.iter().map(|s| s.as_str()).collect(),
@@ -115,11 +113,9 @@ impl TagCloud {
         let progress = self.progress_at(time);
         let palette = self.palette();
 
-        // Collect weights
         let min_weight = self.tags.iter().map(|t| t.weight).fold(f64::MAX, f64::min);
         let max_weight = self.tags.iter().map(|t| t.weight).fold(f64::MIN, f64::max);
 
-        // Sort tags by weight descending (indices for stagger)
         let mut sorted_indices: Vec<usize> = (0..self.tags.len()).collect();
         sorted_indices.sort_by(|&a, &b| {
             self.tags[b]
@@ -132,7 +128,6 @@ impl TagCloud {
         let h_gap = 12.0_f32;
         let v_gap = 8.0_f32;
 
-        // Pre-compute tag metrics for flow layout
         struct TagMetrics {
             index: usize,
             font_size: f32,
@@ -167,7 +162,6 @@ impl TagCloud {
             });
         }
 
-        // Flow layout: place tags left-to-right, wrap when exceeding width
         struct PlacedTag {
             index: usize,
             x: f32,
@@ -186,7 +180,6 @@ impl TagCloud {
             let item_width = m.text_width + h_gap;
 
             if cursor_x + m.text_width > w && cursor_x > 0.0 {
-                // Wrap to next line
                 cursor_y += line_max_height + v_gap;
                 cursor_x = 0.0;
                 line_max_height = 0.0;
@@ -208,7 +201,6 @@ impl TagCloud {
             cursor_x += item_width;
         }
 
-        // Compute total content height for vertical centering
         let total_height = if let Some(last) = placed.last() {
             last.y
                 + placed.iter().fold(0.0_f32, |max_h, p| {
@@ -223,11 +215,9 @@ impl TagCloud {
         };
         let y_offset = ((h - total_height) / 2.0).max(0.0);
 
-        // Render each tag
         for (draw_order, pt) in placed.iter().enumerate() {
             let tag = &self.tags[pt.index];
 
-            // Staggered opacity animation
             let tag_alpha = if self.animated {
                 let stagger_delay = (draw_order as f64 / tag_count as f64) * 0.6;
                 let tag_progress = ((time - stagger_delay) / (self.animation_duration * 0.4))
@@ -241,7 +231,6 @@ impl TagCloud {
                 continue;
             }
 
-            // Pick color
             let color_str = tag
                 .color
                 .as_deref()

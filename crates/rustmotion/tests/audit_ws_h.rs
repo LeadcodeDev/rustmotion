@@ -1,12 +1,3 @@
-//! Regression tests for the workstream H (untrusted scenario ingestion)
-//! audit finding that lives in the `rustmotion` crate: RM-46.
-//!
-//! Remote fetching for `include: "https://..."` is deliberate design; the
-//! finding is the absence of any control around it. These tests exercise
-//! `include::resolve_includes`/`resolve_includes_with_policy` directly
-//! rather than through `rustmotion::loader`, so they do not depend on the
-//! CLI wiring a sibling workstream owns.
-
 use rustmotion::include::{
     resolve_includes, resolve_includes_with_policy, IncludeSource, RemoteIncludePolicy,
 };
@@ -19,8 +10,6 @@ fn scenario_with_remote_include(url: &str) -> Scenario {
     }))
     .expect("scenario with a remote include parses")
 }
-
-// ---- RM-46, part 1: remote includes are denied by default ----
 
 #[test]
 fn remote_include_is_denied_by_default() {
@@ -46,14 +35,8 @@ fn remote_include_denial_names_the_opt_in() {
     );
 }
 
-// ---- RM-46, part 2: once opted in, resolved addresses are still checked
-// against loopback/link-local/private ranges before any request is made ----
-
 #[test]
 fn opted_in_remote_include_still_refuses_the_cloud_metadata_endpoint() {
-    // A literal IP in the URL resolves without any DNS/network I/O (`(&str,
-    // u16): ToSocketAddrs` parses a numeric host directly), so this is a
-    // deterministic, offline test of the SSRF check itself.
     let scenario = scenario_with_remote_include(
         "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
     );

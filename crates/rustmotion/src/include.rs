@@ -12,23 +12,10 @@ use crate::schema::{
 
 const MAX_INCLUDE_DEPTH: u8 = 8;
 
-/// Response-size cap for a remote `include` fetch (RM-46). Scenario JSON is
-/// not expected to be large; this is deliberately far below ureq's own 10 MB
-/// default for `read_to_vec`/`read_to_string`.
 const MAX_REMOTE_INCLUDE_BYTES: u64 = 4 * 1024 * 1024;
 
-/// The CLI flag whose semantics this module implements the mechanism for:
-/// remote `include` is denied unless a caller explicitly opts in by passing
-/// `RemoteIncludePolicy::Allow` to [`resolve_includes_with_policy`]. Naming
-/// it here keeps the error message and the flag rustmotion's CLI is expected
-/// to expose in sync.
 const ALLOW_REMOTE_INCLUDE_FLAG: &str = "--allow-remote-include";
 
-/// Whether a [`resolve_includes_with_policy`] pass may perform outbound
-/// network requests for `include: "https://..."` directives (RM-46: remote
-/// fetching is deliberate design, but it previously had no allowlist and no
-/// opt-out — any scenario, including one merely being `validate`d, could
-/// make this process issue arbitrary GETs). Defaults to [`Self::Deny`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RemoteIncludePolicy {
     #[default]
@@ -36,38 +23,20 @@ pub enum RemoteIncludePolicy {
     Allow,
 }
 
-/// Where the parent scenario was loaded from — determines how relative paths are resolved.
 pub enum IncludeSource {
-    /// Loaded from a file; relative paths resolve against this file's directory.
     File(PathBuf),
-    /// Loaded from --json or stdin; relative paths are rejected.
     Inline,
 }
 
-/// Expand all include directives in a scenario, producing resolved views.
-///
-/// Remote (`http(s)://`) includes are denied by default — see
-/// [`resolve_includes_with_policy`] to opt in. This is exactly
-/// `resolve_includes_with_policy(scenario, source, RemoteIncludePolicy::Deny)`,
-/// kept as its own entry point so every existing caller stays secure by
-/// default without having to be rewritten to pass a policy (RM-46).
 pub fn resolve_includes(scenario: Scenario, source: &IncludeSource) -> Result<ResolvedScenario> {
     resolve_includes_with_policy(scenario, source, RemoteIncludePolicy::Deny)
 }
 
-/// Same as [`resolve_includes`], with explicit control over whether remote
-/// `include` directives may reach the network.
 pub fn resolve_includes_with_policy(
     scenario: Scenario,
     source: &IncludeSource,
     remote_policy: RemoteIncludePolicy,
 ) -> Result<ResolvedScenario> {
-    // `scenario.audio`'s object form (issue #331) can also carry a
-    // synthesised score alongside `tracks` — that part is captured by the
-    // loader (`crate::loader`) before this function is ever called, since
-    // it needs the scenario's own `bpm`/`beat_offset` and this function
-    // consumes `scenario` outright. Only the file-based tracks flow
-    // through the merge below, same as before this issue.
     let mut audio = scenario.audio.into_tracks();
     let mut included_paths = Vec::new();
     let has_scenes = !scenario.scenes.is_empty();
@@ -80,7 +49,6 @@ pub fn resolve_includes_with_policy(
     let templates = &scenario.backgrounds;
 
     let views = if let Some(composition) = scenario.composition {
-        // New format: composition with views
         let mut views = Vec::with_capacity(composition.len());
         for view in composition {
             let mut scenes = resolve_entries(
@@ -110,7 +78,6 @@ pub fn resolve_includes_with_policy(
         }
         views
     } else {
-        // Backward compat: wrap top-level scenes in a single slide view
         let mut scenes = resolve_entries(
             scenario.scenes,
             source,
@@ -209,13 +176,11 @@ fn fetch_and_resolve(
             std::fs::read_to_string(&path).map_err(|_| RustmotionError::IncludeFileNotFound {
                 path: path.display().to_string(),
             })?;
-        // Track this included file for watch mode
         included_paths.push(path.clone());
         let child_source = IncludeSource::File(path);
         (body, child_source)
     };
 
-    // Parse as raw Value first, apply variable substitution, then deserialize
     let mut json_value: serde_json::Value =
         serde_json::from_str(&json_str).map_err(RustmotionError::from)?;
 
@@ -225,38 +190,19 @@ fn fetch_and_resolve(
         &directive.include,
     )?;
 
-    // An included file's assets are relative to *that* file, not to the parent
-    // that pulled it in — otherwise moving an include would silently break
-    // every path inside it.
     if let IncludeSource::File(ref p) = child_source {
         if let Some(dir) = p.parent() {
             crate::assets::rebase_relative_paths(&mut json_value, dir);
         }
     }
-    // `components` (and any `for-each`/`use` inside this file's own scenes)
-    // is scoped to this document: expanded here, per included file, using
-    // ONLY this file's own `components` block — never the parent's, and
-    // never visible to the parent's own `use` sites. See
-    // `rustmotion_core::expand`'s module doc for why that scoping was
-    // chosen over a cross-file component registry.
     crate::expand::expand_directives(&mut json_value, &directive.include)?;
-    // Same reason, same ordering rule, as `loader.rs`/`validation.rs`: an
-    // included file is itself a full document that went through its own
-    // `apply_variables` + `expand_directives` pass just above, so a
-    // `= ...` expression inside *this* file's own scenes needs its own fold
-    // pass too — an included file's static expression is otherwise never
-    // folded (it isn't part of the parent document `loader.rs`/
-    // `validation.rs` already fold), and reaches `Scenario` deserialization
-    // below as a bare string.
     crate::loader::fold_static_expressions(&mut json_value, &directive.include)?;
 
     let child_scenario: Scenario =
         serde_json::from_value(json_value).map_err(RustmotionError::from)?;
 
-    // Merge audio tracks from the included file
     audio.extend(child_scenario.audio.into_tracks());
 
-    // Recursively resolve any nested includes
     let mut scenes = resolve_entries(
         child_scenario.scenes,
         &child_source,
@@ -266,7 +212,6 @@ fn fetch_and_resolve(
         remote_policy,
     )?;
 
-    // Apply scene index filter if specified
     if let Some(ref indices) = directive.scenes {
         let total = scenes.len();
         for &idx in indices {
@@ -303,10 +248,6 @@ fn resolve_local_path(relative: &str, source: &IncludeSource) -> Result<PathBuf>
     }
 }
 
-/// A remote `include` URL that has already passed the SSRF policy check in
-/// [`verify_remote_url`] — every address its host resolves to was confirmed
-/// public. This is the only way to reach [`fetch_remote`]: an unchecked
-/// `&str` cannot be passed to it, by construction.
 struct VerifiedRemoteUrl(String);
 
 impl VerifiedRemoteUrl {
@@ -315,15 +256,6 @@ impl VerifiedRemoteUrl {
     }
 }
 
-/// Resolves `url`'s host and rejects it if any resolved address is not
-/// publicly routable: loopback, link-local (169.254.169.254, the cloud
-/// metadata endpoint, included), or an RFC1918/ULA private range (RM-46).
-///
-/// This check runs once, ahead of the request `fetch_remote` makes moments
-/// later; a DNS answer that changes between this resolution and that
-/// connection ("DNS rebinding") is not defended against — the audit's
-/// remediation asks for a resolve-time check, and closing the rebinding gap
-/// fully would mean replacing `ureq`'s connector rather than configuring it.
 fn verify_remote_url(url: &str) -> Result<VerifiedRemoteUrl> {
     let (host, port) = split_host_port(url)?;
     let addrs: Vec<SocketAddr> = (host.as_str(), port)
@@ -370,11 +302,6 @@ fn is_non_public(ip: IpAddr) -> bool {
     }
 }
 
-/// Splits `scheme://[user:pass@]host[:port][/...]` into `(host, port)`,
-/// defaulting the port from the scheme. Deliberately minimal — this crate
-/// takes no `url` dependency for this, and only needs to know where to point
-/// the resolver; `ureq` itself is still the one that rejects a malformed URL
-/// when the actual request is made.
 fn split_host_port(url: &str) -> Result<(String, u16)> {
     let (rest, default_port) = if let Some(rest) = url.strip_prefix("https://") {
         (rest, 443)
@@ -429,11 +356,8 @@ fn fetch_remote(url: &VerifiedRemoteUrl) -> Result<String> {
         })
 }
 
-// --- Background template resolution ---
-
 use std::collections::HashMap;
 
-/// Resolve a single BackgroundEntry against the template map.
 fn resolve_entry(
     entry: &BackgroundEntry,
     templates: &HashMap<String, serde_json::Value>,
@@ -456,7 +380,6 @@ fn resolve_entry(
     Ok(bg)
 }
 
-/// Validate an AnimatedBackground after deserialization.
 fn validate_animated_bg(bg: &AnimatedBackground) -> Result<()> {
     if let BackgroundPreset::Heropattern(cfg) = &bg.preset {
         if crate::engine::heropatterns::find_pattern(&cfg.pattern).is_none() {
@@ -468,7 +391,6 @@ fn validate_animated_bg(bg: &AnimatedBackground) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a BackgroundValue + legacy animated_background into a ResolvedBackground.
 fn resolve_background_value(
     bg_value: Option<&BackgroundValue>,
     legacy: &[AnimatedBackground],
@@ -496,7 +418,6 @@ fn resolve_background_value(
         }
     }
 
-    // Append legacy animated-background entries (backward compat)
     for bg in legacy {
         validate_animated_bg(bg)?;
     }
@@ -505,7 +426,6 @@ fn resolve_background_value(
     Ok(resolved)
 }
 
-/// Resolve the background for a scene and store it in `resolved_background`.
 fn resolve_scene_background(
     scene: &mut Scene,
     templates: &HashMap<String, serde_json::Value>,
@@ -518,7 +438,6 @@ fn resolve_scene_background(
     Ok(())
 }
 
-/// Deep-merge overlay into base (overlay values win). Skips `$ref` and `transition` keys.
 fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     if let (serde_json::Value::Object(b), serde_json::Value::Object(o)) = (base, overlay) {
         for (k, v) in o {

@@ -1,48 +1,7 @@
-//! CSS colour parsing.
-//!
-//! [`parse_css_color`] is the single entry point every colour-consuming path
-//! in the engine should route through. It accepts every colour form a CSS
-//! author would reasonably write:
-//!
-//! - hex: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa` (case-insensitive)
-//! - `rgb()` / `rgba()`, comma- or space-separated, integers or percentages,
-//!   alpha as a `0..1` float, a percentage, or after a `/`
-//! - `hsl()` / `hsla()`, same separator/alpha flexibility
-//! - the full CSS named-colour keyword set (147 names + `transparent`)
-//!
-//! It returns `None` for anything else so callers can detect the failure
-//! instead of silently painting something wrong.
-//!
-//! [`parse_hex_color`] predates this module and keeps its historical,
-//! infallible signature so every existing call site keeps compiling
-//! untouched — it is now a thin wrapper around [`parse_css_color`]. Its name
-//! is a bit of a misnomer at this point (it accepts any CSS colour form, not
-//! just hex) but changing it would ripple across dozens of call sites in
-//! sibling crates, which is out of scope here.
-//!
-//! Because `parse_hex_color` can't propagate a `None` (its signature is
-//! frozen), unresolvable input logs a warning to stderr and returns
-//! [`UNRESOLVED_COLOR`] — an unmistakable opaque magenta — instead of
-//! quietly falling back to black. Black is a real, common colour choice; on
-//! the dark backgrounds this tool targets, a black fallback for a failed
-//! parse is *invisible*, which is exactly the silent-failure bug this module
-//! exists to close. Magenta never blends in.
-
 use skia_safe::{Color4f, Paint};
 
-/// Sentinel colour returned by [`parse_hex_color`] (and used by callers of
-/// [`parse_css_color`] that choose to mirror this convention) when the input
-/// string cannot be resolved as any known CSS colour form. Deliberately
-/// jarring so a bad colour string is obvious on screen rather than
-/// disappearing into a dark background.
 pub const UNRESOLVED_COLOR: (u8, u8, u8, u8) = (255, 0, 255, 255);
 
-/// Parse any CSS colour string into `(r, g, b, a)` bytes.
-///
-/// Returns `None` when `input` doesn't match any recognised form. Callers
-/// that need an infallible result should decide their own fallback and
-/// **should not** default to black without a very good reason — see the
-/// module docs.
 pub fn parse_css_color(input: &str) -> Option<(u8, u8, u8, u8)> {
     let s = input.trim();
     if s.is_empty() {
@@ -63,9 +22,6 @@ pub fn parse_css_color(input: &str) -> Option<(u8, u8, u8, u8)> {
     named_color(&lower)
 }
 
-/// Parse a hex colour string (any CSS colour form, historically hex-only —
-/// see module docs) into RGBA components. Infallible: unresolvable input is
-/// reported to stderr and mapped to [`UNRESOLVED_COLOR`] rather than black.
 pub fn parse_hex_color(hex: &str) -> (u8, u8, u8, u8) {
     let s = hex.trim();
 
@@ -73,9 +29,6 @@ pub fn parse_hex_color(hex: &str) -> (u8, u8, u8, u8) {
         return rgba;
     }
 
-    // Historical leniency: the original implementation stripped a leading
-    // '#' unconditionally, so callers could (and do) pass hex digits with no
-    // '#' at all. Retry with one prepended before giving up.
     if !s.starts_with('#') {
         if let Some(rgba) = parse_css_color(&format!("#{s}")) {
             return rgba;
@@ -104,8 +57,6 @@ pub fn paint_from_hex(hex: &str) -> Paint {
     paint.set_anti_alias(true);
     paint
 }
-
-// ---- hex ----
 
 fn parse_hex_digits(hex: &str) -> Option<(u8, u8, u8, u8)> {
     if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -145,10 +96,6 @@ fn parse_hex_digits(hex: &str) -> Option<(u8, u8, u8, u8)> {
     }
 }
 
-// ---- functional notation: rgb()/rgba(), hsl()/hsla() ----
-
-/// Split `name(inner)` into its lowercase function name and inner argument
-/// string. `s` is expected to already be trimmed and lowercased.
 fn split_function(s: &str) -> Option<(&str, &str)> {
     let s = s.trim();
     let open = s.find('(')?;
@@ -160,9 +107,6 @@ fn split_function(s: &str) -> Option<(&str, &str)> {
     Some((name, inner))
 }
 
-/// Tokenize a functional-notation argument list. Accepts the classic
-/// comma-separated form (`10, 20, 30, 0.5`) and the modern space-separated
-/// form with an optional `/` before alpha (`10 20 30 / 50%`).
 fn split_components(inner: &str) -> Vec<String> {
     let inner = inner.trim();
     if inner.contains(',') {
@@ -225,8 +169,6 @@ fn parse_hsl_fn(s: &str) -> Option<(u8, u8, u8, u8)> {
     Some((r, g, b, a))
 }
 
-/// A single `rgb()`/`rgba()` colour channel: an integer/float 0-255, or a
-/// percentage 0%-100%.
 fn parse_channel_255(s: &str) -> Option<u8> {
     let s = s.trim();
     if let Some(pct) = s.strip_suffix('%') {
@@ -237,13 +179,6 @@ fn parse_channel_255(s: &str) -> Option<u8> {
     Some(v.clamp(0.0, 255.0).round() as u8)
 }
 
-/// Alpha channel: a float 0-1, or a percentage 0%-100%.
-///
-/// Both branches round, so `0.5` and `50%` resolve to the same byte (128).
-/// The old hand-rolled `rgba()` parser truncated (`as u8`), mapping `0.5` to
-/// `127`; that was an artefact of the formula rather than a deliberate
-/// choice, and it made the two notations for one value disagree. Rounding
-/// matches the CSS spec and browsers.
 fn parse_alpha(s: &str) -> Option<u8> {
     let s = s.trim();
     if let Some(pct) = s.strip_suffix('%') {
@@ -254,8 +189,6 @@ fn parse_alpha(s: &str) -> Option<u8> {
     Some((v.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// Hue: a bare number or a number with a `deg` suffix, normalised into
-/// `0..360`.
 fn parse_hue(s: &str) -> Option<f32> {
     let s = s.trim();
     let s = s.strip_suffix("deg").unwrap_or(s).trim();
@@ -267,7 +200,6 @@ fn parse_hue(s: &str) -> Option<f32> {
     Some(h)
 }
 
-/// A required percentage (saturation/lightness), normalised to `0..1`.
 fn parse_percent_unit(s: &str) -> Option<f32> {
     let s = s.trim().strip_suffix('%')?;
     let v: f32 = s.trim().parse().ok()?;
@@ -295,11 +227,6 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     (to_u8(r1), to_u8(g1), to_u8(b1))
 }
 
-// ---- named colours ----
-
-/// The full CSS named-colour keyword set (CSS Color Module Level 4 extended
-/// keywords, 147 names) plus `transparent`. `name` must already be
-/// lowercased.
 fn named_color(name: &str) -> Option<(u8, u8, u8, u8)> {
     if name == "transparent" {
         return Some((0, 0, 0, 0));
@@ -467,8 +394,6 @@ fn named_color(name: &str) -> Option<(u8, u8, u8, u8)> {
 mod tests {
     use super::*;
 
-    // ---- hex ----
-
     #[test]
     fn hex_3_digit_shorthand() {
         assert_eq!(parse_css_color("#fff"), Some((255, 255, 255, 255)));
@@ -499,8 +424,6 @@ mod tests {
         assert_eq!(parse_css_color("#AbCdEf"), parse_css_color("#abcdef"));
     }
 
-    // ---- rgb / rgba ----
-
     #[test]
     fn rgb_function_white() {
         assert_eq!(
@@ -523,8 +446,6 @@ mod tests {
 
     #[test]
     fn rgba_function_with_float_alpha() {
-        // 0.5 * 255 = 127.5, rounded like the CSS spec and like browsers.
-        // Percentage and bare-float alpha resolve identically.
         let (r, g, b, a) = parse_css_color("rgba(255,255,255,0.5)").unwrap();
         assert_eq!((r, g, b), (255, 255, 255));
         assert_eq!(a, 128);
@@ -545,8 +466,6 @@ mod tests {
             Some((255, 255, 255, 255))
         );
     }
-
-    // ---- hsl / hsla ----
 
     #[test]
     fn hsl_function_primary_colors() {
@@ -582,8 +501,6 @@ mod tests {
         assert_eq!(parse_css_color("hsl(0 100% 50%)"), Some((255, 0, 0, 255)));
     }
 
-    // ---- named colors ----
-
     #[test]
     fn named_color_white_black() {
         assert_eq!(parse_css_color("white"), Some((255, 255, 255, 255)));
@@ -598,7 +515,6 @@ mod tests {
 
     #[test]
     fn named_color_extended_set_sample() {
-        // Spot-check a handful outside the old 11-name table.
         assert_eq!(
             parse_css_color("rebeccapurple"),
             Some((0x66, 0x33, 0x99, 255))
@@ -617,8 +533,6 @@ mod tests {
         assert_eq!(parse_css_color("darkgray"), parse_css_color("darkgrey"));
     }
 
-    // ---- whitespace tolerance ----
-
     #[test]
     fn tolerates_surrounding_and_internal_whitespace() {
         assert_eq!(parse_css_color("  #fff  "), Some((255, 255, 255, 255)));
@@ -628,8 +542,6 @@ mod tests {
             Some((10, 20, 30, 255))
         );
     }
-
-    // ---- rejected forms ----
 
     #[test]
     fn rejects_garbage_word() {
@@ -663,8 +575,6 @@ mod tests {
         assert_eq!(parse_css_color("   "), None);
     }
 
-    // ---- parse_hex_color (infallible wrapper) ----
-
     #[test]
     fn parse_hex_color_still_infallible_for_6_digit() {
         assert_eq!(parse_hex_color("#ffffff"), (255, 255, 255, 255));
@@ -672,16 +582,12 @@ mod tests {
 
     #[test]
     fn parse_hex_color_now_handles_3_digit_shorthand() {
-        // Regression test for the exact silent-black bug: previously any hex
-        // string shorter than 6 chars (post `#`-strip) returned black.
         assert_eq!(parse_hex_color("#fff"), (255, 255, 255, 255));
         assert_eq!(parse_hex_color("#FFF"), (255, 255, 255, 255));
     }
 
     #[test]
     fn parse_hex_color_now_handles_named_and_functional_forms() {
-        // Callers across the codebase pass arbitrary CSS colour strings
-        // (not just hex) through this function via `paint_from_hex`.
         assert_eq!(parse_hex_color("white"), (255, 255, 255, 255));
         assert_eq!(parse_hex_color("rgb(255,255,255)"), (255, 255, 255, 255));
     }

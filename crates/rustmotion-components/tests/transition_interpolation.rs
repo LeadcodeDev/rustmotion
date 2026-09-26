@@ -1,19 +1,3 @@
-//! Generic interpolation of `timeline`/`style.transition` (issue: "generic
-//! interpolation of any property"). Routes JSON straight through
-//! `box_builder` (no layout/paint needed — the interpolated value is fully
-//! decided in `CssStyle` before layout ever runs) and inspects the
-//! resulting `BoxNode.css` at a sampled mid-transition time.
-//!
-//! Before this workstream, `transition_keyframes`/`apply_style_states`
-//! (`box_builder.rs`) only smoothed `opacity` and `color` (text/counter
-//! only) — every other property snapped straight to the target value the
-//! instant `t >= step.at`, `style.transition` or not. The first test below
-//! (`red_*`) pins that snap down with a mid-transition sample: at exactly
-//! half the transition duration, a snapping property already equals its
-//! *end* value, not something in between. That's the signature of a jump,
-//! not an animation — a bounds-only test (checking only t=0 and t=1) would
-//! pass even on a hard cut.
-
 use rustmotion_components::box_builder::{build_scene_at_time, BuildAnimationCtx};
 use rustmotion_components::{ChildComponent, Component, PositionMode};
 use rustmotion_core::css::style::{Background, BorderRadius, CssStyle};
@@ -21,7 +5,7 @@ use rustmotion_core::css::style::{Background, BorderRadius, CssStyle};
 const SCENE_DURATION: f64 = 4.0;
 const STEP_AT: f64 = 1.0;
 const DURATION: f64 = 1.0;
-const MIDPOINT: f64 = STEP_AT + DURATION / 2.0; // 1.5
+const MIDPOINT: f64 = STEP_AT + DURATION / 2.0;
 
 fn div_with_transition(
     from_radius: f64,
@@ -82,11 +66,6 @@ fn bg_hex(css: &CssStyle) -> String {
     }
 }
 
-/// GREEN (after the fix): `border-radius` is a *paint-only* CSS property
-/// (it decorates a box `paint_pass.rs` already laid out; it never feeds
-/// `run_layout`), so it's safe to interpolate at `box_builder` time.
-/// Mid-transition (t=1.5, halfway through a 1s ease-in-out-in transition
-/// from 0 to 40) must land strictly between the two endpoints.
 #[test]
 fn border_radius_interpolates_at_midpoint() {
     let json = div_with_transition(0.0, 40.0, "#000000", "#000000");
@@ -107,8 +86,6 @@ fn border_radius_interpolates_at_midpoint() {
     );
 }
 
-/// Same proof for `background` (solid-colour only): the interpolated hex at
-/// the midpoint must differ from both the `from` and `to` colours.
 #[test]
 fn background_color_interpolates_at_midpoint() {
     let json = div_with_transition(0.0, 0.0, "#000000", "#ffffff");
@@ -130,15 +107,6 @@ fn background_color_interpolates_at_midpoint() {
     );
 }
 
-/// `width` is a *layout* property (it must reach `run_layout`, which
-/// `box_builder` cannot do on its own — the piège this workstream's brief
-/// calls out explicitly). It is deliberately NOT interpolated: it must keep
-/// snapping exactly like every other unhandled property, `style.transition`
-/// or not. This pins that "signal the gap, don't fake the fix" contract:
-/// `validate` growing a diagnostic here is fine; the renderer silently
-/// getting this "right" by some accident would not be — it would mean a
-/// layout property was interpolated purely at paint time, decoupled from
-/// the box the geometry validator actually measured.
 #[test]
 fn width_still_snaps_because_it_is_a_layout_property() {
     let json = serde_json::json!({
@@ -153,8 +121,6 @@ fn width_still_snaps_because_it_is_a_layout_property() {
     });
 
     let mid = css_at(json.clone(), MIDPOINT).width.expect("width set");
-    // Snap semantics: at the midpoint the value already equals the *target*
-    // (300px), not something in between (e.g. ~200px).
     let px = match mid {
         rustmotion_core::css::style::Size::Length(lp) => lp.px(),
         other => panic!("expected a length, got {other:?}"),

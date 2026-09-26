@@ -142,7 +142,6 @@ impl Mockup {
         let sw = screen_rect.width();
         let sh = screen_rect.height();
 
-        // Cover fit
         let scale = (sw / img_w).max(sh / img_h);
         let draw_w = img_w * scale;
         let draw_h = img_h * scale;
@@ -159,7 +158,6 @@ impl Mockup {
     }
 
     fn render_phone(&self, canvas: &Canvas, w: f32, h: f32, m: &DeviceMetrics) -> Result<()> {
-        // Device body
         let body_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let body_rrect = RRect::new_rect_xy(body_rect, m.corner_radius, m.corner_radius);
         let mut body_paint = paint_from_hex(self.theme.bezel_color());
@@ -167,7 +165,6 @@ impl Mockup {
         body_paint.set_anti_alias(true);
         canvas.draw_rrect(body_rrect, &body_paint);
 
-        // Screen area
         let screen_rect = Rect::from_xywh(
             m.bezel_side,
             m.bezel_top,
@@ -175,7 +172,6 @@ impl Mockup {
             h - m.bezel_top - m.bezel_bottom,
         );
 
-        // Screen background
         let mut screen_bg = paint_from_hex(self.theme.screen_bg());
         screen_bg.set_style(PaintStyle::Fill);
         let screen_radius = m.corner_radius - m.bezel_side;
@@ -183,13 +179,11 @@ impl Mockup {
             RRect::new_rect_xy(screen_rect, screen_radius.max(0.0), screen_radius.max(0.0));
         canvas.draw_rrect(screen_rrect, &screen_bg);
 
-        // Content image
         canvas.save();
         canvas.clip_rrect(screen_rrect, skia_safe::ClipOp::Intersect, true);
         self.draw_content_image(canvas, screen_rect)?;
         canvas.restore();
 
-        // iPhone notch
         if matches!(self.device, MockupDevice::Iphone) {
             let notch_w = w * 0.35;
             let notch_h = 28.0;
@@ -213,7 +207,6 @@ impl Mockup {
             canvas.draw_rrect(notch_rrect, &notch_paint);
         }
 
-        // Android punch-hole camera
         if matches!(self.device, MockupDevice::Android) {
             let mut cam_paint = paint_from_hex(self.theme.bezel_color());
             cam_paint.set_style(PaintStyle::Fill);
@@ -221,7 +214,6 @@ impl Mockup {
             canvas.draw_circle((w / 2.0, m.bezel_top / 2.0), 5.0, &cam_paint);
         }
 
-        // Home indicator (iPhone)
         if matches!(self.device, MockupDevice::Iphone) {
             let indicator_w = w * 0.35;
             let indicator_h = 5.0;
@@ -246,7 +238,6 @@ impl Mockup {
         let screen_h = h * 0.85;
         let _base_h = h - screen_h;
 
-        // Screen lid
         let lid_rect = Rect::from_xywh(0.0, 0.0, w, screen_h);
         let lid_rrect = RRect::new_rect_xy(lid_rect, m.corner_radius, m.corner_radius);
         let mut lid_paint = paint_from_hex(self.theme.bezel_color());
@@ -254,7 +245,6 @@ impl Mockup {
         lid_paint.set_anti_alias(true);
         canvas.draw_rrect(lid_rrect, &lid_paint);
 
-        // Screen area
         let screen_rect = Rect::from_xywh(
             m.bezel_side,
             m.bezel_top,
@@ -266,15 +256,12 @@ impl Mockup {
         screen_bg.set_style(PaintStyle::Fill);
         canvas.draw_rect(screen_rect, &screen_bg);
 
-        // Content
         self.draw_content_image(canvas, screen_rect)?;
 
-        // Camera dot
         let mut cam_paint = paint_from_hex("#333333");
         cam_paint.set_anti_alias(true);
         canvas.draw_circle((w / 2.0, m.bezel_top / 2.0), 3.0, &cam_paint);
 
-        // Base (trapezoid)
         let base_y = screen_h;
         let inset = w * 0.05;
         let mut base_path = PathBuilder::new();
@@ -293,7 +280,6 @@ impl Mockup {
     }
 
     fn render_browser(&self, canvas: &Canvas, w: f32, h: f32, m: &DeviceMetrics) -> Result<()> {
-        // Window background
         let body_rect = Rect::from_xywh(0.0, 0.0, w, h);
         let body_rrect = RRect::new_rect_xy(body_rect, m.corner_radius, m.corner_radius);
         let mut body_paint = paint_from_hex(self.theme.bezel_color());
@@ -301,7 +287,6 @@ impl Mockup {
         body_paint.set_anti_alias(true);
         canvas.draw_rrect(body_rrect, &body_paint);
 
-        // Title bar
         let chrome_color = match self.theme {
             MockupTheme::Dark => "#2D2D2D",
             MockupTheme::Light => "#F3F3F3",
@@ -314,7 +299,6 @@ impl Mockup {
         canvas.draw_rect(Rect::from_xywh(0.0, 0.0, w, m.bezel_top), &chrome_paint);
         canvas.restore();
 
-        // Traffic lights
         let dot_colors = ["#FF5F57", "#FEBC2E", "#28C840"];
         let dot_y = m.bezel_top / 2.0;
         for (i, color) in dot_colors.iter().enumerate() {
@@ -325,7 +309,6 @@ impl Mockup {
             canvas.draw_circle((dot_x, dot_y), 6.0, &dot_paint);
         }
 
-        // URL bar
         let url_bar_color = match self.theme {
             MockupTheme::Dark => "#404040",
             MockupTheme::Light => "#FFFFFF",
@@ -341,7 +324,6 @@ impl Mockup {
         url_paint.set_anti_alias(true);
         canvas.draw_rrect(url_rrect, &url_paint);
 
-        // Content area
         let screen_rect = Rect::from_xywh(0.0, m.bezel_top, w, h - m.bezel_top);
 
         let mut screen_bg = paint_from_hex(self.theme.screen_bg());
@@ -351,7 +333,6 @@ impl Mockup {
         canvas.draw_rect(screen_rect, &screen_bg);
         canvas.restore();
 
-        // Content image
         canvas.save();
         canvas.clip_rrect(body_rrect, skia_safe::ClipOp::Intersect, true);
         self.draw_content_image(canvas, screen_rect)?;

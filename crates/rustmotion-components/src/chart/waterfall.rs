@@ -17,7 +17,6 @@ impl Chart {
         let chart_w = w - ml - mr;
         let chart_h = h - mt - mb;
 
-        // Calculate cumulative values and find range
         let mut cumulative = Vec::with_capacity(self.data.len());
         let mut running = 0.0_f64;
         for dp in &self.data {
@@ -48,7 +47,6 @@ impl Chart {
         let gap = 6.0;
         let bar_w = (chart_w - gap * (n + 1) as f32) / n as f32;
 
-        // Zero baseline
         let _zero_y = mt + chart_h - ((0.0 - min_val) / range) as f32 * chart_h;
 
         for (i, dp) in self.data.iter().enumerate() {
@@ -61,7 +59,6 @@ impl Chart {
             let bar_h = (bar_bottom - bar_top) * progress;
             let x = ml + gap + i as f32 * (bar_w + gap);
 
-            // Green for positive, red for negative
             let color = dp.color.as_deref().unwrap_or({
                 if dp.value >= 0.0 {
                     "#22C55E"
@@ -74,7 +71,6 @@ impl Chart {
             paint.set_style(PaintStyle::Fill);
             paint.set_anti_alias(true);
 
-            // Animate from the start position
             let animated_top = if dp.value >= 0.0 {
                 y_start - bar_h
             } else {
@@ -86,7 +82,6 @@ impl Chart {
             let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
             canvas.draw_rrect(rrect, &paint);
 
-            // Connector line to next bar
             if i + 1 < n {
                 let next_x = ml + gap + (i + 1) as f32 * (bar_w + gap);
                 let connector_y = if dp.value >= 0.0 {
@@ -98,7 +93,6 @@ impl Chart {
                 connector_paint.set_style(PaintStyle::Stroke);
                 connector_paint.set_stroke_width(1.0);
                 connector_paint.set_anti_alias(true);
-                // Dashed
                 let intervals = [4.0_f32, 4.0];
                 if let Some(effect) = skia_safe::PathEffect::dash(&intervals, 0.0) {
                     connector_paint.set_path_effect(effect);

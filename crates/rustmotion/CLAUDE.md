@@ -227,12 +227,12 @@ crates/
 > `--features rustmotion/studio` à clippy et aux tests, sans quoi 11 600 lignes
 > cessent d'être vérifiées en restant vertes.
 
-### `src/studio/` : aucun commentaire
+### Aucun commentaire, nulle part
 
-Le code du studio ne porte **aucun commentaire** — ni `//`, ni `///`, ni `//!`.
-La règle suivait la crate ; elle suit maintenant le dossier
-`crates/rustmotion/src/studio/`, la fusion du paquet n'ayant rien changé à son
-bien-fondé.
+Le code Rust ne porte **aucun commentaire** — ni `//`, ni `///`, ni `//!`. La
+règle ne valait que pour le studio ; elle vaut maintenant pour les quatre
+crates. 16 355 commentaires ont été retirés d'un coup, et `//` comme `//!` sont
+à zéro : en ajouter un, c'est rouvrir ce qui a été fermé.
 
 Quand un commentaire semble nécessaire, c'est le signal qu'il faut **renommer
 la liaison ou extraire une fonction nommée** : l'explication va dans un
@@ -240,9 +240,26 @@ identifiant, où elle ne peut pas diverger du code. Le raisonnement qui n'a
 vraiment nulle part d'autre où vivre va dans le **message de commit**, la
 description de PR ou l'issue.
 
-> Piège vérifié : clap dérive le texte de `--help` depuis les doc comments.
-> Utiliser `#[arg(help = "…")]` plutôt que de perdre l'aide. Même vigilance
-> avec `schemars`, qui lit les doc comments dans les `description` du schéma.
+#### La seule exception, et elle n'est pas de la documentation
+
+Les 1 671 `///` restants sont du **texte d'interface**, pas des commentaires :
+
+| Lu par | Où | Ce que ça produit |
+|---|---|---|
+| `clap` | types dérivant `Parser`/`Subcommand`/`Args`/`ValueEnum` | le texte de `rustmotion --help` |
+| `schemars` | types dérivant `JsonSchema`, et leurs champs | les `description` du schéma exporté, que `validate --strict-attrs` consomme |
+
+Les retirer n'enlèverait pas un commentaire, ça viderait `--help` et 1 223
+descriptions du schéma. Ils ne vivent donc que **sur un type portant l'un de ces
+derives, ou sur un de ses champs** — partout ailleurs, un `///` est un
+commentaire, et il n'a pas sa place.
+
+> Corollaire : docs.rs des quatre crates publiées est vide, et c'est assumé.
+>
+> Corollaire moins évident : un doctest vit dans un doc comment, donc supprimer
+> celui-ci supprime le test. Les cinq qui existaient ont été portés en `#[test]`
+> ordinaires plutôt que perdus. Écrire un exemple exécutable, désormais, c'est
+> écrire un test.
 
 ### Ajouter un nouveau composant
 

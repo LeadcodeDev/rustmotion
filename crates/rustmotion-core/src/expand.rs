@@ -1,147 +1,3 @@
-//! Data-driven repetition and reusable component templates.
-//!
-//! This is the answer to the dominant failure mode the original audit named:
-//! an LLM asked for "ten identical cards, different data" hand-writes ten
-//! JSON subtrees, and every copy is a chance to diverge (a forgotten color,
-//! a stray `font-size`, a `position` that doesn't match its siblings). Two
-//! directives close that gap, both usable inside any `children` array —
-//! exactly where a component would go:
-//!
-//! - **`for-each`** repeats a `template` subtree once per element of an
-//!   array, binding the current element's fields (plus `$index`) into it.
-//! - **`use`** instantiates a named, reusable subtree declared once in a
-//!   top-level `components` block, with `props` overrides — a factored-out
-//!   component definition, the same relationship `include` has to a whole
-//!   scenario file, but *within* one file and *without* the I/O.
-//!
-//! ## Why this lives in `rustmotion-core`, not `rustmotion`
-//!
-//! `include.rs` needs file/network I/O (`std::fs`, `ureq`), so it lives in
-//! the `rustmotion` crate. This module is pure `serde_json::Value` rewriting
-//! — no I/O, same as `variables.rs` — so it lives next to it here.
-//!
-//! ## Syntax, and why it looks like `include`/`config` rather than a third
-//! dialect
-//!
-//! ```json
-//! {
-//!   "components": {
-//!     "stat_card": {
-//!       "params": {
-//!         "label": { "type": "string" },
-//!         "value": { "type": "number", "default": 0 },
-//!         "color": { "type": "string", "default": "#6366F1" }
-//!       },
-//!       "template": {
-//!         "type": "card",
-//!         "style": { "width": "300px", "background": "$color" },
-//!         "children": [
-//!           { "type": "text", "content": "$label" },
-//!           { "type": "counter", "value": "$value" }
-//!         ]
-//!       }
-//!     }
-//!   },
-//!   "scenes": [{
-//!     "duration": 3.0,
-//!     "children": [
-//!       {
-//!         "for-each": "$rows",
-//!         "template": { "use": "stat_card", "props": { "label": "$label", "value": "$value" } }
-//!       }
-//!     ]
-//!   }]
-//! }
-//! ```
-//!
-//! `components[name].params` is deliberately the exact same shape as the
-//! scenario-level `config` block (`{"type": ..., "default": ..., "description": ...}`,
-//! see [`crate::schema::VariableDefinition`]) — a param is a variable scoped
-//! to one component instead of the whole file. `use` + its overrides field
-//! mirrors `IncludeDirective { include, config }` (a name plus overrides) —
-//! *except* the overrides field is called **`props`**, not `config`. That is
-//! a deliberate, load-bearing difference, not inconsistency: [`substitute`]
-//! (shared with `variables.rs`) skips recursing into any object key literally
-//! named `"config"`, so that the scenario-level `config` *declarations* block
-//! (whose `default` values must stay literal, see
-//! `variables::test_config_key_not_substituted`) is never accidentally
-//! rewritten by whole-document substitution. Reusing that same key name for
-//! `use`'s overrides would make a `for-each` binding (`$label`) placed inside
-//! a *nested* `use`'s overrides silently never substitute — exactly the kind
-//! of silent failure this workstream exists to remove. `props` sidesteps the
-//! collision entirely while keeping the rest of the shape familiar.
-//!
-//! For `for-each`, each array element's own fields are bound directly (flat,
-//! not `$item.label`): the codebase's existing `$name` substitution has no
-//! dotted-path support (see `variables::parse_single_var_ref`), so an element
-//! `{"label": "Revenue", "value": 120}` exposes `$label` and `$value`
-//! straight into the template, exactly like a `config` default would. The
-//! whole element is *also* bound to `$item` (for forwarding it wholesale,
-//! e.g. into a nested `use`'s `props` via `{"$var": "item"}`), and the
-//! 0-based position is bound to `$index` — plus, for the arithmetic-
-//! expression grammar in [`crate::expr`], the short aliases `$i` (same
-//! value as `$index`) and `$count` (the array's length). Explicit data
-//! always wins: if an element's own field is named `index`, `item`, `i` or
-//! `count`, that value is kept and the built-in is not inserted over it.
-//!
-//! ## Pass ordering (load-bearing, tested in
-//! `rustmotion/tests/templates_iteration.rs`)
-//!
-//! Every call site runs `expand_directives` immediately *after*
-//! `variables::apply_variables` and *before* `Scenario` is deserialized —
-//! same document, same pass boundary `include` sits on the other side of.
-//! Concretely, per document (root scenario file, and independently for each
-//! file pulled in by `include`, since `components` is file-local — see
-//! below):
-//!
-//! 1. Parse JSON.
-//! 2. `variables::apply_variables` — resolves the file's own `config`/`$var`.
-//! 3. **`expand::expand_directives`** (this module) — resolves `for-each`/
-//!    `use` using the now-literal document, then removes `components`.
-//! 4. Deserialize into `Scenario`.
-//! 5. `include::resolve_includes` — splices in child files (each of which
-//!    already went through steps 1-4 independently inside
-//!    `include::fetch_and_resolve`).
-//!
-//! Two consequences fall out of running expansion strictly after variable
-//! substitution and strictly per-document:
-//!
-//! - **You *can* iterate over an array that came from a variable.**
-//!   `"for-each": "$rows"` is, by the time this module sees it, no longer a
-//!   `$`-string — step 2 already replaced it with the literal array (if
-//!   `rows` is a declared `config` variable of array type). `for-each` itself
-//!   never has to know variables exist.
-//! - **You *cannot* instantiate a component defined in an included file** —
-//!   not from the *parent's* `use` sites, anyway. `components` is scoped to
-//!   the document it is declared in, the same way `config` is: each document
-//!   gets its own `apply_variables` + `expand_directives` pass over its own
-//!   text before it is ever spliced into anything else. A `use` inside a
-//!   file that *includes* another file cannot see the includee's
-//!   `components`, and a `use` inside the includee cannot see the includer's.
-//!   This is a deliberate simplicity choice (no cross-file component
-//!   registry, no import syntax to design and version) — see the module test
-//!   `use_cannot_reach_a_component_defined_in_a_sibling_included_file` in
-//!   `rustmotion/tests/templates_iteration.rs` for the resulting diagnostic.
-//!
-//! ## The index-shift trap (already drew blood once — see PR #145 / #160)
-//!
-//! `include` has the exact same shape of bug this module could reintroduce:
-//! a directive that expands to a scene count other than 1 shifts every
-//! later `views[V].scenes[S]` index, and `--fix` patches the raw JSON by
-//! that same indexed path. `for-each` is strictly worse on this axis — ten
-//! elements shift nine siblings, not (at most) a handful. This module does
-//! **not** try to solve that by tracking pre/post-expansion index maps: it
-//! solves it the way `include` already does, by removing the temptation.
-//! `expand_directives` runs *before* `Scenario` is deserialized, so
-//! `LoadedScenario::raw` (what `--fix` would serialize) is *already* the
-//! expanded tree by the time `commands/validate.rs` sees it — same as
-//! `include`'s resolved scenes are already spliced into `raw` by the time
-//! `--fix` runs. `commands/validate.rs::refuse_fix` is extended with a
-//! `UsesTemplateDirectives` case, detected the same (raw-substring,
-//! conservative-by-design) way `UsesInclude` already is, so `--fix` refuses
-//! outright rather than writing the expansion back over the author's
-//! `for-each`/`use`/`components` source.
-
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -151,45 +7,17 @@ use crate::error::{Result, RustmotionError};
 use crate::schema::VariableType;
 use crate::variables::substitute;
 
-/// Defense-in-depth ceiling on nested `use`/`for-each` expansion. True
-/// self-reference cycles are caught immediately by the name stack in
-/// [`resolve_entry`] and never reach this; this only guards against
-/// legitimately deep (non-cyclic) nesting run away, mirroring
-/// `include::MAX_INCLUDE_DEPTH`'s role for the sibling mechanism.
 const MAX_EXPANSION_DEPTH: u32 = 64;
 
-/// Ceiling on the total number of nodes a single document's `for-each`
-/// expansion may produce, across every level of nesting combined (RM-43).
-/// [`MAX_EXPANSION_DEPTH`] bounds how deep directives may nest, not how many
-/// nodes they produce — and nesting one `for-each` inside another's
-/// `template` is explicitly supported (`use_template_can_contain_a_nested_
-/// for_each` below), so the node count a legal, non-cyclic document can
-/// declare is the *product* of every level's array length, not their sum.
-/// Four nested levels of 50 elements is 6.25M nodes from a file under 1 KB.
-/// This is checked incrementally as each `for-each` directive is about to
-/// produce its items (see [`consume_node_budget`]), so a runaway product is
-/// rejected partway through, well before the full tree is ever materialized.
 const MAX_EXPANSION_NODES: u64 = 2_000_000;
 
-/// Cheap first line of defence ahead of [`MAX_EXPANSION_NODES`]: a single
-/// `for-each` directive's own array, before any nesting is even considered.
 const MAX_FOR_EACH_ITEMS: usize = 100_000;
 
-/// One entry of the top-level `components` map: a named, parameterised
-/// subtree. `params` reuses the exact shape of the scenario-level `config`
-/// block, except a param's `default` is optional — omitting it makes the
-/// parameter *required*, which `config` variables cannot express (every
-/// `config` variable must have a default, since it is meant to render
-/// standalone with no overrides at all; a component parameter has no such
-/// obligation — an icon component's `icon` name, for instance, has no
-/// sensible default).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ComponentDefinition {
     #[serde(default)]
     params: HashMap<String, ComponentParam>,
-    /// The subtree to instantiate: a single component object, or an array of
-    /// sibling component objects (a fragment spliced in place).
     template: Value,
 }
 
@@ -198,7 +26,6 @@ struct ComponentDefinition {
 struct ComponentParam {
     #[serde(rename = "type")]
     #[allow(dead_code)]
-    // documentation/schema parity with `config`; not cross-checked against `default`'s actual JSON type (same as `VariableDefinition::var_type` today)
     param_type: VariableType,
     #[serde(default)]
     default: Option<Value>,
@@ -207,7 +34,6 @@ struct ComponentParam {
     description: Option<String>,
 }
 
-/// `{"use": "name", "props": {...}}` — instantiate a `components` entry.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UseDirective {
@@ -217,8 +43,6 @@ struct UseDirective {
     props: HashMap<String, Value>,
 }
 
-/// `{"for-each": [...], "template": {...}}` — repeat `template` once per
-/// element of the (already variable-substituted) array.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ForEachDirective {
@@ -235,18 +59,6 @@ fn is_use(v: &Value) -> bool {
     matches!(v, Value::Object(m) if m.contains_key("use"))
 }
 
-/// Expand every `for-each`/`use` directive found in any `children` array
-/// anywhere in `value`, and consume the top-level `components` block (like
-/// `variables::apply_variables` consumes `config`, it is removed so it never
-/// reaches `Scenario`'s `deny_unknown_fields`). Call this once per document,
-/// immediately after `variables::apply_variables` and before deserializing
-/// into `Scenario` — see the module doc for why that ordering is load-bearing.
-///
-/// `file_label` is the same kind of label `apply_variables` takes (a file
-/// path, `<inline>`, or `<root>`) — used only for error messages, alongside a
-/// structural location built while walking (e.g. `scenes[2].children[1]`),
-/// so a diagnostic names *where in the source* the offending directive is,
-/// not just which file.
 pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
     let defs = extract_component_definitions(value, file_label)?;
     let mut budget = MAX_EXPANSION_NODES;
@@ -307,12 +119,6 @@ pub fn expand_directives(value: &mut Value, file_label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Subtracts `n` from the shared expansion-node budget, or fails naming the
-/// limit and where it was hit (RM-43). See [`MAX_EXPANSION_NODES`] for why
-/// this is checked once per `for-each` directive's item count rather than
-/// once per final node: it is the only point in the recursion where the
-/// multiplicative blow-up can be caught before the work that would produce
-/// it actually runs.
 fn consume_node_budget(budget: &mut u64, n: u64, file_label: &str, location: &str) -> Result<()> {
     match budget.checked_sub(n) {
         Some(remaining) => {
@@ -326,20 +132,6 @@ fn consume_node_budget(budget: &mut u64, n: u64, file_label: &str, location: &st
     }
 }
 
-/// Report `$name`s that survived both variable substitution and directive
-/// expansion.
-///
-/// `variables::apply_variables` runs its own scan, but *before* this pass and
-/// skipping `template`/`props`/`components` — every `$name` in there is a
-/// binding this function is about to resolve, and reporting them would emit a
-/// warning per binding on every correct scenario. Those keys are consumed by
-/// the time we get here, so scanning the expanded document sees only genuine
-/// leftovers: a `$typo` in a template that matched no data field, or a `$` in
-/// ordinary content.
-///
-/// A warning rather than an error, matching what `apply_variables` decided for
-/// the same diagnostic: a literal `$` in a price or a shell path is legitimate
-/// content and must not fail a render.
 fn warn_unresolved_after_expansion(value: &Value, file_label: &str) {
     for name in crate::variables::find_unresolved(value) {
         eprintln!(
@@ -382,11 +174,6 @@ fn extract_component_definitions(
     }
 }
 
-/// Find the `children` array on `value` (if any), expand every entry in it
-/// (concrete entries pass through unchanged but are still recursed into, so
-/// nested containers get their own `children` expanded too), then recurse
-/// into every other field generically — a `for-each`/`use` can appear
-/// anywhere a `children` array can, at any nesting depth.
 fn walk_children(
     value: &mut Value,
     defs: &HashMap<String, ComponentDefinition>,
@@ -427,20 +214,6 @@ fn walk_children(
     Ok(())
 }
 
-/// Resolve one `children` array entry into zero or more concrete entries.
-/// A plain component entry resolves to exactly itself (after recursing into
-/// its own `children`, if it has one). A `for-each`/`use` directive resolves
-/// to the nodes it produces — which are, in turn, run back through this same
-/// function, so a `for-each` template that is itself a `use`, or a `use`
-/// whose template is itself a `for-each`, composes without special-casing.
-///
-/// A bare JSON array (a `for-each`/`use` template written as a *fragment* —
-/// several sibling nodes instead of one) is flattened here too, generically,
-/// rather than only where `use` happens to produce one: both directives'
-/// `template` accept either shape, and this is the single place that
-/// splices a fragment's elements into the parent `children` array instead of
-/// nesting a raw `[...]` inside it (which downstream `Component`
-/// deserialization has no concept of).
 fn resolve_entry(
     entry: Value,
     defs: &HashMap<String, ComponentDefinition>,
@@ -553,23 +326,12 @@ fn expand_for_each_directive(
                 bindings.insert(k.clone(), v.clone());
             }
         }
-        // Explicit data wins: only fill these in if the element didn't
-        // already define a field with that name.
         bindings
             .entry("index".to_string())
             .or_insert_with(|| Value::from(idx));
         bindings
             .entry("item".to_string())
             .or_insert_with(|| element.clone());
-        // `i`/`count` are the short aliases the expression grammar
-        // (`crates/rustmotion-core/src/expr/`) recognises for the same two
-        // facts `index` and the item count already give a template — see
-        // that module's doc for why `$i`/`$count` need to already be plain
-        // numeric text by the time an expression string reaches
-        // `crates/rustmotion/src/loader.rs`'s static-folding pass: that pass
-        // never sees `for-each` iteration state itself, only the document
-        // this substitution already rewrote. Bound the same way as
-        // `index`/`item` — explicit data wins, built-ins only fill a gap.
         bindings
             .entry("i".to_string())
             .or_insert_with(|| Value::from(idx));
@@ -671,13 +433,6 @@ mod tests {
         Ok(value)
     }
 
-    // ---- unresolved-reference scanning across the two passes ----
-
-    /// `apply_variables` scans for leftover `$name`s before this pass runs.
-    /// Left unguarded it reported every template binding as a typo — six
-    /// warnings on the canonical example, each accusing the author of a
-    /// mistake they had not made. Warnings that are reliably wrong teach the
-    /// reader to ignore warnings, which costs more than the scan is worth.
     #[test]
     fn template_bindings_are_not_reported_as_unresolved_before_expansion() {
         let doc = json!({
@@ -700,10 +455,6 @@ mod tests {
         );
     }
 
-    /// The other half: skipping those keys must not turn a false positive
-    /// into a false negative. Once expansion has consumed them, a `$name`
-    /// that matched no data field is a genuine leftover and is visible to the
-    /// very same scan.
     #[test]
     fn a_typo_inside_a_template_is_still_found_after_expansion() {
         let expanded = expand(json!({
@@ -721,8 +472,6 @@ mod tests {
         );
     }
 
-    /// And the correct spelling leaves nothing behind, so the scan above is
-    /// discriminating rather than merely quiet.
     #[test]
     fn a_correct_binding_leaves_nothing_unresolved_after_expansion() {
         let expanded = expand(json!({
@@ -735,8 +484,6 @@ mod tests {
         .expect("expands");
         assert!(crate::variables::find_unresolved(&expanded).is_empty());
     }
-
-    // ---- for-each ----
 
     #[test]
     fn for_each_repeats_template_once_per_element_binding_its_fields() {
@@ -834,10 +581,6 @@ mod tests {
 
     #[test]
     fn for_each_source_that_is_not_an_array_is_a_named_error_not_a_silent_empty_result() {
-        // The exact silent failure mode the brief calls out: a for-each
-        // source key typo'd or referencing an undeclared variable leaves a
-        // literal, non-array `$...` string here — this must be a hard error
-        // naming where, not a quietly empty `children`.
         let doc = json!({
             "video": { "width": 100, "height": 100 },
             "scenes": [{
@@ -876,10 +619,6 @@ mod tests {
 
     #[test]
     fn for_each_with_a_fragment_template_splices_every_sibling_in_place_not_a_nested_array() {
-        // Each iteration's `template` is an *array* of two sibling nodes
-        // (an icon + a label), not a single object — both must end up as
-        // direct, flat siblings in the surrounding `children` array; a
-        // nested `[...]` there would not deserialize as a component.
         let doc = json!({
             "video": { "width": 100, "height": 100 },
             "scenes": [{
@@ -906,8 +645,6 @@ mod tests {
         assert_eq!(children[2]["type"], json!("icon"));
         assert_eq!(children[3]["content"], json!("B"));
     }
-
-    // ---- use / components ----
 
     fn doc_with_stat_card(props: Value) -> Value {
         json!({
@@ -985,8 +722,6 @@ mod tests {
 
     #[test]
     fn use_missing_a_required_parameter_is_a_named_error() {
-        // `label` has no default in `doc_with_stat_card` — omitting it must
-        // fail, not silently render an empty/placeholder value.
         let out = expand(doc_with_stat_card(json!({})));
         let err = out.expect_err("missing required param must fail");
         match &err {
@@ -1083,8 +818,6 @@ mod tests {
         assert_eq!(children[1]["content"], json!("hi"));
     }
 
-    // ---- composition of the two directives ----
-
     #[test]
     fn for_each_template_can_be_a_use_directive() {
         let doc = json!({
@@ -1162,8 +895,6 @@ mod tests {
         assert_eq!(inner[0]["content"], json!(1));
         assert_eq!(inner[1]["content"], json!(2));
     }
-
-    // ---- the tree-identity proof, at the JSON-value level ----
 
     #[test]
     fn for_each_authored_tree_is_identical_to_the_hand_written_equivalent() {
