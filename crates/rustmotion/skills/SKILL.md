@@ -235,6 +235,7 @@ Read individual rule files for detailed explanations, GOOD/BAD examples, and con
 - [rules/validate-json.md](rules/validate-json.md) - Always validate generated JSON with `rustmotion validate` before presenting
 - [rules/halo-shapes.md](rules/halo-shapes.md) - `halo` beyond circles: `radius_x`/`radius_y`/`rotation` for a wide thin band of light, and why the blur follows the short axis
 - [rules/zoom-blur-transition.md](rules/zoom-blur-transition.md) - The radial "tunnel" cut: `zoom_blur`'s `strength`/`origin`, why it had to be a transition and not an effect, and the pivot-coincident-edge trap
+- [rules/chromatic-aberration.md](rules/chromatic-aberration.md) - Per-element red/cyan fringe on arrival: `chromatic_aberration`'s `amount`, how its curve differs from `chromatic_wipe`'s, and the `amount`-not-`amplitude` trap
 - [rules/geometry-safety.md](rules/geometry-safety.md) - Keep all content inside the viewport: `white-space`, `auto_scroll`, `overflow` semantics + violation kinds
 - [rules/clip-path.md](rules/clip-path.md) - Non-rectangular masking: the six `clip-path` shapes, how their percentages resolve, and why `node-path` is not one of them yet
 - [rules/overlapping-scenes.md](rules/overlapping-scenes.md) - Make an element outlive a cut: overlapping `at` windows composite instead of replacing, who supplies the background, and why `snap` never creates an overlap
