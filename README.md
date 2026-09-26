@@ -14,6 +14,23 @@ MIT-licensed: no licence key, no telemetry, no per-render billing. See [Non-goal
 cargo install rustmotion
 ```
 
+From this repository, without waiting for a release:
+
+```bash
+cargo install --git https://github.com/LeadcodeDev/rustmotion
+```
+
+Either command installs the `rustmotion` CLI. Add the `studio` feature to get
+the live preview window (`rustmotion-studio`) alongside it:
+
+```bash
+cargo install --git https://github.com/LeadcodeDev/rustmotion --features studio
+```
+
+The studio is not in the default build because it pulls gpui and a native GUI
+toolchain, which do not build everywhere the CLI builds — a headless server
+being the obvious case.
+
 **Requirements:** Rust toolchain + C++ compiler (for openh264). **Recommended:** `ffmpeg` CLI for 10-bit H.264 and H.265/VP9/ProRes/WebM/GIF output.
 
 ### Shell Completions
@@ -2155,11 +2172,12 @@ crates/
 │   └── *.rs              # one file per component (Painter implementation)
 └── rustmotion/src/
     ├── cli/              # the `rustmotion` binary (clap subcommands)
+    ├── studio/           # the `rustmotion-studio` binary (feature `studio`)
     ├── encode/            # video/audio encoders and muxing
     └── loader.rs          # JSON/HTML → ResolvedScenario
 ```
 
-The `rustmotion` crate is where the binary lives — a crate with only a `[lib]` target installs nothing executable via `cargo install`.
+The `rustmotion` crate is where both binaries live — a crate with only a `[lib]` target installs nothing executable via `cargo install`, and `cargo install --git <url>` refuses a repository in which more than one package declares a `[[bin]]`. That second constraint is why the studio is a module of this crate (`src/studio/`, behind the `studio` feature) rather than a package of its own.
 
 ## License
 

@@ -201,20 +201,38 @@ crates/
 └── rustmotion/src/
     ├── cli/                    # Le binaire `rustmotion` (clap + sous-commandes)
     │   └── commands/           # validate, render, schema, info
+    ├── studio/                 # Le binaire `rustmotion-studio` (feature `studio`)
     ├── encode/                 # Encodeurs vidéo/audio, mux
     └── loader.rs               # Chargement JSON/HTML → ResolvedScenario
 ```
 
-> Le binaire vit dans la crate publiée `rustmotion` : une crate qui n'a qu'une
-> `[lib]` n'installe rien d'exécutable via `cargo install`. Il n'y a pas de
-> sous-commande `studio` — `rustmotion-studio` dépend de `rustmotion`, donc la
-> dépendance inverse serait un cycle. Le studio s'ouvre par son propre binaire.
+> Les deux binaires vivent dans la crate publiée `rustmotion` : une crate qui
+> n'a qu'une `[lib]` n'installe rien d'exécutable via `cargo install`, et
+> `cargo install --git <url>` **refuse** un dépôt où plus d'un paquet déclare un
+> `[[bin]]` (« multiple packages with binaries found » — ni `default-members` ni
+> `required-features` ne changent ce décompte). C'est pour ça que le studio est
+> un module de cette crate et non un paquet à part : en paquet, il dépendait de
+> `loader`/`encode`, donc en faire une dépendance de `rustmotion` était un cycle,
+> que cargo refuse même optionnel.
+>
+> ```bash
+> cargo install --git https://github.com/LeadcodeDev/rustmotion                     # CLI
+> cargo install --git https://github.com/LeadcodeDev/rustmotion --features studio   # CLI + studio
+> ```
+>
+> `studio` est hors du build par défaut : il tire gpui et une toolchain GUI, qui
+> ne compilent pas partout où le CLI compile. Il n'y a pas de **sous-commande**
+> `studio` non plus — elle devrait disparaître du `--help` selon le feature.
+> `--workspace` seul ne compile plus le studio : CI passe
+> `--features rustmotion/studio` à clippy et aux tests, sans quoi 11 600 lignes
+> cessent d'être vérifiées en restant vertes.
 
-### `rustmotion-studio` : aucun commentaire
+### `src/studio/` : aucun commentaire
 
 Le code du studio ne porte **aucun commentaire** — ni `//`, ni `///`, ni `//!`.
-La règle ne vaut que pour cette crate : les quatre autres sont publiées, et
-vider leurs doc comments viderait leurs pages docs.rs.
+La règle suivait la crate ; elle suit maintenant le dossier
+`crates/rustmotion/src/studio/`, la fusion du paquet n'ayant rien changé à son
+bien-fondé.
 
 Quand un commentaire semble nécessaire, c'est le signal qu'il faut **renommer
 la liaison ou extraire une fonction nommée** : l'explication va dans un

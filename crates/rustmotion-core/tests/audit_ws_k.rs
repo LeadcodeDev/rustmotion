@@ -128,7 +128,7 @@ const KNOWN_INERT_FIELDS: &[(&str, &str)] = &[
         "target",
         "Not one of workstream K's 9 named findings — surfaced by this guard test itself, with \
          a caveat this test can't resolve on its own: Annotation.target is written by \
-         rustmotion-studio (crates/rustmotion-studio/src/editor/annotations.rs:94) as raw JSON \
+         the studio (crates/rustmotion/src/studio/editor/annotations.rs:94) as raw JSON \
          (a `\"target\": {...}` object literal, not a `.target` field access — this grep-based \
          check only matches Rust member access), so it may be consumed by the `apply-annotations` \
          Claude Code skill reading the scenario file's raw JSON rather than by any Rust code path. \

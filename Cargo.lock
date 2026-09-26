@@ -6582,13 +6582,18 @@ dependencies = [
  "crossterm",
  "dirs 6.0.0",
  "gif 0.13.3",
+ "gpui-component",
+ "gpui-kit",
  "image",
  "minimp4",
  "notify",
  "openh264",
+ "palette",
  "ratatui",
  "rayon",
  "resvg 0.44.0",
+ "rfd",
+ "rodio",
  "rubato",
  "rustfft",
  "rustmotion-components",
@@ -6598,8 +6603,10 @@ dependencies = [
  "serde",
  "serde_json",
  "skia-safe",
+ "smallvec",
  "symphonia",
  "tiny-skia",
+ "tokio",
  "ureq",
  "usvg 0.44.0",
 ]
@@ -6653,26 +6660,6 @@ dependencies = [
  "markup5ever_rcdom 0.39.0+unofficial",
  "serde_json",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rustmotion-studio"
-version = "0.7.1"
-dependencies = [
- "clap",
- "dirs 6.0.0",
- "gpui-component",
- "gpui-kit",
- "image",
- "notify",
- "palette",
- "rfd",
- "rodio",
- "rustmotion",
- "schemars 0.8.22",
- "serde_json",
- "smallvec",
- "tokio",
 ]
 
 [[package]]

@@ -19,7 +19,7 @@
 // never lints here regardless of this attribute. This single crate-root
 // allow silences only that internal noise; it does not extend to any other
 // crate, so a hand-written construction in `rustmotion-html`,
-// `rustmotion-studio`, or this crate's own `tests/` integration suite (each
+// the studio, or this crate's own `tests/` integration suite (each
 // a separate compilation unit) still warns. Verified empirically before
 // relying on it: see the phase-B report for issue #333.
 #![allow(deprecated)]
