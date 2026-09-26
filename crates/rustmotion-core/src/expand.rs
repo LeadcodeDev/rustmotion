@@ -78,9 +78,11 @@
 //! straight into the template, exactly like a `config` default would. The
 //! whole element is *also* bound to `$item` (for forwarding it wholesale,
 //! e.g. into a nested `use`'s `props` via `{"$var": "item"}`), and the
-//! 0-based position is bound to `$index`. Explicit data always wins: if an
-//! element's own field is named `index` or `item`, that value is kept and the
-//! built-in is not inserted over it.
+//! 0-based position is bound to `$index` — plus, for the arithmetic-
+//! expression grammar in [`crate::expr`], the short aliases `$i` (same
+//! value as `$index`) and `$count` (the array's length). Explicit data
+//! always wins: if an element's own field is named `index`, `item`, `i` or
+//! `count`, that value is kept and the built-in is not inserted over it.
 //!
 //! ## Pass ordering (load-bearing, tested in
 //! `rustmotion/tests/templates_iteration.rs`)
@@ -542,7 +544,8 @@ fn expand_for_each_directive(
     }
     consume_node_budget(budget, items.len() as u64, file_label, location)?;
 
-    let mut out = Vec::with_capacity(items.len());
+    let count = items.len();
+    let mut out = Vec::with_capacity(count);
     for (idx, element) in items.into_iter().enumerate() {
         let mut bindings: HashMap<String, Value> = HashMap::new();
         if let Value::Object(obj) = &element {
@@ -558,6 +561,21 @@ fn expand_for_each_directive(
         bindings
             .entry("item".to_string())
             .or_insert_with(|| element.clone());
+        // `i`/`count` are the short aliases the expression grammar
+        // (`crates/rustmotion-core/src/expr/`) recognises for the same two
+        // facts `index` and the item count already give a template — see
+        // that module's doc for why `$i`/`$count` need to already be plain
+        // numeric text by the time an expression string reaches
+        // `crates/rustmotion/src/loader.rs`'s static-folding pass: that pass
+        // never sees `for-each` iteration state itself, only the document
+        // this substitution already rewrote. Bound the same way as
+        // `index`/`item` — explicit data wins, built-ins only fill a gap.
+        bindings
+            .entry("i".to_string())
+            .or_insert_with(|| Value::from(idx));
+        bindings
+            .entry("count".to_string())
+            .or_insert_with(|| Value::from(count));
 
         let mut node = directive.template.clone();
         substitute(&mut node, &bindings, file_label)?;
@@ -760,6 +778,26 @@ mod tests {
         assert_eq!(children[0]["content"], json!("0:a"));
         assert_eq!(children[1]["content"], json!("1:b"));
         assert_eq!(children[2]["content"], json!("2:c"));
+    }
+
+    #[test]
+    fn for_each_binds_i_and_count_aliases_for_expr_grammar() {
+        let doc = json!({
+            "video": { "width": 100, "height": 100 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": ["a", "b", "c"],
+                    "template": { "type": "text", "content": "$i/$count" }
+                }]
+            }]
+        });
+        let out = expand(doc).unwrap();
+        let children = out["scenes"][0]["children"].as_array().unwrap();
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0]["content"], json!("0/3"));
+        assert_eq!(children[1]["content"], json!("1/3"));
+        assert_eq!(children[2]["content"], json!("2/3"));
     }
 
     #[test]

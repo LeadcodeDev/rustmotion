@@ -240,6 +240,27 @@ pub fn find_unresolved(value: &Value) -> Vec<String> {
 fn find_unresolved_recursive(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(s) => {
+            // An `"= ..."` string is an arithmetic expression (see
+            // `rustmotion_core::expr`'s module doc), not `$name` reference
+            // content this scan understands — it has its own free-variable
+            // resolution (`Scope::var`, evaluated by
+            // `crates/rustmotion/src/loader.rs`'s `fold_static_expressions`
+            // and, for included files, `include.rs`) and its own error type
+            // (`ExprError::UnknownIdent`, surfaced as a precisely-located
+            // hard error, not a warning). Scanning inside it for bare `$word`
+            // occurrences would flag every reserved scope name this
+            // substitution pass was never meant to resolve — `$W`, `$H`,
+            // `$fps`, `$duration`, `$t`, `$T`, `$beat`, and any
+            // expression-only variable an author declares — as a false
+            // "unresolved variable" on every single scenario that uses one,
+            // whether or not the expression fold that runs later actually
+            // resolves it. `Expr::parse`/`fold_static_expressions` are the
+            // authority on whether an expression's identifiers are valid;
+            // this scan defers to them entirely rather than duplicating (and
+            // getting wrong) a second, narrower opinion.
+            if s.trim_start().starts_with('=') {
+                return;
+            }
             let mut chars = s.chars().peekable();
             while let Some(ch) = chars.next() {
                 if ch == '$' {
@@ -568,6 +589,32 @@ mod tests {
         assert!(unresolved.contains(&"also_missing".to_string()));
     }
 
+    /// An `"= ..."` expression is a different sub-language with its own
+    /// identifier resolution (`rustmotion_core::expr`) — this scan must not
+    /// flag `$W`/`$H`/reserved scope names, or any other expression
+    /// variable, as an unresolved `$var` reference. A leading `=` after
+    /// trimming whitespace is enough to opt the whole string out, regardless
+    /// of which names appear inside it.
+    #[test]
+    fn find_unresolved_does_not_scan_inside_an_expression_string() {
+        let val = json!({
+            "x": "= $W/2 + cos($i / $count * TAU) * 700",
+            "y": "  = $H/2",
+            "plain": "$still_flagged"
+        });
+        let unresolved = find_unresolved(&val);
+        assert!(
+            !unresolved
+                .iter()
+                .any(|n| n == "W" || n == "H" || n == "i" || n == "count"),
+            "expression identifiers must not be reported as unresolved variables: {unresolved:?}"
+        );
+        assert!(
+            unresolved.contains(&"still_flagged".to_string()),
+            "a plain (non-expression) string must still be scanned: {unresolved:?}"
+        );
+    }
+
     #[test]
     fn test_apply_defaults() {
         let mut val = json!({
@@ -632,7 +679,7 @@ mod tests {
     // `config` key (RED first) ----
 
     /// A document with **no** `config` block and a literal `$` in unrelated
-    /// content (a `terminal` line's `$PATH`) — this already succeeds today
+    /// content (a `list` item's `$PATH`) — this already succeeds today
     /// (the bug is the *other* direction; this locks in it keeps working).
     fn doc_with_literal_dollar_no_config() -> serde_json::Value {
         json!({
@@ -640,7 +687,7 @@ mod tests {
             "scenes": [{
                 "duration": 3.0,
                 "children": [
-                    { "type": "terminal", "lines": ["echo $PATH", "cd $HOME/project"] },
+                    { "type": "list", "items": ["echo $PATH", "cd $HOME/project"] },
                     { "type": "text", "content": "Price: $100 today only" }
                 ]
             }]
@@ -663,7 +710,7 @@ mod tests {
                 "duration": 3.0,
                 "children": [
                     { "type": "text", "content": "$title" },
-                    { "type": "terminal", "lines": ["echo $PATH", "cd $HOME/project"] },
+                    { "type": "list", "items": ["echo $PATH", "cd $HOME/project"] },
                     { "type": "text", "content": "Price: $100 today only" }
                 ]
             }]
@@ -673,12 +720,11 @@ mod tests {
     #[test]
     fn literal_dollar_without_config_block_already_succeeds() {
         let mut doc = doc_with_literal_dollar_no_config();
-        apply_defaults(&mut doc).expect(
-            "a literal '$' in terminal/text content with no config block must not be fatal",
-        );
+        apply_defaults(&mut doc)
+            .expect("a literal '$' in list/text content with no config block must not be fatal");
         // Content is left as-is: nothing declared these as variables.
         assert_eq!(
-            doc["scenes"][0]["children"][0]["lines"][0],
+            doc["scenes"][0]["children"][0]["items"][0],
             json!("echo $PATH")
         );
     }
@@ -698,7 +744,7 @@ mod tests {
         );
         assert_eq!(doc["scenes"][0]["children"][0]["content"], json!("Demo"));
         assert_eq!(
-            doc["scenes"][0]["children"][1]["lines"][0],
+            doc["scenes"][0]["children"][1]["items"][0],
             json!("echo $PATH")
         );
         assert_eq!(
