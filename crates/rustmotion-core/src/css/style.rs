@@ -7,6 +7,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::computed;
 use super::units::{Length, LengthContext, LengthPercentage, ParsedLength};
 // `GradientBorder` / `InnerShadow` are reused from the schema layer rather
 // than mirrored: same crate, same serde/JsonSchema derives, identical JSON
@@ -60,7 +61,21 @@ pub const TEXT_AUTOFIT_MIN_FONT_PX: f32 = MIN_LEGIBLE_FONT_RATIO * 1080.0;
 
 /// Top-level CSS style block. All fields are optional; `None` means "not set"
 /// and lets the cascade fill in inherited / initial values.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// # `Deserialize` is hand-written, not derived
+///
+/// See [`computed`]'s module doc for why: a `"= ..."` expression on
+/// `opacity`/`width`/`height`/a covered `transform` leaf has to survive
+/// deserialization without retyping the field it was written on (every
+/// other property still deserializes through the ordinary derived logic,
+/// via the private `CssStyleWire` mirror below — `#[serde(remote =
+/// "CssStyle")]` lets that derive construct a real `CssStyle` directly, so
+/// this hand-written impl only has to do two things: peel `"= ..."` strings
+/// off the raw JSON first ([`computed::extract`]), then hand the cleaned
+/// JSON to the derived logic and attach the extracted [`computed::ComputedStyle`]
+/// afterwards. `Serialize` stays derived, unaffected — `expr` is
+/// `#[serde(skip)]` and never round-trips through JSON.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CssStyle {
     // ---- Layout / box ----
@@ -155,12 +170,6 @@ pub struct CssStyle {
     /// width (this is `text`/`gradient_text`'s answer to Remotion's
     /// `fitText()`), it does not start wrapping.
     ///
-    /// **`auto_scroll`** (`codeblock`/`terminal`). Unrelated: `text-autofit`
-    /// is only read by `text`/`gradient_text`'s own painter/intrinsic —
-    /// `codeblock`/`terminal` never look at this field, so there is no
-    /// precedence to resolve between the two; `auto_scroll` keeps scrolling
-    /// (never shrinking) exactly as documented in `CLAUDE.md`.
-    ///
     /// **The floor.** Never shrinks below [`TEXT_AUTOFIT_MIN_FONT_PX`] — the
     /// same calibrated legibility ratio `check_legibility`
     /// (`rustmotion/src/cli/commands/geometry.rs`) already enforces, not a
@@ -233,6 +242,152 @@ pub struct CssStyle {
     // ---- Audio reactive binding ----
     #[serde(default)]
     pub audio_reactive: Option<AudioReactive>,
+
+    // ---- Per-frame expression overrides (issue #338) ----
+    /// The `"= ..."` expressions [`computed::extract`] pulled off this
+    /// node's `opacity`/`width`/`height`/covered `transform` leaves at
+    /// deserialize time — never part of the wire format (`#[serde(skip)]`:
+    /// it neither reads from nor writes to JSON), populated only by
+    /// `CssStyle`'s own hand-written `Deserialize` impl below. See
+    /// [`computed`]'s module doc.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub expr: computed::ComputedStyle,
+}
+
+/// Field-for-field mirror of [`CssStyle`], used only as a `#[serde(remote)]`
+/// deserialization target — see [`CssStyle`]'s own doc, "`Deserialize` is
+/// hand-written, not derived". Never constructed directly; the derive macro
+/// generates `CssStyleWire::deserialize(d) -> Result<CssStyle, D::Error>` as
+/// an inherent function, which is all [`CssStyle`]'s hand-written impl below
+/// calls. Keep this in sync with [`CssStyle`]'s own field list — a field
+/// added to one and not the other fails to compile (a `remote` mismatch is a
+/// type error, never a silent divergence), so drift cannot survive `cargo
+/// check`.
+#[derive(Deserialize, Default)]
+#[serde(
+    remote = "CssStyle",
+    default,
+    deny_unknown_fields,
+    rename_all = "kebab-case"
+)]
+struct CssStyleWire {
+    display: Option<Display>,
+    position: Option<Position>,
+    top: Option<LengthPercentage>,
+    right: Option<LengthPercentage>,
+    bottom: Option<LengthPercentage>,
+    left: Option<LengthPercentage>,
+
+    width: Option<Size>,
+    height: Option<Size>,
+    min_width: Option<Size>,
+    min_height: Option<Size>,
+    max_width: Option<Size>,
+    max_height: Option<Size>,
+
+    margin: Option<Edges>,
+    padding: Option<Edges>,
+    border: Option<BorderEdges>,
+    box_sizing: Option<BoxSizing>,
+    aspect_ratio: Option<f32>,
+
+    flex_direction: Option<FlexDirection>,
+    flex_wrap: Option<FlexWrap>,
+    justify_content: Option<JustifyContent>,
+    align_items: Option<AlignItems>,
+    align_self: Option<AlignSelf>,
+    align_content: Option<AlignContent>,
+    gap: Option<Gap>,
+    flex_grow: Option<f32>,
+    flex_shrink: Option<f32>,
+    flex_basis: Option<Size>,
+    order: Option<i32>,
+
+    grid_template_columns: Option<Vec<GridTrack>>,
+    grid_template_rows: Option<Vec<GridTrack>>,
+    grid_column: Option<GridLine>,
+    grid_row: Option<GridLine>,
+    grid_auto_flow: Option<GridAutoFlow>,
+    justify_items: Option<JustifyItems>,
+    justify_self: Option<JustifySelf>,
+
+    font_family: Option<String>,
+    font_size: Option<Length>,
+    font_weight: Option<FontWeight>,
+    font_style: Option<FontStyle>,
+    line_height: Option<LineHeight>,
+    letter_spacing: Option<Length>,
+    text_align: Option<TextAlign>,
+    color: Option<Color>,
+    white_space: Option<WhiteSpace>,
+    overflow_wrap: Option<OverflowWrap>,
+    text_overflow: Option<TextOverflow>,
+    text_decoration: Option<TextDecoration>,
+    text_autofit: Option<bool>,
+
+    background: Option<Background>,
+    border_radius: Option<BorderRadius>,
+    box_shadow: Option<Vec<BoxShadow>>,
+    text_shadow: Option<Vec<TextShadow>>,
+    opacity: Option<f32>,
+    mix_blend_mode: Option<BlendMode>,
+    clip_path: Option<ClipPath>,
+    gradient_border: Option<GradientBorder>,
+
+    backdrop_blur: Option<f32>,
+    inner_shadow: Option<InnerShadow>,
+
+    filter: Option<Vec<FilterFn>>,
+    backdrop_filter: Option<Vec<FilterFn>>,
+
+    transform: Option<Vec<TransformFn>>,
+    transform_origin: Option<TransformOrigin>,
+    perspective: Option<Length>,
+    perspective_origin: Option<TransformOrigin>,
+
+    depth: Option<f32>,
+
+    overflow: Option<Overflow>,
+    overflow_x: Option<Overflow>,
+    overflow_y: Option<Overflow>,
+    z_index: Option<i32>,
+    visibility: Option<Visibility>,
+
+    #[serde(default, deserialize_with = "deserialize_animation_effects")]
+    animation: Vec<AnimationEffect>,
+    transition: Option<StyleTransition>,
+
+    #[serde(default)]
+    audio_reactive: Option<AudioReactive>,
+
+    #[serde(skip)]
+    expr: computed::ComputedStyle,
+}
+
+impl<'de> Deserialize<'de> for CssStyle {
+    /// Two steps, in order: (1) [`computed::extract`] peels any `"= ..."`
+    /// expression off `opacity`/`width`/`height`/a covered `transform` leaf,
+    /// mutating a `serde_json::Value` in place so the fields it touched are
+    /// left either absent or holding a neutral literal; (2) the cleaned
+    /// `Value` goes through [`CssStyleWire`]'s derived (ordinary,
+    /// `deny_unknown_fields`) logic for everything else. A style object that
+    /// isn't even a JSON object (malformed input) skips step 1 — there is
+    /// nothing to extract from — and step 2 then fails exactly as the old
+    /// derived impl would have.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let expr = match value.as_object_mut() {
+            Some(obj) => computed::extract(obj).map_err(serde::de::Error::custom)?,
+            None => computed::ComputedStyle::default(),
+        };
+        let mut style = CssStyleWire::deserialize(value).map_err(serde::de::Error::custom)?;
+        style.expr = expr;
+        Ok(style)
+    }
 }
 
 /// `transition` config: bare number = duration in seconds with the default
@@ -1425,6 +1580,30 @@ pub enum ClipPath {
     },
     Path {
         d: String,
+    },
+    /// Clip to another node's own path geometry, by id, instead of a literal
+    /// `d` frozen at author time. The motivating shape: two copies of the
+    /// same gem, each clipped by the same animated "crack" node, so the two
+    /// halves separate along a coherent, shared edge — a literal
+    /// `ClipPath::Path` on each copy could not track the crack's own
+    /// animation without duplicating it (and letting the two drift out of
+    /// sync the moment one copy's `d` is edited and the other isn't).
+    ///
+    /// This mirrors `node("id", "prop")` in `crate::expr`'s grammar, which
+    /// reads another node's already-resolved *scalar* through
+    /// `Scope::node_prop`; this variant instead names a node whose
+    /// *geometry* (its own resolved path — a `shape` with
+    /// `ShapeType::Path`, most naturally) should be read, so the `(id,
+    /// prop)` pair that call uses does not apply — `id` alone is enough to
+    /// say which node.
+    ///
+    /// Resolving `id` into an actual clip (finding the node, reading its
+    /// current-frame path, intersecting the canvas clip with it) is the
+    /// paint pipeline's job, not this enum's — same division as every other
+    /// `ClipPath` variant, none of which carry their own clipping logic
+    /// either.
+    NodePath {
+        id: String,
     },
 }
 

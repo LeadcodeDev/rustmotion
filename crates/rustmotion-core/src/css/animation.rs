@@ -6,6 +6,20 @@
 //! This is a transitional module: once all animation surfaces are CSS-native,
 //! the animator can produce `CssStyle` overrides directly and this bridge
 //! disappears.
+//!
+//! # A second caller (issue #338)
+//!
+//! [`apply_animated_props`] has exactly one caller-shape requirement: an
+//! [`AnimatedProperties`] whose non-default fields are the ones to apply.
+//! `crate::css::computed::ComputedStyle::resolve` produces exactly that
+//! shape from a node's per-frame expressions, so `box_builder.rs` calls this
+//! same function a second time per node — once for a resolved animation,
+//! once for resolved expressions — rather than this module growing a
+//! parallel "apply an expression override" path. See that module's doc for
+//! why an expression is "a second source of the same kind of override," and
+//! `box_builder.rs` for the resulting precedence (expressions apply after
+//! animations, so they compose the same way animations already compose with
+//! a literal `CssStyle` value).
 
 use crate::css::style::CssStyle;
 use crate::css::style::{FilterFn, Size, TransformFn};
