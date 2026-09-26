@@ -1,0 +1,98 @@
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#0B1120" },
+  "components": {
+    "kpi_card": {
+      "params": {
+        "label": { "type": "string" },
+        "value": { "type": "string" },
+        "accent": { "type": "string", "default": "#6366F1" },
+        "icon": { "type": "string", "default": "lucide:trending-up" },
+        "delay": { "type": "number", "default": 0 }
+      },
+      "template": {
+        "type": "card",
+        "style": {
+          "width": 360,
+          "height": 220,
+          "background": "#111827",
+          "border-radius": 20,
+          "padding": 28,
+          "flex-direction": "column",
+          "justify-content": "space-between",
+          "gap": 12,
+          "border": { "color": "#1F2937", "width": 1 },
+          "box-shadow": [{ "color": "#00000060", "offset-x": 0, "offset-y": 12, "blur": 30 }],
+          "animation": [{ "name": "fade_in_up", "delay": "$delay", "duration": 0.6 }]
+        },
+        "children": [
+          {
+            "type": "div",
+            "style": { "flex-direction": "row", "align-items": "center", "gap": 12 },
+            "children": [
+              {
+                "type": "shape",
+                "shape": "circle",
+                "fill": "$accent",
+                "style": { "width": 48, "height": 48, "opacity": 0.18 }
+              },
+              {
+                "type": "icon",
+                "icon": "$icon",
+                "position": { "x": 12, "y": 12 },
+                "style": { "width": 24, "height": 24, "color": "$accent" }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "content": "$value",
+            "style": { "font-size": 56, "color": "#FFFFFF", "font-weight": "bold" }
+          },
+          {
+            "type": "text",
+            "content": "$label",
+            "style": { "font-size": 22, "color": "#94A3B8" }
+          }
+        ]
+      }
+    }
+  },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 48 },
+      "children": [
+        {
+          "type": "text",
+          "content": "Q3 Performance",
+          "style": {
+            "font-size": 64,
+            "color": "#FFFFFF",
+            "font-weight": "bold",
+            "text-align": "center",
+            "animation": [{ "name": "fade_in", "duration": 0.5 }]
+          }
+        },
+        {
+          "type": "div",
+          "style": { "flex-direction": "row", "gap": 32 },
+          "children": [
+            {
+              "for-each": [
+                { "label": "Active Users", "value": "45.2K", "accent": "#22C55E", "icon": "lucide:users", "delay": 0.1 },
+                { "label": "Revenue (USD)", "value": "1.24M", "accent": "#3B82F6", "icon": "lucide:dollar-sign", "delay": 0.25 },
+                { "label": "Churn", "value": "2.1%", "accent": "#F59E0B", "icon": "lucide:trending-down", "delay": 0.4 },
+                { "label": "NPS Score", "value": "68", "accent": "#EC4899", "icon": "lucide:heart", "delay": 0.55 }
+              ],
+              "template": {
+                "use": "kpi_card",
+                "props": { "label": "$label", "value": "$value", "accent": "$accent", "icon": "$icon", "delay": "$delay" }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

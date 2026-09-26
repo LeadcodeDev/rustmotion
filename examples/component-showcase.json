@@ -531,88 +531,1028 @@
                   },
                   "children": [
                     {
-                      "type": "codeblock",
-                      "code": "use skia_safe::Canvas;\n\npub trait Painter {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    );\n}\n\nimpl Painter for Text {\n    fn paint_content(\n        &self,\n        canvas: &Canvas,\n        layout: &BoxLayout,\n        _props: &AnimatedProperties,\n        ctx: &PaintCtx,\n    ) {\n        draw_runs(canvas, &self.runs, layout, ctx);\n    }\n}",
-                      "language": "rust",
-                      "theme": "tokyo-night",
-                      "show_line_numbers": true,
-                      "chrome": {
-                        "enabled": true,
-                        "title": "painter.rs"
-                      },
-                      "reveal": {
-                        "mode": "line_by_line",
-                        "duration": 4.0
-                      },
+                      "type": "div",
                       "style": {
+                        "flex-direction": "column",
+                        "background": "#1a1b26",
+                        "overflow": "hidden",
+                        "border-radius": 10,
+                        "width": 900,
+                        "height": 888,
                         "animation": [
                           {
                             "name": "fade_in_up",
                             "delay": 0.3,
                             "duration": 0.5
                           }
-                        ],
-                        "width": 900,
-                        "height": 888
-                      }
+                        ]
+                      },
+                      "children": [
+                        {
+                          "type": "div",
+                          "style": {
+                            "flex-direction": "row",
+                            "align-items": "center",
+                            "gap": 8,
+                            "padding": {
+                              "top": 10,
+                              "right": 14,
+                              "bottom": 10,
+                              "left": 14
+                            },
+                            "background": "#16161e"
+                          },
+                          "children": [
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#ff5f56",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#ffbd2e",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#27c93f",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "painter.rs",
+                              "style": {
+                                "font-size": 13,
+                                "color": "#8b949e",
+                                "margin": {
+                                  "left": 8
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "div",
+                          "stagger": 0.17391304347826086,
+                          "style": {
+                            "flex-direction": "column",
+                            "padding": 20,
+                            "gap": 4
+                          },
+                          "children": [
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "use",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "skia_safe",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": "::",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Canvas",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ";",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "pub",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "trait",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Painter",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": " {",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "    ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "fn",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "paint_content",
+                                  "color": "#7aa2f7"
+                                },
+                                {
+                                  "text": "(",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "self",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        canvas: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Canvas",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        layout: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "BoxLayout",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        props: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "AnimatedProperties",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        ctx: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "PaintCtx",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "    );",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "}",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "impl",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Painter",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "for",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Text",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": " {",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "    ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "fn",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": " ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "paint_content",
+                                  "color": "#7aa2f7"
+                                },
+                                {
+                                  "text": "(",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "self",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        canvas: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "Canvas",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        layout: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "BoxLayout",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        _props: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "AnimatedProperties",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        ctx: &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "PaintCtx",
+                                  "color": "#7dcfff"
+                                },
+                                {
+                                  "text": ",",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "    ) {",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "        ",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "draw_runs",
+                                  "color": "#7aa2f7"
+                                },
+                                {
+                                  "text": "(canvas, &",
+                                  "color": "#c0caf5"
+                                },
+                                {
+                                  "text": "self",
+                                  "color": "#bb9af7"
+                                },
+                                {
+                                  "text": ".runs, layout, ctx);",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "    }",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "rich_text",
+                              "spans": [
+                                {
+                                  "text": "}",
+                                  "color": "#c0caf5"
+                                }
+                              ],
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 15,
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.17391304347826086
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      ]
                     },
                     {
-                      "type": "terminal",
-                      "title": "rustmotion",
-                      "show_chrome": true,
-                      "lines": [
-                        {
-                          "text": "$ rustmotion validate -f showcase.json"
-                        },
-                        {
-                          "text": "✓ schema:   pass"
-                        },
-                        {
-                          "text": "✓ geometry: pass  (0 violations)"
-                        },
-                        {
-                          "text": ""
-                        },
-                        {
-                          "text": "$ rustmotion render -f showcase.json -o out.mp4"
-                        },
-                        {
-                          "text": "  Rendering 1920×1080 @ 30fps"
-                        },
-                        {
-                          "text": "  [scene 1/4]  ████████████  100%"
-                        },
-                        {
-                          "text": "  [scene 2/4]  ████████████  100%"
-                        },
-                        {
-                          "text": "  [scene 3/4]  ████████████  100%"
-                        },
-                        {
-                          "text": "  [scene 4/4]  ████████████  100%"
-                        },
-                        {
-                          "text": "  Encoding… ffmpeg H.264 10-bit"
-                        },
-                        {
-                          "text": "✓  out.mp4  4.2 MB  19.0s"
-                        }
-                      ],
-                      "reveal": {
-                        "mode": "typewriter",
-                        "duration": 4.5
-                      },
+                      "type": "div",
                       "style": {
+                        "flex-direction": "column",
+                        "background": "#1E1E1E",
+                        "border-radius": 10,
+                        "overflow": "hidden",
+                        "width": 900,
+                        "height": 888,
                         "animation": [
                           {
                             "name": "fade_in_up",
                             "delay": 0.5,
                             "duration": 0.5
                           }
-                        ],
-                        "width": 900,
-                        "height": 888
-                      }
+                        ]
+                      },
+                      "children": [
+                        {
+                          "type": "div",
+                          "style": {
+                            "flex-direction": "row",
+                            "align-items": "center",
+                            "gap": 8,
+                            "padding": {
+                              "top": 10,
+                              "right": 14,
+                              "bottom": 10,
+                              "left": 14
+                            },
+                            "background": "#2D2D2D"
+                          },
+                          "children": [
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#ff5f56",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#ffbd2e",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "shape",
+                              "shape": "circle",
+                              "fill": "#27c93f",
+                              "style": {
+                                "width": 12,
+                                "height": 12
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "rustmotion",
+                              "style": {
+                                "font-size": 13,
+                                "color": "#808080",
+                                "margin": {
+                                  "left": 8
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "div",
+                          "stagger": 0.375,
+                          "style": {
+                            "flex-direction": "column",
+                            "padding": 20,
+                            "gap": 6
+                          },
+                          "children": [
+                            {
+                              "type": "text",
+                              "content": "$ rustmotion validate -f showcase.json",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "✓ schema:   pass",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "✓ geometry: pass  (0 violations)",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": " ",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "$ rustmotion render -f showcase.json -o out.mp4",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  Rendering 1920×1080 @ 30fps",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  [scene 1/4]  ████████████  100%",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  [scene 2/4]  ████████████  100%",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  [scene 3/4]  ████████████  100%",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  [scene 4/4]  ████████████  100%",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "  Encoding… ffmpeg H.264 10-bit",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "content": "✓  out.mp4  4.2 MB  19.0s",
+                              "style": {
+                                "font-family": "JetBrains Mono",
+                                "font-size": 16,
+                                "color": "#A0A0A0",
+                                "white-space": "pre",
+                                "animation": [
+                                  {
+                                    "name": "typewriter",
+                                    "duration": 0.375
+                                  }
+                                ]
+                              },
+                              "caret": {
+                                "shape": "block",
+                                "hide_when_done": true
+                              }
+                            }
+                          ]
+                        }
+                      ]
                     }
                   ]
                 }
@@ -877,14 +1817,75 @@
                           }
                         },
                         {
-                          "type": "notification",
-                          "title": "Build succeeded",
-                          "message": "All 98 tests passed in 1.86s",
-                          "variant": "success",
-                          "icon": "lucide:check-circle",
-                          "width": 920,
-                          "slide_in_at": 1.5,
-                          "slide_out_at": 4.8
+                          "type": "div",
+                          "start_at": 1.5,
+                          "end_at": 4.8,
+                          "style": {
+                            "flex-direction": "row",
+                            "align-items": "center",
+                            "gap": 14,
+                            "background": "#111827",
+                            "border-radius": 14,
+                            "padding": 18,
+                            "width": 920,
+                            "animation": [
+                              {
+                                "name": "slide_in_left",
+                                "duration": 0.4
+                              },
+                              {
+                                "name": "fade_out",
+                                "delay": 2.9,
+                                "duration": 0.35
+                              }
+                            ]
+                          },
+                          "children": [
+                            {
+                              "type": "div",
+                              "style": {
+                                "width": 4,
+                                "align-self": "stretch",
+                                "background": "#10b981",
+                                "border-radius": 4
+                              }
+                            },
+                            {
+                              "type": "icon",
+                              "icon": "lucide:check-circle",
+                              "style": {
+                                "width": 28,
+                                "height": 28,
+                                "color": "#10b981"
+                              }
+                            },
+                            {
+                              "type": "div",
+                              "style": {
+                                "flex-direction": "column",
+                                "gap": 4
+                              },
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "content": "Build succeeded",
+                                  "style": {
+                                    "font-size": 20,
+                                    "font-weight": "bold",
+                                    "color": "#f8fafc"
+                                  }
+                                },
+                                {
+                                  "type": "text",
+                                  "content": "All 98 tests passed in 1.86s",
+                                  "style": {
+                                    "font-size": 15,
+                                    "color": "#94a3b8"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
                         }
                       ]
                     }
