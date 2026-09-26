@@ -5,9 +5,19 @@ use std::path::PathBuf;
 use crate::components::{ChildComponent, Component};
 use crate::schema::{AudioTrack, ResolvedScenario, ViewType};
 
+pub struct TimelineOffsets {
+    pub scene_starts: Vec<Vec<f64>>,
+    pub view_ends: Vec<f64>,
+}
+
 pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
+    timeline_offsets(scenario).scene_starts
+}
+
+pub fn timeline_offsets(scenario: &ResolvedScenario) -> TimelineOffsets {
     let fps = scenario.video.fps as f64;
     let mut result: Vec<Vec<f64>> = Vec::with_capacity(scenario.views.len());
+    let mut view_ends: Vec<f64> = Vec::with_capacity(scenario.views.len());
     let mut cursor = 0.0_f64;
 
     for (view_idx, view) in scenario.views.iter().enumerate() {
@@ -34,6 +44,7 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
                 }
 
                 cursor = scene_cursor;
+                view_ends.push(cursor);
                 result.push(scene_offsets);
             }
 
@@ -54,31 +65,27 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
                     .sum();
                 cursor += world_duration;
 
+                view_ends.push(cursor);
                 result.push(scene_offsets);
             }
         }
     }
 
-    result
+    TimelineOffsets {
+        scene_starts: result,
+        view_ends,
+    }
 }
 
 pub fn resolved_scenario_duration(scenario: &ResolvedScenario) -> f64 {
-    let offsets = scene_start_offsets(scenario);
-    let fps = scenario.video.fps as f64;
-    let mut total = 0.0f64;
-    for (view_idx, view) in scenario.views.iter().enumerate() {
-        let Some(last_scene) = view.scenes.last() else {
-            continue;
-        };
-        let last_offset = offsets
-            .get(view_idx)
-            .and_then(|o| o.last())
-            .copied()
-            .unwrap_or(0.0);
-        let scene_frames = (last_scene.duration * fps).round() / fps;
-        total = total.max(last_offset + scene_frames);
-    }
-    total
+    let ends = timeline_offsets(scenario).view_ends;
+    scenario
+        .views
+        .iter()
+        .enumerate()
+        .filter(|(_, view)| !view.scenes.is_empty())
+        .filter_map(|(view_idx, _)| ends.get(view_idx).copied())
+        .fold(0.0f64, f64::max)
 }
 
 #[derive(Debug)]
@@ -446,6 +453,92 @@ mod tests {
 
     fn load(json: &str) -> ResolvedScenario {
         load_scenario_from_source(None, Some(json)).expect("load")
+    }
+
+    #[test]
+    fn a_world_only_scenario_lasts_the_sum_of_its_scenes() {
+        let s = load(
+            r#"{
+            "video": {"width": 32, "height": 32, "fps": 10},
+            "composition": [{
+                "type": "world",
+                "scenes": [
+                    {"duration": 3.0, "children": []},
+                    {"duration": 3.0, "children": []},
+                    {"duration": 2.0, "children": []}
+                ]
+            }]
+        }"#,
+        );
+
+        let total = resolved_scenario_duration(&s);
+        assert!(
+            (total - 8.0).abs() < 1e-9,
+            "a world view lasts the sum of its scenes, not its last scene's 2.0s: got {total}"
+        );
+    }
+
+    #[test]
+    fn world_scenes_keep_their_shared_window_start() {
+        let s = load(
+            r#"{
+            "video": {"width": 32, "height": 32, "fps": 10},
+            "composition": [{
+                "type": "world",
+                "scenes": [
+                    {"duration": 3.0, "children": []},
+                    {"duration": 2.0, "children": []}
+                ]
+            }]
+        }"#,
+        );
+
+        let offsets = scene_start_offsets(&s);
+        assert_eq!(offsets[0], vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_world_view_followed_by_a_slide_view_still_totals_correctly() {
+        let s = load(
+            r#"{
+            "video": {"width": 32, "height": 32, "fps": 10},
+            "composition": [
+                {"type": "world", "scenes": [
+                    {"duration": 3.0, "children": []},
+                    {"duration": 2.0, "children": []}
+                ]},
+                {"type": "slide", "scenes": [{"duration": 1.0, "children": []}]}
+            ]
+        }"#,
+        );
+
+        let total = resolved_scenario_duration(&s);
+        assert!(
+            (total - 6.0).abs() < 1e-9,
+            "world 5.0s then a 1.0s slide totals 6.0s: got {total}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_empty_view_does_not_shorten_the_total() {
+        let s = load(
+            r#"{
+            "video": {"width": 32, "height": 32, "fps": 10},
+            "composition": [
+                {"type": "world", "scenes": [
+                    {"duration": 3.0, "children": []},
+                    {"duration": 2.0, "children": []}
+                ]},
+                {"type": "slide", "scenes": []}
+            ]
+        }"#,
+        );
+
+        let total = resolved_scenario_duration(&s);
+        assert!(
+            (total - 5.0).abs() < 1e-9,
+            "an empty view contributes nothing and takes nothing away: got {total}"
+        );
     }
 
     #[test]
