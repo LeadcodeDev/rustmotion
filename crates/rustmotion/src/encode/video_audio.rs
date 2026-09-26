@@ -106,6 +106,35 @@ pub fn scene_start_offsets(scenario: &ResolvedScenario) -> Vec<Vec<f64>> {
     result
 }
 
+/// The rendered scenario's own total duration, in seconds — the last
+/// view's last scene's own start offset plus its (frame-rounded) duration.
+/// Reuses [`scene_start_offsets`] rather than re-deriving the same
+/// transition-overlap arithmetic a second time.
+///
+/// This is what sizes the synthesised-audio buffer (issue #331): a score
+/// event with no explicit `to` plays until here, and the muxed track built
+/// from it (`crate::encode::audio::synthesize_score_into_track`) is given
+/// exactly this many seconds so a segment render (`--frames a-b`) can slice
+/// it the same way it already slices any other [`crate::schema::AudioTrack`].
+pub fn resolved_scenario_duration(scenario: &ResolvedScenario) -> f64 {
+    let offsets = scene_start_offsets(scenario);
+    let fps = scenario.video.fps as f64;
+    let mut total = 0.0f64;
+    for (view_idx, view) in scenario.views.iter().enumerate() {
+        let Some(last_scene) = view.scenes.last() else {
+            continue;
+        };
+        let last_offset = offsets
+            .get(view_idx)
+            .and_then(|o| o.last())
+            .copied()
+            .unwrap_or(0.0);
+        let scene_frames = (last_scene.duration * fps).round() / fps;
+        total = total.max(last_offset + scene_frames);
+    }
+    total
+}
+
 // ─── Component walk ───────────────────────────────────────────────────────────
 
 /// Collected metadata for a single video component found in the scene tree.
@@ -135,26 +164,6 @@ fn collect_videos_in_child(child: &ChildComponent, out: &mut Vec<VideoOccurrence
                     start_at: v.timing.start_at.unwrap_or(0.0),
                     end_at: v.timing.end_at,
                 });
-            }
-        }
-        Component::Card(c) => {
-            for ch in &c.children {
-                collect_videos_in_child(ch, out);
-            }
-        }
-        Component::Flex(c) => {
-            for ch in &c.children {
-                collect_videos_in_child(ch, out);
-            }
-        }
-        Component::Grid(c) => {
-            for ch in &c.children {
-                collect_videos_in_child(ch, out);
-            }
-        }
-        Component::Positioned(c) => {
-            for ch in &c.children {
-                collect_videos_in_child(ch, out);
             }
         }
         Component::Container(c) => {
