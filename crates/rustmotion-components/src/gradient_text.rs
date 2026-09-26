@@ -5,7 +5,7 @@ use skia_safe::{Canvas, Color4f, Font, FontStyle, Point};
 
 use rustmotion_core::css::style::{
     FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw,
-    WhiteSpace as CssWhiteSpace,
+    TextAlign as CssTextAlign, WhiteSpace as CssWhiteSpace,
 };
 use rustmotion_core::css::CssStyle;
 use rustmotion_core::engine::animator::AnimatedProperties;
@@ -183,6 +183,31 @@ impl GradientText {
             .fold(0.0f32, f32::max);
         let text_h = (lines.len().max(1) - 1) as f32 * line_height_val + ascent + descent;
 
+        // `text-align`, on the same rule `text.rs` applies: each line is
+        // placed within the box width, and `Start`/`Justify` fall back to the
+        // left edge like every other left-ish value. Without this the draw
+        // loop below passed a literal `x = 0.0`, so a `gradient_text` and a
+        // `text` sharing a box and a `text-align: center` disagreed — the
+        // plain one centred, the gradient one sat at the left edge (#337).
+        let align_width = if layout_width.is_finite() && layout_width > 0.0 {
+            layout_width
+        } else {
+            text_w
+        };
+        let align = self.style.text_align.unwrap_or(CssTextAlign::Left);
+        let line_x = |advance: f32| match align {
+            CssTextAlign::Center => (align_width - advance) / 2.0,
+            CssTextAlign::Right | CssTextAlign::End => align_width - advance,
+            _ => 0.0,
+        };
+        // The gradient is defined once across the whole block, so its span
+        // has to travel with the aligned block instead of staying pinned to
+        // the box's left edge: a centred block's glyphs would otherwise run
+        // past the shader's end stop and all pick up the clamped last
+        // colour. The block occupies `text_w` — the widest line — so that
+        // line's own offset is what the endpoints shift by.
+        let block_x = line_x(text_w);
+
         // Compute angle (possibly animated)
         let angle = if self.animate_angle {
             self.angle + time as f32 * self.speed * 360.0
@@ -192,7 +217,7 @@ impl GradientText {
 
         // Compute gradient endpoints from angle, spanning the full block.
         let angle_rad = angle * std::f32::consts::PI / 180.0;
-        let cx = text_w / 2.0;
+        let cx = block_x + text_w / 2.0;
         let cy = text_h / 2.0;
         let half_diag = (text_w.powi(2) + text_h.powi(2)).sqrt() / 2.0;
         let start = Point::new(
@@ -241,13 +266,19 @@ impl GradientText {
                 continue;
             }
             let y = i as f32 * line_height_val + ascent;
+            let x = line_x(measure_text_with_fallback(
+                line,
+                &font,
+                &emoji_font,
+                letter_spacing,
+            ));
             draw_text_with_fallback(
                 canvas,
                 line,
                 &font,
                 &emoji_font,
                 letter_spacing,
-                0.0,
+                x,
                 y,
                 &fill_paint,
             );
@@ -340,6 +371,153 @@ mod tests {
             }
         }
         false
+    }
+
+    /// Horizontal span of every painted pixel, as `(first_x, last_x)`.
+    fn ink_x_span(grid: &[u8], surface_width: i32, height: i32) -> Option<(i32, i32)> {
+        let mut span: Option<(i32, i32)> = None;
+        for y in 0..height {
+            for x in 0..surface_width {
+                if grid[(y * surface_width + x) as usize] > 0 {
+                    span = Some(match span {
+                        None => (x, x),
+                        Some((lo, hi)) => (lo.min(x), hi.max(x)),
+                    });
+                }
+            }
+        }
+        span
+    }
+
+    #[test]
+    fn text_align_center_centres_the_line_in_the_box() {
+        // #337: the draw loop passed a literal `x = 0.0`, so a `gradient_text`
+        // and a `text` sharing a box and a `text-align: center` disagreed --
+        // the plain one centred, the gradient one sat at the left edge.
+        // Measured on pixels rather than on the offset the code computes: the
+        // painted span's own centre must land on the box's centre.
+        const W: i32 = 700;
+        const H: i32 = 80;
+        const BOX_W: f32 = 600.0;
+
+        let mut gt = make_gradient_text("GRADIENT", Some(CssWhiteSpace::Nowrap));
+        gt.style.text_align = Some(CssTextAlign::Center);
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+        let (lo, hi) = ink_x_span(&grid, W, H).expect("centred gradient_text must paint something");
+
+        let ink_centre = (lo + hi) as f32 / 2.0;
+        let box_centre = BOX_W / 2.0;
+        assert!(
+            (ink_centre - box_centre).abs() <= 4.0,
+            "centred gradient_text should sit on the box centre {box_centre}, \
+             painted [{lo}, {hi}] with centre {ink_centre}"
+        );
+        assert!(
+            lo > 40,
+            "centred gradient_text must leave a left margin, first ink at {lo}"
+        );
+    }
+
+    #[test]
+    fn text_align_right_ends_the_line_on_the_box_edge() {
+        const W: i32 = 700;
+        const H: i32 = 80;
+        const BOX_W: f32 = 600.0;
+
+        let mut gt = make_gradient_text("GRADIENT", Some(CssWhiteSpace::Nowrap));
+        gt.style.text_align = Some(CssTextAlign::Right);
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+        let (lo, hi) = ink_x_span(&grid, W, H).expect("right-aligned gradient_text must paint");
+
+        assert!(
+            (hi as f32 - BOX_W).abs() <= 6.0,
+            "right-aligned gradient_text should end on the box edge {BOX_W}, \
+             painted [{lo}, {hi}]"
+        );
+    }
+
+    #[test]
+    fn no_text_align_still_starts_at_the_box_left_edge() {
+        // The default must not move: every scenario written before #337 read
+        // `gradient_text` as left-aligned whatever `text-align` said, and a
+        // file that never set it has to render identically.
+        const W: i32 = 700;
+        const H: i32 = 80;
+
+        let gt = make_gradient_text("GRADIENT", Some(CssWhiteSpace::Nowrap));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+        gt.paint(surface.canvas(), 600.0, None, 0.0, &test_ctx());
+        let grid = alpha_grid(&mut surface, W, H);
+        let (lo, _) = ink_x_span(&grid, W, H).expect("gradient_text must paint");
+
+        assert!(
+            lo < 8,
+            "with no text-align the first ink should hug the left edge, got {lo}"
+        );
+    }
+
+    #[test]
+    fn centring_keeps_the_gradient_over_the_glyphs() {
+        // The shader spans the block, so it has to travel with the aligned
+        // block: pinned at the box's left edge it would end before a centred
+        // block's last glyphs, which would all come out the clamped end
+        // colour. Compare the last glyph's colour centred against
+        // left-aligned -- same glyph, same place in the block, same colour.
+        const W: i32 = 700;
+        const H: i32 = 80;
+        const BOX_W: f32 = 600.0;
+
+        fn last_glyph_rgb(align: Option<CssTextAlign>) -> (u8, u8, u8) {
+            let mut gt = make_gradient_text("GRADIENT", Some(CssWhiteSpace::Nowrap));
+            gt.style.text_align = align;
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((W, H)).expect("raster surface");
+            gt.paint(surface.canvas(), BOX_W, None, 0.0, &test_ctx());
+
+            let snapshot = surface.image_snapshot();
+            let info = skia_safe::ImageInfo::new(
+                (W, H),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            let mut buf = vec![0u8; (W * H * 4) as usize];
+            assert!(snapshot.read_pixels(
+                &info,
+                &mut buf,
+                (W * 4) as usize,
+                skia_safe::IPoint::new(0, 0),
+                skia_safe::image::CachingHint::Disallow,
+            ));
+            let alpha: Vec<u8> = (0..(W * H) as usize).map(|i| buf[i * 4 + 3]).collect();
+            let (_, hi) = ink_x_span(&alpha, W, H).expect("must paint");
+            // The densest opaque pixel on the last glyph's column.
+            let (mut best_y, mut best_a) = (0i32, 0u8);
+            for y in 0..H {
+                let a = alpha[(y * W + hi) as usize];
+                if a > best_a {
+                    best_a = a;
+                    best_y = y;
+                }
+            }
+            let i = ((best_y * W + hi) * 4) as usize;
+            (buf[i], buf[i + 1], buf[i + 2])
+        }
+
+        let left = last_glyph_rgb(None);
+        let centre = last_glyph_rgb(Some(CssTextAlign::Center));
+        let d = |a: u8, b: u8| (a as i32 - b as i32).abs();
+        assert!(
+            d(left.0, centre.0) <= 12 && d(left.1, centre.1) <= 12 && d(left.2, centre.2) <= 12,
+            "the gradient must follow the aligned block: last glyph is {left:?} \
+             left-aligned but {centre:?} centred"
+        );
     }
 
     #[test]
