@@ -2,7 +2,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>, directories: &mut Vec<PathBuf>) {
+    directories.push(dir.to_path_buf());
+
     let mut entries: Vec<_> = fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("failed to read directory {}: {e}", dir.display()))
         .filter_map(|e| e.ok())
@@ -12,7 +14,7 @@ fn collect_md_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            collect_md_files(&path, out);
+            collect_md_files(&path, out, directories);
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
             out.push(path);
         }
@@ -25,7 +27,6 @@ fn main() {
 
     let skills_root = manifest_dir.join("skills");
 
-    println!("cargo:rerun-if-changed={}", skills_root.display());
     println!("cargo:rerun-if-changed=build.rs");
 
     let skill_md = skills_root.join("SKILL.md");
@@ -37,10 +38,15 @@ fn main() {
 
     let rules_dir = skills_root.join("rules");
     let mut rule_files = Vec::new();
-    collect_md_files(&rules_dir, &mut rule_files);
+    let mut walked_directories = vec![skills_root.clone()];
+    collect_md_files(&rules_dir, &mut rule_files, &mut walked_directories);
 
     let mut all_files = vec![skill_md];
     all_files.extend(rule_files);
+
+    for watched in walked_directories.iter().chain(all_files.iter()) {
+        println!("cargo:rerun-if-changed={}", watched.display());
+    }
 
     let mut generated = String::from("&[\n");
     for path in &all_files {

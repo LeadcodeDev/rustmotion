@@ -6,6 +6,13 @@ use crate::schema::{
     TimingMode, TransitionType, VideoConfig, ViewType,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompositeParticipant {
+    pub scene_idx: usize,
+    pub frame_in_scene: u32,
+    pub scene_total_frames: u32,
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum FrameTask {
@@ -30,6 +37,11 @@ pub enum FrameTask {
         options: TransitionOptions,
         transition_duration: f64,
         easing: EasingType,
+    },
+    Composite {
+        global_frame: u32,
+        view_idx: usize,
+        participants: Vec<CompositeParticipant>,
     },
     WorldFrame {
         global_frame: u32,
@@ -122,6 +134,51 @@ pub fn render_frame_task_scaled(
                 &scene.effects,
                 *frame_in_scene,
                 *frame_in_scene as f64 / config.fps as f64,
+            );
+            Ok(pixels)
+        }
+        FrameTask::Composite {
+            global_frame,
+            view_idx,
+            participants,
+        } => {
+            use crate::engine::render::composite::composite_over;
+            let scenario_time = *global_frame as f64 / config.fps as f64;
+            let view = &scenario.views[*view_idx];
+            let scaled_w = (config.width as f32 * scale_factor) as u32;
+            let scaled_h = (config.height as f32 * scale_factor) as u32;
+
+            let bottom = participants
+                .first()
+                .ok_or(RustmotionError::SurfaceCreation)?;
+            let mut pixels = render_scene_frame_scaled(
+                config,
+                &view.scenes[bottom.scene_idx],
+                bottom.frame_in_scene,
+                scenario_time,
+                bottom.scene_total_frames,
+                scale_factor,
+            )?;
+
+            for participant in &participants[1..] {
+                let overlay = render_scene_fg_scaled(
+                    config,
+                    &view.scenes[participant.scene_idx],
+                    participant.frame_in_scene,
+                    scenario_time,
+                    participant.scene_total_frames,
+                    scale_factor,
+                )?;
+                composite_over(&mut pixels, &overlay);
+            }
+
+            apply_post_effects(
+                &mut pixels,
+                scaled_w,
+                scaled_h,
+                &view.scenes[bottom.scene_idx].effects,
+                bottom.frame_in_scene,
+                bottom.frame_in_scene as f64 / config.fps as f64,
             );
             Ok(pixels)
         }
@@ -607,7 +664,13 @@ fn snap_seconds_to_beat(seconds: f64, beat_offset: f64, bpm: f64) -> f64 {
     beat_offset + n * beat_len
 }
 
-fn v2_resolve_at_frames(scene: &Scene, scene_idx: usize, fps: u32, fallback: u32) -> u32 {
+fn v2_resolve_at_frames(
+    scene: &Scene,
+    scene_idx: usize,
+    fps: u32,
+    fallback: u32,
+    snap: SnapDuringPlacement,
+) -> u32 {
     let SceneStart::At(ref tp) = scene.at else {
         return fallback;
     };
@@ -621,12 +684,12 @@ fn v2_resolve_at_frames(scene: &Scene, scene_idx: usize, fps: u32, fallback: u32
             return fallback;
         }
     };
-    let seconds = match scene.resolved_snap {
-        Some(SnapMode::Beat) => match scene.resolved_time_ctx.bpm {
+    let seconds = match (snap, scene.resolved_snap) {
+        (SnapDuringPlacement::Apply, Some(SnapMode::Beat)) => match scene.resolved_time_ctx.bpm {
             Some(bpm) => snap_seconds_to_beat(seconds, scene.resolved_time_ctx.beat_offset, bpm),
             None => seconds,
         },
-        None => seconds,
+        _ => seconds,
     };
     (seconds * fps as f64).round().max(0.0) as u32
 }
@@ -678,24 +741,94 @@ fn build_slide_view_tasks_v2(
         })
         .collect();
 
-    let mut cursor: u32 = 0;
+    let as_written = v2_scene_starts(scenes, &duration_frames, fps, SnapDuringPlacement::Ignore);
+    let author_overlaps = v2_has_overlap(&as_written, &duration_frames, &transition_frames);
 
+    let starts = v2_scene_starts(scenes, &duration_frames, fps, SnapDuringPlacement::Apply);
+
+    if author_overlaps {
+        v2_build_composited(tasks, view_idx, scenes, &duration_frames, &starts);
+        return;
+    }
+
+    let starts = v2_clamp_forward(&starts, &duration_frames);
+    v2_build_sequential(
+        tasks,
+        view_idx,
+        scenes,
+        &duration_frames,
+        &transition_frames,
+        &starts,
+        fps,
+    );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SnapDuringPlacement {
+    Apply,
+    Ignore,
+}
+
+fn v2_scene_starts(
+    scenes: &[Scene],
+    duration_frames: &[u32],
+    fps: u32,
+    snap: SnapDuringPlacement,
+) -> Vec<u32> {
+    let mut starts = Vec::with_capacity(scenes.len());
+    let mut cursor: u32 = 0;
     for (i, scene) in scenes.iter().enumerate() {
-        let requested_start = match scene.at {
+        let start = match scene.at {
             SceneStart::Auto(_) => cursor,
-            SceneStart::At(_) => v2_resolve_at_frames(scene, i, fps, cursor),
+            SceneStart::At(_) => v2_resolve_at_frames(scene, i, fps, cursor, snap),
         };
-        let start = if requested_start < cursor {
+        starts.push(start);
+        cursor = start + duration_frames[i];
+    }
+    starts
+}
+
+fn v2_has_overlap(starts: &[u32], duration_frames: &[u32], transition_frames: &[u32]) -> bool {
+    (1..starts.len()).any(|i| {
+        let previous_end = starts[i - 1] + duration_frames[i - 1];
+        starts[i] + transition_frames[i] < previous_end
+    })
+}
+
+fn v2_clamp_forward(starts: &[u32], duration_frames: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(starts.len());
+    let mut cursor: u32 = 0;
+    for (i, requested) in starts.iter().enumerate() {
+        let start = if *requested < cursor {
             eprintln!(
-                "warning: scene {i}'s `at` resolves before the previous scene's own window \
-                 ends ({:.3}s) — clamped to avoid an overlap this workstream does not model",
-                cursor as f64 / fps as f64
+                "warning: scene {i}'s `at` lands before the previous scene's own window ends \
+                 ({:.3}s of frames) once snapped to the beat grid, and has been pushed forward. \
+                 Snapping quantises a cut, it does not ask two scenes to play at once — write \
+                 the overlap into `at` itself if that is what you want.",
+                cursor as f64
             );
             cursor
         } else {
-            requested_start
+            *requested
         };
+        out.push(start);
+        cursor = start + duration_frames[i];
+    }
+    out
+}
 
+fn v2_build_sequential(
+    tasks: &mut Vec<FrameTask>,
+    view_idx: usize,
+    scenes: &[Scene],
+    duration_frames: &[u32],
+    transition_frames: &[u32],
+    starts: &[u32],
+    fps: u32,
+) {
+    let mut cursor: u32 = 0;
+    for (i, scene) in scenes.iter().enumerate() {
+        let start = starts[i];
         if start > cursor {
             let gap = start - cursor;
             if i == 0 {
@@ -757,6 +890,90 @@ fn build_slide_view_tasks_v2(
                     });
                 }
             }
+        }
+    }
+}
+
+fn v2_build_composited(
+    tasks: &mut Vec<FrameTask>,
+    view_idx: usize,
+    scenes: &[Scene],
+    duration_frames: &[u32],
+    starts: &[u32],
+) {
+    for (i, scene) in scenes.iter().enumerate() {
+        if i > 0 && scene.transition.is_some() {
+            let previous_end = starts[i - 1] + duration_frames[i - 1];
+            if starts[i] < previous_end {
+                eprintln!(
+                    "warning: scene {i} both overlaps scene {} on the absolute timeline and \
+                     declares a `transition`. A transition composites two finished frame \
+                     buffers and an overlap composites live scenes; the two cannot both \
+                     describe the same frames. The transition is ignored here — remove it, or \
+                     move `at` so the scenes no longer overlap.",
+                    i - 1
+                );
+            }
+        }
+    }
+
+    let total_frames = starts
+        .iter()
+        .zip(duration_frames)
+        .map(|(start, duration)| start + duration)
+        .max()
+        .unwrap_or(0);
+
+    for frame in 0..total_frames {
+        let participants: Vec<CompositeParticipant> = starts
+            .iter()
+            .zip(duration_frames)
+            .enumerate()
+            .filter(|(_, (start, duration))| frame >= **start && frame < **start + **duration)
+            .map(|(scene_idx, (start, duration))| CompositeParticipant {
+                scene_idx,
+                frame_in_scene: frame - start,
+                scene_total_frames: *duration,
+            })
+            .collect();
+
+        match participants.len() {
+            0 => {
+                let last_live = starts
+                    .iter()
+                    .zip(duration_frames)
+                    .enumerate()
+                    .filter(|(_, (start, duration))| **start + **duration <= frame)
+                    .max_by_key(|(_, (start, duration))| **start + **duration);
+                match last_live {
+                    Some((scene_idx, (_, duration))) => tasks.push(FrameTask::Normal {
+                        global_frame: tasks.len() as u32,
+                        view_idx,
+                        scene_idx,
+                        frame_in_scene: duration.saturating_sub(1),
+                        scene_total_frames: *duration,
+                    }),
+                    None => tasks.push(FrameTask::Normal {
+                        global_frame: tasks.len() as u32,
+                        view_idx,
+                        scene_idx: 0,
+                        frame_in_scene: 0,
+                        scene_total_frames: duration_frames[0],
+                    }),
+                }
+            }
+            1 => tasks.push(FrameTask::Normal {
+                global_frame: tasks.len() as u32,
+                view_idx,
+                scene_idx: participants[0].scene_idx,
+                frame_in_scene: participants[0].frame_in_scene,
+                scene_total_frames: participants[0].scene_total_frames,
+            }),
+            _ => tasks.push(FrameTask::Composite {
+                global_frame: tasks.len() as u32,
+                view_idx,
+                participants,
+            }),
         }
     }
 }
@@ -880,6 +1097,7 @@ impl FrameTask {
         match self {
             FrameTask::Normal { global_frame, .. }
             | FrameTask::SlideTransition { global_frame, .. }
+            | FrameTask::Composite { global_frame, .. }
             | FrameTask::WorldFrame { global_frame, .. }
             | FrameTask::ViewTransition { global_frame, .. } => *global_frame = frame,
         }
@@ -1459,6 +1677,174 @@ mod timing_v2_tests {
         load_scenario_from_source(None, Some(json)).expect("load")
     }
 
+    fn overlapping_json(second_at: &str) -> String {
+        format!(
+            r##"{{
+            "video": {{"width": 64, "height": 64, "fps": 10}},
+            "timing": "v2",
+            "composition": [{{"type": "slide", "scenes": [
+                {{"duration": 3.0, "children": []}},
+                {{"duration": 1.0, "at": "{second_at}", "children": []}}
+            ]}}]
+        }}"##
+        )
+    }
+
+    fn composite_participants(tasks: &[FrameTask]) -> Vec<Vec<usize>> {
+        tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::Composite { participants, .. } => {
+                    Some(participants.iter().map(|p| p.scene_idx).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_explicit_at_that_overlaps_composites_instead_of_being_clamped() {
+        let scenario = load(&overlapping_json("@1.0s"));
+        let tasks = build_frame_tasks(&scenario);
+
+        let composites = composite_participants(&tasks);
+        assert_eq!(
+            composites.len(),
+            10,
+            "scene 1 runs 1.0s at 10fps entirely inside scene 0, so every one of its frames \
+             composites: got {} composite frames",
+            composites.len()
+        );
+        assert!(
+            composites.iter().all(|p| p == &vec![0, 1]),
+            "each composite frame carries both scenes, bottom first: got {composites:?}"
+        );
+        assert_eq!(
+            tasks.len(),
+            30,
+            "the view lasts max(at + duration) = 3.0s, not the 4.0s a clamped timeline gave"
+        );
+    }
+
+    #[test]
+    fn a_composited_scene_advances_its_own_clock_from_its_own_at() {
+        let scenario = load(&overlapping_json("@1.5s"));
+        let tasks = build_frame_tasks(&scenario);
+
+        let frames_of_scene_1: Vec<u32> = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::Composite { participants, .. } => participants
+                    .iter()
+                    .find(|p| p.scene_idx == 1)
+                    .map(|p| p.frame_in_scene),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            frames_of_scene_1,
+            (0..10).collect::<Vec<u32>>(),
+            "the overlapping scene starts its own clock at 0 when its window opens, and \
+             advances one frame per output frame"
+        );
+    }
+
+    #[test]
+    fn a_scene_spanning_several_others_stays_in_every_one_of_their_frames() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 64, "height": 64, "fps": 10},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"duration": 3.0, "children": []},
+                {"duration": 1.0, "at": "@0.0s", "children": []},
+                {"duration": 1.0, "at": "@1.0s", "children": []},
+                {"duration": 1.0, "at": "@2.0s", "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+
+        assert_eq!(tasks.len(), 30, "the spanning scene sets the view's length");
+        let composites = composite_participants(&tasks);
+        assert_eq!(
+            composites.len(),
+            30,
+            "scene 0 spans the whole view, so every frame has two live scenes"
+        );
+        assert!(
+            composites.iter().all(|p| p[0] == 0),
+            "the spanning scene is always the bottom participant, so it supplies the \
+             background every frame: got {composites:?}"
+        );
+        let second: Vec<usize> = composites.iter().map(|p| p[1]).collect();
+        assert_eq!(second[0], 1, "beat 1 on top at frame 0");
+        assert_eq!(second[10], 2, "beat 2 on top at frame 10");
+        assert_eq!(second[20], 3, "beat 3 on top at frame 20");
+    }
+
+    #[test]
+    fn a_gap_between_overlapping_scenes_holds_the_last_live_frame() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 64, "height": 64, "fps": 10},
+            "timing": "v2",
+            "composition": [{"type": "slide", "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "at": "@0.5s", "children": []},
+                {"duration": 1.0, "at": "@3.0s", "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+        assert_eq!(tasks.len(), 40, "the view runs to 3.0s + 1.0s");
+
+        let held: Vec<(usize, u32)> = tasks[15..30]
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::Normal {
+                    scene_idx,
+                    frame_in_scene,
+                    ..
+                } => Some((*scene_idx, *frame_in_scene)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            held.iter().all(|(idx, frame)| *idx == 1 && *frame == 9),
+            "the gap holds the last frame of the scene that ended most recently: got {held:?}"
+        );
+    }
+
+    #[test]
+    fn snapping_a_cut_earlier_never_creates_an_overlap() {
+        let scenario = load(
+            r##"{
+            "video": {"width": 64, "height": 64, "fps": 10},
+            "timing": "v2",
+            "bpm": 24.0,
+            "snap": "beat",
+            "composition": [{"type": "slide", "scenes": [
+                {"duration": 3.0, "children": []},
+                {"duration": 3.0, "at": "@3.0s", "children": []}
+            ]}]
+        }"##,
+        );
+        let tasks = build_frame_tasks(&scenario);
+
+        assert!(
+            composite_participants(&tasks).is_empty(),
+            "snapping quantises a cut; it must never be read as asking two scenes to play at \
+             once, or `migrate --snap` would silently shorten every file it touches"
+        );
+        assert_eq!(
+            tasks.len(),
+            60,
+            "both scenes keep their full duration once the snapped start is pushed forward"
+        );
+    }
+
     #[test]
     fn v2_timing_renders_the_full_declared_duration_with_no_subtraction() {
         let scenario = load(&six_scene_json(Some("v2")));
@@ -1507,6 +1893,7 @@ mod timing_v2_tests {
             let actual_global = match task {
                 FrameTask::Normal { global_frame, .. } => *global_frame,
                 FrameTask::SlideTransition { global_frame, .. } => *global_frame,
+                FrameTask::Composite { global_frame, .. } => *global_frame,
                 FrameTask::WorldFrame { global_frame, .. } => *global_frame,
                 FrameTask::ViewTransition { global_frame, .. } => *global_frame,
             };
