@@ -137,8 +137,8 @@ fn icon_cache_file(cache_dir: &Path, icon: &str, color: &str, width: u32, height
 
 /// Fetch an icon's SVG bytes, checking the on-disk cache first and falling
 /// back to the Iconify API on a miss. Same public signature as before this
-/// fix — every existing caller (icon.rs, preload.rs, badge.rs,
-/// notification.rs, list.rs, stat.rs) gets the disk cache for free.
+/// fix — every existing caller (icon.rs, preload.rs, badge.rs, list.rs,
+/// stat.rs) gets the disk cache for free.
 pub fn fetch_icon_svg(icon: &str, color: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     fetch_icon_svg_in(icon, color, width, height, &icon_cache_dir())
 }

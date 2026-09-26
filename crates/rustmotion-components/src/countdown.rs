@@ -57,6 +57,14 @@ fn default_border_radius() -> f32 {
 /// css.width.is_none()` never gets a chance to apply its slightly-off one.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "CountdownRaw")]
+#[deprecated(
+    since = "0.7.1",
+    note = "`countdown` is a frozen composition (issue #333). Compose digit tiles from a \
+            `card` + `text` per unit instead of the dedicated flip-clock — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct Countdown {
     #[serde(default = "default_seconds")]
     pub seconds: f64,

@@ -24,7 +24,7 @@ Where:
 | Title + body text (30–50 words) | 5.0–7.0s |
 | 3× feature cards with text | 5.0–6.0s |
 | Counter animation | 3.0–4.0s (`animation_budget` + 1s dwell) |
-| Codeblock typewriter reveal | 6.0–12.0s (depends on line count) |
+| Code/terminal typewriter reveal | 6.0–12.0s (depends on line count) |
 | Data chart with labels | 5.0–7.0s |
 | Dashboard with multiple stats | 6.0–8.0s |
 | CTA / outro | 2.5–3.5s |

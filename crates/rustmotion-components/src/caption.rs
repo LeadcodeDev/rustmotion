@@ -18,6 +18,14 @@ use rustmotion_core::schema::{CaptionStyle, CaptionWord, TimelineStep};
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`caption` is a frozen composition. Compose a `for-each` over the words with \
+            `start_at`/`end_at` per word and an expression picking the active one instead \
+            — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Caption {
     pub words: Vec<CaptionWord>,
     #[serde(default = "default_active_color")]

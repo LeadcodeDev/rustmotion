@@ -79,7 +79,7 @@ fn buffer_crop_strategy_leaks_effect_onto_overlapping_sibling() {
 
     let mut buf = rendered.clone();
     let effects = vec![PostEffect::Pixelate { size: 32 }];
-    apply_post_effects(&mut buf, config.width, config.height, &effects, 0);
+    apply_post_effects(&mut buf, config.width, config.height, &effects, 0, 0.0);
 
     // The foreground square sits entirely inside the background's hit rect,
     // so the crop-and-apply strategy touches its pixels too, even though it

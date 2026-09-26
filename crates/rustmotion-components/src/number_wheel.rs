@@ -61,6 +61,15 @@ fn default_wheel_easing() -> EasingType {
 
 /// An odometer-style number where each digit rolls into place.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`number_wheel` is in the frozen-composition set (issue #333), but \
+            crates/rustmotion/skills/rules/composition-recipes.md flags it (with `gauge`) \
+            as a reasonable exception to keep using directly: reproducing genuine \
+            per-digit scroll physics from card/text/shape primitives is mechanically \
+            harder than the odometer effect itself. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct NumberWheel {
     /// The figure to land on, as written — `"30,222"`, `"5.7"`, `"98%"`.
     /// Digits roll; every other character (separators, signs, units) is

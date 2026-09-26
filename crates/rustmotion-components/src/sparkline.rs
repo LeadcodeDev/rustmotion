@@ -31,6 +31,14 @@ fn default_animation_duration() -> f64 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`sparkline` is a frozen composition (issue #333). Compose a tiny trend line \
+            from an `svg` polyline (or a `line` component) over normalized data points \
+            instead — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Sparkline {
     pub data: Vec<f64>,
     #[serde(default = "default_color")]

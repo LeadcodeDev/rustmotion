@@ -41,6 +41,14 @@ fn default_border_radius() -> f32 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`comparison` is a frozen composition (issue #333). Compose a before/after view \
+            from two clipped `card`/`image` panels and an animated `shape` divider instead \
+            — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Comparison {
     #[serde(default = "default_left_color")]
     pub left_color: String,

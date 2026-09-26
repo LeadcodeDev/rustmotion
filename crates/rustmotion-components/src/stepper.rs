@@ -56,6 +56,15 @@ pub struct StepItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`stepper` is a frozen composition (issue #333). Compose `card` circles \
+            (nodes) + `text` labels + `shape` connectors instead, one `for-each` item \
+            emitting a node and its trailing connector as sibling output — see \
+            crates/rustmotion/skills/rules/composition-recipes.md's step-flow recipe and \
+            examples/composition-step-flow.json. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Stepper {
     /// The steps to display.
     pub steps: Vec<StepItem>,

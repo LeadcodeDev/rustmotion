@@ -1,0 +1,74 @@
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#0F172A" },
+  "components": {
+    "flow_step": {
+      "params": {
+        "number": { "type": "string" },
+        "label": { "type": "string" },
+        "accent": { "type": "string", "default": "#3B82F6" },
+        "connector_color": { "type": "string", "default": "#334155" },
+        "delay": { "type": "number", "default": 0 }
+      },
+      "template": [
+        {
+          "type": "div",
+          "style": { "flex-direction": "column", "align-items": "center", "gap": 16, "animation": [{ "name": "fade_in_up", "delay": "$delay", "duration": 0.5 }] },
+          "children": [
+            {
+              "type": "card",
+              "style": { "width": 88, "height": 88, "background": "$accent", "border-radius": 44, "align-items": "center", "justify-content": "center" },
+              "children": [
+                { "type": "text", "content": "$number", "style": { "font-size": 36, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center" } }
+              ]
+            },
+            { "type": "text", "content": "$label", "style": { "font-size": 24, "color": "#E2E8F0", "text-align": "center" } }
+          ]
+        },
+        {
+          "type": "shape",
+          "shape": "rect",
+          "fill": "$connector_color",
+          "style": { "width": 140, "height": 4, "margin": { "top": 42 } }
+        }
+      ]
+    }
+  },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 44 },
+      "children": [
+        {
+          "type": "text",
+          "content": "Getting Started",
+          "style": { "font-size": 60, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": [{ "name": "fade_in", "duration": 0.5 }] }
+        },
+        {
+          "type": "div",
+          "style": { "flex-direction": "row", "align-items": "flex-start", "gap": 0 },
+          "children": [
+            {
+              "for-each": [
+                { "number": "1", "label": "Sign up", "accent": "#3B82F6", "connector_color": "#334155", "delay": 0.2 },
+                { "number": "2", "label": "Connect data", "accent": "#3B82F6", "connector_color": "#334155", "delay": 0.4 },
+                { "number": "3", "label": "Configure", "accent": "#3B82F6", "connector_color": "#334155", "delay": 0.6 },
+                { "number": "4", "label": "Go live", "accent": "#22C55E", "connector_color": "#00000000", "delay": 0.8 }
+              ],
+              "template": {
+                "use": "flow_step",
+                "props": {
+                  "number": "$number",
+                  "label": "$label",
+                  "accent": "$accent",
+                  "connector_color": "$connector_color",
+                  "delay": "$delay"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -6637,47 +6637,14 @@
           ]
         },
         {
-          "type": "terminal",
-          "position": "absolute",
-          "x": 300,
-          "y": 320,
-          "title": "ferriskey",
-          "theme": "dark",
-          "reveal": {
-            "mode": "typewriter",
-            "start": 0.25,
-            "duration": 2.6
-          },
-          "lines": [
-            {
-              "text": "cargo run --release",
-              "line_type": "command"
-            },
-            {
-              "text": "   Compiling ferriskey v0.7.0",
-              "line_type": "output",
-              "color": "#a1a1aa"
-            },
-            {
-              "text": "    Finished release [optimized] in 4.82s",
-              "line_type": "output",
-              "color": "#a1a1aa"
-            },
-            {
-              "text": "     Running target/release/ferriskey",
-              "line_type": "output",
-              "color": "#a1a1aa"
-            },
-            {
-              "text": "  0 unsafe blocks · 0 known CVEs",
-              "line_type": "output",
-              "color": "#22C55E"
-            }
-          ],
+          "type": "div",
           "style": {
+            "flex-direction": "column",
+            "background": "#1E1E1E",
+            "border-radius": 10,
+            "overflow": "hidden",
             "width": 1000,
             "height": 320,
-            "font-size": 28,
             "animation": [
               {
                 "name": "keyframes",
@@ -6729,7 +6696,162 @@
                 ]
               }
             ]
-          }
+          },
+          "children": [
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "row",
+                "align-items": "center",
+                "gap": 8,
+                "padding": {
+                  "top": 10,
+                  "right": 14,
+                  "bottom": 10,
+                  "left": 14
+                },
+                "background": "#2D2D2D"
+              },
+              "children": [
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ff5f56",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ffbd2e",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#27c93f",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "ferriskey",
+                  "style": {
+                    "font-size": 13,
+                    "color": "#808080",
+                    "margin": {
+                      "left": 8
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "div",
+              "stagger": 0.52,
+              "style": {
+                "flex-direction": "column",
+                "padding": 20,
+                "gap": 6
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "cargo run --release",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#FFFFFF",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "   Compiling ferriskey v0.7.0",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#a1a1aa",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "    Finished release [optimized] in 4.82s",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#a1a1aa",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "     Running target/release/ferriskey",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#a1a1aa",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "  0 unsafe blocks · 0 known CVEs",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#22C55E",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  },
+                  "caret": {
+                    "shape": "block",
+                    "hide_when_done": true
+                  }
+                }
+              ]
+            }
+          ],
+          "position": "absolute",
+          "x": 300,
+          "y": 320
         },
         {
           "type": "success_check",

@@ -2,8 +2,8 @@ use crate::engine::animator::ease;
 use crate::engine::transition::{apply_transition, camera_pan_transition, TransitionOptions};
 use crate::error::{Result, RustmotionError};
 use crate::schema::{
-    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, TransitionType, VideoConfig,
-    ViewType,
+    EasingType, ResolvedScenario as Scenario, ResolvedView, Scene, SceneStart, SceneTail, SnapMode,
+    TimingMode, TransitionType, VideoConfig, ViewType,
 };
 
 /// Description of what to render for a specific frame
@@ -38,6 +38,19 @@ pub enum FrameTask {
         scene_b_idx: usize,
         frame_in_transition: u32,
         scene_a_frame_offset: u32,
+        /// Whether scene A's frame index keeps advancing through the
+        /// transition (`scene_a_frame_offset + frame_in_transition`, today's
+        /// only behaviour) or stays pinned at `scene_a_frame_offset` for
+        /// every frame of the transition.
+        ///
+        /// Every `v1`-built task sets this `true`, reproducing the original
+        /// formula exactly. `timing: "v2"` (issue #336) is the only builder
+        /// that ever sets it `false` — for a scene whose `tail` is
+        /// `"freeze"`, rendered past its own end: the outgoing scene must
+        /// hold its *last* frame for the whole overlap rather than replay
+        /// frames it already showed as plain `Normal` frames moments
+        /// earlier (v2 does not clip a scene's own tail the way v1 does).
+        scene_a_frame_advance: bool,
         scene_a_total_frames: u32,
         scene_b_total_frames: u32,
         transition_type: TransitionType,
@@ -157,6 +170,7 @@ pub fn render_frame_task_scaled(
                 scaled_h,
                 &scene.effects,
                 *frame_in_scene,
+                *frame_in_scene as f64 / config.fps as f64,
             );
             Ok(pixels)
         }
@@ -167,6 +181,7 @@ pub fn render_frame_task_scaled(
             scene_b_idx,
             frame_in_transition,
             scene_a_frame_offset,
+            scene_a_frame_advance,
             scene_a_total_frames,
             scene_b_total_frames,
             transition_type,
@@ -180,7 +195,11 @@ pub fn render_frame_task_scaled(
             let scaled_h = (config.height as f32 * scale_factor) as u32;
             let fps = config.fps;
             let progress = transition_progress(*frame_in_transition, *transition_duration, fps);
-            let frame_a_idx = scene_a_frame_offset + frame_in_transition;
+            let frame_a_idx = if *scene_a_frame_advance {
+                scene_a_frame_offset + frame_in_transition
+            } else {
+                *scene_a_frame_offset
+            };
 
             if matches!(transition_type, TransitionType::CameraPan) {
                 let (ax, ay) = scenes[*scene_a_idx]
@@ -253,6 +272,7 @@ pub fn render_frame_task_scaled(
                     scaled_h,
                     &scenes[*scene_b_idx].effects,
                     *frame_in_transition,
+                    *frame_in_transition as f64 / config.fps as f64,
                 );
                 return Ok(composited);
             }
@@ -313,6 +333,7 @@ pub fn render_frame_task_scaled(
                 scaled_h,
                 &scenes[*scene_b_idx].effects,
                 *frame_in_transition,
+                *frame_in_transition as f64 / config.fps as f64,
             );
             Ok(composited)
         }
@@ -350,6 +371,7 @@ pub fn render_frame_task_scaled(
                     scaled_h,
                     &view.scenes[active_idx].effects,
                     *frame_in_view,
+                    *frame_in_view as f64 / config.fps as f64,
                 );
             }
             Ok(pixels)
@@ -405,6 +427,7 @@ pub fn render_frame_task_scaled(
                     scaled_h,
                     &first_scene.effects,
                     *frame_in_transition,
+                    *frame_in_transition as f64 / config.fps as f64,
                 );
             }
             Ok(composited)
@@ -584,7 +607,10 @@ pub fn build_frame_tasks(scenario: &Scenario) -> Vec<FrameTask> {
         }
 
         match view.view_type {
-            ViewType::Slide => build_slide_view_tasks(&mut tasks, view_idx, view, fps),
+            ViewType::Slide => match view_timing(view) {
+                TimingMode::V1 => build_slide_view_tasks(&mut tasks, view_idx, view, fps),
+                TimingMode::V2 => build_slide_view_tasks_v2(&mut tasks, view_idx, view, fps),
+            },
             ViewType::World => build_world_view_tasks(
                 &mut tasks,
                 view_idx,
@@ -701,6 +727,7 @@ fn build_slide_view_tasks(
                     scene_b_idx: i + 1,
                     frame_in_transition: f,
                     scene_a_frame_offset: scene_frames - outgoing_transition_frames,
+                    scene_a_frame_advance: true,
                     scene_a_total_frames: scene_frames,
                     scene_b_total_frames: scene_b_frames,
                     transition_type: transition.transition_type.clone(),
@@ -708,6 +735,235 @@ fn build_slide_view_tasks(
                     transition_duration: outgoing_effective_duration,
                     easing: easing.clone(),
                 });
+            }
+        }
+    }
+}
+
+/// Which [`TimingMode`] a slide view's tasks should be built under.
+///
+/// There is no view-level (or scenario-level) place to read this from — see
+/// the doc on [`crate::schema::ResolvedScenario`] for why: `bpm`/
+/// `beat_offset`/`timing`/`snap` are stamped onto each individual
+/// [`Scene`] instead (`Scene::resolved_timing`), once, when the source
+/// `Scenario` is deserialized. A view's timing is therefore its first
+/// scene's `resolved_timing` — the common case (no `include`, uniform
+/// `timing` for the whole file) makes every scene in a view agree, so this
+/// is exact there; a view built by mixing an `include`d file that declares
+/// no `timing` of its own with a root scenario that does is a known,
+/// undocumented-by-tests edge case this reduces to "the first scene wins".
+fn view_timing(view: &ResolvedView) -> TimingMode {
+    view.scenes
+        .first()
+        .map(|s| s.resolved_timing)
+        .unwrap_or_default()
+}
+
+/// Frames spent transitioning *into* `scenes[entering_idx]` — 0 if it has no
+/// `transition` of its own (every scene's `transition` describes how it is
+/// entered from the previous one). Clamped to the entering scene's own
+/// frame budget: unlike v1 (which clamps against the *outgoing* scene,
+/// because that side pays for the transition there), v2 never shortens the
+/// outgoing scene, so the entering scene is the one whose own Normal frames
+/// would go negative if the transition were allowed to ask for more than it
+/// has.
+fn v2_incoming_transition_frames(entering: &Scene, entering_frames: u32, fps: u32) -> u32 {
+    let Some(transition) = entering.transition.as_ref() else {
+        return 0;
+    };
+    let raw = (transition.duration * fps as f64).round() as u32;
+    raw.min(entering_frames)
+}
+
+/// Rounds `seconds` to the nearest point on the beat grid `beat_offset + n *
+/// 60 / bpm` (issue #336, `snap: "beat"`) — the cheapest way to get a
+/// rhythmic edit by default: an author sets `snap` once and never
+/// hand-computes a single beat position for `at`.
+fn snap_seconds_to_beat(seconds: f64, beat_offset: f64, bpm: f64) -> f64 {
+    let beat_len = 60.0 / bpm;
+    let n = ((seconds - beat_offset) / beat_len).round();
+    beat_offset + n * beat_len
+}
+
+/// Resolves `scene.at` to an absolute frame index, applying `snap: "beat"`
+/// when the scene's scenario declared one. Never fails outright: an
+/// unresolvable `TimePoint` (e.g. a beat unit with no `bpm`) is reported to
+/// stderr and treated as [`SceneStart::Auto`] (`fallback`) — `build_frame_tasks`
+/// has no `Result` to propagate through, and the rest of the render
+/// pipeline (every caller of it) is built on that being infallible.
+fn v2_resolve_at_frames(scene: &Scene, scene_idx: usize, fps: u32, fallback: u32) -> u32 {
+    let SceneStart::At(ref tp) = scene.at else {
+        return fallback;
+    };
+    let seconds = match tp.resolve_absolute(&scene.resolved_time_ctx) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "warning: scene {scene_idx}'s `at` could not be resolved ({e}); falling back \
+                 to automatic placement"
+            );
+            return fallback;
+        }
+    };
+    let seconds = match scene.resolved_snap {
+        Some(SnapMode::Beat) => match scene.resolved_time_ctx.bpm {
+            Some(bpm) => snap_seconds_to_beat(seconds, scene.resolved_time_ctx.beat_offset, bpm),
+            None => seconds,
+        },
+        None => seconds,
+    };
+    (seconds * fps as f64).round().max(0.0) as u32
+}
+
+/// Pushes `count` repeats of `scenes[scene_idx]`'s frame `frame_in_scene` as
+/// plain `Normal` tasks — holding that one frame in place. Used by
+/// [`build_slide_view_tasks_v2`] to fill a *gap* an explicit `at` can open
+/// (an absolute start later than where the previous scene naturally ends):
+/// the previous scene (or, for a leading gap before the very first scene,
+/// that scene's own opening frame) holds until the gap closes, so the dense,
+/// index-addressed frame schedule this crate builds everywhere else never
+/// grows a hole.
+fn hold_scene_frame(
+    tasks: &mut Vec<FrameTask>,
+    view_idx: usize,
+    scene_idx: usize,
+    frame_in_scene: u32,
+    scene_total_frames: u32,
+    count: u32,
+) {
+    for _ in 0..count {
+        tasks.push(FrameTask::Normal {
+            global_frame: tasks.len() as u32,
+            view_idx,
+            scene_idx,
+            frame_in_scene,
+            scene_total_frames,
+        });
+    }
+}
+
+/// `build_slide_view_tasks`'s `timing: "v2"` counterpart (issue #336): scene
+/// *i* occupies `[at_i, at_i + duration_i)` and a transition entering scene
+/// *i+1* renders scene *i* an *additional* `transition_frames(i+1)` frames
+/// past that window instead of stealing from inside it — see the module doc
+/// this function's neighbours don't have room for: `at_i` defaults
+/// (`SceneStart::Auto`) to exactly where scene `i-1`'s own window ends, so
+/// the transition never shortens anything and the view's total frame count
+/// is simply `sum(duration_frames)`, independent of how many transitions
+/// there are or how long they last.
+///
+/// An explicit `at` that lands *before* the natural next position is
+/// clamped up to it (this workstream does not model an overlap beyond what
+/// a declared `transition` already covers) and warns; one that lands
+/// *after* it opens a gap, filled by holding the previous scene — see
+/// [`hold_scene_frame`].
+fn build_slide_view_tasks_v2(
+    tasks: &mut Vec<FrameTask>,
+    view_idx: usize,
+    view: &ResolvedView,
+    fps: u32,
+) {
+    let scenes = &view.scenes;
+    if scenes.is_empty() {
+        return;
+    }
+
+    let duration_frames: Vec<u32> = scenes
+        .iter()
+        .map(|s| (s.duration * fps as f64).round() as u32)
+        .collect();
+
+    // Frames spent transitioning into scenes[k] — 0 for k == 0.
+    let transition_frames: Vec<u32> = scenes
+        .iter()
+        .enumerate()
+        .map(|(k, s)| {
+            if k == 0 {
+                0
+            } else {
+                v2_incoming_transition_frames(s, duration_frames[k], fps)
+            }
+        })
+        .collect();
+
+    let mut cursor: u32 = 0;
+
+    for (i, scene) in scenes.iter().enumerate() {
+        let requested_start = match scene.at {
+            SceneStart::Auto(_) => cursor,
+            SceneStart::At(_) => v2_resolve_at_frames(scene, i, fps, cursor),
+        };
+        let start = if requested_start < cursor {
+            eprintln!(
+                "warning: scene {i}'s `at` resolves before the previous scene's own window \
+                 ends ({:.3}s) — clamped to avoid an overlap this workstream does not model",
+                cursor as f64 / fps as f64
+            );
+            cursor
+        } else {
+            requested_start
+        };
+
+        if start > cursor {
+            let gap = start - cursor;
+            if i == 0 {
+                hold_scene_frame(tasks, view_idx, 0, 0, duration_frames[0], gap);
+            } else {
+                let prev = i - 1;
+                hold_scene_frame(
+                    tasks,
+                    view_idx,
+                    prev,
+                    duration_frames[prev].saturating_sub(1),
+                    duration_frames[prev],
+                    gap,
+                );
+            }
+        }
+
+        for f in transition_frames[i]..duration_frames[i] {
+            tasks.push(FrameTask::Normal {
+                global_frame: tasks.len() as u32,
+                view_idx,
+                scene_idx: i,
+                frame_in_scene: f,
+                scene_total_frames: duration_frames[i],
+            });
+        }
+        cursor = start + duration_frames[i];
+
+        if let Some(next_scene) = scenes.get(i + 1) {
+            let d = transition_frames[i + 1];
+            if d > 0 {
+                let transition = next_scene
+                    .transition
+                    .as_ref()
+                    .expect("transition_frames[i+1] > 0 implies scenes[i+1].transition.is_some()");
+                let advance = matches!(scene.tail, SceneTail::Continue);
+                let offset = if advance {
+                    duration_frames[i]
+                } else {
+                    duration_frames[i].saturating_sub(1)
+                };
+                let scene_b_frames = duration_frames[i + 1];
+                let easing = transition.easing.clone();
+                for f in 0..d {
+                    tasks.push(FrameTask::SlideTransition {
+                        global_frame: tasks.len() as u32,
+                        view_idx,
+                        scene_a_idx: i,
+                        scene_b_idx: i + 1,
+                        frame_in_transition: f,
+                        scene_a_frame_offset: offset,
+                        scene_a_frame_advance: advance,
+                        scene_a_total_frames: duration_frames[i],
+                        scene_b_total_frames: scene_b_frames,
+                        transition_type: transition.transition_type.clone(),
+                        options: transition.into(),
+                        transition_duration: d as f64 / fps as f64,
+                        easing: easing.clone(),
+                    });
+                }
             }
         }
     }
@@ -963,6 +1219,7 @@ pub(super) fn build_scene_frame_tasks_in_view(
                 scene_b_idx: scene_idx + 1,
                 frame_in_transition: f,
                 scene_a_frame_offset: scene_frames - outgoing_transition_frames,
+                scene_a_frame_advance: true,
                 scene_a_total_frames: scene_frames,
                 scene_b_total_frames: scene_b_frames,
                 transition_type: transition.transition_type.clone(),
@@ -1462,5 +1719,341 @@ mod segment_tests {
         let nv_hashes: Vec<u64> = nv_slots.iter().map(|s| slot_hash(&no_vt, s)).collect();
         let all = plan_dirty(&no_vt, &nv_slots, &nv_hashes, Some(&prev));
         assert!(all.iter().all(|d| *d));
+    }
+}
+
+// Issue #336: absolute scene placement + a beat grid. `build_frame_tasks`
+// must render `timing: "v2"` without subtracting transition durations from
+// the total, and must stay byte-identical (same 13.5s-from-15.0s
+// subtraction) when `timing` is absent.
+#[cfg(test)]
+mod timing_v2_tests {
+    use super::*;
+    use crate::loader::load_scenario_from_source;
+    use crate::schema::ResolvedScenario;
+
+    /// The issue's own reproduction case, verbatim: six scenes declaring
+    /// 2.2 + 2.6 + 2.6 + 3.12 + 2.08 + 2.4 = 15.0s, five transitions
+    /// 0.3 + 0.3 + 0.3 + 0.25 + 0.35 = 1.5s. fps=20 is chosen because at
+    /// that rate every one of those eleven durations lands on an exact
+    /// frame count under Rust's round-half-away-from-zero `f64::round()`
+    /// (unlike e.g. 30fps, where 0.35s rounds to 10.5 frames and drifts the
+    /// v1 total off 13.5s by a third of a frame) — so both the v1 and the
+    /// v2 target are exact, not "close to", 13.5s/15.0s.
+    fn six_scene_json(timing: Option<&str>) -> String {
+        let timing_field = timing
+            .map(|t| format!(r#""timing": "{t}","#))
+            .unwrap_or_default();
+        format!(
+            r##"{{
+            "video": {{"width": 64, "height": 64, "fps": 20}},
+            {timing_field}
+            "scenes": [
+                {{"duration": 2.2, "children": []}},
+                {{"duration": 2.6, "children": [],
+                  "transition": {{"type": "fade", "duration": 0.3}}}},
+                {{"duration": 2.6, "children": [],
+                  "transition": {{"type": "fade", "duration": 0.3}}}},
+                {{"duration": 3.12, "children": [],
+                  "transition": {{"type": "fade", "duration": 0.3}}}},
+                {{"duration": 2.08, "children": [],
+                  "transition": {{"type": "fade", "duration": 0.25}}}},
+                {{"duration": 2.4, "children": [],
+                  "transition": {{"type": "fade", "duration": 0.35}}}}
+            ]
+        }}"##
+        )
+    }
+
+    fn load(json: &str) -> ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("load")
+    }
+
+    #[test]
+    fn v2_timing_renders_the_full_declared_duration_with_no_subtraction() {
+        let scenario = load(&six_scene_json(Some("v2")));
+        let tasks = build_frame_tasks(&scenario);
+        let seconds = tasks.len() as f64 / scenario.video.fps as f64;
+        assert_eq!(
+            seconds,
+            15.0,
+            "expected exactly 15.0s under timing: v2 (at_last + duration_last, no \
+             subtraction), got {seconds}s ({} frames)",
+            tasks.len()
+        );
+    }
+
+    #[test]
+    fn absent_timing_still_subtracts_transition_durations_like_today() {
+        // No `timing` field at all — the default (`v1`) must reproduce
+        // today's behaviour exactly: sum(durations) - sum(transitions).
+        let scenario = load(&six_scene_json(None));
+        let tasks = build_frame_tasks(&scenario);
+        let seconds = tasks.len() as f64 / scenario.video.fps as f64;
+        assert_eq!(
+            seconds, 13.5,
+            "expected exactly 13.5s under the default (v1) subtracting semantics, got {seconds}s"
+        );
+    }
+
+    #[test]
+    fn explicit_timing_v1_matches_the_default() {
+        let default_tasks = build_frame_tasks(&load(&six_scene_json(None)));
+        let explicit_tasks = build_frame_tasks(&load(&six_scene_json(Some("v1"))));
+        assert_eq!(default_tasks.len(), explicit_tasks.len());
+    }
+
+    #[test]
+    fn frame_range_still_addresses_the_same_dense_index_space_under_v2() {
+        // Deliverable 7: `--frames a-b` (`build_frame_tasks_range`) must
+        // keep slicing the same flat, index-addressed schedule under v2.
+        let scenario = load(&six_scene_json(Some("v2")));
+        let full = build_frame_tasks(&scenario);
+        let total = full.len() as u32;
+        assert_eq!(total, 300, "15.0s @ 20fps must be exactly 300 frames");
+
+        let (range_tasks, reported_total) =
+            build_frame_tasks_range(&scenario, 100, 199).expect("range must be in bounds");
+        assert_eq!(reported_total, total);
+        assert_eq!(range_tasks.len(), 100);
+        for (offset, task) in range_tasks.iter().enumerate() {
+            let expected_global = 100 + offset as u32;
+            let actual_global = match task {
+                FrameTask::Normal { global_frame, .. } => *global_frame,
+                FrameTask::SlideTransition { global_frame, .. } => *global_frame,
+                FrameTask::WorldFrame { global_frame, .. } => *global_frame,
+                FrameTask::ViewTransition { global_frame, .. } => *global_frame,
+            };
+            assert_eq!(actual_global, expected_global);
+        }
+
+        // Out of range still errors exactly like it does under v1.
+        assert!(build_frame_tasks_range(&scenario, 0, total).is_err());
+    }
+
+    fn two_scene_json(tail: Option<&str>, transition_duration: f64) -> String {
+        let tail_field = tail
+            .map(|t| format!(r#""tail": "{t}", "#))
+            .unwrap_or_default();
+        format!(
+            r##"{{
+            "video": {{"width": 64, "height": 64, "fps": 30}},
+            "timing": "v2",
+            "scenes": [
+                {{{tail_field}"duration": 1.0, "children": []}},
+                {{"duration": 1.0, "children": [],
+                  "transition": {{"type": "fade", "duration": {transition_duration}}}}}
+            ]
+        }}"##
+        )
+    }
+
+    #[test]
+    fn v2_default_tail_freezes_scene_a_through_the_overlap() {
+        let scenario = load(&two_scene_json(None, 0.2));
+        let tasks = build_frame_tasks(&scenario);
+        let transitions: Vec<_> = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::SlideTransition {
+                    scene_a_frame_offset,
+                    scene_a_frame_advance,
+                    scene_a_total_frames,
+                    ..
+                } => Some((
+                    *scene_a_frame_offset,
+                    *scene_a_frame_advance,
+                    *scene_a_total_frames,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert!(!transitions.is_empty(), "expected transition frames");
+        for (offset, advance, total_frames) in transitions {
+            assert!(!advance, "default tail must not advance scene A's clock");
+            assert_eq!(
+                offset,
+                total_frames - 1,
+                "frozen scene A must always render its own last real frame"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_continue_tail_advances_scene_a_past_its_own_duration() {
+        let scenario = load(&two_scene_json(Some("continue"), 0.2));
+        let tasks = build_frame_tasks(&scenario);
+        let transitions: Vec<_> = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::SlideTransition {
+                    scene_a_frame_offset,
+                    scene_a_frame_advance,
+                    scene_a_total_frames,
+                    ..
+                } => Some((
+                    *scene_a_frame_offset,
+                    *scene_a_frame_advance,
+                    *scene_a_total_frames,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert!(!transitions.is_empty(), "expected transition frames");
+        for (offset, advance, total_frames) in transitions {
+            assert!(
+                advance,
+                "\"continue\" tail must keep scene A's clock advancing"
+            );
+            assert_eq!(
+                offset, total_frames,
+                "the overlap must pick up exactly where scene A's own Normal frames left off"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_scene_a_own_normal_frames_are_never_clipped() {
+        // The core of the fix: under v1 the outgoing scene loses its last
+        // `transition_frames` frames from its own Normal range. Under v2 it
+        // must keep every one of them — this is what makes the total
+        // additive instead of subtractive.
+        let scenario = load(&two_scene_json(None, 0.5));
+        let tasks = build_frame_tasks(&scenario);
+        let scene_a_normal_frames: Vec<u32> = tasks
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::Normal {
+                    scene_idx: 0,
+                    frame_in_scene,
+                    ..
+                } => Some(*frame_in_scene),
+                _ => None,
+            })
+            .collect();
+        let fps = scenario.video.fps;
+        let expected_frames = (1.0 * fps as f64).round() as u32;
+        assert_eq!(
+            scene_a_normal_frames.len() as u32,
+            expected_frames,
+            "scene A's own 1.0s must render in full as Normal frames, unclipped: got {scene_a_normal_frames:?}"
+        );
+        assert_eq!(*scene_a_normal_frames.last().unwrap(), expected_frames - 1);
+    }
+
+    #[test]
+    fn snap_beat_rounds_an_explicit_at_onto_the_grid() {
+        // bpm=120 -> beat length 0.5s, beats at 0, 0.5, 1.0, 1.5, 2.0, ...
+        // Scene 0 (1.0s) ends at 1.0s, well before either candidate beat, so
+        // this only exercises snapping, not the overlap clamp. Scene 1 asks
+        // for the off-grid 1.8s, nearer to the 2.0s beat than to 1.5s; with
+        // `snap: "beat"` that must land exactly on 2.0s.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "timing": "v2",
+            "bpm": 120,
+            "snap": "beat",
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "1.8s"}
+            ]
+        }"##;
+        let scenario = load(json);
+        let tasks = build_frame_tasks(&scenario);
+        let scene_1_start = tasks
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::Normal {
+                    scene_idx: 1,
+                    global_frame,
+                    frame_in_scene: 0,
+                    ..
+                } => Some(*global_frame),
+                _ => None,
+            })
+            .expect("scene 1 must have a frame_in_scene == 0 Normal task");
+        let fps = scenario.video.fps as f64;
+        assert_eq!(
+            scene_1_start as f64 / fps,
+            2.0,
+            "snap: beat must round the off-grid 1.8s onto the 2.0s beat"
+        );
+    }
+
+    #[test]
+    fn at_beat_unit_resolves_against_the_scenarios_bpm_and_beat_offset() {
+        // bpm=120 (0.5s/beat), beat_offset=2.2s (the reel's real anchor per
+        // issue #336) -> beat 1 lands at 2.2 + 0.5 = 2.7s. Scene 0 is only
+        // 2.0s, ending well before that, so this isolates beat resolution
+        // from the overlap clamp (see `snap_beat_rounds_an_explicit_at_onto_the_grid`'s doc).
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "timing": "v2",
+            "bpm": 120,
+            "beat_offset": 2.2,
+            "scenes": [
+                {"duration": 2.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "1b"}
+            ]
+        }"##;
+        let scenario = load(json);
+        let tasks = build_frame_tasks(&scenario);
+        let scene_1_start = tasks
+            .iter()
+            .find_map(|t| match t {
+                FrameTask::Normal {
+                    scene_idx: 1,
+                    global_frame,
+                    frame_in_scene: 0,
+                    ..
+                } => Some(*global_frame),
+                _ => None,
+            })
+            .expect("scene 1 must have a frame_in_scene == 0 Normal task");
+        let fps = scenario.video.fps as f64;
+        assert!(
+            (scene_1_start as f64 / fps - 2.7).abs() < 1e-9,
+            "expected scene 1 to start at beat 1 = 2.7s, got {}s",
+            scene_1_start as f64 / fps
+        );
+    }
+
+    #[test]
+    fn v2_gap_from_an_explicit_at_holds_the_previous_scene() {
+        // Scene 1 explicitly starts a full second after scene 0's 1.0s
+        // window ends, opening a 1.0s gap that must be filled by holding
+        // scene 0 on its own last frame rather than leaving a hole in the
+        // dense, index-addressed schedule.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 10},
+            "timing": "v2",
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "2.0s"}
+            ]
+        }"##;
+        let scenario = load(json);
+        let tasks = build_frame_tasks(&scenario);
+        assert_eq!(
+            tasks.len(),
+            30,
+            "1.0s scene0 + 1.0s gap + 1.0s scene1 @ 10fps"
+        );
+        let held: Vec<u32> = tasks[10..20]
+            .iter()
+            .filter_map(|t| match t {
+                FrameTask::Normal {
+                    scene_idx: 0,
+                    frame_in_scene,
+                    ..
+                } => Some(*frame_in_scene),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            held,
+            vec![9; 10],
+            "the 1.0s gap must hold scene 0's own last frame (index 9), got {held:?}"
+        );
     }
 }

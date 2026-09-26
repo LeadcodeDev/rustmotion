@@ -1,0 +1,886 @@
+{
+  "version": "1.0",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#0f172a"
+  },
+  "backgrounds": {
+    "rings": {
+      "preset": "concentric_circles",
+      "colors": [
+        "#0f172a",
+        "#1b1447",
+        "#0f172a"
+      ],
+      "speed": 12,
+      "element_size": 1.5,
+      "count": 5
+    }
+  },
+  "composition": [
+    {
+      "type": "slide",
+      "scenes": [
+        {
+          "duration": 6.0,
+          "background": {
+            "$ref": "rings"
+          },
+          "layout": {
+            "align_items": "center",
+            "justify_content": "center",
+            "direction": "column",
+            "gap": 40
+          },
+          "camera": {
+            "origin": {
+              "x": 960,
+              "y": 540
+            },
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  {
+                    "time": 0,
+                    "value": 1.18
+                  },
+                  {
+                    "time": 5.0,
+                    "value": 1.0
+                  }
+                ],
+                "easing": "ease_out"
+              },
+              {
+                "property": "x",
+                "values": [
+                  {
+                    "time": 0,
+                    "value": -90
+                  },
+                  {
+                    "time": 5.0,
+                    "value": 0
+                  }
+                ],
+                "easing": "ease_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "shape",
+              "shape": "circle",
+              "position": "absolute",
+              "x": 120,
+              "y": 140,
+              "fill": {
+                "type": "radial",
+                "colors": [
+                  "#6366F180",
+                  "#6366F100"
+                ]
+              },
+              "style": {
+                "width": 760,
+                "height": 760,
+                "depth": 0.25,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "duration": 1.0
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 5,
+                    "frequency": 0.35,
+                    "seed": 7
+                  }
+                ]
+              }
+            },
+            {
+              "type": "shape",
+              "shape": "circle",
+              "position": "absolute",
+              "x": 1180,
+              "y": 360,
+              "fill": {
+                "type": "radial",
+                "colors": [
+                  "#A855F780",
+                  "#A855F700"
+                ]
+              },
+              "style": {
+                "width": 680,
+                "height": 680,
+                "depth": 0.4,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "delay": 0.2,
+                    "duration": 1.0
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_x",
+                    "amplitude": 6,
+                    "frequency": 0.45,
+                    "seed": 91
+                  }
+                ]
+              }
+            },
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "column",
+                "align-items": "center",
+                "gap": 28,
+                "depth": 1.0
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "Depth is a rendering decision",
+                  "max_width": 1400,
+                  "style": {
+                    "font-size": 104,
+                    "color": "#F8FAFC",
+                    "font-weight": "bold",
+                    "text-align": "center",
+                    "line-height": 1.05,
+                    "letter-spacing": -2,
+                    "animation": [
+                      {
+                        "name": "char_fade_in",
+                        "granularity": "word",
+                        "stagger": 0.14,
+                        "duration": 0.6,
+                        "delay": 0.6
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "Four independent mechanisms, one camera.",
+                  "max_width": 1100,
+                  "style": {
+                    "font-size": 40,
+                    "color": "#94A3B8",
+                    "text-align": "center",
+                    "line-height": 1.4,
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "delay": 1.7,
+                        "duration": 0.7
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "badge",
+              "text": "style.depth",
+              "icon": "lucide:layers",
+              "variant": "solid",
+              "position": "absolute",
+              "x": 150,
+              "y": 880,
+              "style": {
+                "background": "#4338CA",
+                "font-size": 30,
+                "depth": 1.9,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 2.4,
+                    "duration": 0.6
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 9,
+                    "frequency": 1.2,
+                    "seed": 33
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "duration": 6.5,
+          "transition": {
+            "type": "iris",
+            "duration": 0.7
+          },
+          "background": {
+            "$ref": "rings",
+            "colors": [
+              "#0f172a",
+              "#10283f",
+              "#0f172a"
+            ],
+            "transition": {
+              "duration": 1.0,
+              "easing": "ease_in_out"
+            }
+          },
+          "layout": {
+            "align_items": "center",
+            "justify_content": "center",
+            "direction": "column",
+            "gap": 48
+          },
+          "children": [
+            {
+              "type": "shape",
+              "shape": "circle",
+              "position": "absolute",
+              "x": 700,
+              "y": 240,
+              "fill": {
+                "type": "radial",
+                "colors": [
+                  "#0EA5E980",
+                  "#0EA5E900"
+                ]
+              },
+              "style": {
+                "width": 820,
+                "height": 820,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "duration": 1.0
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 4,
+                    "frequency": 0.3,
+                    "seed": 12
+                  }
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "content": "A tilt the shadow agrees with",
+              "style": {
+                "font-size": 64,
+                "color": "#F8FAFC",
+                "font-weight": "bold",
+                "text-align": "center",
+                "letter-spacing": -1,
+                "animation": [
+                  {
+                    "name": "fade_in_down",
+                    "duration": 0.7
+                  }
+                ]
+              }
+            },
+            {
+              "type": "card",
+              "style": {
+                "width": 1180,
+                "height": 440,
+                "background": "#1e293b",
+                "border-radius": 28,
+                "padding": 56,
+                "gap": 32,
+                "flex-direction": "column",
+                "justify-content": "center",
+                "border": {
+                  "color": "#FFFFFF1A",
+                  "width": 1
+                },
+                "box-shadow": [
+                  {
+                    "color": "#00000090",
+                    "offset-x": 0,
+                    "offset-y": 36,
+                    "blur": 90
+                  }
+                ],
+                "animation": [
+                  {
+                    "name": "keyframes",
+                    "keyframes": [
+                      {
+                        "property": "rotate_x",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 14
+                          },
+                          {
+                            "time": 2.6,
+                            "value": 4
+                          }
+                        ],
+                        "easing": "ease_out"
+                      },
+                      {
+                        "property": "rotate_y",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": -13
+                          },
+                          {
+                            "time": 2.6,
+                            "value": -4
+                          }
+                        ],
+                        "easing": "ease_out"
+                      },
+                      {
+                        "property": "perspective",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 900
+                          },
+                          {
+                            "time": 2.6,
+                            "value": 900
+                          }
+                        ],
+                        "easing": "linear"
+                      },
+                      {
+                        "property": "opacity",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 0
+                          },
+                          {
+                            "time": 0.6,
+                            "value": 1
+                          }
+                        ],
+                        "easing": "ease_out"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "float_3d",
+                    "loop": true
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "rotate_x",
+                      "color": "#38BDF8",
+                      "font-weight": "bold"
+                    },
+                    {
+                      "text": " and "
+                    },
+                    {
+                      "text": "rotate_y",
+                      "color": "#38BDF8",
+                      "font-weight": "bold"
+                    },
+                    {
+                      "text": " drive a Skia M44 matrix."
+                    }
+                  ],
+                  "max_width": 1020,
+                  "style": {
+                    "font-size": 44,
+                    "color": "#E2E8F0",
+                    "line-height": 1.35
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "The box-shadow is not drawn by hand. It reads the tilt and shifts against it, so the card keeps a ground plane.",
+                  "max_width": 1020,
+                  "style": {
+                    "font-size": 32,
+                    "color": "#94A3B8",
+                    "line-height": 1.5,
+                    "animation": [
+                      {
+                        "name": "fade_in",
+                        "delay": 1.2,
+                        "duration": 0.8
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "duration": 7.0,
+          "transition": {
+            "type": "corner_reveal",
+            "duration": 0.6,
+            "corner": "bottom_left"
+          },
+          "background": {
+            "$ref": "rings",
+            "colors": [
+              "#0f172a",
+              "#2a1240",
+              "#0f172a"
+            ],
+            "transition": {
+              "duration": 1.0,
+              "easing": "ease_in_out"
+            }
+          },
+          "layout": {
+            "align_items": "center",
+            "justify_content": "center",
+            "direction": "column",
+            "gap": 36
+          },
+          "camera": {
+            "origin": {
+              "x": 960,
+              "y": 540
+            },
+            "keyframes": [
+              {
+                "property": "x",
+                "values": [
+                  {
+                    "time": 0.4,
+                    "value": 0
+                  },
+                  {
+                    "time": 6.2,
+                    "value": 150
+                  }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "shape",
+              "shape": "rounded_rect",
+              "position": "absolute",
+              "x": 0,
+              "y": 560,
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#1E1B4B00",
+                  "#312E8166"
+                ],
+                "angle": 90
+              },
+              "style": {
+                "width": 1920,
+                "height": 520,
+                "border-radius": 0,
+                "depth": 0.2,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "duration": 0.8
+                  }
+                ]
+              }
+            },
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "row",
+                "align-items": "center",
+                "gap": 40,
+                "depth": 0.55
+              },
+              "children": [
+                {
+                  "type": "card",
+                  "style": {
+                    "width": 380,
+                    "height": 300,
+                    "background": "#16213a",
+                    "border-radius": 22,
+                    "padding": 32,
+                    "gap": 14,
+                    "flex-direction": "column",
+                    "justify-content": "center",
+                    "opacity": 0.72,
+                    "box-shadow": [
+                      {
+                        "color": "#00000060",
+                        "offset-x": 0,
+                        "offset-y": 16,
+                        "blur": 40
+                      }
+                    ],
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "delay": 0.3,
+                        "duration": 0.7
+                      },
+                      {
+                        "name": "wiggle",
+                        "property": "translate_y",
+                        "amplitude": 4,
+                        "frequency": 0.4,
+                        "seed": 51
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "content": "depth 0.2",
+                      "style": {
+                        "font-size": 34,
+                        "color": "#64748B",
+                        "font-weight": "bold"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Barely moves. Reads as far.",
+                      "max_width": 300,
+                      "style": {
+                        "font-size": 26,
+                        "color": "#475569",
+                        "line-height": 1.4,
+                        "height": 80
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "card",
+                  "style": {
+                    "width": 380,
+                    "height": 300,
+                    "background": "#1e293b",
+                    "border-radius": 22,
+                    "padding": 32,
+                    "gap": 14,
+                    "flex-direction": "column",
+                    "justify-content": "center",
+                    "box-shadow": [
+                      {
+                        "color": "#00000070",
+                        "offset-x": 0,
+                        "offset-y": 22,
+                        "blur": 55
+                      }
+                    ],
+                    "animation": [
+                      {
+                        "name": "fade_in_up",
+                        "delay": 0.5,
+                        "duration": 0.7
+                      },
+                      {
+                        "name": "wiggle",
+                        "property": "translate_y",
+                        "amplitude": 6,
+                        "frequency": 0.7,
+                        "seed": 42
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "content": "depth 1.0",
+                      "style": {
+                        "font-size": 34,
+                        "color": "#E2E8F0",
+                        "font-weight": "bold"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "content": "Tracks the camera exactly.",
+                      "max_width": 300,
+                      "style": {
+                        "font-size": 26,
+                        "color": "#94A3B8",
+                        "line-height": 1.4,
+                        "height": 80
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "style": {
+                "width": 400,
+                "height": 300,
+                "background": "#312E81",
+                "border-radius": 24,
+                "padding": 36,
+                "gap": 16,
+                "flex-direction": "column",
+                "justify-content": "center",
+                "depth": 2.1,
+                "border": {
+                  "color": "#818CF880",
+                  "width": 2
+                },
+                "box-shadow": [
+                  {
+                    "color": "#000000A0",
+                    "offset-x": 0,
+                    "offset-y": 34,
+                    "blur": 80
+                  }
+                ],
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 0.8,
+                    "duration": 0.7
+                  },
+                  {
+                    "name": "wiggle",
+                    "property": "translate_y",
+                    "amplitude": 10,
+                    "frequency": 1.1,
+                    "seed": 88
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "depth 2.1",
+                  "style": {
+                    "font-size": 38,
+                    "color": "#FFFFFF",
+                    "font-weight": "bold"
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "Overtakes the camera. Reads as close enough to touch.",
+                  "max_width": 340,
+                  "style": {
+                    "font-size": 27,
+                    "color": "#C7D2FE",
+                    "line-height": 1.4,
+                    "height": 120
+                  }
+                }
+              ],
+              "position": "absolute",
+              "x": 1210,
+              "y": 600
+            }
+          ]
+        },
+        {
+          "duration": 5.5,
+          "transition": {
+            "type": "pixel_dissolve",
+            "duration": 0.8,
+            "cell": 40,
+            "seed": 11
+          },
+          "background": {
+            "$ref": "rings"
+          },
+          "layout": {
+            "align_items": "center",
+            "justify_content": "center",
+            "direction": "column",
+            "gap": 44
+          },
+          "camera": {
+            "origin": {
+              "x": 960,
+              "y": 540
+            },
+            "keyframes": [
+              {
+                "property": "zoom",
+                "values": [
+                  {
+                    "time": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "time": 4.6,
+                    "value": 1.12
+                  }
+                ],
+                "easing": "ease_in_out"
+              }
+            ]
+          },
+          "children": [
+            {
+              "type": "shape",
+              "shape": {
+                "polygon": {
+                  "sides": 6
+                }
+              },
+              "position": "absolute",
+              "x": 170,
+              "y": 120,
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#6366F1",
+                  "#A855F7"
+                ],
+                "angle": 135
+              },
+              "style": {
+                "width": 330,
+                "height": 330,
+                "depth": 0.35,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "duration": 0.8
+                  },
+                  {
+                    "name": "orbit",
+                    "radius_x": 26,
+                    "radius_y": 16,
+                    "speed": 0.16,
+                    "depth": 0.22,
+                    "tilt": 18
+                  }
+                ],
+                "opacity": 0.32
+              }
+            },
+            {
+              "type": "shape",
+              "shape": {
+                "polygon": {
+                  "sides": 6
+                }
+              },
+              "position": "absolute",
+              "x": 1450,
+              "y": 620,
+              "fill": {
+                "type": "linear",
+                "colors": [
+                  "#38BDF8",
+                  "#6366F1"
+                ],
+                "angle": 135
+              },
+              "style": {
+                "width": 260,
+                "height": 260,
+                "depth": 0.18,
+                "opacity": 0.22,
+                "animation": [
+                  {
+                    "name": "fade_in",
+                    "delay": 0.3,
+                    "duration": 0.9
+                  },
+                  {
+                    "name": "orbit",
+                    "radius_x": 18,
+                    "radius_y": 12,
+                    "speed": 0.11,
+                    "depth": 0.18,
+                    "tilt": -14
+                  }
+                ]
+              }
+            },
+            {
+              "type": "icon",
+              "icon": "lucide:box",
+              "style": {
+                "width": 128,
+                "height": 128,
+                "color": "#818CF8",
+                "animation": [
+                  {
+                    "name": "tilt_in",
+                    "duration": 1.0
+                  },
+                  {
+                    "name": "float_3d",
+                    "loop": true
+                  }
+                ]
+              }
+            },
+            {
+              "type": "gradient_text",
+              "content": "rustmotion",
+              "colors": [
+                "#818CF8",
+                "#C084FC",
+                "#38BDF8"
+              ],
+              "angle": 90,
+              "animate_angle": true,
+              "speed": 0.2,
+              "style": {
+                "font-size": 132,
+                "font-weight": "bold",
+                "letter-spacing": -3,
+                "animation": [
+                  {
+                    "name": "scale_in",
+                    "delay": 0.5,
+                    "duration": 0.9
+                  }
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "content": "No browser. No Node. One binary that knows where things are in space.",
+              "max_width": 1200,
+              "style": {
+                "font-size": 34,
+                "color": "#94A3B8",
+                "text-align": "center",
+                "line-height": 1.5,
+                "animation": [
+                  {
+                    "name": "fade_in_up",
+                    "delay": 1.5,
+                    "duration": 0.8
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

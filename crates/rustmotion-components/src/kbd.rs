@@ -30,6 +30,13 @@ fn default_text_color() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`kbd` is a frozen composition (issue #333). Compose a keycap from a small `card` \
+            (border + shadow) with a `text` label instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Kbd {
     pub key: String,
     #[serde(default = "default_font_size")]

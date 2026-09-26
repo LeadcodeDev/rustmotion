@@ -1,0 +1,62 @@
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#0F0E2A" },
+  "components": {
+    "feature_pill": {
+      "params": {
+        "text": { "type": "string" },
+        "icon": { "type": "string", "default": "lucide:check" },
+        "accent": { "type": "string", "default": "#6366F1" },
+        "delay": { "type": "number", "default": 0 }
+      },
+      "template": {
+        "type": "div",
+        "style": {
+          "flex-direction": "row",
+          "align-items": "center",
+          "gap": 10,
+          "padding": { "top": 12, "bottom": 12, "left": 20, "right": 24 },
+          "background": "$accent",
+          "border-radius": 999,
+          "animation": [{ "name": "scale_in", "delay": "$delay", "duration": 0.4 }]
+        },
+        "children": [
+          { "type": "icon", "icon": "$icon", "style": { "width": 22, "height": 22, "color": "#FFFFFF" } },
+          { "type": "text", "content": "$text", "style": { "font-size": 26, "color": "#FFFFFF", "font-weight": "bold" } }
+        ]
+      }
+    }
+  },
+  "scenes": [
+    {
+      "duration": 3.5,
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 40 },
+      "children": [
+        {
+          "type": "text",
+          "content": "Everything you need",
+          "style": { "font-size": 60, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": [{ "name": "fade_in_up", "duration": 0.5 }] }
+        },
+        {
+          "type": "div",
+          "style": { "flex-direction": "row", "gap": 20, "flex-wrap": "wrap", "justify-content": "center" },
+          "children": [
+            {
+              "for-each": [
+                { "text": "Unlimited projects", "icon": "lucide:infinity", "accent": "#6366F1", "delay": 0.2 },
+                { "text": "Priority support", "icon": "lucide:headphones", "accent": "#22C55E", "delay": 0.35 },
+                { "text": "Custom domains", "icon": "lucide:globe", "accent": "#EC4899", "delay": 0.5 },
+                { "text": "Team seats", "icon": "lucide:users", "accent": "#F59E0B", "delay": 0.65 },
+                { "text": "SSO & audit logs", "icon": "lucide:shield-check", "accent": "#3B82F6", "delay": 0.8 }
+              ],
+              "template": {
+                "use": "feature_pill",
+                "props": { "text": "$text", "icon": "$icon", "accent": "$accent", "delay": "$delay" }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

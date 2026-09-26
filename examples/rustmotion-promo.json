@@ -183,27 +183,423 @@
           }
         },
         {
-          "type": "codeblock",
-          "language": "html",
-          "theme": "tokyo-night",
-          "show_line_numbers": true,
-          "chrome": {
-            "enabled": true,
-            "title": "promo.html"
-          },
-          "reveal": {
-            "mode": "typewriter",
-            "start": 0.6,
-            "duration": 3.4
-          },
-          "code": "<rustmotion width=\"1920\" height=\"1080\" fps=\"30\">\n  <scene duration=\"4\" background=\"#0f172a\">\n    <h1 anim=\"fade-in-up\">Ship Faster</h1>\n    <p anim=\"fade-in-up delay:0.3\">Built in Rust. No browser.</p>\n    <rm-counter from=\"0\" to=\"1250\" suffix=\"+\"></rm-counter>\n  </scene>\n</rustmotion>",
+          "type": "div",
           "style": {
+            "flex-direction": "column",
+            "background": "#1a1b26",
+            "overflow": "hidden",
+            "border-radius": 16,
             "width": 1280,
-            "height": 420,
-            "font-size": 26,
-            "padding": 28,
-            "border-radius": 16
-          }
+            "height": 420
+          },
+          "children": [
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "row",
+                "align-items": "center",
+                "gap": 8,
+                "padding": {
+                  "top": 10,
+                  "right": 14,
+                  "bottom": 10,
+                  "left": 14
+                },
+                "background": "#16161e"
+              },
+              "children": [
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ff5f56",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ffbd2e",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#27c93f",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "promo.html",
+                  "style": {
+                    "font-size": 13,
+                    "color": "#8b949e",
+                    "margin": {
+                      "left": 8
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "div",
+              "stagger": 0.4857142857142857,
+              "style": {
+                "flex-direction": "column",
+                "padding": 28,
+                "gap": 4
+              },
+              "children": [
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "<",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "rustmotion",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "width=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"1920\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "height=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"1080\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "fps=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"30\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "  <",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "scene",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "duration=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"4\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "background=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"#0f172a\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "    <",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "h1",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "anim=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"fade-in-up\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": ">Ship Faster</",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "h1",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "    <",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "p",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "anim=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"fade-in-up delay:0.3\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": ">Built in Rust. No browser.</",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "p",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "    <",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "rm-counter",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "from=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"0\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "to=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"1250\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": " ",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "suffix=",
+                      "color": "#e0af68"
+                    },
+                    {
+                      "text": "\"+\"",
+                      "color": "#9ece6a"
+                    },
+                    {
+                      "text": "></",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "rm-counter",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "  </",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "scene",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "rich_text",
+                  "spans": [
+                    {
+                      "text": "</",
+                      "color": "#c0caf5"
+                    },
+                    {
+                      "text": "rustmotion",
+                      "color": "#f7768e"
+                    },
+                    {
+                      "text": ">",
+                      "color": "#c0caf5"
+                    }
+                  ],
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 26,
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.4857142857142857
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
         },
         {
           "type": "text",
@@ -629,41 +1025,167 @@
           }
         },
         {
-          "type": "terminal",
-          "title": "rustmotion",
-          "theme": "dark",
-          "reveal": {
-            "mode": "line_by_line",
-            "start": 0.6,
-            "duration": 2.6
-          },
-          "lines": [
-            {
-              "text": "rustmotion validate -f promo.json",
-              "line_type": "prompt"
-            },
-            {
-              "text": "Warning: unknown attribute 'sufix' on 'counter'",
-              "line_type": "output"
-            },
-            {
-              "text": "  hint: did you mean 'suffix'?",
-              "line_type": "output"
-            },
-            {
-              "text": "",
-              "line_type": "output"
-            },
-            {
-              "text": "Valid scenario: 6 scene(s) · schema + geometry safe",
-              "line_type": "command"
-            }
-          ],
+          "type": "div",
           "style": {
+            "flex-direction": "column",
+            "background": "#1E1E1E",
+            "border-radius": 10,
+            "overflow": "hidden",
             "width": 1160,
-            "height": 360,
-            "font-size": 24
-          }
+            "height": 360
+          },
+          "children": [
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "row",
+                "align-items": "center",
+                "gap": 8,
+                "padding": {
+                  "top": 10,
+                  "right": 14,
+                  "bottom": 10,
+                  "left": 14
+                },
+                "background": "#2D2D2D"
+              },
+              "children": [
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ff5f56",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ffbd2e",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#27c93f",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "rustmotion",
+                  "style": {
+                    "font-size": 13,
+                    "color": "#808080",
+                    "margin": {
+                      "left": 8
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "div",
+              "stagger": 0.52,
+              "style": {
+                "flex-direction": "column",
+                "padding": 20,
+                "gap": 6
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "$ rustmotion validate -f promo.json",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 24,
+                    "color": "#22C55E",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "Warning: unknown attribute 'sufix' on 'counter'",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 24,
+                    "color": "#A0A0A0",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "  hint: did you mean 'suffix'?",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 24,
+                    "color": "#A0A0A0",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": " ",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 24,
+                    "color": "#A0A0A0",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "Valid scenario: 6 scene(s) · schema + geometry safe",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 24,
+                    "color": "#FFFFFF",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 0.52
+                      }
+                    ]
+                  },
+                  "caret": {
+                    "shape": "block",
+                    "hide_when_done": true
+                  }
+                }
+              ]
+            }
+          ]
         },
         {
           "type": "text",
@@ -741,25 +1263,103 @@
           }
         },
         {
-          "type": "terminal",
-          "title": "sh",
-          "theme": "dark",
-          "reveal": {
-            "mode": "typewriter",
-            "start": 0.5,
-            "duration": 1.4
-          },
-          "lines": [
-            {
-              "text": "cargo install rustmotion",
-              "line_type": "prompt"
-            }
-          ],
+          "type": "div",
           "style": {
+            "flex-direction": "column",
+            "background": "#1E1E1E",
+            "border-radius": 10,
+            "overflow": "hidden",
             "width": 720,
-            "height": 130,
-            "font-size": 28
-          }
+            "height": 130
+          },
+          "children": [
+            {
+              "type": "div",
+              "style": {
+                "flex-direction": "row",
+                "align-items": "center",
+                "gap": 8,
+                "padding": {
+                  "top": 10,
+                  "right": 14,
+                  "bottom": 10,
+                  "left": 14
+                },
+                "background": "#2D2D2D"
+              },
+              "children": [
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ff5f56",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#ffbd2e",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "shape",
+                  "shape": "circle",
+                  "fill": "#27c93f",
+                  "style": {
+                    "width": 12,
+                    "height": 12
+                  }
+                },
+                {
+                  "type": "text",
+                  "content": "sh",
+                  "style": {
+                    "font-size": 13,
+                    "color": "#808080",
+                    "margin": {
+                      "left": 8
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "div",
+              "stagger": 1.4,
+              "style": {
+                "flex-direction": "column",
+                "padding": 20,
+                "gap": 6
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "content": "$ cargo install rustmotion",
+                  "style": {
+                    "font-family": "JetBrains Mono",
+                    "font-size": 28,
+                    "color": "#22C55E",
+                    "white-space": "pre",
+                    "animation": [
+                      {
+                        "name": "typewriter",
+                        "duration": 1.4
+                      }
+                    ]
+                  },
+                  "caret": {
+                    "shape": "block",
+                    "hide_when_done": true
+                  }
+                }
+              ]
+            }
+          ]
         },
         {
           "type": "badge",

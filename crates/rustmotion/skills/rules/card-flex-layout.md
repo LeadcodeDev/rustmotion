@@ -1,6 +1,6 @@
-# Rule: Use card/flex/div for Layout
+# Rule: Use `div` for Layout
 
-`card` and `flex` (alias for `card`) use a CSS flexbox engine that auto-positions children. Use `card` for visual containers (background, border, shadow), `div` for invisible grouping and pure layout (no background, no border, no clipping).
+`div` is the one container type: a CSS flexbox/grid engine that auto-positions `children`. Decoration (`background`, `border`, `box-shadow`, `border-radius`) is entirely opt-in through `style` — set none of them for invisible grouping and pure layout, or set them for a visually decorated panel. `card`, `flex`, `grid`, and `positioned` are accepted JSON aliases for the same type and render identically; write new scenarios as `div`.
 
 ## Scene = Implicit Flex Container
 
@@ -24,7 +24,7 @@ You can customize the scene layout:
 }
 ```
 
-## Card/Flex Patterns
+## Layout Patterns
 
 Key patterns:
 - **Horizontal row:** `"flex-direction": "row"` + `"gap"`
@@ -33,13 +33,13 @@ Key patterns:
 - **Auto-height:** `"style": { "width": 800, "height": "auto" }`
 - **Grid:** `"display": "grid"` + `"grid-template-columns"`
 
-Children flow in the flexbox. Use `positioned` container for absolute positioning.
+Children flow in the flexbox by default. Any child can opt out with `position: {x, y}` — that's a property of the child, not a special container mode, so it works inside any `div` without needing a distinct type.
 
-**Grid sizing:** `height: "auto"` on a grid container sizes correctly to content — you don't need an explicit `height` just to avoid stretching. See [rules/grid-card-height.md](rules/grid-card-height.md).
+**Grid sizing:** `height: "auto"` on a grid container sizes correctly to content — you don't need an explicit `height` just to avoid stretching. See [grid-card-height.md](grid-card-height.md).
 
 ## 23 component types have no *intrinsic* size — they fall back to a documented default
 
-Most components either measure their own content (`text`, `codeblock`, `counter`, `badge`, `table`, `terminal`, `caption`, `kbd`, `gradient_text`, `rich_text`) or get a computed fallback size from their own fields (`icon`-like shapes such as `avatar`, `divider`, `line`, `arrow`, `switch`, `slider`, `progress`, `list`, `timeline`, `notification`, `rating`, `qr_code`, `countdown`, `particle`, `cursor`, `connector`, `waveform`, `audio_spectrum`). The following **23 types have no intrinsic measurement** (they fall through `component_intrinsic`'s `_ => None` arm and don't override `Painter::intrinsic_size`), but every one of them gets a **default `width`/`height` applied by `apply_intrinsic_overrides`** in `crates/rustmotion-components/src/box_builder.rs` whenever the JSON doesn't already set `style.width`/`style.height` — an explicit size is an *override*, not a requirement:
+Most components either measure their own content (`text`, `counter`, `badge`, `table`, `caption`, `kbd`, `gradient_text`, `rich_text`) or get a computed fallback size from their own fields (`icon`-like shapes such as `avatar`, `divider`, `line`, `arrow`, `switch`, `slider`, `progress`, `list`, `timeline`, `rating`, `qr_code`, `countdown`, `particle`, `cursor`, `connector`, `waveform`, `audio_spectrum`). The following **23 types have no intrinsic measurement** (they fall through `component_intrinsic`'s `_ => None` arm and don't override `Painter::intrinsic_size`), but every one of them gets a **default `width`/`height` applied by `apply_intrinsic_overrides`** in `crates/rustmotion-components/src/box_builder.rs` whenever the JSON doesn't already set `style.width`/`style.height` — an explicit size is an *override*, not a requirement:
 
 | Component | Default size | Where it comes from |
 |---|---|---|
@@ -67,7 +67,7 @@ Most components either measure their own content (`text`, `codeblock`, `counter`
 
 A default only fills in the axis that's actually missing — `apply_default_size` respects an explicit `width` or `height` (and derives the other one from `style.aspect-ratio` when only one is set). Explicit `style.width`/`style.height` is still worth setting whenever the default doesn't match the layout you want (e.g. a `stat` narrower than 280px in a tight row), but omitting it no longer produces a blank frame — three `stat`s in a flex-row card with no explicit size now lay out at 280×180 each, confirmed by `box_builder.rs`'s own tests.
 
-If a component isn't showing up despite that, look at [rules/component-field-placement.md](rules/component-field-placement.md) first — schema-field misplacement is the more common cause of an invisible component.
+If a component isn't showing up despite that, look at [component-field-placement.md](component-field-placement.md) first — schema-field misplacement is the more common cause of an invisible component.
 
 **GOOD** (icon + text row):
 ```json

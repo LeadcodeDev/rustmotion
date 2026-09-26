@@ -19,6 +19,13 @@ use rustmotion_core::schema::{
 use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`counter` is a frozen composition (issue #333). Compose a plain `text` node and \
+            drive its displayed value with an animation/expression on content instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Counter {
     pub from: f64,
     pub to: f64,

@@ -7,7 +7,8 @@ use rustmotion::core::css::style::{
 };
 use rustmotion::engine::animator::{motion_path_length, MOTION_PATH_MIN_LENGTH};
 use rustmotion::schema::{
-    AnimationEffect, CharAnimationTiming, MotionPathConfig, ResolvedScenario, SpringConfig,
+    AnimationEffect, CharAnimationTiming, MotionPathConfig, ResolvedScenario, SceneStart,
+    SpringConfig, TimeError,
 };
 
 pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<String>) {
@@ -33,6 +34,24 @@ pub fn validate_scenario(scenario: &ResolvedScenario) -> (Vec<String>, Vec<Strin
         for (si, scene) in view.scenes.iter().enumerate() {
             if scene.duration <= 0.0 {
                 errors.push(format!("views[{}].scenes[{}].duration must be > 0", vi, si));
+            }
+
+            // Issue #336: a syntactically valid `at` (e.g. "@8b") can still
+            // be unresolvable if the scenario never declared `bpm` — that
+            // can only be known once the whole scenario is in scope, unlike
+            // grammar (rejected earlier, at deserialize time — see
+            // `SceneStart`'s custom `Deserialize` impl). `resolve_absolute`
+            // cannot return `Unparseable` here: grammar was already
+            // enforced, so `NoBpm` is the only reachable error.
+            if let SceneStart::At(ref time_point) = scene.at {
+                if let Err(e @ TimeError::NoBpm(_)) =
+                    time_point.resolve_absolute(&scene.resolved_time_ctx)
+                {
+                    errors.push(format!(
+                        "views[{vi}].scenes[{si}].at: unresolved_beat_unit — {e} (declare \
+                         `bpm` at the scenario root, or use an `s`/`ms` unit instead)"
+                    ));
+                }
             }
 
             let children = rustmotion::engine::render::deserialize_children(scene);
@@ -237,11 +256,16 @@ fn validate_children(
                     errors.push(format!("{}: QR code content must not be empty", p));
                 }
             }
+            #[allow(deprecated)]
             Component::Mockup(m) => {
                 if !std::path::Path::new(&m.src).exists() {
                     errors.push(format!("{}.src: file not found '{}'", p, m.src));
                 }
             }
+            // `Counter` is one of issue #333's eleven frozen-composition
+            // components: deprecating the struct deprecates every field read
+            // on it, and `counter_display_len` reads five of them directly.
+            #[allow(deprecated)]
             Component::Counter(c) => {
                 let from_len =
                     counter_display_len(c.from, c.decimals, &c.separator, &c.prefix, &c.suffix);
@@ -255,27 +279,24 @@ fn validate_children(
                     ));
                 }
             }
-            Component::Card(card) => {
-                if matches!(card.style.display, Some(CssDisplay::Grid))
-                    && card.style.grid_template_columns.is_none()
+            Component::Container(container) => {
+                // `div`, `card`, `flex`, `grid` and `positioned` all
+                // deserialize into the same `ContainerComponent` now (see
+                // the alias list on `Component::Container` in `lib.rs`), so
+                // there is no way left to single out a node that was typed
+                // `grid` in the source JSON — only what its `style.display`
+                // actually says survives the merge. A bare `{"type":
+                // "grid"}` with no `display` and no
+                // `grid-template-columns` used to get its own dedicated
+                // error; it no longer can, since it is indistinguishable
+                // from a plain `div`. What still fires: explicit `display:
+                // grid` without `grid-template-columns`, previously the
+                // `card` half of this check.
+                if matches!(container.style.display, Some(CssDisplay::Grid))
+                    && container.style.grid_template_columns.is_none()
                 {
                     errors.push(format!("{}: grid display without grid-template-columns", p));
                 }
-                validate_children(&card.children, &p, scene_duration, errors, warnings);
-            }
-            Component::Flex(flex) => {
-                validate_children(&flex.children, &p, scene_duration, errors, warnings);
-            }
-            Component::Grid(grid) => {
-                if grid.style.grid_template_columns.is_none() {
-                    errors.push(format!("{}: grid without grid-template-columns", p));
-                }
-                validate_children(&grid.children, &p, scene_duration, errors, warnings);
-            }
-            Component::Positioned(pos) => {
-                validate_children(&pos.children, &p, scene_duration, errors, warnings);
-            }
-            Component::Container(container) => {
                 validate_children(&container.children, &p, scene_duration, errors, warnings);
             }
             _ => {}
@@ -751,11 +772,7 @@ fn check_motion_path_config(
 /// The `time_scale` declared on a container component, if any.
 fn container_time_scale(component: &Component) -> Option<f64> {
     match component {
-        Component::Card(c) => c.time_scale,
-        Component::Flex(c) => c.time_scale,
-        Component::Grid(c) => c.time_scale,
         Component::Container(c) => c.time_scale,
-        Component::Positioned(c) => c.time_scale,
         _ => None,
     }
 }
@@ -1660,6 +1677,77 @@ mod motion_path_validation_tests {
         assert!(
             errors.iter().all(|e| !e.contains("animation finishes at")),
             "a looping motion_path must not be budget-checked, like orbit/wiggle: {errors:?}"
+        );
+    }
+}
+
+/// Issue #336: a grammatically valid `at` that still can't be *resolved*
+/// (a beat unit with no `bpm` declared) must be a named, located, blocking
+/// error — `unresolved_beat_unit` — not a silent fallback to automatic
+/// placement.
+#[cfg(test)]
+mod unresolved_beat_unit_tests {
+    use super::*;
+    use rustmotion::loader::load_scenario_from_source;
+
+    fn parse(json: &str) -> ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("scenario parses")
+    }
+
+    #[test]
+    fn beat_unit_with_no_bpm_is_a_named_located_error() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "@8b"}
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (errors, _warnings) = validate_scenario(&scenario);
+        let hit = errors
+            .iter()
+            .find(|e| e.contains("unresolved_beat_unit"))
+            .unwrap_or_else(|| panic!("expected an unresolved_beat_unit error, got: {errors:?}"));
+        assert!(
+            hit.contains("views[0].scenes[1]"),
+            "must name and locate the offending scene: {hit}"
+        );
+        assert!(hit.contains("@8b"), "must echo the offending spec: {hit}");
+    }
+
+    #[test]
+    fn beat_unit_with_bpm_declared_is_not_an_error() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "bpm": 120,
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "@8b"}
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (errors, _warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.iter().all(|e| !e.contains("unresolved_beat_unit")),
+            "bpm is declared — this must resolve, not error: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn plain_seconds_at_never_needs_bpm() {
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "2.5s"}
+            ]
+        }"##;
+        let scenario = parse(json);
+        let (errors, _warnings) = validate_scenario(&scenario);
+        assert!(
+            errors.iter().all(|e| !e.contains("unresolved_beat_unit")),
+            "an s/ms-unit `at` never needs bpm: {errors:?}"
         );
     }
 }

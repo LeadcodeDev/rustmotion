@@ -186,6 +186,55 @@ enum Commands {
         var: Vec<String>,
     },
 
+    /// Render a contact sheet: one PNG grid of timestamped stills, so a
+    /// scenario can be inspected at several instants at once without
+    /// watching it play. Reuses the same single-frame render path as
+    /// `still`, one call per requested instant.
+    Sheet {
+        /// Path to the JSON scenario file
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Comma-separated list of instants to capture, in seconds (e.g.
+        /// "3.2,4.8,19.9"). Cells are laid out in this order. Mutually
+        /// exclusive with --every; exactly one of the two is required.
+        #[arg(
+            long,
+            value_name = "T1,T2,...",
+            conflicts_with = "every",
+            required_unless_present = "every"
+        )]
+        at: Option<String>,
+
+        /// Sample every `SECONDS` from 0 up to the scenario's last frame.
+        /// Mutually exclusive with --at; exactly one of the two is required.
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            conflicts_with = "at",
+            required_unless_present = "at"
+        )]
+        every: Option<f64>,
+
+        /// Output file path
+        #[arg(short, long, default_value = "sheet.png")]
+        output: PathBuf,
+
+        /// Number of cells per row. The grid lays out left to right, top to
+        /// bottom.
+        #[arg(long, default_value_t = 4)]
+        columns: usize,
+
+        /// Width of each cell in pixels. Cell height follows the
+        /// scenario's own aspect ratio, so no letterboxing is needed.
+        #[arg(long, default_value_t = 320)]
+        cell_width: u32,
+
+        /// Output format for machine consumption
+        #[arg(long, value_enum)]
+        output_format: Option<OutputFormat>,
+    },
+
     /// Generate word-level caption timings from audio (whisper.cpp) or subtitles
     #[command(after_help = CAPTIONS_EXAMPLES)]
     Captions {
@@ -232,8 +281,8 @@ enum Commands {
         #[arg(long)]
         report: Option<PathBuf>,
 
-        /// Auto-fix safe violations in place (clamp positions, set wrap=true,
-        /// enable auto_scroll). The original file is rewritten.
+        /// Auto-fix safe violations in place (clamp positions, set wrap=true).
+        /// The original file is rewritten.
         #[arg(long)]
         fix: bool,
 
@@ -259,6 +308,21 @@ enum Commands {
         /// Set a single variable override as key=value (repeatable).
         #[arg(long, value_name = "KEY=VALUE", number_of_values = 1)]
         var: Vec<String>,
+    },
+
+    /// Convert a scenario to `"timing": "v2"` (issue #336), compensating
+    /// every scene's duration and `at` so the migrated file renders
+    /// frame-for-frame identically to the one it replaces. Refuses a
+    /// templated scenario, or one using `include`/`for-each`/`use`, for the
+    /// same reason `validate --fix` already does.
+    Migrate {
+        /// Path to the JSON scenario file
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Write the migrated scenario here instead of overwriting `--file`
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Render one video per line of a JSONL data file
@@ -796,6 +860,27 @@ pub fn run() -> Result<()> {
             let scenario = rustmotion::loader::load_input_with_vars(&file, overrides.as_ref())?;
             commands::cmd_still(scenario, &output, time, format, quality)
         }
+        Commands::Sheet {
+            file,
+            at,
+            every,
+            output,
+            columns,
+            cell_width,
+            output_format,
+        } => {
+            let scenario = rustmotion::loader::load_input_with_vars(&file, None)?;
+            commands::cmd_sheet(
+                scenario,
+                &output,
+                at.as_deref(),
+                every,
+                columns,
+                cell_width,
+                output_format.as_ref(),
+                cli.quiet,
+            )
+        }
         Commands::Captions {
             audio,
             output,
@@ -833,6 +918,7 @@ pub fn run() -> Result<()> {
                 overrides.as_ref(),
             )
         }
+        Commands::Migrate { file, output } => commands::cmd_migrate(&file, output.as_deref()),
         Commands::Batch {
             file,
             data,

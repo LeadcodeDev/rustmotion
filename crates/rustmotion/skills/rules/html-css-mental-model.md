@@ -2,7 +2,7 @@
 
 ## Principe
 
-L'API JSON de Rustmotion est un superset de HTML/CSS. Chaque scène est un flex container, chaque `card` est une `<div>`, les propriétés CSS (`gap`, `padding`, `flex-direction`, `align-items`, etc.) ont exactement la même sémantique.
+L'API JSON de Rustmotion est un superset de HTML/CSS. Chaque scène est un flex container, chaque conteneur (`{"type": "div"}`) est une `<div>`, les propriétés CSS (`gap`, `padding`, `flex-direction`, `align-items`, etc.) ont exactement la même sémantique.
 
 **Avant d'écrire du JSON, se poser cette question : "Comment j'écrirais ça en HTML/CSS ?"**
 
@@ -14,15 +14,11 @@ L'API JSON de Rustmotion est un superset de HTML/CSS. Chaque scène est un flex 
 
 | HTML/CSS | Rustmotion JSON | Quand l'utiliser |
 |---|---|---|
-| `<div>` neutre | `{"type": "div"}` | Layout pur, sans décoration visuelle |
-| `<div class="card">` avec fond, border-radius | `{"type": "card"}` | Container avec styling visuel |
+| `<div>` neutre ou décorée | `{"type": "div"}` | Layout pur (rien dans `style`), ou container visuel (`background`/`border-radius`/`box-shadow` dans `style`) — même type dans les deux cas |
 | `<div style="display:flex; flex-direction:row; gap:24px">` | `{"type": "div", "style": {"flex-direction": "row", "gap": 24}}` | Ligne horizontale |
 | `<div style="display:grid; grid-template-columns:1fr 1fr">` | `{"type": "div", "style": {"display": "grid", "grid-template-columns": ["1fr","1fr"]}}` | Grille |
 
-**Règle de choix** :
-- `div` → grouper des enfants sans fond, border-radius, ou ombre. Flex par défaut.
-- `card` → conteneur avec background, border-radius, shadow. Flex par défaut.
-- Les deux acceptent les mêmes propriétés CSS (`gap`, `padding`, `flex-direction`, `align-items`, `justify-content`, `grid-template-columns`, etc.)
+**Règle de choix** : un seul type de conteneur, `div`. La décoration (fond, border-radius, ombre) est optionnelle et se règle entièrement via `style` — rien à choisir entre deux types différents. `card`, `flex`, `grid`, `positioned`, `container` sont des alias JSON historiques du même type (rétrocompatibilité) ; ils rendent à l'identique. Écrire `div` dans les nouveaux scénarios.
 
 ### Autres correspondances
 

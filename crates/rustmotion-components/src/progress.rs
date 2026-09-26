@@ -39,6 +39,16 @@ pub enum ProgressVariant {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`progress` is a frozen composition (issue #333). Compose a track + fill from \
+            two `shape`s — a static track and a `rounded_rect` fill whose `style.width` \
+            is keyframed — instead. See \
+            crates/rustmotion/skills/rules/composition-recipes.md's progress-bar recipe \
+            and examples/composition-progress-bars.json. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct Progress {
     #[serde(default)]
     pub progress: f64,

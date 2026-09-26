@@ -42,6 +42,14 @@ pub struct TagItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`tag_cloud` is a frozen composition (issue #333). Compose weighted tags from a \
+            `for-each` over `text` nodes with `font-size` scaled by weight instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct TagCloud {
     pub tags: Vec<TagItem>,
     #[serde(default = "default_min_font_size")]

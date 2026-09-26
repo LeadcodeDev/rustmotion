@@ -16,7 +16,7 @@ pub trait Painter {
     );
 
     /// Optional intrinsic measurement for taffy's measure_fn (text, image,
-    /// codeblock). Return None to let taffy size the node from CssStyle alone.
+    /// table). Return None to let taffy size the node from CssStyle alone.
     fn intrinsic_size(&self, available: AvailableSize, ctx: &MeasureCtx) -> Option<(f32, f32)> {
         None
     }

@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "video": { "width": 1920, "height": 1080, "fps": 30, "background": "#0B1120" },
+  "components": {
+    "progress_row": {
+      "params": {
+        "label": { "type": "string" },
+        "percent_label": { "type": "string" },
+        "target_width": { "type": "number" },
+        "accent": { "type": "string", "default": "#3B82F6" },
+        "delay": { "type": "number", "default": 0 }
+      },
+      "template": {
+        "type": "div",
+        "style": { "flex-direction": "column", "gap": 10, "width": 760 },
+        "children": [
+          {
+            "type": "div",
+            "style": { "flex-direction": "row", "justify-content": "space-between" },
+            "children": [
+              { "type": "text", "content": "$label", "style": { "font-size": 26, "color": "#E2E8F0", "font-weight": "bold" } },
+              { "type": "text", "content": "$percent_label", "style": { "font-size": 26, "color": "$accent", "font-weight": "bold" } }
+            ]
+          },
+          {
+            "type": "card",
+            "style": { "width": 760, "height": 18, "background": "#1E293B", "border-radius": 9, "padding": 0 },
+            "children": [
+              {
+                "type": "shape",
+                "shape": "rounded_rect",
+                "fill": "$accent",
+                "style": {
+                  "width": 6,
+                  "height": 18,
+                  "border-radius": 9,
+                  "animation": [{
+                    "name": "keyframes",
+                    "delay": "$delay",
+                    "keyframes": [{
+                      "property": "width",
+                      "easing": "ease_out_cubic",
+                      "keyframes": [{ "time": 0, "value": 6 }, { "time": 1.2, "value": "$target_width" }]
+                    }]
+                  }]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "scenes": [
+    {
+      "duration": 4.0,
+      "layout": { "direction": "column", "align_items": "center", "justify_content": "center", "gap": 44 },
+      "children": [
+        {
+          "type": "text",
+          "content": "Migration Progress",
+          "style": { "font-size": 60, "color": "#FFFFFF", "font-weight": "bold", "text-align": "center", "animation": [{ "name": "fade_in", "duration": 0.5 }] }
+        },
+        {
+          "type": "div",
+          "style": { "flex-direction": "column", "gap": 28 },
+          "children": [
+            {
+              "for-each": [
+                { "label": "Database schema", "percent_label": "100%", "target_width": 760, "accent": "#22C55E", "delay": 0.2 },
+                { "label": "API endpoints", "percent_label": "82%", "target_width": 623, "accent": "#3B82F6", "delay": 0.35 },
+                { "label": "Background jobs", "percent_label": "54%", "target_width": 410, "accent": "#F59E0B", "delay": 0.5 },
+                { "label": "Legacy cleanup", "percent_label": "12%", "target_width": 91, "accent": "#EF4444", "delay": 0.65 }
+              ],
+              "template": {
+                "use": "progress_row",
+                "props": {
+                  "label": "$label",
+                  "percent_label": "$percent_label",
+                  "target_width": "$target_width",
+                  "accent": "$accent",
+                  "delay": "$delay"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

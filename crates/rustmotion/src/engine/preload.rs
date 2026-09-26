@@ -88,26 +88,6 @@ pub fn prefetch_icons(scenes: &[Scene]) {
                     h,
                 ));
             }
-            Component::Card(c) => {
-                for child in &c.children {
-                    collect_from_component(child, seen);
-                }
-            }
-            Component::Flex(c) => {
-                for child in &c.children {
-                    collect_from_component(child, seen);
-                }
-            }
-            Component::Grid(c) => {
-                for child in &c.children {
-                    collect_from_component(child, seen);
-                }
-            }
-            Component::Positioned(c) => {
-                for child in &c.children {
-                    collect_from_component(child, seen);
-                }
-            }
             Component::Container(c) => {
                 for child in &c.children {
                     collect_from_component(child, seen);
@@ -400,10 +380,6 @@ pub fn preextract_video_frames(scenes: &[Scene], fps: u32) {
 
         // Recurse into containers
         if let Some(children) = match &child.component {
-            Component::Card(c) => Some(&c.children),
-            Component::Flex(c) => Some(&c.children),
-            Component::Grid(c) => Some(&c.children),
-            Component::Positioned(c) => Some(&c.children),
             Component::Container(c) => Some(&c.children),
             _ => None,
         } {

@@ -2,6 +2,7 @@ use rustmotion::error::{Result, RustmotionError};
 use rustmotion::schema::ResolvedScenario;
 use std::path::{Path, PathBuf};
 
+use super::audio_report::analyze_scenario_audio_levels;
 use super::geometry::{GeometryViolation, ViolationKind};
 use super::validation::{self, ValidationReport, ValidationSource, VarOverrides};
 
@@ -35,20 +36,30 @@ fn announced_duration(scenario: &ResolvedScenario) -> f64 {
 /// writing back is faithful. For anything templated they do not, and the write
 /// silently replaces the source with its own expansion: the `config` block and
 /// every `$var` disappear, includes get inlined into the parent, `for-each`/
-/// `use` get inlined into their repeated/instantiated output, and an HTML
-/// input is replaced by JSON outright.
+/// `use` get inlined into their repeated/instantiated output, a static
+/// `= ...` expression is replaced by the one literal it folded to, and an
+/// HTML input is replaced by JSON outright.
 ///
-/// One rule covers all four: only write back a source `--fix` can reproduce.
+/// One rule covers all five: only write back a source `--fix` can reproduce.
+///
+/// `pub(crate)` rather than private: `rustmotion migrate` refuses a
+/// templated/`include`/`for-each`/`use` source on exactly this ground (see
+/// `migrate.rs`'s own doc comment) — a migrated file whose path indices no
+/// longer match its source is worse than an unmigrated one, the same reason
+/// `--fix` refuses. Reusing this type and `refuse_fix` below, rather than a
+/// second copy, is what keeps the two commands from silently drifting apart
+/// on what counts as "templated".
 #[derive(Debug, PartialEq, Eq)]
-enum FixRefusal {
+pub(crate) enum FixRefusal {
     HtmlSource,
     Templated,
     UsesInclude,
     UsesTemplateDirectives,
+    UsesExpression,
 }
 
 impl FixRefusal {
-    fn explain(&self, path: &Path) -> String {
+    pub(crate) fn explain(&self, path: &Path) -> String {
         let p = path.display();
         match self {
             Self::HtmlSource => format!(
@@ -73,12 +84,59 @@ impl FixRefusal {
                  exactly like `include`. Fix the `components` definition or the `for-each` \
                  template directly."
             ),
+            Self::UsesExpression => format!(
+                "--fix cannot rewrite {p}: it uses an `= ...` expression (see \
+                 `rustmotion_core::expr`), and the fixer would write back the *evaluated* tree — \
+                 a static expression folds to its literal number at load, and writing that \
+                 number back would silently replace the formula with the one value it happened \
+                 to produce, making the expression unrecoverable. Fix the expression by hand."
+            ),
+        }
+    }
+
+    /// Same refusal, `rustmotion migrate`'s own wording: the noun changes
+    /// ("the migrator" instead of "the fixer") but the reasoning — path
+    /// indices no longer matching the source — is identical, which is why
+    /// this shares [`refuse_fix`] rather than re-deriving its own detection.
+    pub(crate) fn explain_for_migrate(&self, path: &Path) -> String {
+        let p = path.display();
+        match self {
+            Self::HtmlSource => format!(
+                "migrate cannot rewrite {p}: it is an HTML source, and the migrator only knows \
+                 how to emit JSON — applying it would replace your markup with the transpiled \
+                 scenario. Transpile to JSON first, then migrate that."
+            ),
+            Self::Templated => format!(
+                "migrate cannot rewrite {p}: it declares `config` or uses `$variables`, and the \
+                 migrator would write back the substituted scenario — dropping the template and \
+                 making `--var` a silent no-op. Migrate the template by hand."
+            ),
+            Self::UsesInclude => format!(
+                "migrate cannot rewrite {p}: it uses `include`, and the migrator would write back \
+                 the resolved tree — inlining the included files into the parent and patching by \
+                 a path that no longer means the same node. Migrate the included file directly."
+            ),
+            Self::UsesTemplateDirectives => format!(
+                "migrate cannot rewrite {p}: it uses `for-each`/`use` (or declares `components`), \
+                 and the migrator would write back the expanded tree — inlining every repeated \
+                 instance and patching by a path that no longer means the same source node, \
+                 exactly like `include`. Migrate the `components` definition or the `for-each` \
+                 template directly."
+            ),
+            Self::UsesExpression => format!(
+                "migrate cannot rewrite {p}: it uses an `= ...` expression (see \
+                 `rustmotion_core::expr`), and the migrator would write back the *evaluated* tree \
+                 — a static expression folds to its literal number at load, and writing that \
+                 number back would silently replace the formula with the one value it happened \
+                 to produce, making the expression unrecoverable. Migrate the expression by hand."
+            ),
         }
     }
 }
 
-/// `None` when `--fix` may write over `input`.
-fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
+/// `None` when `--fix` (or `rustmotion migrate`, which reuses this same
+/// check — see [`FixRefusal`]'s doc comment) may write over `input`.
+pub(crate) fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     if rustmotion::loader::is_html_path(input) {
         return Some(FixRefusal::HtmlSource);
     }
@@ -105,6 +163,14 @@ fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
     {
         return Some(FixRefusal::UsesTemplateDirectives);
     }
+    // Every expression containing a `$name` (the common case — every
+    // example in the issue this exists for does) is already caught by the
+    // `raw_source.contains("$")` check above; this closes the narrower gap
+    // of a fully `$`-free static expression like `"= cos(PI/4) * 100"`,
+    // which would otherwise fold to a literal and be refused nowhere.
+    if rustmotion::loader::source_uses_expression(raw_source) {
+        return Some(FixRefusal::UsesExpression);
+    }
     None
 }
 
@@ -122,9 +188,13 @@ fn refuse_fix(input: &Path, raw_source: &str) -> Option<FixRefusal> {
 /// exact bytes still on disk) fresh yields the identical tree
 /// `apply_fixes`/`navigate`'s path indices were computed against, minus the
 /// rebase.
-fn fixable_source(raw_source: &str) -> Result<serde_json::Value> {
-    serde_json::from_str(raw_source)
-        .map_err(|e| RustmotionError::Generic(format!("re-parse source for --fix: {}", e)))
+///
+/// `pub(crate)`: `rustmotion migrate` re-parses the same on-disk bytes for
+/// the same reason, once `refuse_fix` has cleared them.
+pub(crate) fn fixable_source(raw_source: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(raw_source).map_err(|e| {
+        RustmotionError::Generic(format!("re-parse source for --fix/--migrate: {}", e))
+    })
 }
 
 pub fn cmd_validate(
@@ -151,7 +221,7 @@ pub fn cmd_validate(
     }
 
     if let Some(report_path) = report {
-        write_report(report_path, &report_out)?;
+        write_report(report_path, &report_out, &loaded.scenario)?;
         eprintln!("Wrote report: {}", report_path.display());
     }
 
@@ -216,13 +286,20 @@ pub fn cmd_validate(
     Ok(())
 }
 
-fn write_report(path: &Path, report: &ValidationReport) -> Result<()> {
+fn write_report(path: &Path, report: &ValidationReport, scenario: &ResolvedScenario) -> Result<()> {
+    // Issue #334's second blind spot, closed: a mixed soundtrack that clips
+    // used to be a discovery made after the fact with an external tool
+    // (`ffmpeg -af astats`) — see `audio_report`'s module doc. Measuring it
+    // here, unconditionally, means every `--report` carries it next to
+    // `geometry_violations` instead of requiring a second pass.
+    let audio = analyze_scenario_audio_levels(scenario);
     let json = serde_json::json!({
         "schema_errors": report.schema_errors,
         "geometry_violations": report.geom_violations,
         "unresolved_vars": report.unresolved_vars,
         "warnings": report.warnings,
         "attr_warnings": report.attr_warnings,
+        "audio": audio,
     });
     let pretty = serde_json::to_string_pretty(&json)
         .map_err(|e| RustmotionError::Generic(format!("serialize report: {}", e)))?;
@@ -254,12 +331,6 @@ fn apply_fixes(root: &mut serde_json::Value, violations: &[GeometryViolation]) -
                     if style_obj.remove("white-space").is_some() {
                         applied += 1;
                     }
-                }
-            }
-            ViolationKind::AutoScrollDisabledOverflow => {
-                if let Some(obj) = target.as_object_mut() {
-                    obj.insert("auto_scroll".into(), serde_json::Value::Bool(true));
-                    applied += 1;
                 }
             }
             ViolationKind::ContentOverflowsBox => {
@@ -486,7 +557,7 @@ mod tests {
         let top_children = render::deserialize_children(&scenario.views[0].scenes[0]);
         assert_eq!(top_children.len(), 1, "card must survive the fix");
         let text_survived = match &top_children[0].component {
-            Component::Card(c) => c.children.len() == 1,
+            Component::Container(c) => c.children.len() == 1,
             _ => false,
         };
         assert!(
@@ -703,6 +774,40 @@ mod tests {
         }
 
         #[test]
+        fn a_scenario_using_a_dollar_free_static_expression_is_refused() {
+            // No `$` anywhere in this fixture on purpose, same reasoning as
+            // `a_scenario_using_for_each_is_refused` above: proves the
+            // detection does not piggyback on the pre-existing `$`-content
+            // check, which a fully static `= ...` expression can slip past.
+            let with_expression = r##"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"text","content":"hi","x":"= cos(PI/4) * 100"}
+                ]}]}"##;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_expression),
+                Some(FixRefusal::UsesExpression)
+            );
+        }
+
+        #[test]
+        fn a_scenario_using_a_dollar_expression_is_refused_as_templated_not_expression() {
+            // `refuse_fix` checks the generic `$`-content rule before the
+            // expression-specific one, so an expression referencing a scope
+            // variable is refused as `Templated` — still refused, just
+            // attributed to the check that runs first. Documented here so a
+            // future reordering doesn't silently change this without a test
+            // noticing.
+            let with_var_expression = r##"{"video":{"width":320,"height":240,"fps":30},
+                "scenes":[{"duration":1.0,"children":[
+                {"type":"text","content":"hi","x":"= $W/2"}
+                ]}]}"##;
+            assert_eq!(
+                refuse_fix(Path::new("s.json"), with_var_expression),
+                Some(FixRefusal::Templated)
+            );
+        }
+
+        #[test]
         fn every_refusal_names_the_file_and_says_what_to_do_instead() {
             let p = Path::new("scenes/hero.json");
             for r in [
@@ -710,6 +815,7 @@ mod tests {
                 FixRefusal::Templated,
                 FixRefusal::UsesInclude,
                 FixRefusal::UsesTemplateDirectives,
+                FixRefusal::UsesExpression,
             ] {
                 let msg = r.explain(p);
                 assert!(msg.contains("scenes/hero.json"), "{msg}");

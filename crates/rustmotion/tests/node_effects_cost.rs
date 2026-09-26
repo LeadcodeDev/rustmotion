@@ -117,7 +117,7 @@ fn bench_pixel_effects_full_frame_vs_node_box() {
     let mut full_buf = vec![0u8; (full_w * full_h * 4) as usize];
     let t0 = Instant::now();
     for f in 0..FRAMES {
-        apply_post_effects(&mut full_buf, full_w, full_h, &effects, f);
+        apply_post_effects(&mut full_buf, full_w, full_h, &effects, f, 0.0);
     }
     let full_elapsed = t0.elapsed();
 
@@ -125,7 +125,7 @@ fn bench_pixel_effects_full_frame_vs_node_box() {
     let mut box_buf = vec![0u8; (box_w * box_h * 4) as usize];
     let t0 = Instant::now();
     for f in 0..FRAMES {
-        apply_post_effects(&mut box_buf, box_w, box_h, &effects, f);
+        apply_post_effects(&mut box_buf, box_w, box_h, &effects, f, 0.0);
     }
     let box_elapsed = t0.elapsed();
 

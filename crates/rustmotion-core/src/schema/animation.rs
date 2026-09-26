@@ -72,6 +72,15 @@ pub enum EasingType {
         x2: f64,
         y2: f64,
     },
+    /// Discrete jump easing (CSS `steps(n, jump-end)`): `t` snaps to one of
+    /// `n` equally-sized steps instead of interpolating continuously. The
+    /// value holds at step `i`'s level (`i / n`) for the whole `[i/n,
+    /// (i+1)/n)` span of `t`, then jumps — it never eases through the
+    /// space between two states. `steps(1)` is the degenerate, most useful
+    /// case: hold the start value for the entire segment, then jump to the
+    /// end exactly at `t = 1.0` — a blinking caret wants this (a discrete
+    /// on/off), not a fade. See `engine::animator::ease` for the formula.
+    Steps(u32),
 }
 
 fn default_easing() -> EasingType {
@@ -201,9 +210,36 @@ pub struct PresetConfig {
     pub delay: f64,
     #[serde(default = "default_preset_duration")]
     pub duration: f64,
-    /// Loop the animation continuously
+    /// Loop the animation continuously. Kept as a plain bool — `true`
+    /// covers both "loop forever" (`repeat_count: None`) and "loop a known
+    /// number of times" (`repeat_count: Some(n)`) — so every reader that
+    /// only ever checked this flag (there were several, outside this
+    /// workstream's owned files) keeps treating a finite `repeat_count` as
+    /// "this loops" rather than mis-reading it as a one-shot animation.
     #[serde(default, rename = "loop")]
     pub repeat: bool,
+    /// How many times the animation plays when `AnimationTiming`'s widened
+    /// `"loop"` field named an exact integer count rather than a bare
+    /// bool (issue #330). `None` defers entirely to `repeat`: `true` loops
+    /// forever, `false` plays once. See
+    /// `AnimationTiming::{repeat, repeat_count}` for where this is parsed
+    /// from JSON, and `engine::animator::cycle_time` for how it's played
+    /// back.
+    #[serde(default)]
+    pub repeat_count: Option<u32>,
+    /// Reverse direction on every other play (ping-pong) instead of
+    /// snapping back to the start each cycle — GSAP calls this `yoyo`.
+    /// Only meaningful when the animation actually repeats (`repeat` or
+    /// `repeat_count`); a no-op otherwise. Applies to any looping
+    /// animation, not a fixed set of presets — see
+    /// `engine::animator::cycle_time`.
+    #[serde(default)]
+    pub yoyo: bool,
+    /// Pause between plays, in seconds, held at the resting value of the
+    /// play that just finished before the next one starts. `0.0` (default)
+    /// is a seamless loop.
+    #[serde(default)]
+    pub repeat_delay: f64,
     /// Overshoot/anticipation intensity for scale_in/scale_out (0.0 = none, default 0.08 = 8%).
     #[serde(default)]
     pub overshoot: Option<f64>,
@@ -225,6 +261,9 @@ impl Default for PresetConfig {
             delay: 0.0,
             duration: 0.8,
             repeat: false,
+            repeat_count: None,
+            yoyo: false,
+            repeat_delay: 0.0,
             overshoot: None,
             spring: None,
             amplitude: None,

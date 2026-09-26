@@ -9,12 +9,13 @@ use skia_safe::{Font, FontStyle as SkFontStyle, Typeface};
 
 use rustmotion_core::css::style::{
     CssStyle, FontStyle as CssFontStyle, FontWeight as CssFontWeight, FontWeightKw, LineHeight,
-    WhiteSpace, TEXT_AUTOFIT_MIN_FONT_PX,
+    TextAlign as CssTextAlign, WhiteSpace, TEXT_AUTOFIT_MIN_FONT_PX,
 };
 use rustmotion_core::engine::box_tree::{AvailableSpace, IntrinsicMeasure};
+use rustmotion_core::engine::deps::{TextMetrics, TextMetricsProvider};
 use rustmotion_core::engine::renderer::{
-    emoji_typeface, format_counter_value, measure_text_with_fallback, typeface_with_fallback,
-    wrap_text_with_tracking,
+    compute_glyph_metrics, emoji_typeface, format_counter_value, measure_text_with_fallback,
+    typeface_with_fallback, wrap_text_with_tracking, GlyphMetric,
 };
 
 use crate::badge::{Badge, BadgeSize};
@@ -104,6 +105,13 @@ pub struct TextIntrinsic {
     letter_spacing: f32,
     max_width: Option<f32>,
     wrap: bool,
+    /// `style.text-align`, resolved to the three horizontal keywords that
+    /// matter for placing a line inside its box (`right`/`end` collapse to
+    /// `Right`, everything else — including `justify`, which this engine
+    /// doesn't implement — collapses to `Left`). Only consulted by
+    /// [`Self::text_metrics`] (issue #328): line placement for painting is
+    /// `Text`'s own concern and already reads `style.text_align` directly.
+    text_align: CssTextAlign,
     /// `style.text-autofit == Some(true)`, but only ever set by
     /// [`Self::from_text`] / [`GradientTextIntrinsic::from_gradient_text`] —
     /// see [`Self::with_autofit`]'s doc comment for why `from_parts`/
@@ -187,6 +195,11 @@ impl TextIntrinsic {
         let base_ctx = measure_time_font_size_ctx(0.0);
         let (font_size, letter_spacing, line_height_resolved) =
             style.typography_px_ctx(&base_ctx, 48.0);
+        let text_align = match style.text_align {
+            Some(CssTextAlign::Center) => CssTextAlign::Center,
+            Some(CssTextAlign::Right | CssTextAlign::End) => CssTextAlign::Right,
+            _ => CssTextAlign::Left,
+        };
         Self {
             content: content.to_string(),
             font_family: style.font_family.clone(),
@@ -197,6 +210,7 @@ impl TextIntrinsic {
             letter_spacing,
             max_width,
             wrap: true,
+            text_align,
             text_autofit: false,
         }
     }
@@ -312,6 +326,117 @@ impl TextIntrinsic {
     fn typeface(&self) -> Option<Typeface> {
         let family = self.font_family.as_deref().unwrap_or("Inter");
         typeface_with_fallback(family, self.sk_font_style()).ok()
+    }
+
+    /// Text/glyph metrics for a `node("id", ...)` expression read (issue
+    /// #328) — the `TextMetrics`/`Glyphs` families of
+    /// `crate::engine::deps::ResolvedNode::prop`. `content_box_width` is the
+    /// node's own resolved content-box width, post-`layout_pass`
+    /// (`BoxLayout::content_box().2`) — the same width `self.measure`
+    /// itself would receive as `known.0`/`available.0`, which is why this
+    /// can only run *after* layout, unlike [`Self::sk_font_style`].
+    ///
+    /// `capHeight`/`ascender`/`baseline` are plain font metrics (wrap-
+    /// independent); `textWidth` and the glyph run depend on how `content`
+    /// wraps at `content_box_width`, computed the same way
+    /// [`Self::measure`] does (`wrap_text_with_tracking`, same font/tracking
+    /// inputs), so the box an expression reads back always agrees with the
+    /// box `layout_pass` actually reserved. Does not account for
+    /// `text-autofit`'s shrunk font size — this reports metrics at the
+    /// *requested* size regardless of whether autofit later shrinks it, a
+    /// known simplification (autofit and `node(...)` reads are an unusual
+    /// combination: autofit exists for content whose length can't be
+    /// predicted, which cuts against also anchoring another node to its
+    /// exact rendered size).
+    pub fn text_metrics(&self, content_box_width: f32) -> Option<TextMetrics> {
+        let typeface = self.typeface()?;
+        let font = Font::from_typeface(typeface, self.font_size);
+        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, self.font_size));
+
+        let wrap_at = if self.wrap {
+            Some(
+                self.max_width
+                    .map(|m| m.min(content_box_width))
+                    .unwrap_or(content_box_width),
+            )
+        } else {
+            None
+        };
+        let lines = wrap_text_with_tracking(
+            &self.content,
+            &font,
+            &emoji_font,
+            wrap_at,
+            self.letter_spacing,
+        );
+
+        let mut text_width = 0.0f32;
+        let mut glyphs: Vec<GlyphMetric> = Vec::new();
+        for line in &lines {
+            let advance = measure_text_with_fallback(line, &font, &emoji_font, self.letter_spacing);
+            text_width = text_width.max(advance);
+            // `self.text_align` is already normalised to Left/Center/Right
+            // at construction (see `from_parts`) — no other variant is ever
+            // stored here.
+            let line_x = match self.text_align {
+                CssTextAlign::Center => (content_box_width - advance) / 2.0,
+                CssTextAlign::Right => content_box_width - advance,
+                _ => 0.0,
+            };
+            let line_glyphs = compute_glyph_metrics(line, &font, &emoji_font, self.letter_spacing);
+            glyphs.extend(line_glyphs.into_iter().map(|g| GlyphMetric {
+                x: g.x + line_x,
+                width: g.width,
+            }));
+        }
+
+        let (_, metrics) = font.metrics();
+        let ascender = -metrics.ascent;
+        let descender = metrics.descent;
+        // Mirrors `text.rs::paint`'s own `baseline_offset` formula exactly
+        // (centers the em box within the line box) so `baseline` describes
+        // where the glyphs this same struct paints actually sit.
+        let baseline = (self.line_height_resolved + ascender - descender) / 2.0;
+
+        Some(TextMetrics {
+            text_width,
+            cap_height: metrics.cap_height,
+            ascender,
+            baseline,
+            glyphs,
+        })
+    }
+}
+
+/// [`TextMetricsProvider`] implementation for the two components whose
+/// intrinsic measurer is [`TextIntrinsic`]-backed and expose plain text
+/// content (`Text`, `GradientText`) — the bridge
+/// `rustmotion_core::engine::deps` needs from this crate to resolve the
+/// `TextMetrics`/`Glyphs` families without `rustmotion-core` knowing either
+/// concrete type (see that module's doc comment on why this is a trait
+/// rather than a direct call).
+///
+/// `Caption`/`Counter`/`Kbd`/`Badge`/`RichText` also measure through
+/// `TextIntrinsic`-shaped helpers but are not wired in here — extending
+/// this is a matter of downcasting to each and calling the same
+/// `TextIntrinsic::text_metrics`, not new measurement logic.
+pub struct ComponentTextMetrics;
+
+impl TextMetricsProvider for ComponentTextMetrics {
+    fn text_metrics(
+        &self,
+        payload: &(dyn std::any::Any + Send + Sync),
+        content_box_width: f32,
+    ) -> Option<TextMetrics> {
+        if let Some(t) = payload.downcast_ref::<Text>() {
+            return TextIntrinsic::from_text(t).text_metrics(content_box_width);
+        }
+        if let Some(g) = payload.downcast_ref::<GradientText>() {
+            return GradientTextIntrinsic::from_gradient_text(g)
+                .0
+                .text_metrics(content_box_width);
+        }
+        None
     }
 }
 
@@ -785,93 +910,6 @@ fn synthesize_text_style(src: &CssStyle, font_size: f32, default_family: &str) -
 fn _line_height_unused(_: Option<&LineHeight>) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Terminal intrinsic measurer
-// ─────────────────────────────────────────────────────────────────────────────
-
-use crate::terminal::{
-    resolve_typeface as resolve_terminal_typeface, Terminal, CHROME_HEIGHT,
-    FONT_SIZE as TERM_FONT_SIZE, LINE_HEIGHT as TERM_LINE_HEIGHT, PADDING as TERM_PADDING,
-};
-
-/// Intrinsic measurer for [`Terminal`].
-///
-/// Natural size formula (matches the painter exactly):
-/// - `line_height = ceil(font_size × TERM_LINE_HEIGHT / TERM_FONT_SIZE)`
-/// - `height = chrome_height + 2 × TERM_PADDING + n_lines × line_height`
-/// - `width` = widest line text (prefix + content) + 2 × TERM_PADDING
-///
-/// If the Skia font fails to load, returns (0, 0) so layout falls back to
-/// whatever container constraints supply.
-pub struct TerminalIntrinsic {
-    line_height: f32,
-    n_lines: usize,
-    chrome_height: f32,
-    padding: f32,
-    /// Maximum measured text width across all lines (including prefix).
-    max_line_width: f32,
-}
-
-impl TerminalIntrinsic {
-    pub fn from_terminal(t: &Terminal) -> Self {
-        let font_size = t
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), TERM_FONT_SIZE);
-        let line_height = (font_size * TERM_LINE_HEIGHT / TERM_FONT_SIZE).ceil();
-        let chrome_height = if t.show_chrome { CHROME_HEIGHT } else { 0.0 };
-
-        // Measure each line (prefix + text) with the same Skia font the painter uses.
-        let max_line_width = Self::measure_max_width(t, font_size);
-
-        Self {
-            line_height,
-            n_lines: t.lines.len(),
-            chrome_height,
-            padding: TERM_PADDING,
-            max_line_width,
-        }
-    }
-
-    fn measure_max_width(t: &Terminal, font_size: f32) -> f32 {
-        // Same resolver the painter calls — see `terminal::resolve_typeface`.
-        // Measuring with one face and painting with another is how text ends up
-        // overflowing a box the geometry pass has already approved.
-        let Some(typeface) = resolve_terminal_typeface(&t.style) else {
-            // Font unavailable (CI without fonts); return 0 — the layout will
-            // be width-unconstrained and the container drives the size.
-            return 0.0;
-        };
-        let font = Font::from_typeface(typeface, font_size);
-        let emoji_font = emoji_typeface().map(|tf| Font::from_typeface(tf, font_size));
-
-        t.lines
-            .iter()
-            .map(|line| {
-                let prefix = match line.line_type {
-                    crate::terminal::TerminalLineType::Prompt => "$ ",
-                    _ => "",
-                };
-                let full = format!("{}{}", prefix, line.text);
-                measure_text_with_fallback(&full, &font, &emoji_font, 0.0)
-            })
-            .fold(0.0f32, f32::max)
-    }
-}
-
-impl IntrinsicMeasure for TerminalIntrinsic {
-    fn measure(
-        &self,
-        known: (Option<f32>, Option<f32>),
-        _available: (AvailableSpace, AvailableSpace),
-    ) -> (f32, f32) {
-        let w = known.0.unwrap_or(self.max_line_width + self.padding * 2.0);
-        let h = known.1.unwrap_or(
-            self.chrome_height + self.padding * 2.0 + self.n_lines as f32 * self.line_height,
-        );
-        (w, h)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Table intrinsic measurer
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -929,88 +967,6 @@ impl IntrinsicMeasure for TableIntrinsic {
         let h = known
             .1
             .unwrap_or((1 + self.row_count) as f32 * self.row_height);
-        (w, h)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Codeblock intrinsic measurer
-// ─────────────────────────────────────────────────────────────────────────────
-
-use crate::codeblock::dimensions::compute_code_dimensions;
-use crate::codeblock::highlight::resolve_monospace_font;
-use crate::codeblock::Codeblock;
-use rustmotion_core::css::style::{FontWeight as CssFontWeight2, FontWeightKw as CssFontWeightKw2};
-use rustmotion_core::schema::FontWeight;
-
-/// Intrinsic measurer for [`Codeblock`].
-///
-/// Reuses `compute_code_dimensions` (same function as the painter) to derive:
-/// - `width  = max_line_width + gutter_width + pad_left + pad_right`
-/// - `height = line_count × line_height + pad_top + pad_bottom + chrome_height`
-///
-/// Computed once at construction from the initial `code` string. If a state
-/// transition widens the content at paint time, `auto_scroll` handles vertical
-/// overflow without needing the intrinsic to re-run.
-pub struct CodeblockIntrinsic {
-    natural_width: f32,
-    natural_height: f32,
-}
-
-impl CodeblockIntrinsic {
-    pub fn from_codeblock(c: &Codeblock) -> Self {
-        let font_family = c.style.font_family_or("JetBrains Mono");
-        let font_size = c
-            .style
-            .font_size_px_ctx(&measure_time_font_size_ctx(0.0), 14.0);
-        let font_weight = match &c.style.font_weight {
-            Some(CssFontWeight2::Keyword(CssFontWeightKw2::Bold | CssFontWeightKw2::Bolder)) => {
-                FontWeight::Bold
-            }
-            Some(CssFontWeight2::Number(n)) if *n >= 600 => FontWeight::Bold,
-            Some(CssFontWeight2::Number(n)) => FontWeight::Weight(*n),
-            _ => FontWeight::Normal,
-        };
-
-        let Some(font) = resolve_monospace_font(font_family, font_size, font_weight) else {
-            return Self {
-                natural_width: 0.0,
-                natural_height: 0.0,
-            };
-        };
-
-        let padding = {
-            let (t, r, b, l) = c.style.padding_px();
-            if t == 0.0 && r == 0.0 && b == 0.0 && l == 0.0 {
-                (16.0, 16.0, 16.0, 16.0)
-            } else {
-                (t, r, b, l)
-            }
-        };
-
-        let chrome_height = if c.chrome.as_ref().is_some_and(|ch| ch.enabled) {
-            36.0
-        } else {
-            0.0
-        };
-
-        let dims = compute_code_dimensions(&c.code, &font, font_size, padding, chrome_height, c);
-
-        Self {
-            natural_width: dims.total_width,
-            natural_height: dims.total_height,
-        }
-    }
-}
-
-impl IntrinsicMeasure for CodeblockIntrinsic {
-    fn measure(
-        &self,
-        known: (Option<f32>, Option<f32>),
-        _available: (AvailableSpace, AvailableSpace),
-    ) -> (f32, f32) {
-        let w = known.0.unwrap_or(self.natural_width);
-        let h = known.1.unwrap_or(self.natural_height);
         (w, h)
     }
 }
@@ -1910,5 +1866,128 @@ mod tests {
             w_constrained, w_unconstrained,
             "caption must ignore text-autofit entirely (nowrap bleeds exactly as before)"
         );
+    }
+
+    // ─── `text_metrics` / `ComponentTextMetrics` (issue #328) ──────────────
+
+    fn plain_text(content: &str, font_size: f32) -> Text {
+        Text {
+            content: content.into(),
+            max_width: None,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(font_size)),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+            text_shadow: None,
+            stroke: None,
+            text_background: None,
+            caret: None,
+            states: Vec::new(),
+            swap: None,
+        }
+    }
+
+    #[test]
+    fn text_metrics_reports_glyph_count_matching_content_for_one_line() {
+        let text = plain_text("Sentence", 32.0);
+        let metrics = TextIntrinsic::from_text(&text)
+            .text_metrics(500.0)
+            .expect("host must have a fallback typeface");
+        assert_eq!(metrics.glyphs.len(), "Sentence".chars().count());
+        assert!(metrics.text_width > 0.0);
+        assert!(metrics.cap_height > 0.0);
+        assert!(metrics.ascender > 0.0);
+    }
+
+    #[test]
+    fn text_metrics_last_glyph_sits_before_where_a_detached_char_would_go() {
+        // The issue #328 worked example: the author writes the sentence
+        // without its trailing `?` and anchors a separate node to the last
+        // glyph's right edge.
+        let text = plain_text("Sentence", 32.0);
+        let metrics = TextIntrinsic::from_text(&text).text_metrics(500.0).unwrap();
+        let last = *metrics.glyphs.last().unwrap();
+        let detached_question_mark_x = last.x + last.width;
+        assert!(detached_question_mark_x > last.x);
+        assert!(detached_question_mark_x <= metrics.text_width + 0.5);
+    }
+
+    #[test]
+    fn text_metrics_width_matches_measure_when_unwrapped() {
+        let text = plain_text("no wrap needed", 24.0);
+        let intrinsic = TextIntrinsic::from_text(&text);
+        let (measured_w, _measured_h) = intrinsic.measure(
+            (None, None),
+            (AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+        );
+        let metrics = intrinsic.text_metrics(10_000.0).unwrap();
+        assert!(
+            (metrics.text_width - measured_w).abs() < 0.5,
+            "text_metrics width {} should match measure() width {}",
+            metrics.text_width,
+            measured_w
+        );
+    }
+
+    #[test]
+    fn text_metrics_centers_glyphs_when_text_align_is_center() {
+        let mut text = plain_text("Hi", 32.0);
+        text.style.text_align = Some(rustmotion_core::css::style::TextAlign::Center);
+        let intrinsic = TextIntrinsic::from_text(&text);
+        let centered = intrinsic.text_metrics(400.0).unwrap();
+        let left = plain_text("Hi", 32.0);
+        let left_metrics = TextIntrinsic::from_text(&left).text_metrics(400.0).unwrap();
+        assert!(
+            centered.glyphs[0].x > left_metrics.glyphs[0].x,
+            "centered first glyph ({}) should start further right than left-aligned ({})",
+            centered.glyphs[0].x,
+            left_metrics.glyphs[0].x
+        );
+    }
+
+    #[test]
+    fn component_text_metrics_downcasts_text() {
+        let text = plain_text("Hello", 28.0);
+        let provider = ComponentTextMetrics;
+        let payload: &(dyn std::any::Any + Send + Sync) = &text;
+        let metrics = provider
+            .text_metrics(payload, 500.0)
+            .expect("Text must resolve through ComponentTextMetrics");
+        assert_eq!(metrics.glyphs.len(), "Hello".chars().count());
+    }
+
+    #[test]
+    fn component_text_metrics_downcasts_gradient_text() {
+        let gt = GradientText {
+            content: "Gradient".into(),
+            colors: vec!["#3B82F6".into(), "#8B5CF6".into()],
+            angle: 90.0,
+            animate_angle: false,
+            speed: 0.5,
+            timing: Default::default(),
+            style: CssStyle {
+                font_size: Some(Length::Px(28.0)),
+                ..Default::default()
+            },
+            timeline: Vec::new(),
+            stagger: None,
+        };
+        let provider = ComponentTextMetrics;
+        let payload: &(dyn std::any::Any + Send + Sync) = &gt;
+        let metrics = provider
+            .text_metrics(payload, 500.0)
+            .expect("GradientText must resolve through ComponentTextMetrics");
+        assert_eq!(metrics.glyphs.len(), "Gradient".chars().count());
+    }
+
+    #[test]
+    fn component_text_metrics_returns_none_for_a_non_text_component() {
+        // Any non-text payload (a bare `i32` stands in for one here) must
+        // fall through cleanly rather than panicking on a failed downcast.
+        let payload: &(dyn std::any::Any + Send + Sync) = &42i32;
+        assert!(ComponentTextMetrics.text_metrics(payload, 500.0).is_none());
     }
 }

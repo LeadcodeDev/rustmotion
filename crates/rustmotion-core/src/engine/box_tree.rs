@@ -1,7 +1,7 @@
 //! Box tree — the intermediate representation between a JSON scenario and
 //! the layout/paint passes. Each node carries a resolved [`CssStyle`], a
 //! discriminator pointing to the source component, and an optional intrinsic
-//! measurement callback (text, image, codeblock, chart, ...).
+//! measurement callback (text, image, table, chart, ...).
 
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ pub struct BoxNode {
     pub css: CssStyle,
     pub children: Vec<BoxNode>,
     /// Optional intrinsic measurement (used by taffy's `measure_fn` for
-    /// leaves like text / codeblock / image). `None` = pure container.
+    /// leaves like text / table / image). `None` = pure container.
     pub intrinsic: Option<Arc<dyn IntrinsicMeasure>>,
     /// JSON path of this node relative to its scene's `children` array, e.g.
     /// "/children/2/children/0". `None` for synthetic nodes (the scene root).

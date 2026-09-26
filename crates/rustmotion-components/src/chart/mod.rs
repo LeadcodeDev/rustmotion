@@ -94,6 +94,14 @@ pub struct RadarData {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`chart` is a frozen composition. Compose a `for-each` over the data with a \
+            computed `height`/`width` expression per bar (proportional size, index-staggered \
+            grow-in) instead — see crates/rustmotion/skills/rules/composition-recipes.md. \
+            Kept for compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Chart {
     pub chart_type: ChartType,
     #[serde(default)]

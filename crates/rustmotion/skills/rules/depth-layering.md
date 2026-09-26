@@ -25,7 +25,7 @@ Design each scene in three planes. Every element belongs to exactly one:
 | Plane | z-index | Role | Typical components |
 |---|---|---|---|
 | **Background** | 0 | Ambient texture, gradients, decorative shapes | `animated-background`, `shape` circles/blobs, `particle` |
-| **Mid-ground** | 1 | Main content, cards, charts | `card`, `chart`, `codeblock`, `text` body |
+| **Mid-ground** | 1 | Main content, cards, charts | `card`, `chart`, `table`, `text` body |
 | **Foreground** | 2 | Emphasis elements, badges, callouts | `badge`, `icon` hero, `text` headline |
 
 Use `"style": { "z-index": N }` to enforce render order when elements overlap.

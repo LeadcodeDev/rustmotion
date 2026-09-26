@@ -62,7 +62,13 @@ pub fn resolve_includes_with_policy(
     source: &IncludeSource,
     remote_policy: RemoteIncludePolicy,
 ) -> Result<ResolvedScenario> {
-    let mut audio = scenario.audio;
+    // `scenario.audio`'s object form (issue #331) can also carry a
+    // synthesised score alongside `tracks` — that part is captured by the
+    // loader (`crate::loader`) before this function is ever called, since
+    // it needs the scenario's own `bpm`/`beat_offset` and this function
+    // consumes `scenario` outright. Only the file-based tracks flow
+    // through the merge below, same as before this issue.
+    let mut audio = scenario.audio.into_tracks();
     let mut included_paths = Vec::new();
     let has_scenes = !scenario.scenes.is_empty();
     let has_composition = scenario.composition.is_some();
@@ -234,12 +240,21 @@ fn fetch_and_resolve(
     // `rustmotion_core::expand`'s module doc for why that scoping was
     // chosen over a cross-file component registry.
     crate::expand::expand_directives(&mut json_value, &directive.include)?;
+    // Same reason, same ordering rule, as `loader.rs`/`validation.rs`: an
+    // included file is itself a full document that went through its own
+    // `apply_variables` + `expand_directives` pass just above, so a
+    // `= ...` expression inside *this* file's own scenes needs its own fold
+    // pass too — an included file's static expression is otherwise never
+    // folded (it isn't part of the parent document `loader.rs`/
+    // `validation.rs` already fold), and reaches `Scenario` deserialization
+    // below as a bare string.
+    crate::loader::fold_static_expressions(&mut json_value, &directive.include)?;
 
     let child_scenario: Scenario =
         serde_json::from_value(json_value).map_err(RustmotionError::from)?;
 
     // Merge audio tracks from the included file
-    audio.extend(child_scenario.audio);
+    audio.extend(child_scenario.audio.into_tracks());
 
     // Recursively resolve any nested includes
     let mut scenes = resolve_entries(

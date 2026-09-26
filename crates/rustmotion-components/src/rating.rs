@@ -32,6 +32,14 @@ fn default_animation_duration() -> f64 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`rating` is a frozen composition (issue #333). Compose stars from repeated \
+            `icon`s in a `for-each`, with a partial fill via two overlapping clipped \
+            copies — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Rating {
     #[serde(default)]
     pub value: f64,

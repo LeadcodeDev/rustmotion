@@ -42,6 +42,13 @@ pub enum TooltipArrow {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`tooltip` is a frozen composition (issue #333). Compose a small rounded `card` + \
+            a rotated triangle `shape` (the arrow) + `text` instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Tooltip {
     pub text: String,
     #[serde(default)]

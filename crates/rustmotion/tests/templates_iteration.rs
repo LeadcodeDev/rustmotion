@@ -285,3 +285,60 @@ fn for_each_authored_scenario_resolves_identically_to_the_hand_written_equivalen
         resolved_hand_written.views[0].scenes[0].duration
     );
 }
+
+/// An included file goes through its own `apply_variables` +
+/// `expand_directives` pass (`include.rs`'s own doc explains why —
+/// `components` is scoped per document) — and needs its own expression fold
+/// for exactly the same reason: `= ...` expressions inside the *included*
+/// file's own scenes were never folded by the parent document's loader
+/// pipeline, only the parent's own top-level tree was. Proves the included
+/// file's `for-each`-driven expression resolves to a literal, not a bare
+/// string that would fail typed deserialization.
+#[test]
+fn an_included_files_own_expressions_are_folded_too() {
+    let dir = std::env::temp_dir().join(format!(
+        "rm_templates_iteration_include_expr_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let child_path = dir.join("child_expr.json");
+    let parent_path = dir.join("parent_expr.json");
+
+    let child = serde_json::json!({
+        "video": { "width": 1080, "height": 1920 },
+        "scenes": [{
+            "duration": 1.0,
+            "children": [{
+                "for-each": [1, 2, 3, 4],
+                "template": {
+                    "type": "text",
+                    "content": "badge",
+                    "position": "absolute",
+                    "x": "= $W/2 + cos($i / $count * TAU) * 200"
+                }
+            }]
+        }]
+    });
+    let parent = serde_json::json!({
+        "video": { "width": 1080, "height": 1920 },
+        "scenes": [{ "include": "child_expr.json" }]
+    });
+    std::fs::write(&child_path, child.to_string()).unwrap();
+    std::fs::write(&parent_path, parent.to_string()).unwrap();
+
+    let resolved = rustmotion::loader::load_scenario_with_vars(&parent_path, None)
+        .expect("parent including child with expressions resolves");
+    let children = &resolved.views[0].scenes[0].children;
+    assert_eq!(children.len(), 4);
+    for (i, child) in children.iter().enumerate() {
+        let x = child["x"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("child {i}'s x must fold to a number, got {:?}", child["x"]));
+        let want = 1080.0 / 2.0 + (i as f64 / 4.0 * std::f64::consts::TAU).cos() * 200.0;
+        assert!((x - want).abs() < 1e-9, "child {i}: got {x}, want {want}");
+    }
+
+    let _ = std::fs::remove_file(&child_path);
+    let _ = std::fs::remove_file(&parent_path);
+    let _ = std::fs::remove_dir(&dir);
+}

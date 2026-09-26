@@ -15,7 +15,7 @@ t_local = (t_global - time_offset) * time_scale
 
 Everything inside follows the remap: animation presets, keyframes, timeline
 steps, `start_at`/`end_at` windows, stagger, motion blur ghosts, and internal
-animations (counter progress, `draw_in`, terminal typewriter…).
+animations (counter progress, `draw_in`, `typewriter`…).
 
 **Slow-motion example** — the card's children fade in at half speed:
 

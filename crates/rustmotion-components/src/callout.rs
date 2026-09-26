@@ -29,6 +29,14 @@ pub enum ArrowDirection {
 /// - `style.border-radius` — corner radius (default: `8`)
 /// - `style.font-size` — text size (default: `16`)
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`callout` is a frozen composition (issue #333), the same recipe as `tooltip`: \
+            compose a small rounded `card` + a rotated triangle `shape` (the arrow) + `text` \
+            instead — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Callout {
     pub text: String,
     #[serde(default)]

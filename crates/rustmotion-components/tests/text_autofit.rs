@@ -3,7 +3,6 @@
 //! `TextIntrinsic`/`Text::paint` unit-level tests in `intrinsic.rs`/
 //! `text.rs`. Routes a `text` component through the same
 //! `build_scene_with_anim` → `run_layout` → `paint_tree` sequence
-//! `codeblock_auto_scroll.rs` uses — the same sequence
 //! `render_with_new_pipeline_iter` runs once per rendered frame in the real
 //! encoder. This is the strongest available proof that `TextIntrinsic::
 //! measure` (which determines the box `run_layout` reserves) and
@@ -45,6 +44,7 @@ fn render_at(content: &str, autofit: bool, time: f64) -> Vec<u8> {
     let component: Component =
         serde_json::from_value(text_json(content, autofit)).expect("deserialize");
     let child = ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: BOX_X, y: BOX_Y }),
         x: None,

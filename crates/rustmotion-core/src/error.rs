@@ -263,6 +263,16 @@ pub enum RustmotionError {
     #[error("Failed to create decoder for '{path}': {reason}")]
     AudioDecoder { path: String, reason: String },
 
+    // --- Audio synthesis (issue #331) ---
+    #[error("audio.score: {source}")]
+    AudioSynthScore {
+        #[from]
+        source: crate::audio::ScoreError,
+    },
+
+    #[error("failed to write synthesised audio to a temporary file '{path}': {reason}")]
+    AudioSynthWrite { path: String, reason: String },
+
     // --- Rendering ---
     #[error("Failed to create Skia surface")]
     SurfaceCreation,

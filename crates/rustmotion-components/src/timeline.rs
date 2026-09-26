@@ -14,6 +14,14 @@ use rustmotion_core::traits::{PaintCtx, Painter, TimingConfig};
 
 /// A horizontal or vertical pipeline/timeline component.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`timeline` is a frozen composition (issue #333), the same recipe as \
+            `stepper`: compose `card`/`shape` nodes and connectors instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md's step-flow recipe and \
+            examples/composition-step-flow.json. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Timeline {
     /// The steps in the pipeline.
     pub steps: Vec<TimelineStep>,

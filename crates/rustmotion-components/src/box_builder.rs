@@ -6,9 +6,10 @@
 //! - `width` / `height` from the component's `size` field (if any)
 //! - `z-index` from the child's `z_index` field
 //!
-//! Container components (Card / Flex / Grid / Container / Positioned)
-//! recursively build child boxes. Leaf components produce an empty-children
-//! box that the dispatcher will paint.
+//! The single container component (`Component::Container`, tagged `div` and
+//! aliased `container`/`card`/`flex`/`grid`/`positioned` — all six spellings
+//! deserialize into the same struct) recursively builds child boxes. Leaf
+//! components produce an empty-children box that the dispatcher will paint.
 //!
 //! The builder also returns a flat `Vec<&Component>` indexed by NodeId so
 //! the painter can resolve a node back to its component.
@@ -19,6 +20,8 @@ use rustmotion_core::css::style::{AlignSelf, CssStyle, Position, Size as CSize};
 use rustmotion_core::css::{apply_animated_props, LengthPercentage as CLP};
 use rustmotion_core::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion_core::engine::box_tree::{BoxKind, BoxNode, NodeId};
+use rustmotion_core::engine::deps::NodeRef;
+use rustmotion_core::expr::Scope;
 use rustmotion_core::schema::video::{AnimationEffect, MotionBlurConfig, TrailConfig};
 
 use crate::callout::ArrowDirection as CalloutArrowDirection;
@@ -125,11 +128,76 @@ pub fn build_scene_with_anim<'a>(
 /// Same as [`build_scene_with_root`] but accepts an iterator over
 /// `&ChildComponent` references. Useful when the caller has filtered or
 /// re-ordered the scene's children and doesn't want to clone.
+///
+/// Builds with no outer [`Scope`] — see
+/// [`build_scene_from_refs_with_scope`]'s doc for what that means and why
+/// every other public entry point in this file (this one included) keeps
+/// that parameter fixed at `None` rather than exposing it: a scenario using
+/// no `vars` and no `node(...)` reference renders through exactly this
+/// path, unchanged, whatever `rustmotion/src/engine/render/scene.rs` does
+/// on its own richer path.
 pub fn build_scene_from_refs<'a, I>(
+    children: I,
+    viewport: (f32, f32),
+    root_css: CssStyle,
+    anim: Option<BuildAnimationCtx>,
+) -> BuiltScene<'a>
+where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    build_scene_from_refs_with_scope(children, viewport, root_css, anim, None)
+}
+
+/// Full form of [`build_scene_from_refs`]: `outer_scope` is tried, after the
+/// per-node [`rustmotion_core::css::FrameClock`], by every node's own
+/// `style.expr` (issue #338) — see [`resolve_computed_style`]'s doc for the
+/// exact composition (`rustmotion_core::css::ComposedScope`) and why the
+/// clock always wins for its own six reserved names.
+///
+/// `outer_scope` is caller-owned and frame-global: unlike `anim` (which
+/// `build_child` remaps per node through each container's own
+/// `time_scale`/`time_offset`), the same `&dyn Scope` reference is handed to
+/// every node in this call — a declared `vars` name and a `node(...)`
+/// reference both resolve against one shared, already-computed state for
+/// the whole frame, not a per-node one. See
+/// `rustmotion/src/engine/render/scene.rs`'s `EngineScope` for what
+/// typically sits behind it (a `vars::VarScope` composed with an
+/// `engine::deps::ResolvedFrame`) and why that composition happens one
+/// level up rather than in this crate: this crate does not otherwise depend
+/// on `rustmotion-core`'s `vars` or `engine::deps` modules by name, only on
+/// the `Scope` trait object they both implement.
+pub fn build_scene_from_refs_with_scope<'a, I>(
+    children: I,
+    viewport: (f32, f32),
+    root_css: CssStyle,
+    anim: Option<BuildAnimationCtx>,
+    outer_scope: Option<&dyn Scope>,
+) -> BuiltScene<'a>
+where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    build_scene_from_refs_with_scope_quiet(children, viewport, root_css, anim, outer_scope, true)
+}
+
+/// Full form of [`build_scene_from_refs_with_scope`]: `warn_unresolved`
+/// gates [`resolve_computed_style`]'s stderr warning for an expression that
+/// fails to resolve against `outer_scope`. `false` for a build whose only
+/// purpose is to seed a not-yet-complete `outer_scope` (the throwaway first
+/// pass `render_with_new_pipeline_iter` runs for a scene with a `node(...)`
+/// reference — see that function's doc): a `node(...)` call there fails
+/// *by construction*, not because anything is actually wrong, and is
+/// corrected by the very next build; warning about it would be a stderr
+/// line that doesn't describe the frame that actually gets painted. Every
+/// other build (the common no-outer-scope path, and any build whose
+/// `outer_scope` is already complete) keeps warning — an expression that
+/// still fails there really does keep its pre-expression value on screen.
+pub fn build_scene_from_refs_with_scope_quiet<'a, I>(
     children: I,
     viewport: (f32, f32),
     mut root_css: CssStyle,
     anim: Option<BuildAnimationCtx>,
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
 ) -> BuiltScene<'a>
 where
     I: IntoIterator<Item = &'a ChildComponent>,
@@ -152,6 +220,9 @@ where
             0.0,
             (1.0, 0.0),
             &root_css,
+            viewport,
+            outer_scope,
+            warn_unresolved,
         ));
     }
 
@@ -175,6 +246,84 @@ where
         stagger_delays,
         time_params,
     }
+}
+
+/// Every declared `id` in this subtree, paired with the `node(...)`
+/// references its own style expressions make — the
+/// `(String, Vec<NodeRef>)` shape `rustmotion_core::engine::deps::DepGraph::build`
+/// wants. A node's references were already found once, at load (see
+/// `rustmotion_core::css::computed::extract`'s `node_refs` field), so this
+/// is a plain tree walk with no `Expr`/JSON work of its own — cheap enough
+/// to call every frame, and callers on the hot per-frame path do (see
+/// `rustmotion/src/engine/render/scene.rs`).
+///
+/// Recurses into a container's children via [`container_children_of`], the
+/// same `Component` variant match `container_children` uses (minus the
+/// animation-context bookkeeping this walk doesn't need) to decide which
+/// components nest children and under which field, so a component type
+/// this file doesn't (yet) recurse into cannot silently diverge between
+/// "what gets laid out" and "what gets scanned for references".
+pub fn collect_node_refs<'a, I>(children: I) -> Vec<(String, Vec<NodeRef>)>
+where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    let mut out = Vec::new();
+    for child in children {
+        collect_node_refs_into(child, &mut out);
+    }
+    out
+}
+
+fn collect_node_refs_into(child: &ChildComponent, out: &mut Vec<(String, Vec<NodeRef>)>) {
+    if let Some(id) = &child.id {
+        out.push((
+            id.clone(),
+            component_style(&child.component).expr.node_refs.clone(),
+        ));
+    }
+    for c in container_children_of(&child.component) {
+        collect_node_refs_into(c, out);
+    }
+}
+
+/// The child slice a container `Component` variant nests its own children
+/// under, empty for anything else — the one list of "which variants nest
+/// children and where" every tree walk in this file that needs to see the
+/// *whole* subtree (not just what `container_children` lays out with an
+/// animation context in hand) shares, rather than re-deriving its own copy
+/// that could quietly drift from it.
+fn container_children_of(component: &Component) -> &[ChildComponent] {
+    match component {
+        Component::Container(c) => &c.children,
+        _ => &[],
+    }
+}
+
+/// True when *any* node in this subtree — declared `id` or not — makes at
+/// least one `node(...)` reference. Deliberately not derived from
+/// [`collect_node_refs`]'s own result: that function only ever records a
+/// node's references under *that node's own* entry, and only when the node
+/// itself has a declared `id` (matching `DepGraph::build`'s contract, which
+/// needs an entry only for a reference *target*, never for a plain
+/// referencer). The common shape — a node with no `id` of its own reading
+/// `node("otherId", ...)` — would then never surface in
+/// `collect_node_refs`'s output at all, silently skipping the second build
+/// pass its own reference needs. This walks every node regardless of
+/// whether it declares an `id`.
+pub fn scene_uses_node_refs<'a, I>(children: I) -> bool
+where
+    I: IntoIterator<Item = &'a ChildComponent>,
+{
+    children.into_iter().any(scene_uses_node_refs_in)
+}
+
+fn scene_uses_node_refs_in(child: &ChildComponent) -> bool {
+    if !component_style(&child.component).expr.node_refs.is_empty() {
+        return true;
+    }
+    container_children_of(&child.component)
+        .iter()
+        .any(scene_uses_node_refs_in)
 }
 
 fn default_root_css(viewport: (f32, f32)) -> CssStyle {
@@ -419,6 +568,14 @@ fn build_ghosts<'a>(
 /// containers' `stagger` fields.
 /// `time_remap` is the accumulated affine time transform `(scale, shift)` where
 /// `t_local = scale * t_global + shift`. Default is `(1.0, 0.0)` (identity).
+/// `viewport` feeds [`rustmotion_core::css::FrameClock`] for this node's own
+/// `style.expr` (issue #338) — see this file's "Per-frame expressions" doc
+/// section, above [`resolve_computed_style`]. `outer_scope` is the same
+/// frame-global `Scope` [`build_scene_from_refs_with_scope`] received,
+/// passed straight through every recursion (never remapped per node the way
+/// `anim`/`time_remap` are — see that function's own doc). `warn_unresolved`
+/// is [`build_scene_from_refs_with_scope_quiet`]'s own flag, passed through
+/// unchanged.
 #[allow(clippy::too_many_arguments)]
 fn build_child<'a>(
     child: &'a ChildComponent,
@@ -431,6 +588,9 @@ fn build_child<'a>(
     stagger_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
 ) -> Vec<BoxNode> {
     // Compute the local animation context for this node — remapped by the
     // accumulated affine time transform from ancestor containers.
@@ -559,6 +719,14 @@ fn build_child<'a>(
             apply_glow_effect(&mut css, &effects);
             carry_paint_pass_effects(&mut css, &effects);
         }
+        resolve_computed_style(
+            &mut css,
+            &path,
+            actx,
+            viewport,
+            outer_scope,
+            warn_unresolved,
+        );
     }
 
     // ── Audio-reactive binding ────────────────────────────────────────────────
@@ -652,6 +820,9 @@ fn build_child<'a>(
         stagger_delay,
         time_remap,
         &css,
+        viewport,
+        outer_scope,
+        warn_unresolved,
     );
     let intrinsic = component_intrinsic(&child.component, &css);
 
@@ -669,6 +840,101 @@ fn build_child<'a>(
     let mut result = ghosts;
     result.push(principal);
     result
+}
+
+// ── Per-frame expressions (issue #338) ──────────────────────────────────────
+//
+// `css.expr` (`rustmotion_core::css::ComputedStyle`) holds whatever `"= ..."`
+// expressions `CssStyle`'s own `Deserialize` impl pulled off this node's
+// style at load time — see that type's module doc. This is where the other
+// half of the two-tier model in `rustmotion_core::expr`'s own doc happens:
+// evaluating those expressions fresh every frame and applying the result
+// through `apply_animated_props`, the exact same override path a resolved
+// `style.animation` already goes through a few lines above this function's
+// call site — an expression is a second source of the same kind of
+// override, not a parallel application mechanism.
+//
+// `apply_animated_props` is called a second time (once for the resolved
+// animation, once for this), so the two compose exactly the way it already
+// composes an animation on top of a literal CSS value: `opacity` multiplies
+// (both contribute — a literal, an animation, and an expression on the same
+// node all multiply together), `width`/`height` last-write-wins (an
+// expression overrides an animation's own resize, since this call runs
+// after it), and the four covered `transform` leaves each append their own
+// `TransformFn` (both contribute, associative — see
+// `rustmotion_core::css::computed::extract`'s doc for why the neutral
+// placeholder its extraction leaves behind makes that safe).
+//
+// The `Scope` used here composes `rustmotion_core::css::FrameClock` — the
+// reserved scenario-clock names (`t`/`T`/`duration`/`W`/`H`/`fps`), built
+// from data `BuildAnimationCtx` and `viewport` already carry down to this
+// exact call site — with `outer_scope`, the frame-global `&dyn Scope`
+// `build_scene_from_refs_with_scope` threads down unchanged through every
+// recursive `build_child`/`container_children` call (see those functions'
+// own doc for why it isn't remapped per node the way `anim`/`time_remap`
+// are). `rustmotion_core::css::ComposedScope` is the composite: the clock's
+// six reserved names always win (see that type's own doc for why),
+// everything else — a declared `vars` name, a `node(...)` reference — falls
+// through to `outer_scope`. `rustmotion/src/engine/render/scene.rs` is what
+// actually builds one (its own `EngineScope`, composing a `vars::VarScope`
+// with the `node(...)` dependency graph's `ResolvedFrame`) and passes it in
+// as `outer_scope`; every other caller in this crate (tests, the studio hit
+// probe, any scenario with no `vars` and no node `id`) passes `None`, which
+// makes `ComposedScope` behave exactly like a bare `FrameClock` — see that
+// type's doc for why that is byte-for-byte, not just "close enough". An
+// expression naming a name neither the clock nor `outer_scope` answers
+// still fails loudly and specifically (see below), never silently — except
+// when `warn_unresolved` is `false` (a throwaway pass whose own build is
+// about to be discarded/superseded; see
+// `build_scene_from_refs_with_scope_quiet`'s doc), in which case the
+// best-effort fallback still applies but stays silent, since the frame it
+// would be describing is never the one that reaches the screen.
+fn resolve_computed_style(
+    css: &mut CssStyle,
+    path: &str,
+    actx: BuildAnimationCtx,
+    viewport: (f32, f32),
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
+) {
+    if css.expr.is_empty() {
+        return;
+    }
+    let clock = rustmotion_core::css::FrameClock {
+        t: actx.time,
+        t_abs: actx.scenario_time,
+        duration: actx.scene_duration,
+        width: viewport.0 as f64,
+        height: viewport.1 as f64,
+        fps: actx.fps as f64,
+    };
+    let scope = rustmotion_core::css::ComposedScope {
+        clock,
+        outer: outer_scope,
+    };
+    match css.expr.resolve(&scope) {
+        Ok(props) => apply_animated_props(css, &props),
+        Err(e) => {
+            // Best-effort, same contract `deserialize_children`
+            // (`rustmotion/src/engine/render/scene.rs`) already uses for a
+            // single broken child: named and located (`e` carries the exact
+            // property and the underlying `ExprError`, `path` carries which
+            // node), but never a fatal error and never a silent zero — the
+            // property that failed simply keeps whatever value it already
+            // had (its literal, or whatever an animation already resolved
+            // it to) for this frame, instead of aborting or blanking the
+            // rest of this node's expressions too... except that it *does*
+            // abort the rest of *this* node's expressions this frame:
+            // `ComputedStyle::resolve` stops at the first failing property,
+            // so a later expression on the same node that would have
+            // succeeded is not evaluated either. See that type's own doc.
+            if warn_unresolved {
+                eprintln!(
+                    "warning: {path}: {e} — this property keeps its pre-expression value this frame"
+                );
+            }
+        }
+    }
 }
 
 /// The full effect list for a component at paint time: `style.animation`,
@@ -758,7 +1024,17 @@ pub(crate) fn apply_style_states(
             base.insert(k, v);
         }
     }
-    if let Ok(merged) = serde_json::from_value::<CssStyle>(serde_json::Value::Object(base)) {
+    // `CssStyle::expr` (issue #338) is `#[serde(skip)]` — neither `css`
+    // above nor a `step.style` survives this serialize round trip with its
+    // expressions intact, so `merged.expr` comes back empty regardless of
+    // what either side held. Restore `css`'s own pre-merge expressions
+    // (`.prefer` rather than a bare overwrite, so this stays correct even
+    // if that serialize-skip ever narrows) — otherwise a node with both a
+    // `style.expr` and any `timeline` style state would silently lose its
+    // expression the first time a state became due.
+    let saved_expr = css.expr.clone();
+    if let Ok(mut merged) = serde_json::from_value::<CssStyle>(serde_json::Value::Object(base)) {
+        merged.expr = merged.expr.prefer(saved_expr);
         *css = merged;
     }
 }
@@ -1189,13 +1465,7 @@ fn component_intrinsic(
             crate::intrinsic::NumberWheelIntrinsic::from_number_wheel(w),
         )),
         Badge(b) => Some(Arc::new(crate::intrinsic::BadgeIntrinsic::from_badge(b))),
-        Terminal(t) => Some(Arc::new(
-            crate::intrinsic::TerminalIntrinsic::from_terminal(t),
-        )),
         Table(t) => Some(Arc::new(crate::intrinsic::TableIntrinsic::from_table(t))),
-        Codeblock(c) => Some(Arc::new(
-            crate::intrinsic::CodeblockIntrinsic::from_codeblock(c),
-        )),
         // M2: rich_text had no intrinsic measurer at all, so it laid out
         // 0×0 and rendered nothing unless the author guessed an explicit
         // width/height.
@@ -1224,36 +1494,15 @@ fn container_children<'a>(
     inherited_delay: f64,
     time_remap: (f64, f64),
     parent_css: &CssStyle,
+    viewport: (f32, f32),
+    outer_scope: Option<&dyn Scope>,
+    warn_unresolved: bool,
 ) -> Vec<BoxNode> {
     let (children, stagger, child_scale, child_offset): (&[ChildComponent], Option<f32>, f64, f64) =
         match component {
-            Component::Card(c) => (
-                &c.children,
-                c.stagger,
-                c.time_scale.unwrap_or(1.0),
-                c.time_offset.unwrap_or(0.0),
-            ),
-            Component::Flex(c) => (
-                &c.children,
-                c.stagger,
-                c.time_scale.unwrap_or(1.0),
-                c.time_offset.unwrap_or(0.0),
-            ),
-            Component::Grid(c) => (
-                &c.children,
-                c.stagger,
-                c.time_scale.unwrap_or(1.0),
-                c.time_offset.unwrap_or(0.0),
-            ),
             Component::Container(c) => (
                 &c.children,
                 c.stagger,
-                c.time_scale.unwrap_or(1.0),
-                c.time_offset.unwrap_or(0.0),
-            ),
-            Component::Positioned(c) => (
-                &c.children,
-                None,
                 c.time_scale.unwrap_or(1.0),
                 c.time_offset.unwrap_or(0.0),
             ),
@@ -1290,6 +1539,9 @@ fn container_children<'a>(
             inherited_delay + j as f64 * step,
             child_remap,
             parent_css,
+            viewport,
+            outer_scope,
+            warn_unresolved,
         ));
     }
     result
@@ -1304,19 +1556,28 @@ fn component_css(component: &Component) -> CssStyle {
     css
 }
 
-/// Set `display` from the component kind when the user didn't specify one.
-/// `card` / `flex` → `flex`, `grid` → `grid`. The taffy bridge defaults to
-/// `block` otherwise, which would silently ignore `flex-direction` & friends.
+/// Set `display` on the container when the user didn't specify one. The
+/// four former variants (`card`/`flex`/`grid`/`positioned`) are now a single
+/// `Component::Container` with no field recording which spelling produced
+/// it, so the old "which variant is this" dispatch can't tell `grid` apart
+/// from the others anymore — the signal used instead is `grid-template-columns`
+/// itself: a container that sets it (the only way `validate_schema`'s grid
+/// checks let a scenario be valid in the first place) defaults to
+/// `Display::Grid`; every other container defaults to `Display::Flex`. The
+/// taffy bridge would otherwise default to `block`, silently ignoring
+/// `flex-direction` & friends.
 fn apply_default_display(component: &Component, css: &mut CssStyle) {
     use rustmotion_core::css::style::Display;
     if css.display.is_some() {
         return;
     }
-    css.display = match component {
-        Component::Card(_) | Component::Flex(_) | Component::Container(_) => Some(Display::Flex),
-        Component::Grid(_) => Some(Display::Grid),
-        _ => return,
-    };
+    if matches!(component, Component::Container(_)) {
+        css.display = Some(if css.grid_template_columns.is_some() {
+            Display::Grid
+        } else {
+            Display::Flex
+        });
+    }
 }
 
 /// Measure a single line of text with the exact same Skia font metrics the
@@ -1555,15 +1816,6 @@ fn apply_intrinsic_overrides(component: &Component, css: &mut CssStyle) {
                         n * (r * 2.0 + 64.0)
                     }
                 };
-                css.height = Some(CSize::Length(CLP::Px(h)));
-            }
-        }
-        Notification(c) => {
-            if css.width.is_none() {
-                css.width = Some(CSize::Length(CLP::Px(c.width)));
-            }
-            if css.height.is_none() {
-                let h = if c.message.is_some() { 96.0 } else { 64.0 };
                 css.height = Some(CSize::Length(CLP::Px(h)));
             }
         }
@@ -2083,7 +2335,6 @@ fn component_style(c: &Component) -> &CssStyle {
         Counter(c) => &c.style,
         Cursor(c) => &c.style,
         Caption(c) => &c.style,
-        Codeblock(c) => &c.style,
         Connector(c) => &c.style,
         Avatar(c) => &c.style,
         AvatarGroup(c) => &c.style,
@@ -2104,7 +2355,6 @@ fn component_style(c: &Component) -> &CssStyle {
         Lottie(c) => &c.style,
         Marquee(c) => &c.style,
         Mockup(c) => &c.style,
-        Notification(c) => &c.style,
         Particle(c) => &c.style,
         PillNav(c) => &c.style,
         Progress(c) => &c.style,
@@ -2122,14 +2372,9 @@ fn component_style(c: &Component) -> &CssStyle {
         RichText(c) => &c.style,
         Table(c) => &c.style,
         TagCloud(c) => &c.style,
-        Terminal(c) => &c.style,
         Timeline(c) => &c.style,
         Tooltip(c) => &c.style,
         Treemap(c) => &c.style,
-        Positioned(c) => &c.style,
-        Flex(c) => &c.style,
-        Grid(c) => &c.style,
-        Card(c) => &c.style,
         Container(c) => &c.style,
         AudioSpectrum(c) => &c.style,
         Waveform(c) => &c.style,
@@ -2150,7 +2395,6 @@ pub fn component_kind(c: &Component) -> &'static str {
         Counter(_) => "counter",
         Cursor(_) => "cursor",
         Caption(_) => "caption",
-        Codeblock(_) => "codeblock",
         Connector(_) => "connector",
         Avatar(_) => "avatar",
         AvatarGroup(_) => "avatar_group",
@@ -2171,7 +2415,6 @@ pub fn component_kind(c: &Component) -> &'static str {
         Lottie(_) => "lottie",
         Marquee(_) => "marquee",
         Mockup(_) => "mockup",
-        Notification(_) => "notification",
         Particle(_) => "particle",
         PillNav(_) => "pill_nav",
         Progress(_) => "progress",
@@ -2189,18 +2432,14 @@ pub fn component_kind(c: &Component) -> &'static str {
         RichText(_) => "rich_text",
         Table(_) => "table",
         TagCloud(_) => "tag_cloud",
-        Terminal(_) => "terminal",
         Timeline(_) => "timeline",
         Tooltip(_) => "tooltip",
         Treemap(_) => "treemap",
-        Positioned(_) => "positioned",
-        Flex(_) => "flex",
-        Grid(_) => "grid",
-        Card(_) => "card",
         // The schema tag is `div` (`#[serde(rename = "div", alias =
-        // "container")]` on the enum in `lib.rs`) — `container` only
-        // survives as a deserialize alias, so naming it that way here told
-        // an author to look for a tag their scenario cannot contain.
+        // "container", alias = "card", alias = "flex", alias = "grid", alias
+        // = "positioned")]` on the enum in `lib.rs`) — the other five only
+        // survive as deserialize aliases, so naming this label anything else
+        // told an author to look for a tag their scenario cannot contain.
         Container(_) => "div",
         AudioSpectrum(_) => "audio_spectrum",
         Waveform(_) => "waveform",
@@ -2275,6 +2514,7 @@ mod tests {
     #[test]
     fn start_at_rebases_the_entrance_animation_clock() {
         let scene = vec![ChildComponent {
+            id: None,
             component: serde_json::from_value(json!({
                 "type": "shape",
                 "shape": "rect",
@@ -2329,6 +2569,7 @@ mod tests {
     #[test]
     fn start_at_rebases_an_exit_animation_declared_after_the_entrance() {
         let scene = vec![ChildComponent {
+            id: None,
             component: serde_json::from_value(json!({
                 "type": "shape",
                 "shape": "rect",
@@ -2383,7 +2624,7 @@ mod tests {
     use serde_json::json;
 
     fn make_card(children: Vec<ChildComponent>, style: CssStyle) -> Component {
-        Component::Card(crate::card::Card {
+        Component::Container(crate::container::ContainerComponent {
             children,
             timing: Default::default(),
             style,
@@ -2396,6 +2637,7 @@ mod tests {
 
     fn make_shape(width: f32, height: f32) -> ChildComponent {
         ChildComponent {
+            id: None,
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
                 text: None,
@@ -2420,6 +2662,7 @@ mod tests {
 
     fn make_text(content: &str, style: CssStyle) -> ChildComponent {
         ChildComponent {
+            id: None,
             component: Component::Text(crate::text::Text {
                 content: content.to_string(),
                 max_width: None,
@@ -2461,6 +2704,7 @@ mod tests {
             CssStyle::default(),
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -2492,6 +2736,7 @@ mod tests {
             },
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -2529,6 +2774,7 @@ mod tests {
     #[test]
     fn absolute_child_uses_top_left() {
         let scene = vec![ChildComponent {
+            id: None,
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
                 text: None,
@@ -2562,6 +2808,7 @@ mod tests {
     #[test]
     fn horizontal_divider_stretches_to_parent_width() {
         let divider = ChildComponent {
+            id: None,
             component: Component::Divider(crate::divider::Divider {
                 direction: DividerDirection::Horizontal,
                 thickness: 4.0,
@@ -2592,12 +2839,13 @@ mod tests {
         // A flex column card with no fixed size — its children's intrinsic
         // sizes should determine the card's width/height. The text child
         // must be measured via cosmic-text, not collapse to 0×0.
-        use crate::card::Card;
+        use crate::container::ContainerComponent;
         use crate::text::Text;
 
         use rustmotion_core::css::units::Length;
 
         let text = ChildComponent {
+            id: None,
             component: Component::Text(Text {
                 content: "Hello World".into(),
                 max_width: None,
@@ -2623,7 +2871,8 @@ mod tests {
         };
 
         let card = ChildComponent {
-            component: Component::Card(Card {
+            id: None,
+            component: Component::Container(ContainerComponent {
                 children: vec![text],
                 timing: Default::default(),
                 style: CssStyle {
@@ -2676,6 +2925,7 @@ mod tests {
     #[test]
     fn arrow_intrinsic_size_uses_endpoint_bbox_plus_arrowhead() {
         let arrow = ChildComponent {
+            id: None,
             component: Component::Arrow(crate::arrow::Arrow {
                 x1: 10.0,
                 y1: 20.0,
@@ -2716,6 +2966,7 @@ mod tests {
     #[test]
     fn connector_intrinsic_size_uses_endpoint_bbox_plus_arrowhead() {
         let conn = ChildComponent {
+            id: None,
             component: Component::Connector(crate::connector::Connector {
                 from: crate::connector::ConnectorPoint { x: 50.0, y: 0.0 },
                 to: crate::connector::ConnectorPoint { x: 150.0, y: 50.0 },
@@ -2757,6 +3008,7 @@ mod tests {
 
         use rustmotion_core::css::units::Length;
         let counter = ChildComponent {
+            id: None,
             component: Component::Counter(Counter {
                 duration: None,
                 from: 0.0,
@@ -2808,6 +3060,7 @@ mod tests {
         use crate::badge::{Badge, BadgeSize, BadgeVariant};
 
         let badge = ChildComponent {
+            id: None,
             component: Component::Badge(Badge {
                 text: "New".into(),
                 icon: None,
@@ -2849,6 +3102,7 @@ mod tests {
     #[test]
     fn line_intrinsic_size_matches_endpoint_bounding_box() {
         let line = ChildComponent {
+            id: None,
             component: Component::Line(crate::line::Line {
                 x1: 10.0,
                 y1: 20.0,
@@ -2887,6 +3141,7 @@ mod tests {
         use rustmotion_core::css::units::Length;
 
         let rich_text = ChildComponent {
+            id: None,
             component: Component::RichText(RichText {
                 spans: vec![
                     RichTextSpan {
@@ -3058,6 +3313,7 @@ mod tests {
         let component: Component =
             serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{e}\n{json:#}"));
         ChildComponent {
+            id: None,
             component,
             position: None,
             x: None,
@@ -3075,6 +3331,7 @@ mod tests {
     fn layout_in_auto_card(child_json: serde_json::Value) -> (f32, f32) {
         let card = make_card(vec![child_from_json(child_json)], CssStyle::default());
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -3230,6 +3487,7 @@ mod tests {
             },
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -3271,6 +3529,7 @@ mod tests {
             },
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -3305,6 +3564,7 @@ mod tests {
             },
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -3334,6 +3594,7 @@ mod tests {
             },
         );
         let scene = vec![ChildComponent {
+            id: None,
             component: card,
             position: Some(crate::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -3351,6 +3612,7 @@ mod tests {
 
     fn make_aspect_shape(width: f32, aspect_ratio: f32) -> ChildComponent {
         ChildComponent {
+            id: None,
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
                 text: None,
@@ -3421,6 +3683,7 @@ mod tests {
 
     fn make_aspect_shape_no_width(aspect_ratio: f32) -> ChildComponent {
         ChildComponent {
+            id: None,
             component: Component::Shape(crate::shape::Shape {
                 shape: rustmotion_core::schema::ShapeType::Rect,
                 text: None,

@@ -44,6 +44,14 @@ fn default_transition_duration() -> f64 {
 /// `box_builder.rs` ever sees this component, without touching that file.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "SwitchRaw")]
+#[deprecated(
+    since = "0.7.1",
+    note = "`switch` is a frozen composition (issue #333). Compose a toggle from two \
+            `shape`s (track + thumb) with the thumb's position keyframed instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct Switch {
     #[serde(default)]
     pub value: bool,

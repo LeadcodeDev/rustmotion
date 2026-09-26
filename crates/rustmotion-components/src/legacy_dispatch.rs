@@ -4,8 +4,9 @@
 //! Naming kept as "legacy" for now to avoid churn in callers; this is the
 //! sole dispatcher in use since every component implements `Painter`.
 //!
-//! Containers (Card / Flex / Grid / Container / Positioned) are intentionally
-//! skipped: paint_pass already paints their box decorations and recurses into
+//! The container component (`Component::Container` — tagged `div`, aliased
+//! `container`/`card`/`flex`/`grid`/`positioned`) is intentionally skipped:
+//! paint_pass already paints its box decorations and recurses into
 //! children — so calling the container's own `paint_content` would do nothing
 //! anyway, and we save a no-op call.
 //!
@@ -141,36 +142,19 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
         // promises the canvas is already translated to the CONTENT-box
         // origin, with `layout` describing the content box — padding
         // reserved by taffy is consumed here, not left for the painter to
-        // rediscover. `Codeblock` is a deliberate, documented exception: it
-        // reads `style.padding` itself (`codeblock/render.rs` computes
-        // `code_x = x + pad_left + gutter_width` from the layout origin it
-        // receives) and paints its own background/border directly from the
-        // BORDER-box origin. Honoring the general contract for it too would
-        // double-apply padding — content shifted twice, background rect
-        // shrunk incorrectly — so it keeps receiving the untranslated
-        // border-box origin and dimensions, exactly as before this fix.
-        let is_self_padding = matches!(child.component, Component::Codeblock(_));
-
+        // rediscover. `Codeblock` used to be a deliberate, documented
+        // exception (it painted from the untranslated BORDER-box origin);
+        // it has been deleted, so every remaining `Painter` now honors the
+        // general contract uniformly.
         canvas.save();
-        let local = if is_self_padding {
-            canvas.translate((layout.x, layout.y));
-            BoxLayout {
-                x: 0.0,
-                y: 0.0,
-                width: layout.width,
-                height: layout.height,
-                ..Default::default()
-            }
-        } else {
-            let (cx, cy, cw, ch) = layout.content_box();
-            canvas.translate((cx, cy));
-            BoxLayout {
-                x: 0.0,
-                y: 0.0,
-                width: cw,
-                height: ch,
-                ..Default::default()
-            }
+        let (cx, cy, cw, ch) = layout.content_box();
+        canvas.translate((cx, cy));
+        let local = BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: cw,
+            height: ch,
+            ..Default::default()
         };
 
         let paint_ctx = PaintCtx {
@@ -190,14 +174,7 @@ impl<'a> PaintDispatcher for LegacyPaintDispatcher<'a> {
 }
 
 fn is_container(c: &Component) -> bool {
-    matches!(
-        c,
-        Component::Card(_)
-            | Component::Flex(_)
-            | Component::Grid(_)
-            | Component::Container(_)
-            | Component::Positioned(_)
-    )
+    matches!(c, Component::Container(_))
 }
 
 #[cfg(test)]
@@ -216,6 +193,7 @@ mod tests {
 
     fn shape_child(w: f32, h: f32, x: f32, y: f32) -> ChildComponent {
         ChildComponent {
+            id: None,
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 text: None,
@@ -378,11 +356,12 @@ mod tests {
     fn card_background_painted_with_red_shape_inside() {
         // Card 100×80 at (40,30), green background, contains a red 30×20 shape
         // absolutely positioned at (10,10) inside the card.
-        use crate::card::Card;
+        use crate::container::ContainerComponent;
 
         use rustmotion_core::css::style::{Background, Color};
 
         let red_shape = ChildComponent {
+            id: None,
             component: Component::Shape(Shape {
                 shape: ShapeType::Rect,
                 text: None,
@@ -405,7 +384,8 @@ mod tests {
         };
 
         let card = ChildComponent {
-            component: Component::Card(Card {
+            id: None,
+            component: Component::Container(ContainerComponent {
                 children: vec![red_shape],
                 timing: Default::default(),
                 style: CssStyle {
@@ -496,6 +476,7 @@ mod tests {
 
         let make_scene = || {
             let shape = ChildComponent {
+                id: None,
                 component: Component::Shape(Shape {
                     shape: ShapeType::Rect,
                     text: None,

@@ -338,6 +338,20 @@ pub fn ease(t: f64, easing: &EasingType) -> f64 {
         EasingType::Bounce => bounce_ease_out(t),
         EasingType::Spring => t, // Spring handled separately
         EasingType::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
+        // CSS `steps(n, jump-end)`: hold at step `i`'s level (`i / n`) for
+        // the whole `[i/n, (i+1)/n)` span, then jump. `t == 1.0` always
+        // lands exactly on `1.0` — the final jump — rather than on the
+        // last held step, which the `floor` below would otherwise produce
+        // (`floor(1.0 * n) / n == 1.0` only by coincidence of exact
+        // arithmetic; guarding it explicitly avoids relying on that).
+        EasingType::Steps(n) => {
+            let n = (*n).max(1) as f64;
+            if t >= 1.0 {
+                1.0
+            } else {
+                (t * n).floor() / n
+            }
+        }
     }
 }
 
@@ -913,7 +927,7 @@ pub fn resolve_animations(
 
     for anim in all_animations {
         let anim_time = if should_loop {
-            loop_time(anim, time)
+            cycle_time(anim, time, &config)
         } else {
             time
         };
@@ -931,8 +945,23 @@ pub fn resolve_animations(
     props
 }
 
-/// Wrap time within the animation's keyframe range for looping
-fn loop_time(anim: &Animation, time: f64) -> f64 {
+/// Maps `time` into the animation's own repeat cycle, honouring
+/// `config.repeat_count` (finite vs. infinite), `config.yoyo` (ping-pong
+/// direction) and `config.repeat_delay` (a pause held at each cycle's
+/// resting value) — issue #330's generalisation of what used to be a
+/// bare infinite modulo wrap. Only called when `config.repeat` is already
+/// known true (see `resolve_animations`'s `should_loop` gate); a
+/// non-looping animation never reaches this function.
+///
+/// The default case — `repeat: true`, no `repeat_count`, `yoyo: false`,
+/// `repeat_delay: 0.0` — reduces algebraically to `period == duration` and
+/// `cycle_index` always even (never backward), so `within_cycle` is
+/// exactly `(time - start) % duration` and the result is exactly
+/// `start + (elapsed % duration)`: the old `loop_time` formula this
+/// function replaces, byte-identical (see
+/// `tests::repeat_true_with_no_new_fields_is_byte_identical_to_legacy_loop_time`
+/// below).
+fn cycle_time(anim: &Animation, time: f64, config: &PresetConfig) -> f64 {
     let keyframes = &anim.keyframes;
     if keyframes.len() < 2 {
         return time;
@@ -943,7 +972,43 @@ fn loop_time(anim: &Animation, time: f64) -> f64 {
     if duration < 1e-9 || time < start {
         return time;
     }
-    start + ((time - start) % duration)
+
+    // `repeat_delay` pads every cycle with a held pause before the next
+    // one starts — the period the clock wraps on is longer than the
+    // motion itself by exactly that pause.
+    let period = duration + config.repeat_delay.max(0.0);
+    if period < 1e-9 {
+        return time;
+    }
+
+    let elapsed = time - start;
+    let mut cycle_index = (elapsed / period).floor() as i64;
+    if cycle_index < 0 {
+        cycle_index = 0;
+    }
+
+    // A finite `repeat_count` freezes on the resting value of its last
+    // play once `time` runs past it, instead of continuing to cycle.
+    if let Some(count) = config.repeat_count {
+        let last_index = (count.max(1) - 1) as i64;
+        if cycle_index > last_index {
+            cycle_index = last_index;
+        }
+    }
+
+    // Time spent inside this cycle's own motion window, clamped to
+    // `duration` — once past it, we're in the `repeat_delay` pause (or,
+    // for the clamped final cycle above, held there indefinitely).
+    let within_cycle = (elapsed - cycle_index as f64 * period)
+        .min(duration)
+        .max(0.0);
+
+    let backward = config.yoyo && cycle_index % 2 == 1;
+    if backward {
+        end - within_cycle
+    } else {
+        start + within_cycle
+    }
 }
 
 /// Result of resolving an animation value — either a number or a color
@@ -3514,5 +3579,217 @@ mod char_animation_tuning_tests {
         for i in 0..8 {
             assert!((a.unit_start(i) - 0.5).abs() < 1e-9);
         }
+    }
+}
+
+#[cfg(test)]
+mod easing_steps_tests {
+    //! Issue #330: `EasingType::Steps(n)` — a caret that jumps rather than
+    //! fades. `steps(1)` is the acceptance criterion's own example: hold
+    //! the start value for the whole segment, then jump to the end
+    //! exactly at `t = 1.0`.
+    use super::*;
+
+    #[test]
+    fn steps_one_holds_the_start_value_until_the_very_end() {
+        let s = EasingType::Steps(1);
+        for t in [0.0, 0.1, 0.5, 0.9, 0.999_999] {
+            assert_eq!(
+                ease(t, &s),
+                0.0,
+                "steps(1) must hold at 0.0 for the entire segment, t={t}"
+            );
+        }
+        assert_eq!(ease(1.0, &s), 1.0, "steps(1) jumps to 1.0 exactly at t=1.0");
+    }
+
+    #[test]
+    fn steps_four_holds_four_discrete_levels() {
+        let s = EasingType::Steps(4);
+        assert_eq!(ease(0.0, &s), 0.0);
+        assert_eq!(ease(0.1, &s), 0.0);
+        assert_eq!(ease(0.24, &s), 0.0);
+        assert_eq!(ease(0.25, &s), 0.25);
+        assert_eq!(ease(0.49, &s), 0.25);
+        assert_eq!(ease(0.50, &s), 0.50);
+        assert_eq!(ease(0.75, &s), 0.75);
+        assert_eq!(ease(0.999, &s), 0.75);
+        assert_eq!(ease(1.0, &s), 1.0);
+    }
+
+    #[test]
+    fn steps_zero_does_not_panic_or_divide_by_zero() {
+        let s = EasingType::Steps(0);
+        for t in [0.0, 0.5, 1.0] {
+            assert!(ease(t, &s).is_finite());
+        }
+    }
+}
+
+#[cfg(test)]
+mod repeat_cycle_tests {
+    //! Issue #330: `PresetConfig::{repeat_count, yoyo, repeat_delay}` widen
+    //! what used to be a bare infinite-or-nothing `bool repeat`, resolved
+    //! by `cycle_time` (this module's private `loop_time` replacement).
+    use super::*;
+
+    /// A single property ramping 0.0 -> 1.0 linearly over `[0, duration]`.
+    fn ramp(duration: f64) -> Animation {
+        kf_anim("x", 0.0, 0.0, duration, 1.0, EasingType::Linear)
+    }
+
+    fn config(repeat_count: Option<u32>, yoyo: bool, repeat_delay: f64) -> PresetConfig {
+        PresetConfig {
+            repeat: true,
+            repeat_count,
+            yoyo,
+            repeat_delay,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn repeat_true_with_no_new_fields_is_byte_identical_to_legacy_loop_time() {
+        // The exact formula the old `loop_time` used, kept here verbatim
+        // (not by calling `cycle_time`) as the independent reference this
+        // test checks `cycle_time` against.
+        fn legacy_loop_time(start: f64, duration: f64, time: f64) -> f64 {
+            if duration < 1e-9 || time < start {
+                return time;
+            }
+            start + ((time - start) % duration)
+        }
+
+        let duration = 2.0;
+        let anim = ramp(duration);
+        let cfg = config(None, false, 0.0);
+        for t in [
+            -1.0, 0.0, 0.3, 0.999_999, 1.0, 1.5, 1.999_999, 2.0, 2.000_001, 2.5, 3.999_999, 4.0,
+            4.1, 10.3, 100.7,
+        ] {
+            let got = cycle_time(&anim, t, &cfg);
+            let legacy = legacy_loop_time(0.0, duration, t);
+            assert!(
+                (got - legacy).abs() < 1e-12,
+                "t={t}: cycle_time={got}, legacy loop_time={legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finite_repeat_count_freezes_on_the_last_plays_resting_value() {
+        let duration = 1.0;
+        let anim = ramp(duration);
+        // 3 plays total: cycles [0,1), [1,2), [2,3). Past t=3 it must hold
+        // exactly the value cycle index 2 ends on (the ramp's own end, 1.0
+        // in `x`-progress terms — checked here as resolved cycle_time).
+        let cfg = config(Some(3), false, 0.0);
+        let frozen_at = cycle_time(&anim, 3.0, &cfg);
+        for t in [3.0, 3.5, 10.0, 1_000.0] {
+            let got = cycle_time(&anim, t, &cfg);
+            assert!(
+                (got - frozen_at).abs() < 1e-9,
+                "t={t} must stay frozen at the last play's end ({frozen_at}), got {got}"
+            );
+        }
+        // And the first two plays must still have actually cycled (not
+        // frozen from the start).
+        assert!((cycle_time(&anim, 0.5, &cfg) - 0.5).abs() < 1e-9);
+        assert!((cycle_time(&anim, 1.5, &cfg) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn repeat_count_of_one_behaves_like_a_single_play() {
+        let duration = 1.0;
+        let anim = ramp(duration);
+        let looping = config(Some(1), false, 0.0);
+        for t in [0.0, 0.5, 1.0, 2.0, 5.0] {
+            let got = cycle_time(&anim, t, &looping);
+            let single_play = t.min(duration);
+            assert!((got - single_play).abs() < 1e-9, "t={t}: got {got}");
+        }
+    }
+
+    #[test]
+    fn yoyo_reverses_every_other_cycle() {
+        let duration = 1.0;
+        let anim = ramp(duration);
+        let cfg = config(None, true, 0.0);
+        // Cycle 0 (forward): local time == elapsed.
+        assert!((cycle_time(&anim, 0.25, &cfg) - 0.25).abs() < 1e-9);
+        // Cycle 1 (backward, elapsed in [1,2)): mapped time counts back
+        // down from the end (1.0) instead of up from the start.
+        assert!((cycle_time(&anim, 1.25, &cfg) - 0.75).abs() < 1e-9);
+        assert!((cycle_time(&anim, 1.75, &cfg) - 0.25).abs() < 1e-9);
+        // Cycle 2 (forward again): back to counting up from the start.
+        assert!((cycle_time(&anim, 2.25, &cfg) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn yoyo_produces_a_continuous_value_at_every_cycle_boundary() {
+        // A ping-pong must never visibly jump at the seam between two
+        // cycles — the resolved value approaching a boundary from either
+        // side must converge to the same number.
+        let duration = 1.0;
+        let anim = ramp(duration);
+        let cfg = config(None, true, 0.0);
+        for boundary in [1.0, 2.0, 3.0] {
+            let just_before = cycle_time(&anim, boundary - 1e-6, &cfg);
+            let at = cycle_time(&anim, boundary, &cfg);
+            assert!(
+                (just_before - at).abs() < 1e-3,
+                "boundary {boundary}: just_before={just_before}, at={at}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeat_delay_holds_the_resting_value_between_plays() {
+        let duration = 1.0;
+        let anim = ramp(duration);
+        let cfg = config(None, false, 0.5); // period = 1.5
+                                            // Motion window [0,1): still animating.
+        assert!((cycle_time(&anim, 0.5, &cfg) - 0.5).abs() < 1e-9);
+        // Pause window [1,1.5): held at the end of the motion window (1.0).
+        assert!((cycle_time(&anim, 1.0, &cfg) - 1.0).abs() < 1e-9);
+        assert!((cycle_time(&anim, 1.3, &cfg) - 1.0).abs() < 1e-9);
+        // Next cycle starts fresh at 1.5.
+        assert!((cycle_time(&anim, 1.5, &cfg) - 0.0).abs() < 1e-9);
+        assert!((cycle_time(&anim, 2.0, &cfg) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resolve_animations_actually_applies_yoyo_and_repeat_count_end_to_end() {
+        // Same scenario at the public `resolve_animations` entry point
+        // (not just the private `cycle_time` helper), proving the fields
+        // reach the solver through `PresetConfig` for a real `Animation`
+        // list, not only for presets. `translate_x` is used instead of
+        // `ramp`'s own `"x"` property, which `apply_property` doesn't
+        // recognise.
+        let animations = vec![kf_anim(
+            "translate_x",
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            EasingType::Linear,
+        )];
+        let cfg = config(Some(2), true, 0.0);
+        let at = |t: f64| -> f64 {
+            resolve_animations(&animations, None, Some(&cfg), t, 10.0).translate_x as f64
+        };
+        assert!((at(0.25) - 0.25).abs() < 1e-4, "forward play: {}", at(0.25));
+        assert!(
+            (at(1.25) - 0.75).abs() < 1e-4,
+            "yoyo'd second play: {}",
+            at(1.25)
+        );
+        // repeat_count: 2 -> only 2 plays; past t=2 it holds frozen.
+        let frozen = at(2.0);
+        assert!(
+            (at(5.0) - frozen).abs() < 1e-4,
+            "must stay frozen: {}",
+            at(5.0)
+        );
     }
 }

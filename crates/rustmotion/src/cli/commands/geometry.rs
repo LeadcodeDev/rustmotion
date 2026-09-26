@@ -13,8 +13,6 @@
 //!   * detect wrapping content whose natural size exceeds its own resolved
 //!     box (`text`/`gradient_text`/`caption`/`rich_text`/`table` — #128
 //!     item 1: originally `text`-only)
-//!   * detect terminal/codeblock content that overflows their box when
-//!     `auto_scroll: false`
 //!   * exempt `marquee` and `cursor` (designed to bleed)
 //!   * never report a node clipped by an `overflow: hidden`/`clip`/`scroll`/
 //!     `auto` ancestor as a viewport overflow (H4) — the ancestor's own bbox
@@ -56,8 +54,7 @@ use rustmotion::components::box_builder::{
     build_scene_from_refs, component_kind, effective_effects, BuildAnimationCtx,
 };
 use rustmotion::components::intrinsic::{
-    CaptionIntrinsic, CodeblockIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic,
-    TerminalIntrinsic, TextIntrinsic,
+    CaptionIntrinsic, GradientTextIntrinsic, RichTextIntrinsic, TableIntrinsic, TextIntrinsic,
 };
 use rustmotion::components::{ChildComponent, Component};
 use rustmotion::core::css::style::{
@@ -70,7 +67,7 @@ use rustmotion::core::engine::box_tree::{AvailableSpace, BoxKind, BoxNode, Intri
 use rustmotion::core::engine::layout_pass::{run_layout, BoxLayout, LayoutResult};
 use rustmotion::engine::animator::{resolve_props_for_effects, AnimatedProperties};
 use rustmotion::engine::render;
-use rustmotion::schema::{Camera, ResolvedScenario, Scene, ViewType};
+use rustmotion::schema::{Camera, ResolvedScenario, ResolvedView, Scene, TransitionType, ViewType};
 use serde::Serialize;
 
 /// One detected layout violation.
@@ -109,8 +106,6 @@ pub enum ViolationKind {
     /// `white-space: nowrap`/`pre` set but the natural width exceeds the
     /// allocated width.
     UnwrappableTextOverflow,
-    /// terminal/codeblock has `auto_scroll: false` but content > box.
-    AutoScrollDisabledOverflow,
     /// Wrapping text's content, measured at the width its own box was
     /// actually assigned, needs more width (an unbreakable word/token) or
     /// height (wrapped lines) than that box's `content_box()` — e.g. a
@@ -333,16 +328,6 @@ fn walk(
                     out,
                 );
             }
-            check_auto_scroll(
-                &child.component,
-                &child_path,
-                layout,
-                own_bound,
-                viewport,
-                vi,
-                si,
-                out,
-            );
             // Suppressed under a clipping ancestor (parent_clips) exactly
             // like check_viewport, and when the node clips its own overflow
             // (paint_pass applies a node's own `overflow: hidden`/clip/
@@ -454,10 +439,6 @@ fn bleeds(child: &ChildComponent) -> bool {
 
 fn container_children(c: &Component) -> Option<&[ChildComponent]> {
     match c {
-        Component::Card(card) => Some(&card.children),
-        Component::Flex(flex) => Some(&flex.children),
-        Component::Grid(grid) => Some(&grid.children),
-        Component::Positioned(pos) => Some(&pos.children),
         Component::Container(c) => Some(&c.children),
         _ => None,
     }
@@ -789,14 +770,7 @@ fn hint_for_viewport(component: &Component, axis: Axis, bbox: &BBox, vp: (u32, u
 /// `intrinsic.rs`'s "M1 follow-up" doc comments), so their measured size
 /// agrees with what gets painted; always `false` for the rest.
 ///
-/// Deliberately excludes `codeblock`/`terminal`: both have an `auto_scroll`
-/// escape hatch (default `true`) that makes "natural content taller than
-/// the assigned box" an *intentional*, painter-handled clip+scroll rather
-/// than a defect — `check_auto_scroll` already covers the `auto_scroll:
-/// false` case correctly. A blanket natural-vs-own-box comparison here would
-/// false-positive on every ordinary `auto_scroll: true` codeblock/terminal
-/// that's deliberately given a smaller-than-natural box to scroll within.
-/// Also excludes atomic single-line components (`badge`/`kbd`/`counter`) —
+/// Excludes atomic single-line components (`badge`/`kbd`/`counter`) —
 /// out of scope for this pass, see the workstream report.
 fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasure>, bool)> {
     fn is_nowrap(ws: &Option<WhiteSpace>) -> bool {
@@ -811,6 +785,7 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
             Box::new(GradientTextIntrinsic::from_gradient_text(t)),
             is_nowrap(&t.style.white_space),
         )),
+        #[allow(deprecated)]
         Component::Caption(c) => Some((
             Box::new(CaptionIntrinsic::from_caption(c)),
             is_nowrap(&c.style.white_space),
@@ -822,8 +797,8 @@ fn measurer_and_nowrap(component: &Component) -> Option<(Box<dyn IntrinsicMeasur
 }
 
 /// RM-31: natural (unwrapped) width vs the node's own CONTENT box, not its
-/// border box. `LegacyPaintDispatcher::dispatch` hands every non-codeblock
-/// painter (`Text`/`GradientText`/`Caption` included) a synthetic
+/// border box. `LegacyPaintDispatcher::dispatch` hands every painter
+/// (`Text`/`GradientText`/`Caption` included) a synthetic
 /// `BoxLayout` built from `layout.content_box()`, translated to the
 /// content-box origin — so the painter wraps and draws inside the content
 /// box, not the raw taffy layout box this walker reads. Comparing against
@@ -899,9 +874,7 @@ fn check_unwrappable_text(
 /// Originally `text`-only (#128 item 1: "content overflow is checked for
 /// text only"); now covers every component with an `IntrinsicMeasure` whose
 /// natural size can legitimately be smaller than what layout assigned it —
-/// see `measurer_and_nowrap`'s doc comment for exactly which types and why
-/// (`codeblock`/`terminal` are deliberately excluded: their `auto_scroll`
-/// escape hatch makes a smaller-than-natural box intentional).
+/// see `measurer_and_nowrap`'s doc comment for exactly which types.
 ///
 /// Complementary to `check_unwrappable_text`, not overlapping with it on the
 /// WIDTH axis: that one covers `white-space: nowrap`/`pre` (single unwrapped
@@ -1057,111 +1030,10 @@ fn check_content_overflows_box(
     });
 }
 
-/// Round 4 audit, constat 6: this used to hand-roll codeblock/terminal
-/// natural-height formulas with a hardcoded 16+16=32px padding assumption
-/// and (for terminal) the CSS `style.line-height` property — neither of
-/// which is what actually gets painted. `CodeblockIntrinsic`/
-/// `TerminalIntrinsic` are the exact measurers `component_intrinsic`
-/// (`box_builder.rs`) hands to the layout pass for these two components, so
-/// calling them here — instead of re-deriving the formula — keeps this
-/// check byte-for-byte in sync with `compute_code_dimensions` (codeblock,
-/// which DOES read `style.padding_px()`) and `terminal::line_height()`
-/// (terminal, which does NOT honour `style.line-height`, always using its
-/// own fixed `LINE_HEIGHT`/`FONT_SIZE` ratio). Measuring at
-/// `(None, None)`/`MaxContent` yields each component's natural (unbounded)
-/// size, exactly like `check_unwrappable_text`/`check_content_overflows_box`
-/// already do for the text-family intrinsics.
-///
-/// RM-33: the codeblock and terminal arms compare against different boxes,
-/// on purpose. `LegacyPaintDispatcher::is_self_padding` matches only
-/// `Component::Codeblock` — a codeblock is handed the raw (border) layout
-/// box and paints its own padding inside it (`compute_code_dimensions`
-/// already bakes `style.padding_px()` into `natural_h`, so comparing against
-/// the border box is the byte-for-byte-correct pairing). Every other
-/// painter, terminal included, is handed `layout.content_box()` instead —
-/// so the terminal arm compares against that, not the border box, or it
-/// under-reports by exactly the node's own padding.
-///
-/// RM-34: same `container_bound` clamp as `check_content_overflows_box`, and
-/// for the same reason — an in-flow codeblock/terminal that's the sole child
-/// of a fixed-height card now grows its own box to its natural (unscrolled)
-/// height instead of being shrunk to the card's declared size, which made
-/// this check's own-box-vs-own-content comparison vacuous. See that
-/// function's doc comment for the full explanation.
-fn check_auto_scroll(
-    component: &Component,
-    path: &str,
-    layout: &BoxLayout,
-    container_bound: Option<(f32, f32)>,
-    viewport: (u32, u32),
-    vi: usize,
-    si: usize,
-    out: &mut Vec<GeometryViolation>,
-) {
-    let max_content = (AvailableSpace::MaxContent, AvailableSpace::MaxContent);
-    match component {
-        Component::Codeblock(cb) if !cb.auto_scroll => {
-            let (_, natural_h) =
-                CodeblockIntrinsic::from_codeblock(cb).measure((None, None), max_content);
-            let mut bbox = bbox_of(layout);
-            if let Some((_, bh)) = container_bound {
-                bbox.h = bbox.h.min(bh);
-            }
-            if natural_h > bbox.h + 0.5 {
-                out.push(GeometryViolation {
-                    view_index: vi,
-                    scene_index: si,
-                    path: path.to_string(),
-                    component: "codeblock".to_string(),
-                    axis: Axis::Y,
-                    kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox,
-                    viewport,
-                    hint: format!(
-                        "codeblock content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or shorten code",
-                        natural_h, bbox.h
-                    ),
-                });
-            }
-        }
-        Component::Terminal(t) if !t.auto_scroll => {
-            let (_, natural_h) =
-                TerminalIntrinsic::from_terminal(t).measure((None, None), max_content);
-            let (cx, cy, cw, ch) = layout.content_box();
-            let ch = match container_bound {
-                Some((_, bh)) => ch.min(bh),
-                None => ch,
-            };
-            if natural_h > ch + 0.5 {
-                out.push(GeometryViolation {
-                    view_index: vi,
-                    scene_index: si,
-                    path: path.to_string(),
-                    component: "terminal".to_string(),
-                    axis: Axis::Y,
-                    kind: ViolationKind::AutoScrollDisabledOverflow,
-                    bbox: BBox {
-                        x: cx,
-                        y: cy,
-                        w: cw,
-                        h: ch,
-                    },
-                    viewport,
-                    hint: format!(
-                        "terminal content needs ~{:.0}px but box is {:.0}px — enable auto_scroll or remove lines",
-                        natural_h, ch
-                    ),
-                });
-            }
-        }
-        _ => {}
-    }
-}
-
 // ─── M4: legibility floor (issue #110 / #102) ──────────────────────────────
 //
 // "Fits in the frame" (checked above) is not "readable in a video". A table
-// column, a badge, a codeblock line — any of them can validate perfectly
+// column, a badge, a caption line — any of them can validate perfectly
 // clean while rendering at a font size nobody could read once the video is
 // scaled down from its native resolution, which is how video is normally
 // watched (embedded players, mobile feeds, thumbnails) unlike a web page,
@@ -1183,8 +1055,8 @@ fn check_auto_scroll(
 /// Coverage: every component whose `Painter` resolves its rendered font
 /// size from `style.font-size` (falling back to that component's own
 /// documented default when unset) — text, rich_text, gradient_text,
-/// caption, counter, table, terminal, codeblock, callout, list,
-/// notification (title + message), pill_nav, badge, kbd, tooltip, marquee.
+/// caption, counter, table, callout, list, pill_nav, badge, kbd, tooltip,
+/// marquee.
 /// Not covered: components whose text sizing isn't a simple
 /// `style.font-size`-or-default resolution (chart axis/labels, gauge, stat,
 /// sparkline, heatmap, treemap, dot_map, avatar initials, progress label,
@@ -1272,8 +1144,7 @@ fn walk_legibility(
 /// default each `Painter` falls back to when `style.font-size` is unset
 /// (see the file/line citations below — kept in sync by hand since these
 /// defaults live in `rustmotion-components`, out of this workstream's
-/// scope). A component can report more than one size (e.g. a notification's
-/// title and message use different sizes).
+/// scope). A component can report more than one size.
 /// Whether this component's painter actually honours `style.text-autofit`.
 /// Deliberately the same two variants `TextIntrinsic::with_autofit` is called
 /// for — every other component ignores the field, so warning about them would
@@ -1286,6 +1157,16 @@ fn declares_text_autofit(component: &Component) -> bool {
     }
 }
 
+// `Counter`/`PillNav`/`Callout`/`List`/`Kbd`/`Tooltip`/`Marquee`/`Badge` are
+// eight of the twenty-seven frozen-composition components deprecated by
+// issue #333 — most of this function's own match arms read a field of one
+// of them. (`Notification` used to be a ninth; it was deleted outright
+// rather than merely deprecated.) Narrowest scope that still compiles:
+// the whole function, not a per-arm `#[allow(deprecated)]` nine times over,
+// since deprecating a struct deprecates every field read on it and this
+// function's entire purpose is reading exactly those fields for the
+// legibility-floor table below.
+#[allow(deprecated)]
 fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
     match component {
         // text.rs, rich_text.rs, gradient_text.rs, caption.rs, counter.rs: 48.0
@@ -1294,23 +1175,12 @@ fn text_sizes(component: &Component) -> Vec<(&'static str, f32)> {
         Component::GradientText(t) => vec![("gradient_text", t.style.font_size_px_or(48.0))],
         Component::Caption(t) => vec![("caption", t.style.font_size_px_or(48.0))],
         Component::Counter(c) => vec![("counter", c.style.font_size_px_or(48.0))],
-        // table.rs, terminal.rs, codeblock/{dimensions,render}.rs, pill_nav.rs: 14.0
+        // table.rs, pill_nav.rs: 14.0
         Component::Table(t) => vec![("table", t.style.font_size_px_or(14.0))],
-        Component::Terminal(t) => vec![("terminal", t.style.font_size_px_or(14.0))],
-        Component::Codeblock(c) => vec![("codeblock", c.style.font_size_px_or(14.0))],
         Component::PillNav(p) => vec![("pill_nav", p.style.font_size_px_or(14.0))],
-        // callout.rs, list.rs, notification.rs (title): 16.0
+        // callout.rs, list.rs: 16.0
         Component::Callout(c) => vec![("callout", c.style.font_size_px_or(16.0))],
         Component::List(l) => vec![("list", l.style.font_size_px_or(16.0))],
-        Component::Notification(n) => {
-            let title = n.style.font_size_px_or(16.0);
-            let mut sizes = vec![("notification title", title)];
-            if n.message.is_some() {
-                // notification.rs: message_font_size() = title_font_size() * 0.85
-                sizes.push(("notification message", title * 0.85));
-            }
-            sizes
-        }
         // These carry their own `font_size` field (already serde-resolved
         // to its component default when absent from JSON), overridable by
         // `style.font-size` exactly like the rest — kbd.rs, tooltip.rs,
@@ -1410,20 +1280,8 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
         for (si, scene) in view.scenes.iter().enumerate() {
             // Constat 4: same decorative-child filtering as `validate_geometry`
             // — see that call site's comment for why.
-            let is_world = matches!(view.view_type, ViewType::World);
-            let indexed = deserialize_children_indexed(scene);
-            let indexed: Vec<(usize, ChildComponent)> = if is_world {
-                indexed
-                    .into_iter()
-                    .filter(|(_, c)| !c.is_decorative())
-                    .collect()
-            } else {
-                indexed
-            };
-            let raw_indices: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
-            let children: Vec<ChildComponent> = indexed.into_iter().map(|(_, c)| c).collect();
+            let (children, raw_indices) = scene_geometry_children(view, scene);
             let viewport = (scenario.video.width, scenario.video.height);
-            let viewport_f = (viewport.0 as f32, viewport.1 as f32);
 
             let camera = scene
                 .camera
@@ -1448,35 +1306,28 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
                 .map_or(scene_duration, |f| f.clamp(0.0, scene_duration));
 
             for time in anim_sample_times(sample_until) {
-                let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
-                let anim = Some(BuildAnimationCtx {
-                    time,
-                    scenario_time: time,
-                    scene_duration,
-                    fps,
-                });
-                let built = build_scene_from_refs(children.iter(), viewport_f, root_css, anim);
-                let layouts = run_layout(
-                    &built.root,
-                    viewport_f,
-                    &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
-                );
-
-                walk_anim(
+                // `scenario_time` reuses the per-scene-local `time` here (not
+                // the scene's real absolute offset into the scenario) —
+                // pre-existing, unchanged by this refactor: an audio-reactive
+                // component validated on scene 2 is checked against the
+                // wrong absolute clock. Out of this fix's scope; see
+                // `validate_geometry_transitions`, which threads the real
+                // `global_frame`-derived value through instead because it
+                // has it on hand for free from the frame-task schedule.
+                sample_scene_geometry(
+                    scene,
                     &children,
-                    &built.root.children,
-                    &layouts,
-                    &built.stagger_delays,
-                    &built.time_params,
-                    viewport,
+                    &raw_indices,
+                    view,
                     vi,
                     si,
-                    &path_root,
-                    Some(&raw_indices),
-                    /*parent_clips=*/ false,
+                    viewport,
                     camera,
+                    &path_root,
+                    fps,
                     time,
-                    scene_duration,
+                    /*scenario_time=*/ time,
+                    /*transition_label=*/ None,
                     &mut seen,
                     &mut violations,
                 );
@@ -1484,6 +1335,94 @@ pub fn validate_geometry_animated(scenario: &ResolvedScenario) -> Vec<GeometryVi
         }
     }
     violations
+}
+
+/// `scene`'s children, indexed for path-preserving reporting exactly like
+/// [`validate_geometry`]'s own walk (H3), with the same `world`-view
+/// decorative-child filter [`validate_geometry_animated`]'s doc comment
+/// explains (round 4 audit, constat 4). Factored out so
+/// [`validate_geometry_transitions`] prepares a transition's two sides the
+/// identical way `validate_geometry_animated` prepares an ordinary scene,
+/// rather than a second, independently-drifting copy of this filter.
+fn scene_geometry_children(
+    view: &ResolvedView,
+    scene: &Scene,
+) -> (Vec<ChildComponent>, Vec<usize>) {
+    let is_world = matches!(view.view_type, ViewType::World);
+    let indexed = deserialize_children_indexed(scene);
+    let indexed: Vec<(usize, ChildComponent)> = if is_world {
+        indexed
+            .into_iter()
+            .filter(|(_, c)| !c.is_decorative())
+            .collect()
+    } else {
+        indexed
+    };
+    let raw_indices: Vec<usize> = indexed.iter().map(|(i, _)| *i).collect();
+    let children: Vec<ChildComponent> = indexed.into_iter().map(|(_, c)| c).collect();
+    (children, raw_indices)
+}
+
+/// Build the box tree at one specific `(time, scenario_time)` and walk it —
+/// the inner body [`validate_geometry_animated`] runs once per sampled
+/// instant, factored out so [`validate_geometry_transitions`] can run the
+/// exact same construction at a transition frame's own local time, with one
+/// extra knob an ordinary in-scene sample never needs: `transition_label`,
+/// prefixed onto every violation's hint so a `--report` reader can tell
+/// "only found during a transition frame" apart from "found on this scene's
+/// own resting/animated sampling" without cross-referencing paths by hand.
+#[allow(clippy::too_many_arguments)]
+fn sample_scene_geometry(
+    scene: &Scene,
+    children: &[ChildComponent],
+    raw_indices: &[usize],
+    view: &ResolvedView,
+    vi: usize,
+    si: usize,
+    viewport: (u32, u32),
+    camera: Option<&Camera>,
+    path_root: &str,
+    fps: u32,
+    time: f64,
+    scenario_time: f64,
+    transition_label: Option<&str>,
+    seen: &mut HashSet<(usize, usize, String)>,
+    out: &mut Vec<GeometryViolation>,
+) {
+    let viewport_f = (viewport.0 as f32, viewport.1 as f32);
+    let root_css = render::root_style(scene.layout.as_ref(), view.view_type.clone());
+    let anim = Some(BuildAnimationCtx {
+        time,
+        scenario_time,
+        scene_duration: scene.duration,
+        fps,
+    });
+    let built = build_scene_from_refs(children.iter(), viewport_f, root_css, anim);
+    let layouts = run_layout(
+        &built.root,
+        viewport_f,
+        &ConversionContext::for_viewport(viewport_f.0, viewport_f.1),
+    );
+
+    walk_anim(
+        children,
+        &built.root.children,
+        &layouts,
+        &built.stagger_delays,
+        &built.time_params,
+        viewport,
+        vi,
+        si,
+        path_root,
+        Some(raw_indices),
+        /*parent_clips=*/ false,
+        camera,
+        transition_label,
+        time,
+        scene.duration,
+        seen,
+        out,
+    );
 }
 
 /// `boxes` filtered down to principal nodes — motion-blur/trail ghosts
@@ -1520,6 +1459,10 @@ fn walk_anim(
     path_indices: Option<&[usize]>,
     parent_clips: bool,
     camera: Option<&Camera>,
+    // `Some` when this sample belongs to a `SlideTransition`/`ViewTransition`
+    // frame task rather than an ordinary in-scene sample — see
+    // `sample_scene_geometry`'s doc.
+    transition_label: Option<&str>,
     time: f64,
     scene_duration: f64,
     seen: &mut HashSet<(usize, usize, String)>,
@@ -1638,7 +1581,13 @@ fn walk_anim(
                         kind: ViolationKind::AnimatedTextOverflow,
                         bbox: transformed,
                         viewport,
-                        hint: hint_for_animated(&child.component, &props, time, scene_duration),
+                        hint: hint_for_animated(
+                            &child.component,
+                            &props,
+                            time,
+                            scene_duration,
+                            transition_label,
+                        ),
                     });
                 }
             }
@@ -1658,6 +1607,7 @@ fn walk_anim(
                 None,
                 parent_clips || container_clips(&child.component),
                 camera,
+                transition_label,
                 time,
                 scene_duration,
                 seen,
@@ -1689,6 +1639,12 @@ fn hint_for_animated(
     props: &AnimatedProperties,
     time: f64,
     scene_duration: f64,
+    // `Some` when this violation came from `validate_geometry_transitions`
+    // rather than an ordinary `validate_geometry_animated` sample — see
+    // `sample_scene_geometry`'s doc. Prefixed onto the message so a
+    // `--report` reader can tell the two apart without cross-referencing
+    // paths by hand.
+    transition_label: Option<&str>,
 ) -> String {
     let ratio = if scene_duration > 1e-6 {
         time / scene_duration
@@ -1704,13 +1660,280 @@ fn hint_for_animated(
         props.scale_x,
         props.scale_y,
     );
-    match component_kind(component) {
+    let msg = match component_kind(component) {
         "text" | "rich_text" | "gradient_text" | "caption" | "counter" => format!(
             "{} — reduce font_size, soften the preset (e.g. fade_in instead of slide_in_left), or add max_width",
             base
         ),
         _ => format!("{} — soften the preset or pull the resting position inward", base),
+    };
+    match transition_label {
+        Some(label) => format!("{label}: {msg}"),
+        None => msg,
     }
+}
+
+// ─── Transition-frame sampling (#334) ──────────────────────────────────────
+//
+// `validate_geometry`/`validate_geometry_animated` both iterate `view.scenes`
+// and sample within `[0, scene_duration]`. Neither ever looks at a
+// `FrameTask::SlideTransition`/`FrameTask::ViewTransition` — the composite of
+// two already-rendered frame buffers `render_frame_task_scaled` builds
+// between two scenes (or two views) is unvalidated on `main`, which is this
+// engine's own copy of the blind spot issue #334 names: "the transitions, I
+// never saw them play."
+//
+// This is not just "sample more densely": under `timing: "v2"` (issue #336),
+// a transition entering scene `i+1` renders scene `i` an *additional*
+// `transition_frames(i+1)` frames PAST its own `[0, scene_duration]` window
+// instead of stealing from inside it (`build_slide_view_tasks_v2`, when the
+// outgoing scene's `tail` is `"continue"`) — so the scene being sampled
+// during a transition frame can be running at a local time
+// `anim_sample_times` never generates for it at all, not merely one it
+// happens to skip between two samples. `frame_a_idx`/`frame_in_transition`
+// (read straight off the `FrameTask`, matching `render_frame_task_scaled`'s
+// own arithmetic byte-for-byte) are the only reliable source for "what local
+// time is this scene actually rendered at right now."
+
+/// Mirrors `engine::render::scene`'s private `SceneTime::clamp` — a scene
+/// paints nothing past `freeze_at`, so a transition frame asking for a local
+/// time beyond it must clamp the same way an ordinary `Normal` frame already
+/// does. Duplicated rather than called: `SceneTime` is private to a file
+/// outside this workstream's owned perimeter (`geometry.rs`/`validate.rs`/
+/// `validation.rs`) — the same reasoning `fold_static_camera`'s doc comment
+/// gives for its own duplicated formula.
+///
+/// Called from [`validate_geometry_transitions`], itself wired into
+/// `validation.rs`'s `run_checks` under `--strict-anim`.
+fn clamp_to_scene_freeze(scene: &Scene, raw: f64) -> f64 {
+    match scene.freeze_at {
+        Some(freeze_at) if raw > freeze_at => freeze_at,
+        _ => raw,
+    }
+}
+
+// `TransitionType::CameraPan` `SlideTransition`s are deliberately NOT
+// sampled below (both sides skipped outright, like `ViewTransition`'s
+// `world`-view sides just below). `camera_pan_transition`
+// (`rustmotion_core::engine::transition`) genuinely translates each side's
+// foreground on screen by up to the full `Scene::world_position` delta
+// between the two scenes — commonly close to a full viewport width, since
+// the usual use is "the next scene over". Sliding fully off (and the
+// incoming scene fully on) is that mechanism working as designed, not a
+// defect a validator should ever name — unlike an ordinary pixel-composite
+// transition (fade/wipe/slide/…), where each side is rendered at its own
+// undisturbed layout and *that* is exactly what this checker validates.
+// Folding the pan's own translation in and then bounds-checking it would
+// false-positive on every such transition, at both of its ends, every time.
+
+/// Sample every `SlideTransition`/`ViewTransition` frame task
+/// [`rustmotion::encode::build_frame_tasks`] schedules, and report the same
+/// `AnimatedTextOverflow` violations [`validate_geometry_animated`] reports
+/// for an ordinary scene sample — reusing that exact `ViolationKind` (not a
+/// new one) so this stays inside the frozen `--report` JSON shape and every
+/// existing consumer of it (including `validate.rs`'s `apply_fixes`, whose
+/// match over `ViolationKind` lives outside this workstream's owned files)
+/// keeps compiling unchanged.
+///
+/// Only ever called under `--strict-anim`, exactly like
+/// `validate_geometry_animated` — see that call site in `validation.rs`'s
+/// `run_checks`: sampling every transition frame at full layout cost is the
+/// same trade this workstream already accepted for ordinary animated frames.
+///
+/// `ViewTransition` sides are only sampled when that side's own view is
+/// `ViewType::Slide` — a `world` view's boundary frame is a camera-composited
+/// blend of several scenes (`render_world_frame_scaled`), which no per-scene
+/// geometry walker in this file models (pre-existing limitation of
+/// `validate_geometry`/`validate_geometry_animated` too: neither folds the
+/// world camera's continuous pan into a scene's own bbox check). Sampling it
+/// as if it were an ordinary scene would be actively wrong, not merely
+/// incomplete, so it is skipped rather than guessed at.
+pub fn validate_geometry_transitions(scenario: &ResolvedScenario) -> Vec<GeometryViolation> {
+    use rustmotion::encode::video::FrameTask;
+
+    let mut violations = Vec::new();
+    let fps = scenario.video.fps;
+    if fps == 0 {
+        return violations;
+    }
+    let tasks = rustmotion::encode::build_frame_tasks(scenario);
+    let mut seen: HashSet<(usize, usize, String)> = HashSet::new();
+
+    for task in &tasks {
+        match task {
+            FrameTask::SlideTransition {
+                global_frame,
+                view_idx,
+                scene_a_idx,
+                scene_b_idx,
+                frame_in_transition,
+                scene_a_frame_offset,
+                scene_a_frame_advance,
+                transition_type,
+                ..
+            } => {
+                // See the module-level comment right above this function for
+                // why `CameraPan` is skipped outright rather than folded in
+                // and bounds-checked.
+                if matches!(transition_type, TransitionType::CameraPan) {
+                    continue;
+                }
+
+                let view = &scenario.views[*view_idx];
+                let scene_a = &view.scenes[*scene_a_idx];
+                let scene_b = &view.scenes[*scene_b_idx];
+                let scenario_time = *global_frame as f64 / fps as f64;
+
+                let frame_a_idx = if *scene_a_frame_advance {
+                    scene_a_frame_offset + frame_in_transition
+                } else {
+                    *scene_a_frame_offset
+                };
+                let time_a = clamp_to_scene_freeze(scene_a, frame_a_idx as f64 / fps as f64);
+                let time_b =
+                    clamp_to_scene_freeze(scene_b, *frame_in_transition as f64 / fps as f64);
+
+                let label_a = format!(
+                    "SlideTransition scene {scene_a_idx}->{scene_b_idx}, frame {frame_in_transition}, \
+                     outgoing side (its own local time reaches {time_a:.3}s)"
+                );
+                let label_b = format!(
+                    "SlideTransition scene {scene_a_idx}->{scene_b_idx}, frame {frame_in_transition}, \
+                     incoming side (local time {time_b:.3}s)"
+                );
+
+                let (children_a, raw_indices_a) = scene_geometry_children(view, scene_a);
+                let camera_a = scene_a
+                    .camera
+                    .as_ref()
+                    .filter(|_| !scene_uses_depth(&children_a));
+                let path_root_a = format!("views[{view_idx}].scenes[{scene_a_idx}]");
+                sample_scene_geometry(
+                    scene_a,
+                    &children_a,
+                    &raw_indices_a,
+                    view,
+                    *view_idx,
+                    *scene_a_idx,
+                    (scenario.video.width, scenario.video.height),
+                    camera_a,
+                    &path_root_a,
+                    fps,
+                    time_a,
+                    scenario_time,
+                    Some(&label_a),
+                    &mut seen,
+                    &mut violations,
+                );
+
+                let (children_b, raw_indices_b) = scene_geometry_children(view, scene_b);
+                let camera_b = scene_b
+                    .camera
+                    .as_ref()
+                    .filter(|_| !scene_uses_depth(&children_b));
+                let path_root_b = format!("views[{view_idx}].scenes[{scene_b_idx}]");
+                sample_scene_geometry(
+                    scene_b,
+                    &children_b,
+                    &raw_indices_b,
+                    view,
+                    *view_idx,
+                    *scene_b_idx,
+                    (scenario.video.width, scenario.video.height),
+                    camera_b,
+                    &path_root_b,
+                    fps,
+                    time_b,
+                    scenario_time,
+                    Some(&label_b),
+                    &mut seen,
+                    &mut violations,
+                );
+            }
+            FrameTask::ViewTransition {
+                global_frame,
+                view_a_idx,
+                view_b_idx,
+                ..
+            } => {
+                let scenario_time = *global_frame as f64 / fps as f64;
+
+                let view_a = &scenario.views[*view_a_idx];
+                if matches!(view_a.view_type, ViewType::Slide) {
+                    if let Some(last_idx) = view_a.scenes.len().checked_sub(1) {
+                        let scene = &view_a.scenes[last_idx];
+                        let scene_frames = (scene.duration * fps as f64).round() as u32;
+                        let time = clamp_to_scene_freeze(
+                            scene,
+                            scene_frames.saturating_sub(1) as f64 / fps as f64,
+                        );
+                        let label = format!(
+                            "ViewTransition view {view_a_idx}->{view_b_idx}, outgoing view's last frame"
+                        );
+                        let (children, raw_indices) = scene_geometry_children(view_a, scene);
+                        let camera = scene
+                            .camera
+                            .as_ref()
+                            .filter(|_| !scene_uses_depth(&children));
+                        let path_root = format!("views[{view_a_idx}].scenes[{last_idx}]");
+                        sample_scene_geometry(
+                            scene,
+                            &children,
+                            &raw_indices,
+                            view_a,
+                            *view_a_idx,
+                            last_idx,
+                            (scenario.video.width, scenario.video.height),
+                            camera,
+                            &path_root,
+                            fps,
+                            time,
+                            scenario_time,
+                            Some(&label),
+                            &mut seen,
+                            &mut violations,
+                        );
+                    }
+                }
+
+                let view_b = &scenario.views[*view_b_idx];
+                if matches!(view_b.view_type, ViewType::Slide) {
+                    if let Some(scene) = view_b.scenes.first() {
+                        let time = clamp_to_scene_freeze(scene, 0.0);
+                        let label = format!(
+                            "ViewTransition view {view_a_idx}->{view_b_idx}, incoming view's first frame"
+                        );
+                        let (children, raw_indices) = scene_geometry_children(view_b, scene);
+                        let camera = scene
+                            .camera
+                            .as_ref()
+                            .filter(|_| !scene_uses_depth(&children));
+                        let path_root = format!("views[{view_b_idx}].scenes[0]");
+                        sample_scene_geometry(
+                            scene,
+                            &children,
+                            &raw_indices,
+                            view_b,
+                            *view_b_idx,
+                            0,
+                            (scenario.video.width, scenario.video.height),
+                            camera,
+                            &path_root,
+                            fps,
+                            time,
+                            scenario_time,
+                            Some(&label),
+                            &mut seen,
+                            &mut violations,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    violations
 }
 
 /// Render a violation for human consumption (multi-line, color-free).
@@ -1723,7 +1946,6 @@ pub fn format_violation(v: &GeometryViolation) -> String {
     let kind_str = match v.kind {
         ViolationKind::ViewportOverflow => "viewport overflow",
         ViolationKind::UnwrappableTextOverflow => "wrap=false but text too wide",
-        ViolationKind::AutoScrollDisabledOverflow => "auto_scroll=false but content too tall",
         ViolationKind::ContentOverflowsBox => "wrapped content exceeds its own box",
         ViolationKind::ContentOverflowsCard => "component extends past its containing card",
         ViolationKind::AnimatedTextOverflow => "animation pushes content outside viewport",
@@ -1744,6 +1966,106 @@ pub fn format_violation(v: &GeometryViolation) -> String {
         axis_str,
         v.hint,
     )
+}
+
+/// Advisory check (issue #336): when `bpm` is set, warn about a scene whose
+/// resolved cut — the frame at which it actually starts appearing, once
+/// `at`/transitions/`timing` are all accounted for — doesn't land on the
+/// beat grid `beat_offset + n * 60 / bpm`.
+///
+/// Always a warning, never a blocking error (unlike `unresolved_beat_unit`
+/// in `validate_schema.rs`, which is about a cut that cannot be *computed*
+/// at all): an off-grid cut still renders exactly as declared, it just
+/// isn't rhythmic. `snap: "beat"` is the fix this points authors at.
+///
+/// Reuses `rustmotion::encode::build_frame_tasks` rather than re-deriving
+/// cut positions independently — that scheduler (a different workstream's
+/// file within this crate, read here, not edited) is the single source of
+/// truth for where a cut actually falls once transitions/gaps/`timing` are
+/// applied; a second implementation here could silently drift from it.
+/// Slide views only, matching that scheduler's own `timing: "v2"` scope —
+/// a `world` view's continuous camera pan has no "cut" this check's model
+/// applies to.
+pub fn check_off_grid_cuts(scenario: &ResolvedScenario) -> Vec<String> {
+    use rustmotion::encode::video::FrameTask;
+    use std::collections::HashMap;
+
+    let mut warnings = Vec::new();
+    let fps = scenario.video.fps;
+    if fps == 0 {
+        return warnings;
+    }
+
+    let tasks = rustmotion::encode::build_frame_tasks(scenario);
+
+    // First frame at which each (view, scene) becomes the *entering* side
+    // of a cut: either the first frame of the transition blending it in,
+    // or — with no transition — its own first Normal frame.
+    let mut cut_frame: HashMap<(usize, usize), u32> = HashMap::new();
+    for task in &tasks {
+        match task {
+            FrameTask::SlideTransition {
+                global_frame,
+                view_idx,
+                scene_b_idx,
+                frame_in_transition: 0,
+                ..
+            } => {
+                cut_frame
+                    .entry((*view_idx, *scene_b_idx))
+                    .or_insert(*global_frame);
+            }
+            FrameTask::Normal {
+                global_frame,
+                view_idx,
+                scene_idx,
+                ..
+            } => {
+                cut_frame
+                    .entry((*view_idx, *scene_idx))
+                    .or_insert(*global_frame);
+            }
+            _ => {}
+        }
+    }
+
+    for (vi, view) in scenario.views.iter().enumerate() {
+        for (si, scene) in view.scenes.iter().enumerate() {
+            // A view's first scene has nothing cutting *into* it.
+            if si == 0 {
+                continue;
+            }
+            let Some(bpm) = scene.resolved_time_ctx.bpm else {
+                continue;
+            };
+            if bpm <= 0.0 {
+                continue;
+            }
+            let Some(&frame) = cut_frame.get(&(vi, si)) else {
+                continue;
+            };
+            let time = frame as f64 / fps as f64;
+            let beat_offset = scene.resolved_time_ctx.beat_offset;
+            let beat_len = 60.0 / bpm;
+            let nearest_beat_n = ((time - beat_offset) / beat_len).round();
+            let nearest_beat = beat_offset + nearest_beat_n * beat_len;
+            let drift = (time - nearest_beat).abs();
+            // Half a frame is the unavoidable rounding a discrete frame
+            // grid imposes on a continuous beat position, not a drift an
+            // author could fix.
+            let tolerance = 0.5 / fps as f64;
+            if drift > tolerance {
+                warnings.push(format!(
+                    "views[{vi}].scenes[{si}]: off_grid_cut — this cut lands at {time:.3}s, \
+                     {drift:.3}s off the nearest beat ({nearest_beat:.3}s at {bpm} bpm). Set \
+                     `snap: \"beat\"` on the scenario, or give this scene an explicit `at` on \
+                     the grid, for a rhythmic edit."
+                ));
+            }
+        }
+    }
+
+    warnings
 }
 
 #[cfg(test)]
@@ -1776,6 +2098,159 @@ mod tests {
         assert!(
             violations.is_empty(),
             "expected clean, got: {:?}",
+            violations
+        );
+    }
+
+    // ─── #334: transition-frame sampling ───────────────────────────────────
+    //
+    // The demonstration this workstream exists for: a `timing: "v2"` scene
+    // whose `tail` is `"continue"` keeps sliding for the whole transition
+    // overlap PAST its own `duration` — a local time window
+    // `validate_geometry_animated`'s `anim_sample_times` never generates
+    // (bounded by `scene_duration`), so the text is comfortably on-screen at
+    // every one of that function's own samples yet well off it by the time
+    // the transition it never looks at is halfway done.
+
+    /// video 640×360, text sliding from x=460 toward x=-440 (translate
+    /// 0 → -900px linearly over a 2.0s keyframe window) starting at the
+    /// scene's own t=0. At the scene's own last sample (t=1.0s, translate
+    /// -450px), the box's left edge sits at x=10 — inside the viewport with
+    /// room to spare. Scene 0's `tail: "continue"` lets it keep sliding
+    /// through the 0.5s (15-frame @30fps) transition into scene 1, reaching
+    /// t≈1.47s at the transition's last frame — translate ≈ -660px, left
+    /// edge ≈ -200px: off the left edge of the viewport.
+    const V2_TAIL_CONTINUE_TRANSITION_JSON: &str = r##"{
+        "video": { "width": 640, "height": 360, "fps": 30 },
+        "timing": "v2",
+        "scenes": [
+            {
+                "duration": 1.0,
+                "tail": "continue",
+                "children": [{
+                    "type": "text",
+                    "content": "EDGE",
+                    "position": "absolute",
+                    "x": 460, "y": 140,
+                    "style": {
+                        "color": "#ffffff",
+                        "font-size": "40px",
+                        "white-space": "nowrap",
+                        "animation": [{
+                            "name": "keyframes",
+                            "delay": 0,
+                            "duration": 2.0,
+                            "keyframes": [{
+                                "property": "position.x",
+                                "keyframes": [
+                                    { "time": 0.0, "value": 0 },
+                                    { "time": 2.0, "value": -900 }
+                                ],
+                                "easing": "linear"
+                            }]
+                        }]
+                    }
+                }]
+            },
+            {
+                "duration": 1.0,
+                "transition": { "type": "fade", "duration": 0.5 },
+                "children": []
+            }
+        ]
+    }"##;
+
+    #[test]
+    fn validate_geometry_animated_misses_the_v2_tail_continue_transition_overflow() {
+        let scenario = parse(V2_TAIL_CONTINUE_TRANSITION_JSON);
+        let violations = validate_geometry_animated(&scenario);
+        assert!(
+            violations.is_empty(),
+            "this is exactly the blind spot #334 names: `validate_geometry_animated` only \
+             samples within [0, scene_duration], so it never sees this scene sliding further \
+             left during the transition overlap its own `tail: \"continue\"` grants it. A \
+             non-empty result here means the blind spot has already been closed some other \
+             way and this demonstration needs a new repro: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn validate_geometry_transitions_catches_the_v2_tail_continue_transition_overflow() {
+        let scenario = parse(V2_TAIL_CONTINUE_TRANSITION_JSON);
+        let violations = validate_geometry_transitions(&scenario);
+        assert!(
+            !violations.is_empty(),
+            "expected the transition-frame sampler to catch the overflow \
+             validate_geometry_animated misses"
+        );
+        let v = &violations[0];
+        assert_eq!(v.component, "text");
+        assert_eq!(v.kind, ViolationKind::AnimatedTextOverflow);
+        assert!(
+            matches!(v.axis, Axis::X | Axis::Both),
+            "expected an X-axis (or both) overflow, got {:?}",
+            v.axis
+        );
+        assert!(
+            v.bbox.x < -0.5,
+            "expected the box to have slid past the left edge, got x={}",
+            v.bbox.x
+        );
+        assert_eq!(v.view_index, 0);
+        assert_eq!(
+            v.scene_index, 0,
+            "the overflowing side is scene 0 (the outgoing/`tail: continue` scene), not scene 1"
+        );
+        assert!(
+            v.hint.contains("SlideTransition"),
+            "hint should name the transition frame this was sampled from, not read like an \
+             ordinary in-scene sample: {}",
+            v.hint
+        );
+    }
+
+    /// A `CameraPan` `SlideTransition` genuinely translates each side's
+    /// foreground across the frame as part of compositing — up to the full
+    /// `world-position` delta between the two scenes, commonly close to a
+    /// full viewport width. Both shapes below are only ~270px from the
+    /// opposite edge of a 640px-wide frame — well inside the 500px pan this
+    /// transition declares — so a naive fold-then-bounds-check would flag
+    /// both of them as leaving the viewport, on every single `camera_pan`
+    /// transition, which is that mechanism working as designed, not a
+    /// defect. `validate_geometry_transitions` must report nothing at all
+    /// for a `CameraPan` side.
+    #[test]
+    fn camera_pan_slide_transition_sides_are_not_reported() {
+        let json = r##"{
+            "video": { "width": 640, "height": 360 },
+            "scenes": [
+                {
+                    "duration": 1.0,
+                    "world-position": { "x": 0, "y": 0 },
+                    "children": [{
+                        "type": "shape", "shape": "rect",
+                        "size": { "width": 100, "height": 80 },
+                        "x": 270, "y": 140, "fill": "#ff0000"
+                    }]
+                },
+                {
+                    "duration": 1.0,
+                    "world-position": { "x": 500, "y": 0 },
+                    "transition": { "type": "camera_pan", "duration": 0.5 },
+                    "children": [{
+                        "type": "shape", "shape": "rect",
+                        "size": { "width": 100, "height": 80 },
+                        "x": 270, "y": 140, "fill": "#00ff00"
+                    }]
+                }
+            ]
+        }"##;
+        let scenario = parse(json);
+        let violations = validate_geometry_transitions(&scenario);
+        assert!(
+            violations.is_empty(),
+            "a camera_pan transition's sides must be skipped outright, not bounds-checked: {:?}",
             violations
         );
     }
@@ -2010,173 +2485,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn auto_scroll_disabled_codeblock_overflows() {
-        // 20 lines × 14 px × 1.5 line-height + chrome + padding ≈ 487 px.
-        // Box height capped at 200 via style.height → AutoScrollDisabledOverflow.
-        // Note: "size" is a legacy field silently ignored by the schema; use
-        // style.height to actually constrain the box in the layout pass.
-        let json = r##"{
-            "video": { "width": 1920, "height": 1080 },
-            "scenes": [{
-                "duration": 1.0,
-                "children": [{
-                    "type": "codeblock",
-                    "code": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20",
-                    "auto_scroll": false,
-                    "style": { "width": "800px", "height": "200px" },
-                    "x": 100, "y": 100
-                }]
-            }]
-        }"##;
-        let scenario = parse(json);
-        let violations = validate_geometry(&scenario);
-        let v = violations
-            .iter()
-            .find(|v| v.kind == ViolationKind::AutoScrollDisabledOverflow);
-        assert!(
-            v.is_some(),
-            "missing AutoScrollDisabledOverflow in {:?}",
-            violations
-        );
-        assert_eq!(v.unwrap().component, "codeblock");
-    }
-
-    // ─── Round 4 audit, constat 6: check_auto_scroll must use the real
-    // painter's dimension formula (CodeblockIntrinsic/TerminalIntrinsic),
-    // not a hardcoded 16+16=32px padding assumption ──────────────────────
-
-    #[test]
-    fn codeblock_auto_scroll_check_honours_explicit_padding_not_a_hardcoded_16px() {
-        // 10 lines, font-size defaults to 14px (line-height 1.3 -> 18.2px/line
-        // -> 182px of text), auto_scroll: false, box height fixed at 250px.
-        // style.padding is *explicitly* 60px on every side (120px vertical
-        // budget) — nothing close to the hardcoded "16 top + 16 bottom" the
-        // old formula assumed. Real natural height (chrome disabled):
-        // 120 (padding) + 182 (text) = 302px, ~52px past the 250px box —
-        // a genuine overflow. The hardcoded-32px formula computed
-        // 32 + 182 = 214px, comfortably under 250px, and stayed silent.
-        let code_lines: String = (1..=10)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join("\\n");
-        let json = format!(
-            r##"{{
-                "video": {{ "width": 1920, "height": 1080 }},
-                "scenes": [{{
-                    "duration": 1.0,
-                    "children": [{{
-                        "type": "codeblock",
-                        "code": "{code_lines}",
-                        "auto_scroll": false,
-                        "style": {{ "width": "600px", "height": "250px", "padding": "60px" }}
-                    }}]
-                }}]
-            }}"##
-        );
-        let scenario = parse(&json);
-        let violations = validate_geometry(&scenario);
-        let v = violations
-            .iter()
-            .find(|v| v.kind == ViolationKind::AutoScrollDisabledOverflow);
-        assert!(
-            v.is_some(),
-            "expected AutoScrollDisabledOverflow for a 60px-padded codeblock the \
-             hardcoded-16px formula wrongly cleared (real natural height ~302px > \
-             250px box): {:?}",
-            violations
-        );
-    }
-
-    #[test]
-    fn codeblock_auto_scroll_check_does_not_false_positive_on_tight_default_padding() {
-        // Complementary false-positive guard: 10 lines, DEFAULT padding
-        // (16px each side -> 32px vertical budget, matching
-        // CodeblockIntrinsic's own fallback for an all-zero/unset padding —
-        // see `CodeblockIntrinsic::from_codeblock`'s (16,16,16,16) default).
-        // Natural height: 32 + 182 = 214px. Box height 220px comfortably
-        // holds it — must NOT be flagged.
-        let code_lines: String = (1..=10)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join("\\n");
-        let json = format!(
-            r##"{{
-                "video": {{ "width": 1920, "height": 1080 }},
-                "scenes": [{{
-                    "duration": 1.0,
-                    "children": [{{
-                        "type": "codeblock",
-                        "code": "{code_lines}",
-                        "auto_scroll": false,
-                        "style": {{ "width": "600px", "height": "220px" }}
-                    }}]
-                }}]
-            }}"##
-        );
-        let scenario = parse(&json);
-        let violations = validate_geometry(&scenario);
-        assert!(
-            violations
-                .iter()
-                .all(|v| v.kind != ViolationKind::AutoScrollDisabledOverflow),
-            "a codeblock that genuinely fits its box must not be flagged: {:?}",
-            violations
-        );
-    }
-
-    #[test]
-    fn terminal_auto_scroll_check_uses_the_painters_fixed_line_height_ratio() {
-        // Terminal (unlike codeblock) does NOT honour `style.line-height` at
-        // paint time — `terminal.rs`'s own `line_height()` method always
-        // computes `(font_size * 22.0 / 14.0).ceil()` (a fixed ratio baked
-        // into the component, `terminal::LINE_HEIGHT`/`FONT_SIZE`), ignoring
-        // any CSS `line-height` override entirely. The old hand-rolled check
-        // used `t.style.line_height_for(font_size)` (the CSS property,
-        // honouring `style.line-height`) instead — so a `line-height: 3`
-        // override (unitless -> 3 * 14px = 42px/line) inflated the OLD
-        // formula's estimate even though the real painter still renders
-        // 22px lines and ignores the override.
-        //
-        // 8 lines, chrome disabled, font-size defaults to 14:
-        //   real (TerminalIntrinsic/painter): 2*16 (fixed padding) +
-        //     8 * 22 (fixed ratio, ignores the override) = 32 + 176 = 208px
-        //   old hand-rolled (CSS line-height, AND its own wrong default
-        //     font-size of 16px instead of the real 14px):
-        //     32 + 8 * line_height_for(16) = 32 + 8 * 48 = 32 + 384 = 416px
-        //     (captured red-phase output: "terminal content needs ~416px")
-        // Box height fixed at 300px sits strictly between the two: the real
-        // content fits (208 < 300), but the old formula's inflated 416px
-        // wrongly reported an overflow — a false positive this fix removes.
-        let json = r##"{
-            "video": { "width": 1920, "height": 1080 },
-            "scenes": [{
-                "duration": 1.0,
-                "children": [{
-                    "type": "terminal",
-                    "lines": [
-                        { "text": "one" }, { "text": "two" }, { "text": "three" },
-                        { "text": "four" }, { "text": "five" }, { "text": "six" },
-                        { "text": "seven" }, { "text": "eight" }
-                    ],
-                    "show_chrome": false,
-                    "auto_scroll": false,
-                    "style": { "width": "600px", "height": "300px", "line-height": 3 }
-                }]
-            }]
-        }"##;
-        let scenario = parse(json);
-        let violations = validate_geometry(&scenario);
-        assert!(
-            violations
-                .iter()
-                .all(|v| v.kind != ViolationKind::AutoScrollDisabledOverflow),
-            "terminal ignores style.line-height at paint time — the check must too, \
-             real content (208px) fits the 300px box: {:?}",
-            violations
-        );
-    }
-
     // ─── C1: remediation hints must never name the nonexistent `wrap` field ──
 
     #[test]
@@ -2303,7 +2611,7 @@ mod tests {
         assert!(
             hidden_violations
                 .iter()
-                .any(|v| v.component == "card" && v.kind == ViolationKind::ViewportOverflow),
+                .any(|v| v.component == "div" && v.kind == ViolationKind::ViewportOverflow),
             "the card itself must still be reported: {:?}",
             hidden_violations
         );
@@ -3443,8 +3751,8 @@ mod tests {
     // "Deliberately NOT in scope" note and `walk`'s retired call site for
     // the full reasoning. These fixtures are the same ones that used to
     // assert the (wrong) opposite — kept, with flipped assertions, as
-    // regression coverage across component types (text/codeblock/table/
-    // nested card/bleed) now that the check is gone. ─────────────────────
+    // regression coverage across component types (text/table/nested
+    // card/bleed) now that the check is gone. ────────────────────────────
 
     #[test]
     fn absolutely_positioned_text_spilling_past_a_visible_card_is_legal() {
@@ -3519,112 +3827,6 @@ mod tests {
                 .any(|v| v.kind == ViolationKind::ViewportOverflow),
             "content escaping a visible card AND the 540px frame must still be reported by \
              check_viewport — retiring ContentOverflowsCard must not have removed this: {:?}",
-            violations
-        );
-    }
-
-    #[test]
-    fn in_flow_codeblock_shrunk_by_its_card_is_caught_by_auto_scroll_check() {
-        // Sanity/regression guard establishing the baseline this workstream
-        // found empirically: an ordinary in-flow codeblock (single child,
-        // no explicit height) inside a card with an *explicit* fixed height
-        // gets its own box shrunk to that height by flex layout (same
-        // shrink-to-fit behaviour already established for `text`/`table`),
-        // so `check_auto_scroll`'s existing natural-vs-own-box comparison
-        // already catches it correctly here. The genuinely uncaught case —
-        // an *unclamped* codeblock whose own box already matches its own
-        // (natural) content but still spills past its card — is the next
-        // test, `absolutely_positioned_codeblock_spilling_past_its_card_is_flagged`.
-        let code_lines: String = (1..=30)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join("\\n");
-        let json = format!(
-            r##"{{
-                "video": {{ "width": 1920, "height": 1080 }},
-                "scenes": [{{
-                    "duration": 1.0,
-                    "children": [{{
-                        "type": "card",
-                        "position": "absolute",
-                        "x": 100, "y": 100,
-                        "style": {{ "width": "600px", "height": "300px", "background": "#111111" }},
-                        "children": [{{
-                            "type": "codeblock",
-                            "code": "{code_lines}",
-                            "auto_scroll": false
-                        }}]
-                    }}]
-                }}]
-            }}"##
-        );
-        let scenario = parse(&json);
-        let violations = validate_geometry(&scenario);
-        let v = violations
-            .iter()
-            .find(|v| {
-                v.kind == ViolationKind::AutoScrollDisabledOverflow && v.component == "codeblock"
-            })
-            .unwrap_or_else(|| panic!("expected AutoScrollDisabledOverflow: {:?}", violations));
-        assert_eq!(v.axis, Axis::Y);
-    }
-
-    #[test]
-    fn absolutely_positioned_codeblock_spilling_past_a_visible_card_is_legal() {
-        // #128 item 1's first repro ("a codeblock painting 578px inside a
-        // 300px card"): taken out of flex flow (`position: absolute`, like
-        // the analogous text/table tests above) so its own box is NOT
-        // shrunk to fit the card — it stays at its natural, unscrolled
-        // content height regardless of `auto_scroll`. `auto_scroll: true`
-        // (the default) is used deliberately here so `check_auto_scroll`
-        // stays quiet too, isolating this from every other check: the card
-        // has default (`visible`) overflow, so per constat 7 this must
-        // validate clean.
-        let code_lines: String = (1..=30)
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join("\\n");
-        let json = format!(
-            r##"{{
-                "video": {{ "width": 1920, "height": 1080 }},
-                "scenes": [{{
-                    "duration": 1.0,
-                    "children": [{{
-                        "type": "card",
-                        "position": "absolute",
-                        "x": 100, "y": 100,
-                        "style": {{ "width": "600px", "height": "300px", "background": "#111111" }},
-                        "children": [{{
-                            "type": "codeblock",
-                            "position": "absolute",
-                            "x": 0, "y": 0,
-                            "code": "{code_lines}"
-                        }}]
-                    }}]
-                }}]
-            }}"##
-        );
-        let scenario = parse(&json);
-        let violations = validate_geometry(&scenario);
-        assert!(
-            violations
-                .iter()
-                .all(|v| v.kind != ViolationKind::AutoScrollDisabledOverflow),
-            "auto_scroll defaults to true — that check must stay quiet: {:?}",
-            violations
-        );
-        assert!(
-            violations
-                .iter()
-                .all(|v| v.kind != ViolationKind::ViewportOverflow),
-            "fixture should stay inside the 1080px-tall frame by construction: {:?}",
-            violations
-        );
-        assert!(
-            violations
-                .iter()
-                .all(|v| v.kind != ViolationKind::ContentOverflowsCard),
-            "codeblock sticking out of a visible-overflow card is a legal, documented pattern: {:?}",
             violations
         );
     }
@@ -3782,8 +3984,8 @@ mod tests {
 
     #[test]
     fn component_that_fits_its_card_is_not_flagged() {
-        // Passing-case guard: same shape as the codeblock repro, but the
-        // card is tall enough to hold it — must not fire.
+        // Passing-case guard: a component small enough for its card — must
+        // not fire.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
@@ -3794,9 +3996,8 @@ mod tests {
                     "x": 100, "y": 100,
                     "style": { "width": "600px", "height": "200px", "background": "#111111" },
                     "children": [{
-                        "type": "codeblock",
-                        "code": "fn main() {\n    println!(\"hi\");\n}",
-                        "auto_scroll": false
+                        "type": "text",
+                        "content": "hi"
                     }]
                 }]
             }]
@@ -3807,7 +4008,7 @@ mod tests {
             violations
                 .iter()
                 .all(|v| v.kind != ViolationKind::ContentOverflowsCard),
-            "a codeblock that fits its card must not be flagged: {:?}",
+            "a component that fits its card must not be flagged: {:?}",
             violations
         );
     }
@@ -4235,17 +4436,15 @@ mod legibility_tests {
     }
 
     #[test]
-    fn default_table_terminal_codeblock_on_1080p_do_not_warn() {
-        // 14px defaults must clear the floor so this check doesn't spam
+    fn default_table_on_1080p_does_not_warn() {
+        // 14px default must clear the floor so this check doesn't spam
         // every scenario that never touched style.font-size.
         let json = r##"{
             "video": { "width": 1920, "height": 1080 },
             "scenes": [{
                 "duration": 1.0,
                 "children": [
-                    { "type": "table", "headers": ["a"], "rows": [["1"]] },
-                    { "type": "terminal", "lines": [{ "text": "$ ok", "type": "input" }] },
-                    { "type": "codeblock", "code": "fn main() {}" }
+                    { "type": "table", "headers": ["a"], "rows": [["1"]] }
                 ]
             }]
         }"##;
@@ -4341,5 +4540,107 @@ mod legibility_tests {
             "got: {}",
             warnings[0]
         );
+    }
+}
+
+/// Issue #336: `off_grid_cut` — an advisory warning when `bpm` is set and a
+/// resolved cut does not land on the beat grid.
+#[cfg(test)]
+mod off_grid_cut_tests {
+    use super::*;
+    use rustmotion::loader::load_scenario_from_source;
+
+    fn parse(json: &str) -> rustmotion::schema::ResolvedScenario {
+        load_scenario_from_source(None, Some(json)).expect("scenario parses")
+    }
+
+    #[test]
+    fn no_bpm_means_no_warnings_regardless_of_cut_placement() {
+        // 0.62s is deliberately off any plausible grid — but with no `bpm`
+        // declared, there is no grid to be off of.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "scenes": [
+                {"duration": 0.62, "children": []},
+                {"duration": 1.0, "children": []}
+            ]
+        }"##;
+        assert!(check_off_grid_cuts(&parse(json)).is_empty());
+    }
+
+    #[test]
+    fn cut_exactly_on_the_beat_does_not_warn() {
+        // bpm=120 -> 0.5s/beat. Scene 0 is exactly 1.0s (two beats), so the
+        // cut into scene 1 lands exactly on beat 2.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "bpm": 120,
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": []}
+            ]
+        }"##;
+        assert!(
+            check_off_grid_cuts(&parse(json)).is_empty(),
+            "a cut exactly on a beat must not warn"
+        );
+    }
+
+    #[test]
+    fn off_grid_cut_is_named_and_located() {
+        // bpm=120 -> 0.5s/beat. Scene 0 is 0.62s, so the cut into scene 1
+        // lands at 0.62s — 0.12s off the nearest beat (0.5s).
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "bpm": 120,
+            "scenes": [
+                {"duration": 0.62, "children": []},
+                {"duration": 1.0, "children": []}
+            ]
+        }"##;
+        let warnings = check_off_grid_cuts(&parse(json));
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(warnings[0].contains("off_grid_cut"), "got: {}", warnings[0]);
+        assert!(
+            warnings[0].contains("views[0].scenes[1]"),
+            "must name and locate the entering scene: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn snap_beat_on_an_explicit_at_silences_the_warning() {
+        // Same off-grid 0.62s target as the test above, but expressed as an
+        // explicit `at` under `timing: "v2"` with `snap: "beat"` — the
+        // scheduler itself rounds it onto the grid, so the *resolved* cut
+        // (what this check reads) is on-grid even though the declared value
+        // was not.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "timing": "v2",
+            "bpm": 120,
+            "snap": "beat",
+            "scenes": [
+                {"duration": 1.0, "children": []},
+                {"duration": 1.0, "children": [], "at": "0.62s"}
+            ]
+        }"##;
+        assert!(
+            check_off_grid_cuts(&parse(json)).is_empty(),
+            "snap: beat must resolve the cut onto the grid before this check sees it"
+        );
+    }
+
+    #[test]
+    fn a_views_first_scene_never_warns() {
+        // No cut *into* the first scene of a view — nothing to check.
+        let json = r##"{
+            "video": {"width": 64, "height": 64, "fps": 20},
+            "bpm": 120,
+            "scenes": [
+                {"duration": 0.37, "children": []}
+            ]
+        }"##;
+        assert!(check_off_grid_cuts(&parse(json)).is_empty());
     }
 }

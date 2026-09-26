@@ -499,6 +499,168 @@ fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     result
 }
 
+// ─── Synthesised soundtrack (issue #331) ───────────────────────────────────────
+//
+// `rustmotion-core::audio` renders a declarative score into an offline f32
+// buffer with no audio file involved. The bridge here writes that buffer to
+// a cached WAV file and appends it to `ResolvedScenario::audio` as an
+// ordinary `AudioTrack` — from that point on it is indistinguishable from a
+// file a user actually supplied, and flows through `mix_audio_tracks_segment`
+// above (resampling, `--frames a-b` segment windowing, the final mux)
+// completely unmodified. This module joins that existing pipeline; it does
+// not replace any part of it.
+
+/// Cache key for a synthesised score's rendered WAV: a hash of its JSON
+/// representation plus the resolved `bpm`/`beat_offset`/duration it was
+/// rendered against. Mirrors `video_audio.rs`'s own cache-by-hash
+/// convention for its embedded-video-audio extraction.
+///
+/// `AudioConfig`/`Score`/`Voice` hold `f32`/`f64` fields and so cannot
+/// derive `Hash` directly; this goes through `serde_json::to_string`
+/// instead, re-keying `voices` (a `HashMap`, whose field order —
+/// and so its JSON string — would otherwise vary per process) through a
+/// `BTreeMap` first, so the same score hashes to the same path both within
+/// a run and across separate ones. Even if it didn't: a hash collision
+/// here is only ever a cache *miss* (a harmless re-render) or, in
+/// principle, a cache hit on the wrong content — the samples
+/// `rustmotion_core::audio::render` produces never depend on this key at
+/// all (see its doc), only on `cfg`/`ctx`/`duration_secs` themselves.
+fn synth_cache_path(
+    cfg: &crate::schema::AudioConfig,
+    ctx: &rustmotion_core::schema::time::TimeCtx,
+    duration_secs: f64,
+) -> std::path::PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    // `Score::voices` is a `HashMap`, whose iteration order — and so
+    // `serde_json::to_string`'s field order — varies per process (std's
+    // default hasher is randomly seeded). Hashing that string directly
+    // would turn every fresh `rustmotion` invocation into a cache miss for
+    // the *identical* score. Re-keying through a `BTreeMap` first fixes the
+    // order deterministically, so the same score hashes to the same path
+    // both within a run and across separate ones.
+    let score = cfg.as_score();
+    let sorted_voices: std::collections::BTreeMap<_, _> = score.voices.iter().collect();
+    if let Ok(json) = serde_json::to_string(&sorted_voices) {
+        json.hash(&mut hasher);
+    }
+    if let Ok(json) = serde_json::to_string(&score.score) {
+        json.hash(&mut hasher);
+    }
+    if let Ok(json) = serde_json::to_string(&score.master) {
+        json.hash(&mut hasher);
+    }
+    ctx.bpm.map(f64::to_bits).hash(&mut hasher);
+    ctx.beat_offset.to_bits().hash(&mut hasher);
+    duration_secs.to_bits().hash(&mut hasher);
+
+    std::env::temp_dir().join(format!("rustmotion_synth_{:016x}.wav", hasher.finish()))
+}
+
+/// Writes a canonical PCM WAV (16-bit, little-endian, no extension chunks) —
+/// the same header shape this module's own test fixtures already use, just
+/// as production code instead of a test helper. `symphonia`'s WAV demuxer
+/// (already exercised by [`decode_audio_file`]) reads this back byte-exact.
+fn write_wav_pcm16(
+    path: &std::path::Path,
+    samples: &[i16],
+    sample_rate: u32,
+    channels: u16,
+) -> std::io::Result<()> {
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = channels * bits_per_sample / 8;
+    let data_size = (samples.len() * 2) as u32;
+
+    let mut buf = Vec::with_capacity(44 + data_size as usize);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_size).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    for &s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(path, &buf)
+}
+
+/// Renders `cfg`'s synthesised score (issue #331's `voices`/`score`/
+/// `master`) and appends it to `resolved.audio` as a plain [`AudioTrack`],
+/// so every downstream consumer — the resampler, `--frames a-b` segment
+/// windowing, the final mux — treats it exactly like a user-supplied file.
+/// A no-op when `cfg.has_synth()` is `false` (an object-form `audio` used
+/// only to carry `tracks`) or the scenario has zero duration.
+///
+/// `scenario_bpm`/`scenario_beat_offset` are the scenario's own grid,
+/// captured by the caller (`crate::loader`) before `include::resolve_includes`
+/// consumes the `Scenario` they came from; `cfg.bpm`/`cfg.beat_offset`
+/// override them when set. Sharing the scenario's real grid by default —
+/// not duplicating it — is deliverable #1's whole point: a score whose
+/// `every`/`from`/`to` resolve against the *same* `bpm`/`beat_offset` as
+/// `Scene::at` is what puts a kick on the same instant as a cut.
+pub fn synthesize_score_into_track(
+    resolved: &mut crate::schema::ResolvedScenario,
+    cfg: &crate::schema::AudioConfig,
+    scenario_bpm: Option<f64>,
+    scenario_beat_offset: f64,
+) -> Result<()> {
+    if !cfg.has_synth() {
+        return Ok(());
+    }
+
+    let ctx = rustmotion_core::schema::time::TimeCtx {
+        bpm: cfg.bpm.or(scenario_bpm),
+        beat_offset: cfg.beat_offset.unwrap_or(scenario_beat_offset),
+        scene_start: 0.0,
+    };
+    let duration_secs = crate::encode::video_audio::resolved_scenario_duration(resolved);
+    if duration_secs <= 0.0 {
+        return Ok(());
+    }
+
+    let path = synth_cache_path(cfg, &ctx, duration_secs);
+    if !path.exists() {
+        let score = cfg.as_score();
+        let stereo = rustmotion_core::audio::render(&score, ctx, duration_secs)?;
+        let samples_i16: Vec<i16> = stereo
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        write_wav_pcm16(
+            &path,
+            &samples_i16,
+            rustmotion_core::audio::SYNTH_SAMPLE_RATE,
+            2,
+        )
+        .map_err(|e| RustmotionError::AudioSynthWrite {
+            path: path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+    }
+
+    resolved.audio.push(AudioTrack {
+        src: path.display().to_string(),
+        start: 0.0,
+        end: None,
+        volume: 1.0,
+        fade_in: None,
+        fade_out: None,
+        volume_keyframes: Vec::new(),
+    });
+
+    Ok(())
+}
+
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
