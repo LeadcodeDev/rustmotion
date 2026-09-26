@@ -21,6 +21,9 @@ pub enum PointerTone {
     Light,
     /// Dark arrow, light outline — for light frames.
     Dark,
+    /// Transparent fill, white outline — reads on top of any background,
+    /// dark or light, without a filled shape competing with what it points at.
+    Outline,
 }
 
 /// How loud the click ring is.
@@ -134,6 +137,7 @@ impl Pointer {
         let (fill, outline) = match self.tone {
             PointerTone::Light => ("#FFFFFF", "#111827"),
             PointerTone::Dark => ("#111827", "#FFFFFF"),
+            PointerTone::Outline => ("transparent", "#FFFFFF"),
         };
         (
             self.color.clone().unwrap_or_else(|| fill.to_string()),
@@ -141,6 +145,13 @@ impl Pointer {
                 .clone()
                 .unwrap_or_else(|| outline.to_string()),
         )
+    }
+
+    fn ring_fallback_color<'a>(&self, fill: &'a str, outline: &'a str) -> &'a str {
+        match self.tone {
+            PointerTone::Outline => outline,
+            PointerTone::Light | PointerTone::Dark => fill,
+        }
     }
 
     fn arrow_path(size: f32) -> Path {
@@ -187,7 +198,8 @@ impl Painter for Pointer {
         canvas.translate((dx, dy));
 
         if let (Some(p), Some((stroke_f, travel_f))) = (click, self.click_ring.metrics()) {
-            let (r, g, b, _) = parse_hex_color(self.ring_color.as_deref().unwrap_or(&fill));
+            let ring_fallback = self.ring_fallback_color(&fill, &outline);
+            let (r, g, b, _) = parse_hex_color(self.ring_color.as_deref().unwrap_or(ring_fallback));
             let alpha = ((1.0 - p) * 200.0) as u8;
             if alpha > 0 {
                 let mut ring = Paint::default();
@@ -310,6 +322,174 @@ mod tests {
         assert!(
             p.click_progress(1.1).is_some(),
             "the click itself still runs — the arrow still dips"
+        );
+    }
+
+    fn paint_ctx(time: f64, video_width: u32, video_height: u32) -> PaintCtx {
+        PaintCtx {
+            time,
+            scenario_time: time,
+            scene_duration: 1.0,
+            frame_index: 0,
+            fps: 30,
+            video_width,
+            video_height,
+            stagger_offset: 0.0,
+        }
+    }
+
+    fn render(
+        p: &Pointer,
+        w: i32,
+        h: i32,
+        time: f64,
+        background: skia_safe::Color,
+    ) -> skia_safe::Surface {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("raster surface");
+        {
+            let canvas = surface.canvas();
+            canvas.clear(background);
+            p.paint_content(
+                canvas,
+                &BoxLayout::default(),
+                &AnimatedProperties::default(),
+                &paint_ctx(time, w as u32, h as u32),
+            );
+        }
+        surface
+    }
+
+    fn pixel(surface: &mut skia_safe::Surface, w: i32, h: i32, x: f32, y: f32) -> (u8, u8, u8, u8) {
+        let snapshot = surface.image_snapshot();
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let ok = snapshot.read_pixels(
+            &info,
+            &mut buf,
+            (w * 4) as usize,
+            skia_safe::IPoint::new(0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        assert!(ok, "pixel read should succeed");
+        let ix = x.round() as i32;
+        let iy = y.round() as i32;
+        let idx = ((iy * w + ix) * 4) as usize;
+        (buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3])
+    }
+
+    const PROBE_SIZE: f32 = 200.0;
+
+    fn deep_interior_point() -> (f32, f32) {
+        (PROBE_SIZE * 0.1946, PROBE_SIZE * 0.4390)
+    }
+
+    fn left_edge_point() -> (f32, f32) {
+        let stroke_width = (PROBE_SIZE * 0.07f32).max(1.0);
+        (stroke_width * 0.3, PROBE_SIZE * 0.36)
+    }
+
+    #[test]
+    fn deep_interior_point_is_well_clear_of_the_outline_stroke() {
+        let path = Pointer::arrow_path(PROBE_SIZE);
+        let margin = (PROBE_SIZE * 0.07).max(1.0) + 3.0;
+        let (cx, cy) = deep_interior_point();
+        assert!(
+            path.contains((cx, cy)),
+            "probe point must be inside the arrow"
+        );
+        for (dx, dy) in [(-margin, 0.0), (margin, 0.0), (0.0, -margin), (0.0, margin)] {
+            assert!(
+                path.contains((cx + dx, cy + dy)),
+                "probe point at ({cx}, {cy}) is too close to an edge in direction ({dx}, {dy})"
+            );
+        }
+    }
+
+    #[test]
+    fn outline_tone_leaves_the_interior_transparent_and_paints_a_pointer_coloured_edge() {
+        let p = pointer(serde_json::json!({ "tone": "outline", "size": PROBE_SIZE }));
+        let background = skia_safe::Color::from_argb(255, 0, 128, 0);
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let mut surface = render(&p, W, H, 0.0, background);
+
+        let (ix, iy) = deep_interior_point();
+        let interior = pixel(&mut surface, W, H, ix, iy);
+        assert_eq!(
+            interior,
+            (0, 128, 0, 255),
+            "an outline pointer must let the background show through its interior, got {interior:?}"
+        );
+
+        let (ex, ey) = left_edge_point();
+        let edge = pixel(&mut surface, W, H, ex, ey);
+        assert!(
+            edge.0 > 200 && edge.1 > 200 && edge.2 > 200 && edge.3 == 255,
+            "the outline itself must still paint a solid, pointer-coloured edge, got {edge:?}"
+        );
+    }
+
+    #[test]
+    fn filled_tones_still_paint_pointer_colour_in_both_interior_and_edge() {
+        let background = skia_safe::Color::from_argb(255, 0, 128, 0);
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let (ix, iy) = deep_interior_point();
+        let (ex, ey) = left_edge_point();
+
+        let light = pointer(serde_json::json!({ "tone": "light", "size": PROBE_SIZE }));
+        let mut light_surface = render(&light, W, H, 0.0, background);
+        assert_eq!(
+            pixel(&mut light_surface, W, H, ix, iy),
+            (255, 255, 255, 255),
+            "light tone interior must stay pinned to its white fill"
+        );
+        assert_eq!(
+            pixel(&mut light_surface, W, H, ex, ey),
+            (0x11, 0x18, 0x27, 255),
+            "light tone edge must stay pinned to its dark outline"
+        );
+
+        let dark = pointer(serde_json::json!({ "tone": "dark", "size": PROBE_SIZE }));
+        let mut dark_surface = render(&dark, W, H, 0.0, background);
+        assert_eq!(
+            pixel(&mut dark_surface, W, H, ix, iy),
+            (0x11, 0x18, 0x27, 255),
+            "dark tone interior must stay pinned to its dark fill"
+        );
+        assert_eq!(
+            pixel(&mut dark_surface, W, H, ex, ey),
+            (255, 255, 255, 255),
+            "dark tone edge must stay pinned to its white outline"
+        );
+    }
+
+    #[test]
+    fn outline_tone_keeps_the_click_ring_visible_and_matched_to_the_white_outline() {
+        let p = pointer(serde_json::json!({
+            "tone": "outline",
+            "size": 120.0,
+            "click_ring": "bold",
+            "click_duration": 0.5,
+            "path": [{ "time": 0.0, "x": 150.0, "y": 150.0 }]
+        }));
+        const W: i32 = 300;
+        const H: i32 = 300;
+        let background = skia_safe::Color::from_argb(255, 20, 20, 20);
+        let mut surface = render(&p, W, H, 0.15, background);
+
+        let radius = 0.3 * 1.25 * 120.0;
+        let offset = radius * std::f32::consts::FRAC_1_SQRT_2;
+        let (rx, ry) = (150.0 - offset, 150.0 - offset);
+        let ring = pixel(&mut surface, W, H, rx, ry);
+        assert!(
+            ring.0 > 100 && ring.1 > 100 && ring.2 > 100,
+            "the click ring on an outline pointer must default to the outline's white, not a hard-coded or transparent-derived colour, got {ring:?}"
         );
     }
 }
