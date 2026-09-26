@@ -26,7 +26,7 @@ For a product demo or an agent walkthrough — the arrow that moves to a control
 | Field | Role |
 |---|---|
 | `size` | Height of the arrow in px. The click ring scales with it. |
-| `tone` | `light` (white arrow, dark outline) or `dark` |
+| `tone` | `light` (white arrow, dark outline), `dark`, or `outline` (transparent fill, white outline) |
 | `color` / `outline_color` | Override `tone` |
 | `click_ring` | `subtle` / `standard` / `bold` / `none` |
 | `path` | Waypoints `{time, x, y}` — the pointer **clicks on arrival** at each one |
@@ -47,3 +47,9 @@ Corollary: `pointer` is **exempt from the viewport overflow check**, like `marqu
 ## The move pauses on the click
 
 Between two waypoints, the pointer doesn't set off again until the click animation is done (`click_duration`). That's what makes the gesture read: arrive, click, leave. A `click_duration` close to the gap between two waypoints barely leaves time for the travel — leave at least double.
+
+## `outline` tone: a pointer that doesn't fight the thing it's pointing at
+
+`light` and `dark` are both filled arrows — a solid shape that sits on top of whatever's underneath. `outline` is a third tone: a transparent fill with a white outline, so the arrow reads as a mark rather than a shape competing for attention with the control it's pointing at. Reach for it over a busy screenshot or a mockup where a filled arrow would cover detail you want to keep visible.
+
+The click ring follows the same rule as `color`/`outline_color`: it defaults to whichever colour is actually visible for the tone in use — the fill for `light`/`dark`, the outline for `outline` — rather than a colour hard-coded independently of `tone`. `ring_color` still overrides it directly, same as on the filled tones.
