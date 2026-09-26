@@ -1116,6 +1116,91 @@ fn apply_transform(
     }
 }
 
+/// Decomposes a node's already-resolved `CssStyle.transform`/`opacity` into
+/// the five scalars a `node("id", "tx"|"ty"|"scale"|"rotation"|"opacity")`
+/// expression reads (issue #328) — the "animated transform" family, the one
+/// the eight orbiting-badge lines this workstream exists for actually need.
+///
+/// Reads straight off `css`/`layout`, both already resolved for the current
+/// frame by the time this is called (animation resolution happens once per
+/// frame, before the box tree is built — see `rustmotion-components`'
+/// `box_builder::build_scene_at_time`), so this never reaches back into the
+/// animator itself and never risks reading a stale frame.
+///
+/// Compound transforms (more than one `translate`/`scale`/`rotate` function
+/// on a single node, or a raw `matrix`/`matrix3d`) are approximated by
+/// folding the individual functions in list order — summing translations,
+/// multiplying scale factors, summing rotation degrees — rather than
+/// composing an actual matrix and decomposing it. That is exact for the
+/// single-function-per-frame case every `AnimationEffect` preset in this
+/// engine produces (an orbiting badge's `orbit`/keyframe animation resolves
+/// to one `translate`, not several), and is the documented limit for a
+/// hand-authored `transform` list beyond that. `scale` collapses `scale_x`/
+/// `scale_y` to their average — exact for the overwhelmingly common uniform
+/// case (`scale_x == scale_y`) and a reasonable single-scalar stand-in
+/// otherwise, since the expression grammar has no vector return type to
+/// hand back `(scale_x, scale_y)` separately. `rotation` sums only
+/// `rotate`/`rotate_z`/`rotate3d`'s own `deg` — `rotate_x`/`rotate_y` tilt
+/// out of the 2D plane a `line` endpoint lives in, so folding them into the
+/// same scalar would misrepresent what's actually visible on screen.
+pub fn animated_transform(
+    css: &CssStyle,
+    layout: &BoxLayout,
+    viewport: (f32, f32),
+) -> (f32, f32, f32, f32, f32) {
+    let length_ctx = LengthContext {
+        viewport_width: viewport.0,
+        viewport_height: viewport.1,
+        parent_size: layout.width.max(layout.height),
+        font_size: css.font_size_px_or(16.0),
+        root_font_size: 16.0,
+    };
+    let ctx_x = LengthContext {
+        parent_size: layout.width,
+        ..length_ctx
+    };
+    let ctx_y = LengthContext {
+        parent_size: layout.height,
+        ..length_ctx
+    };
+
+    let mut tx = 0.0f32;
+    let mut ty = 0.0f32;
+    let mut scale_x = 1.0f32;
+    let mut scale_y = 1.0f32;
+    let mut rotation = 0.0f32;
+    for t in css.transform.as_deref().unwrap_or(&[]) {
+        match t {
+            TransformFn::Translate { x, y } => {
+                tx += x.resolve(&ctx_x);
+                ty += y.resolve(&ctx_y);
+            }
+            TransformFn::TranslateX { x } => tx += x.resolve(&ctx_x),
+            TransformFn::TranslateY { y } => ty += y.resolve(&ctx_y),
+            TransformFn::Translate3d { x, y, .. } => {
+                tx += x.resolve(&ctx_x);
+                ty += y.resolve(&ctx_y);
+            }
+            TransformFn::Scale { x, y } => {
+                scale_x *= x;
+                scale_y *= y;
+            }
+            TransformFn::ScaleX { x } => scale_x *= x,
+            TransformFn::ScaleY { y } => scale_y *= y,
+            TransformFn::Scale3d { x, y, .. } => {
+                scale_x *= x;
+                scale_y *= y;
+            }
+            TransformFn::Rotate { deg } | TransformFn::RotateZ { deg } => rotation += deg,
+            TransformFn::Rotate3d { deg, .. } => rotation += deg,
+            _ => {}
+        }
+    }
+    let scale = (scale_x + scale_y) / 2.0;
+    let opacity = css.opacity.unwrap_or(1.0);
+    (tx, ty, scale, rotation, opacity)
+}
+
 /// CSS `perspective(d)` projection matrix in row-major form.
 /// Maps (x, y, z, 1) → w' = 1 - z/d; perspective divide yields depth scaling.
 fn css_perspective_m44(d: f32) -> M44 {
@@ -3171,5 +3256,88 @@ mod tests {
         let c = parse_color(&Color::String("not-a-color".to_string()));
         assert_ne!(c, SColor::BLACK);
         assert_eq!(c, SColor::from_argb(255, 255, 0, 255));
+    }
+}
+
+#[cfg(test)]
+mod animated_transform_tests {
+    use super::*;
+    use crate::css::units::LengthPercentage as CLP;
+
+    fn layout(w: f32, h: f32) -> BoxLayout {
+        BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: w,
+            height: h,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_transform_is_identity_with_full_opacity() {
+        let css = CssStyle::default();
+        let (tx, ty, scale, rotation, opacity) =
+            animated_transform(&css, &layout(100.0, 100.0), (1920.0, 1080.0));
+        assert_eq!(
+            (tx, ty, scale, rotation, opacity),
+            (0.0, 0.0, 1.0, 0.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn single_translate_and_opacity_roundtrip() {
+        let css = CssStyle {
+            transform: Some(vec![TransformFn::Translate {
+                x: CLP::Px(42.0),
+                y: CLP::Px(-7.0),
+            }]),
+            opacity: Some(0.5),
+            ..Default::default()
+        };
+        let (tx, ty, _scale, _rotation, opacity) =
+            animated_transform(&css, &layout(100.0, 100.0), (1920.0, 1080.0));
+        assert_eq!(tx, 42.0);
+        assert_eq!(ty, -7.0);
+        assert_eq!(opacity, 0.5);
+    }
+
+    #[test]
+    fn uniform_scale_and_rotation() {
+        let css = CssStyle {
+            transform: Some(vec![
+                TransformFn::Scale { x: 2.0, y: 2.0 },
+                TransformFn::Rotate { deg: 30.0 },
+            ]),
+            ..Default::default()
+        };
+        let (_tx, _ty, scale, rotation, _opacity) =
+            animated_transform(&css, &layout(100.0, 100.0), (1920.0, 1080.0));
+        assert_eq!(scale, 2.0);
+        assert_eq!(rotation, 30.0);
+    }
+
+    #[test]
+    fn an_orbiting_node_at_two_different_frames_reports_two_different_positions() {
+        // The exact shape of the "eight lines to orbiting badges" scenario:
+        // a node whose `transform` is a single `translate` recomputed every
+        // frame by the (unowned) animator. Simulating two frames' worth of
+        // already-resolved CSS here proves `animated_transform` reads
+        // whatever it is handed, frame-fresh, with no memory of the last
+        // call — the property the per-frame, topological resolution in
+        // `engine::deps` depends on.
+        let orbit = |angle_deg: f32| {
+            let mut css = CssStyle::default();
+            let (s, c) = angle_deg.to_radians().sin_cos();
+            css.transform = Some(vec![TransformFn::Translate {
+                x: CLP::Px(c * 100.0),
+                y: CLP::Px(s * 100.0),
+            }]);
+            css
+        };
+        let l = layout(10.0, 10.0);
+        let (tx0, ty0, ..) = animated_transform(&orbit(0.0), &l, (1920.0, 1080.0));
+        let (tx1, ty1, ..) = animated_transform(&orbit(90.0), &l, (1920.0, 1080.0));
+        assert!((tx0 - tx1).abs() > 1.0 || (ty0 - ty1).abs() > 1.0);
     }
 }

@@ -1,5 +1,7 @@
 pub mod animator;
 pub mod box_tree;
+pub mod deps;
+pub mod shake;
 pub mod heropatterns;
 pub mod layout_pass;
 pub mod paint_pass;

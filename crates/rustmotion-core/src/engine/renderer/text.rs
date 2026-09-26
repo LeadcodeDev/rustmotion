@@ -118,6 +118,86 @@ pub fn make_text_blob_with_spacing(text: &str, font: &Font, spacing: f32) -> Opt
     TextBlob::from_pos_text(text, &positions, font)
 }
 
+// ─── Glyph metrics (issue #328) ─────────────────────────────────────────────
+//
+// Glyph positions were already computed here — `str_to_glyphs_vec`, then
+// `get_widths`, then a `positions` vector, exactly what
+// `make_text_blob_with_spacing` above builds — but only ever consumed
+// straight into a `TextBlob` and thrown away once painted. Nothing let an
+// expression ask where, say, the last glyph of a typed sentence actually
+// landed. The functions below retain that same per-glyph data instead of
+// discarding it.
+
+/// One glyph's left edge and advance width, in a **line's own** coordinate
+/// space: `x == 0.0` at the start of the line, before any `text-align`
+/// offset a caller applies on top (mirrors [`draw_text_with_fallback`]'s own
+/// `cursor_x`, which starts at the line's left edge for the same reason).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlyphMetric {
+    pub x: f32,
+    pub width: f32,
+}
+
+/// Per-glyph `(x, width)` for `text` measured against a single `font`, no
+/// run segmentation — the same primitive [`make_text_blob_with_spacing`]
+/// already computes (`str_to_glyphs_vec` + `get_widths`) to place each
+/// glyph in a `TextBlob`, retained here as positions instead of being
+/// consumed straight into one.
+fn glyph_metrics_single_font(text: &str, font: &Font, letter_spacing: f32) -> Vec<GlyphMetric> {
+    let glyphs = font.str_to_glyphs_vec(text);
+    if glyphs.is_empty() {
+        return Vec::new();
+    }
+    let mut widths = vec![0.0f32; glyphs.len()];
+    font.get_widths(&glyphs, &mut widths);
+    let mut out = Vec::with_capacity(glyphs.len());
+    let mut x = 0.0f32;
+    for w in widths {
+        out.push(GlyphMetric { x, width: w });
+        x += w + letter_spacing;
+    }
+    out
+}
+
+/// Per-glyph `(x, width)` for one already-wrapped line of `text`, run-aware
+/// (emoji-font and glyph-coverage fallback — see [`segment_text_runs`])
+/// exactly like [`draw_text_with_fallback`]: same runs, same per-run font
+/// choice, so a glyph index into this list lines up with the glyph
+/// `draw_text_with_fallback` actually paints at that position. `x` is
+/// line-relative (see [`GlyphMetric`]'s doc) — a caller placing the line
+/// inside a box via `text-align` adds its own line offset on top, the same
+/// way `draw_text_with_fallback`'s callers already compute `line_x`.
+pub fn compute_glyph_metrics(
+    text: &str,
+    font: &Font,
+    emoji_font: &Option<Font>,
+    letter_spacing: f32,
+) -> Vec<GlyphMetric> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    if !needs_segmentation(text, font, emoji_font) {
+        return glyph_metrics_single_font(text, font, letter_spacing);
+    }
+
+    let runs = segment_text_runs(text, font);
+    let mut out = Vec::new();
+    let mut cursor_x = 0.0f32;
+    for run in &runs {
+        let segment = &text[run.start..run.end];
+        let mut owned = None;
+        let f = resolve_run_font(&run.kind, segment, font, emoji_font, &mut owned);
+        let metrics = glyph_metrics_single_font(segment, f, letter_spacing);
+        let run_advance: f32 = metrics.iter().map(|m| m.width + letter_spacing).sum();
+        out.extend(metrics.into_iter().map(|m| GlyphMetric {
+            x: cursor_x + m.x,
+            width: m.width,
+        }));
+        cursor_x += run_advance;
+    }
+    out
+}
+
 // ─── Emoji support ──────────────────────────────────────────────────────────
 
 /// Code points that render as emoji **by default**, in every context,
@@ -350,12 +430,11 @@ fn needs_segmentation(text: &str, primary: &Font, emoji_font: &Option<Font>) -> 
     text.chars().any(|c| {
         // ASCII short-circuits before the `unichar_to_glyph` FFI call: every
         // font this engine resolves covers printable ASCII, and callers
-        // that draw a lot of short spans per frame (codeblock's per-token
-        // syntax highlighting, in particular) call this once per span —
-        // skipping the Skia round-trip for the overwhelmingly common
-        // all-ASCII case keeps #3's fix from adding per-glyph FFI overhead
-        // to code that was never affected by the tofu/coverage bug it
-        // fixes.
+        // that draw a lot of short spans per frame (`rich_text`'s per-span
+        // styling, in particular) call this once per span — skipping the
+        // Skia round-trip for the overwhelmingly common all-ASCII case
+        // keeps #3's fix from adding per-glyph FFI overhead to code that
+        // was never affected by the tofu/coverage bug it fixes.
         !(c.is_ascii() || c.is_whitespace() || (c as u32) < 0x20)
             && primary.unichar_to_glyph(c as i32) == 0
     })
@@ -1199,5 +1278,110 @@ mod glyph_fallback_tests {
             "measured width {measured_w} should roughly match the painted ink width \
              {painted_width} (min_x={min_x}, max_x={max_x})"
         );
+    }
+}
+
+// ─── Tests: glyph metrics (issue #328) ──────────────────────────────────────
+
+#[cfg(test)]
+mod glyph_metrics_tests {
+    use super::super::typeface_with_fallback;
+    use super::*;
+    use skia_safe::FontStyle as SkFontStyle;
+
+    fn test_font(size: f32) -> Font {
+        let typeface = typeface_with_fallback("Helvetica", SkFontStyle::default())
+            .expect("host must have a fallback typeface");
+        Font::from_typeface(typeface, size)
+    }
+
+    #[test]
+    fn empty_text_has_no_glyphs() {
+        let font = test_font(32.0);
+        assert!(compute_glyph_metrics("", &font, &None, 0.0).is_empty());
+    }
+
+    #[test]
+    fn glyph_count_matches_char_count_for_plain_ascii() {
+        let font = test_font(32.0);
+        let metrics = compute_glyph_metrics("Hello", &font, &None, 0.0);
+        assert_eq!(metrics.len(), 5);
+    }
+
+    #[test]
+    fn first_glyph_starts_at_line_origin() {
+        let font = test_font(32.0);
+        let metrics = compute_glyph_metrics("Hello", &font, &None, 0.0);
+        assert_eq!(metrics[0].x, 0.0);
+    }
+
+    #[test]
+    fn glyphs_are_monotonically_increasing_and_sum_to_the_advance_width() {
+        let font = test_font(48.0);
+        let text = "Sentence?";
+        let metrics = compute_glyph_metrics(text, &font, &None, 0.0);
+        assert_eq!(metrics.len(), text.chars().count());
+        for pair in metrics.windows(2) {
+            assert!(
+                pair[1].x >= pair[0].x,
+                "glyph x must be non-decreasing: {:?}",
+                metrics
+            );
+        }
+        let last = metrics.last().unwrap();
+        let total_advance = last.x + last.width;
+        let measured = measure_text_with_fallback(text, &font, &None, 0.0);
+        assert!(
+            (total_advance - measured).abs() < 0.5,
+            "last glyph's right edge ({total_advance}) should match the \
+             measured advance width ({measured})"
+        );
+    }
+
+    #[test]
+    fn last_glyph_is_the_detachable_question_mark() {
+        // The motivating scenario (issue #328): the author writes the
+        // sentence *without* its trailing `?` and places a separate node at
+        // `x = node("sentence", "glyph_x:<n-1>") + node("sentence",
+        // "glyph_x:<n-1>").width` — proven here at the primitive level: the
+        // last glyph of "Sentence" really is the `e`, immediately before
+        // where a detached `?` would sit.
+        let font = test_font(32.0);
+        let metrics = compute_glyph_metrics("Sentence", &font, &None, 0.0);
+        let e_glyph = *metrics.last().unwrap();
+        let question_x = e_glyph.x + e_glyph.width;
+        assert!(question_x > e_glyph.x);
+    }
+
+    #[test]
+    fn letter_spacing_widens_the_gap_between_glyphs() {
+        let font = test_font(32.0);
+        let tight = compute_glyph_metrics("AB", &font, &None, 0.0);
+        let wide = compute_glyph_metrics("AB", &font, &None, 10.0);
+        assert_eq!(tight.len(), 2);
+        assert_eq!(wide.len(), 2);
+        assert!(wide[1].x > tight[1].x + 9.0);
+    }
+
+    #[test]
+    fn single_font_path_matches_make_text_blob_with_spacing_positions() {
+        // `compute_glyph_metrics`'s fast path and `make_text_blob_with_spacing`
+        // must compute the exact same per-glyph x positions — they exist to
+        // describe the same drawn glyphs, just one keeps the positions and
+        // the other consumes them into a blob.
+        let font = test_font(40.0);
+        let text = "Hello";
+        let spacing = 2.0;
+        let metrics = compute_glyph_metrics(text, &font, &None, spacing);
+
+        let glyphs = font.str_to_glyphs_vec(text);
+        let mut widths = vec![0.0f32; glyphs.len()];
+        font.get_widths(&glyphs, &mut widths);
+        let mut x = 0.0f32;
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(metrics[i].x, x);
+            assert_eq!(metrics[i].width, *w);
+            x += w + spacing;
+        }
     }
 }

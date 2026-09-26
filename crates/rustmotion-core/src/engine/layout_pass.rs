@@ -29,6 +29,28 @@ pub struct Insets {
 }
 
 impl BoxLayout {
+    /// Horizontal centre of the border box, in absolute viewport
+    /// coordinates. One of the geometry properties a `node("id", "cx")`
+    /// expression reads post-`layout_pass` (issue #328).
+    pub fn cx(&self) -> f32 {
+        self.x + self.width / 2.0
+    }
+
+    /// Vertical centre of the border box. See [`Self::cx`].
+    pub fn cy(&self) -> f32 {
+        self.y + self.height / 2.0
+    }
+
+    /// Right edge of the border box (`x + width`). See [`Self::cx`].
+    pub fn right(&self) -> f32 {
+        self.x + self.width
+    }
+
+    /// Bottom edge of the border box (`y + height`). See [`Self::cx`].
+    pub fn bottom(&self) -> f32 {
+        self.y + self.height
+    }
+
     pub fn content_box(&self) -> (f32, f32, f32, f32) {
         let x = self.x + self.border.left + self.padding.left;
         let y = self.y + self.border.top + self.padding.top;

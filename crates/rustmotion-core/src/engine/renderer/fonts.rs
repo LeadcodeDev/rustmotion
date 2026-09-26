@@ -125,15 +125,14 @@ fn custom_typeface(family: &str, style: FontStyle) -> Option<Typeface> {
 
 /// Look up only the custom/Google-font registry for `family` at the
 /// requested `style`, without falling through to any system font. Exposed
-/// for callers (e.g. `codeblock`/`terminal`'s monospace font resolver) that
+/// for callers with their own family-specific system fallback chain that
 /// need to check "did the scenario declare a custom font for this family"
-/// *before* trying their own family-specific system fallback chain — unlike
-/// [`typeface_with_fallback`], which interleaves a single system-family
-/// lookup between the custom check and its own generic Helvetica/Arial
-/// catch-all, an order that doesn't suit every caller (see issue: codeblock/
-/// terminal's hardcoded monospace fallback list was never reached because
-/// `typeface_with_fallback`'s own system lookup already matched a decoy
-/// system family, e.g. "JetBrains Mono").
+/// *before* trying that chain — unlike [`typeface_with_fallback`], which
+/// interleaves a single system-family lookup between the custom check and
+/// its own generic Helvetica/Arial catch-all, an order that doesn't suit
+/// every caller (a caller with a hardcoded monospace fallback list, for
+/// instance, would never reach it if `typeface_with_fallback`'s own system
+/// lookup already matched a decoy system family, e.g. "JetBrains Mono").
 pub fn resolve_custom_typeface(family: &str, style: FontStyle) -> Option<Typeface> {
     custom_typeface(family, style)
 }
