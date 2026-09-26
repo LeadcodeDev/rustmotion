@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn stereo_channels_are_identical_mono_duplicated() {
         let buf = render(&issue_example_score(), ctx(), 13.0).unwrap();
-        for pair in buf.chunks_exact(2) {
+        for pair in buf.as_chunks::<2>().0 {
             assert_eq!(pair[0], pair[1]);
         }
     }

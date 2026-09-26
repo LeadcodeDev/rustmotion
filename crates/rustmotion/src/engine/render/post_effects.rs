@@ -89,7 +89,7 @@ pub fn apply_flash(
     }
     let alpha = intensity.clamp(0.0, 1.0) * (1.0 - (dt / duration as f64) as f32);
     let (fr, fg, fb) = parse_hex_rgb(color);
-    for px in buf.chunks_exact_mut(4) {
+    for px in buf.as_chunks_mut::<4>().0 {
         px[0] = blend(px[0], fr, alpha);
         px[1] = blend(px[1], fg, alpha);
         px[2] = blend(px[2], fb, alpha);
