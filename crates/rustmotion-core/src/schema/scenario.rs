@@ -1096,6 +1096,19 @@ pub enum TransitionDirection {
     Down,
 }
 
+/// The centre a `zoom_blur` transition radiates its streaks from, in frame
+/// pixels. Absent = frame centre.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ZoomBlurOrigin {
+    /// Horizontal centre, in frame pixels.
+    #[serde(default)]
+    pub x: f32,
+    /// Vertical centre, in frame pixels.
+    #[serde(default)]
+    pub y: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Transition {
@@ -1123,6 +1136,16 @@ pub struct Transition {
     /// colour flash and leaves a plain fast slide; `2` doubles it.
     #[serde(default = "default_transition_aberration")]
     pub aberration: f32,
+    /// `zoom_blur` only: how far the radial streaks reach. `0` collapses the
+    /// streak pass entirely, leaving a plain zoom with no smear; higher
+    /// values pull the outer copies further from `origin`. Ignored by every
+    /// other transition type.
+    #[serde(default = "default_transition_strength")]
+    pub strength: f32,
+    /// `zoom_blur` only: the centre the streaks radiate from. Ignored by
+    /// every other transition type.
+    #[serde(default)]
+    pub origin: Option<ZoomBlurOrigin>,
     #[serde(default = "default_transition_duration")]
     pub duration: f64,
     #[serde(default = "default_transition_easing")]
@@ -1173,6 +1196,12 @@ pub enum TransitionType {
     /// channels at the peak and recombines as it lands — the glitch-flash
     /// cut. `direction` steers it, `aberration` scales the split.
     ChromaticWipe,
+    /// A radial zoom blur: the outgoing frame streaks outward from `origin`
+    /// while it fades, then the incoming frame is left standing alone — the
+    /// "tunnel" cut. `strength` sets how far the streaks reach; `0`
+    /// collapses it to a plain zoom with no smear. Zero at both ends of the
+    /// transition, so no fringe bleeds into the next scene.
+    ZoomBlur,
     None,
 }
 
@@ -1185,6 +1214,10 @@ fn default_transition_seed() -> u32 {
 }
 
 fn default_transition_aberration() -> f32 {
+    1.0
+}
+
+fn default_transition_strength() -> f32 {
     1.0
 }
 

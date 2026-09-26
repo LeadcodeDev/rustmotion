@@ -1,7 +1,7 @@
 use crate::engine::animator::ease;
 use crate::schema::{
     EasingType, PanBackground, PixelDissolveOrder, Transition, TransitionCorner,
-    TransitionDirection, TransitionType,
+    TransitionDirection, TransitionType, ZoomBlurOrigin,
 };
 use skia_safe::{surfaces, Color4f, ColorType, ImageInfo, Paint, PathBuilder, Rect};
 
@@ -13,6 +13,8 @@ pub struct TransitionOptions {
     pub order: PixelDissolveOrder,
     pub direction: TransitionDirection,
     pub aberration: f32,
+    pub strength: f32,
+    pub origin: Option<ZoomBlurOrigin>,
 }
 
 impl Default for TransitionOptions {
@@ -24,6 +26,8 @@ impl Default for TransitionOptions {
             order: PixelDissolveOrder::default(),
             direction: TransitionDirection::default(),
             aberration: 1.0,
+            strength: 1.0,
+            origin: None,
         }
     }
 }
@@ -37,6 +41,8 @@ impl From<&Transition> for TransitionOptions {
             order: t.order,
             direction: t.direction,
             aberration: t.aberration,
+            strength: t.strength,
+            origin: t.origin,
         }
     }
 }
@@ -58,6 +64,8 @@ pub fn apply_transition(
         order,
         direction,
         aberration,
+        strength,
+        origin,
     } = *opts;
 
     match transition_type {
@@ -91,6 +99,9 @@ pub fn apply_transition(
         TransitionType::ChromaticWipe => chromatic_wipe(
             frame_a, frame_b, width, height, progress, direction, aberration,
         ),
+        TransitionType::ZoomBlur => {
+            zoom_blur_transition(frame_a, frame_b, width, height, progress, strength, origin)
+        }
         TransitionType::None => {
             if progress < 0.5 {
                 frame_a.to_vec()
@@ -612,6 +623,83 @@ fn chromatic_wipe(
         }
     }
     out
+}
+
+const ZOOM_BLUR_ZOOM_REACH: f32 = 0.5;
+const ZOOM_BLUR_STEPS: usize = 10;
+const ZOOM_BLUR_MAX_EXTRA_SCALE: f32 = 0.6;
+
+fn zoom_blur_transition(
+    frame_a: &[u8],
+    frame_b: &[u8],
+    width: u32,
+    height: u32,
+    progress: f32,
+    strength: f32,
+    origin: Option<ZoomBlurOrigin>,
+) -> Vec<u8> {
+    let mut surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return blend_fade(frame_a, frame_b, progress),
+    };
+    let (Some(img_a), Some(img_b)) = (
+        frame_to_image(frame_a, width, height),
+        frame_to_image(frame_b, width, height),
+    ) else {
+        return blend_fade(frame_a, frame_b, progress);
+    };
+
+    let (w, h) = (width as f32, height as f32);
+    let (ox, oy) = match origin {
+        Some(o) => (o.x, o.y),
+        None => (w / 2.0, h / 2.0),
+    };
+
+    let scale_now = 1.0 + progress * ZOOM_BLUR_ZOOM_REACH;
+    let alpha_a = 1.0 - progress;
+
+    {
+        let canvas = surface.canvas();
+        canvas.draw_image(&img_b, (0.0, 0.0), None);
+        canvas.save();
+        canvas.translate((ox, oy));
+        canvas.scale((scale_now, scale_now));
+        canvas.translate((-ox, -oy));
+        let mut paint = Paint::default();
+        paint.set_alpha_f(alpha_a);
+        canvas.draw_image(&img_a, (0.0, 0.0), Some(&paint));
+        canvas.restore();
+    }
+    let sharp = surface_to_pixels(surface, width, height);
+
+    let peak = 1.0 - (progress * 2.0 - 1.0).abs();
+    let reach = strength.max(0.0) * peak;
+    if reach <= 0.0 {
+        return sharp;
+    }
+
+    let mut streak_surface = match create_skia_surface(width, height) {
+        Some(s) => s,
+        None => return sharp,
+    };
+    let extra = reach * ZOOM_BLUR_MAX_EXTRA_SCALE;
+    let canvas = streak_surface.canvas();
+    canvas.draw_image(&img_b, (0.0, 0.0), None);
+    for i in (0..ZOOM_BLUR_STEPS).rev() {
+        let t = i as f32 / (ZOOM_BLUR_STEPS - 1) as f32;
+        let s = scale_now + extra * t;
+        let weight = (1.0 - t).powf(1.5);
+        let mut streak_paint = Paint::default();
+        streak_paint.set_alpha_f((alpha_a * weight).clamp(0.0, 1.0));
+        canvas.save();
+        canvas.translate((ox, oy));
+        canvas.scale((s, s));
+        canvas.translate((-ox, -oy));
+        canvas.draw_image(&img_a, (0.0, 0.0), Some(&streak_paint));
+        canvas.restore();
+    }
+
+    surface_to_pixels(streak_surface, width, height)
 }
 
 fn dissolve_transition(
