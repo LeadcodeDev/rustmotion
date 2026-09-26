@@ -558,8 +558,29 @@ pub struct HaloZone {
     pub y: f32,
     /// Radius as a fraction of that surface's `max(width, height)` — so the
     /// same value covers proportionally the same area whichever view it is in.
+    /// This is also the fallback for `radius_x`/`radius_y` when either is
+    /// omitted, which is what keeps a zone written before those fields
+    /// existed a perfect, unrotated circle.
     #[serde(default = "default_halo_radius")]
     pub radius: f32,
+    /// Horizontal radius, same fraction-of-surface units as
+    /// [`HaloZone::radius`]. Omitted (the default) falls back to `radius`.
+    /// Set it together with `radius_y` to draw an ellipse instead of a
+    /// circle — a wide, thin light band wants `radius_x` far larger than
+    /// `radius_y`.
+    #[serde(default)]
+    pub radius_x: Option<f32>,
+    /// Vertical radius, same fraction-of-surface units as
+    /// [`HaloZone::radius`]. Omitted (the default) falls back to `radius` —
+    /// see [`HaloZone::radius_x`].
+    #[serde(default)]
+    pub radius_y: Option<f32>,
+    /// Rotation of the ellipse in degrees, clockwise about its own center.
+    /// Ignored on a circular zone (`radius_x == radius_y`, which includes
+    /// every zone that only sets `radius`) — a rotated circle is a circle,
+    /// so it is never worth the extra draw call.
+    #[serde(default)]
+    pub rotation: f32,
     /// Zone opacity, multiplied with any alpha already encoded in `color`.
     ///
     /// Default `1.0` is a true no-op: it leaves `color`'s own alpha (opaque
@@ -569,6 +590,20 @@ pub struct HaloZone {
     /// `0.0..=1.0`.
     #[serde(default = "default_halo_opacity")]
     pub opacity: f32,
+}
+
+impl HaloZone {
+    pub fn effective_radius_x(&self) -> f32 {
+        self.radius_x.unwrap_or(self.radius)
+    }
+
+    pub fn effective_radius_y(&self) -> f32 {
+        self.radius_y.unwrap_or(self.radius)
+    }
+
+    pub fn is_circular(&self) -> bool {
+        self.effective_radius_x() == self.effective_radius_y()
+    }
 }
 
 /// Transition configuration for background interpolation between scenes.
@@ -834,6 +869,9 @@ mod halo_zone_opacity_tests {
             x: 0.5,
             y: 0.5,
             radius: 0.4,
+            radius_x: None,
+            radius_y: None,
+            rotation: 0.0,
             opacity: 0.6,
         };
         let v = serde_json::to_value(&zone).unwrap();
@@ -874,6 +912,98 @@ mod halo_zone_opacity_tests {
             }
             _ => panic!("expected Halo preset"),
         }
+    }
+}
+
+#[cfg(test)]
+mod halo_zone_ellipse_tests {
+    use super::*;
+
+    fn zone_with_radius_only(radius: f32) -> HaloZone {
+        serde_json::from_value(serde_json::json!({ "color": "#FFFFFF", "radius": radius })).unwrap()
+    }
+
+    #[test]
+    fn radius_x_and_radius_y_default_to_none_when_omitted() {
+        let zone = zone_with_radius_only(0.4);
+        assert_eq!(zone.radius_x, None);
+        assert_eq!(zone.radius_y, None);
+        assert_eq!(zone.rotation, 0.0);
+    }
+
+    #[test]
+    fn effective_radius_falls_back_to_radius_when_axis_radii_are_absent() {
+        let zone = zone_with_radius_only(0.4);
+        assert_eq!(zone.effective_radius_x(), 0.4);
+        assert_eq!(zone.effective_radius_y(), 0.4);
+    }
+
+    #[test]
+    fn effective_radius_honours_explicit_axis_values() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#FFFFFF",
+            "radius": 0.4,
+            "radius_x": 0.8,
+            "radius_y": 0.05
+        }))
+        .unwrap();
+        assert_eq!(zone.effective_radius_x(), 0.8);
+        assert_eq!(zone.effective_radius_y(), 0.05);
+    }
+
+    #[test]
+    fn a_radius_only_zone_is_circular() {
+        assert!(zone_with_radius_only(0.4).is_circular());
+    }
+
+    #[test]
+    fn explicit_equal_radius_x_and_radius_y_is_still_circular() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#FFFFFF",
+            "radius": 0.4,
+            "radius_x": 0.4,
+            "radius_y": 0.4
+        }))
+        .unwrap();
+        assert!(zone.is_circular());
+    }
+
+    #[test]
+    fn differing_axis_radii_are_not_circular() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#FFFFFF",
+            "radius": 0.4,
+            "radius_x": 0.8,
+            "radius_y": 0.1
+        }))
+        .unwrap();
+        assert!(!zone.is_circular());
+    }
+
+    #[test]
+    fn a_nonzero_rotation_does_not_affect_circularity() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#FFFFFF",
+            "radius": 0.4,
+            "rotation": 45.0
+        }))
+        .unwrap();
+        assert!(
+            zone.is_circular(),
+            "rotation has no visible effect on a circle, so it must not change how it renders"
+        );
+    }
+
+    #[test]
+    fn rotation_defaults_to_zero_degrees() {
+        let zone: HaloZone = serde_json::from_value(serde_json::json!({
+            "color": "#FFFFFF",
+            "radius": 0.4,
+            "radius_x": 0.8,
+            "radius_y": 0.1
+        }))
+        .unwrap();
+        assert_eq!(zone.rotation, 0.0);
     }
 }
 
