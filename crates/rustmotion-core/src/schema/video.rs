@@ -2,7 +2,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use skia_safe::Path as SkiaPath;
 
-use super::animation::{Animation, AnimationPreset, EasingType, PresetConfig, SpringConfig};
+use super::animation::{
+    Animation, AnimationPreset, ChromaticAberrationConfig, EasingType, PresetConfig, SpringConfig,
+};
 use super::style::{FontWeight, TextAlign, VerticalAlign};
 
 /// A single animation effect. Discriminated by `"type"` in JSON.
@@ -101,6 +103,10 @@ pub enum AnimationEffect {
     /// coordinate space path points are interpreted in, and how degenerate
     /// paths (empty, single-point, zero-length) are handled.
     MotionPath(MotionPathConfig),
+    /// Per-element channel-split: the node's own rendered content splits into
+    /// red/cyan fringes that converge back to zero separation by the end.
+    /// See [`ChromaticAberrationConfig`]'s doc comment.
+    ChromaticAberration(ChromaticAberrationConfig),
 }
 
 impl AnimationEffect {
@@ -121,6 +127,7 @@ impl AnimationEffect {
             Keyframes(c) => c.delay += by,
             MotionPath(c) => c.delay += by,
             Shimmer(c) => c.delay += by,
+            ChromaticAberration(c) => c.delay += by,
             Glow(_) | Wiggle(_) | Orbit(_) | MotionBlur(_) | Trail(_) => {}
         }
     }

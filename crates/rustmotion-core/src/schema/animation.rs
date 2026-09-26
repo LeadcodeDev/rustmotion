@@ -262,6 +262,40 @@ fn default_preset_duration() -> f64 {
     0.8
 }
 
+/// Per-element channel-split effect: the red and cyan (green+blue) channels
+/// of the node's own rendered content separate by `amount` px and converge
+/// back to a perfect overlap by the end of `duration` — the same "zero at
+/// the end" guarantee `TransitionType::ChromaticWipe` gives its reveal edge
+/// (see `engine::transition::chromatic_wipe`), so no node is left
+/// permanently fringed once the effect has played.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ChromaticAberrationConfig {
+    /// Delay before the split starts (seconds).
+    #[serde(default)]
+    pub delay: f64,
+    /// How long the channels take to converge back to zero separation
+    /// (seconds).
+    #[serde(default = "default_chromatic_aberration_duration")]
+    pub duration: f64,
+    /// How far the red and cyan channels separate at the peak (px), reached
+    /// the instant the effect starts (`delay`) and decaying to `0` by
+    /// `delay + duration`.
+    #[serde(default = "default_chromatic_aberration_amount")]
+    pub amount: f32,
+    /// Easing applied to the decay from `amount` down to zero.
+    #[serde(default = "default_easing")]
+    pub easing: EasingType,
+}
+
+fn default_chromatic_aberration_duration() -> f64 {
+    0.6
+}
+
+fn default_chromatic_aberration_amount() -> f32 {
+    6.0
+}
+
 #[cfg(test)]
 mod deny_unknown_fields_tests {
     use super::*;
@@ -311,5 +345,30 @@ mod deny_unknown_fields_tests {
         let k: Keyframe = serde_json::from_value(json).unwrap();
         assert_eq!(k.time, 0.5);
         assert!(k.easing.is_some());
+    }
+
+    #[test]
+    fn chromatic_aberration_config_rejects_unknown_fields() {
+        let json = json!({ "amount": 6.0, "duratoin": 0.6 });
+        let err = serde_json::from_value::<ChromaticAberrationConfig>(json)
+            .expect_err("a typo'd field must be rejected, not silently ignored");
+        assert!(err.to_string().contains("duratoin"), "got: {err}");
+    }
+
+    #[test]
+    fn chromatic_aberration_config_defaults() {
+        let json = json!({});
+        let cfg: ChromaticAberrationConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(cfg.delay, 0.0);
+        assert_eq!(cfg.duration, default_chromatic_aberration_duration());
+        assert_eq!(cfg.amount, default_chromatic_aberration_amount());
+    }
+
+    #[test]
+    fn chromatic_aberration_config_accepts_issue_shape() {
+        let json = json!({ "amount": 6, "duration": 0.6 });
+        let cfg: ChromaticAberrationConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(cfg.amount, 6.0);
+        assert_eq!(cfg.duration, 0.6);
     }
 }
