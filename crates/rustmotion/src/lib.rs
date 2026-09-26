@@ -31,5 +31,12 @@ pub mod encode;
 pub mod include;
 pub mod loader;
 
+/// Le studio de prévisualisation. Un module et non une crate à part parce que
+/// `cargo install --git <url>` refuse un dépôt où plus d'un paquet déclare un
+/// binaire, et qu'une crate séparée dépendant de `loader`/`encode` ne pouvait
+/// pas devenir une dépendance de celle-ci sans cycle. Voir le `Cargo.toml`.
+#[cfg(feature = "studio")]
+pub mod studio;
+
 #[cfg(test)]
 mod tests;

@@ -1,11 +1,13 @@
 //! Le binaire `rustmotion` : analyse des arguments et aiguillage vers
 //! `commands`.
 //!
-//! Il n'y a pas de sous-commande `studio` ici. Le studio est une app Dioxus
-//! qui dépend de cette crate ; l'appeler depuis ce module ferait dépendre
-//! `rustmotion` de `rustmotion-studio`, donc d'elle-même, et cargo refuse le
-//! cycle. Le studio s'ouvre par son propre binaire, `rustmotion-studio -f
-//! scenario.json`.
+//! Il n'y a pas de sous-commande `studio` ici, et c'est délibéré : le studio
+//! n'entre dans le build que derrière le feature `studio`, donc une
+//! sous-commande devrait soit disparaître du `--help` selon le feature, soit
+//! échouer à l'exécution en expliquant qu'il faut réinstaller. Il garde son
+//! binaire, `rustmotion-studio -f scenario.json`, que `cargo install
+//! --features studio` livre à côté de celui-ci. Le code, lui, vit dans cette
+//! crate depuis la fusion du paquet — voir `crate::studio`.
 
 mod claude_md;
 mod commands;

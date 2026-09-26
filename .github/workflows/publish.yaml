@@ -13,9 +13,9 @@ jobs:
 
       - name: Install system dependencies
         # Doit rester identique à ci.yaml : l'étape « Run tests » ci-dessous lance
-        # `cargo test --workspace`, qui compile ET LIE rustmotion-studio. Sans ces
-        # paquets l'édition de liens échoue et la release s'arrête avant toute
-        # publication.
+        # `cargo test --workspace --features rustmotion/studio`, qui compile ET
+        # LIE le studio. Sans ces paquets l'édition de liens échoue et la
+        # release s'arrête avant toute publication.
         # xkbcommon-x11/wayland/xcb-cursor : exigés par gpui, à l'édition de liens
         # seulement. clippy passe sans eux puisqu'il ne lie pas — la panne
         # n'apparaît donc qu'au job de test. C'est ce qui a cassé le premier CI du
@@ -65,6 +65,10 @@ jobs:
       # pouvait donc jamais reussir, et la release 0.6.0 s'est arretee la — apres
       # avoir publie rustmotion-core, definitivement.
       #
-      # rustmotion-studio porte `publish = false` : cargo la saute tout seul.
+      # Le studio n'est plus un paquet : c'est un module de `rustmotion` derrière
+      # le feature `studio`, donc il part avec elle et il n'y a plus rien à
+      # sauter. Ses dépendances (gpui-kit, gpui-component, rfd, rodio, palette)
+      # sont optionnelles mais doivent rester résolvables depuis le registre,
+      # sans quoi la publication de `rustmotion` échoue.
       - name: Publish all crates
         run: cargo publish --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

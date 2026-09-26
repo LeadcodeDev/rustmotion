@@ -12,13 +12,29 @@ path = "src/lib.rs"
 
 # Le binaire vit ici, et pas dans une crate à part, parce que c'est la seule
 # façon que `cargo install rustmotion` livre une commande : une crate qui n'a
-# qu'une `[lib]` installe une bibliothèque et rien d'exécutable. La
-# sous-commande `studio` ne peut pas y être : `rustmotion-studio` dépend de
-# `rustmotion`, donc la dépendance inverse — même optionnelle — est un cycle
-# que cargo refuse. Le studio garde son propre binaire `rustmotion-studio`.
+# qu'une `[lib]` installe une bibliothèque et rien d'exécutable.
+#
+# Le studio a rejoint cette crate (`src/studio/`) pour la même raison, poussée
+# d'un cran : `cargo install --git <url>` sans nom de paquet refuse un dépôt où
+# plus d'un paquet déclare un `[[bin]]` (« multiple packages with binaries
+# found »), et ni `default-members` ni `required-features` ne changent ce
+# décompte — vérifié, pas supposé. Un seul paquet peut donc porter des
+# binaires. Il était un paquet à part, qui dépendait de `rustmotion` pour
+# `loader` et `encode` : en faire une dépendance de `rustmotion` aurait été un
+# cycle, que cargo refuse même optionnel. Devenu un module, il n'y a plus deux
+# paquets, donc plus de cycle, et ses chemins `rustmotion::…` restent valides
+# tels quels grâce au `extern crate self as rustmotion` de `lib.rs`.
 [[bin]]
 name = "rustmotion"
 path = "src/bin/main.rs"
+
+# Derrière `required-features`, hors du build par défaut : gpui et sa toolchain
+# GUI ne doivent pas entrer dans un `cargo install rustmotion` fait sur une
+# machine sans affichage, où elles peuvent ne pas compiler du tout.
+[[bin]]
+name = "rustmotion-studio"
+path = "src/bin/studio.rs"
+required-features = ["studio"]
 
 [dependencies]
 rustmotion-core.workspace = true
@@ -50,7 +66,40 @@ tiny-skia = "0.11"
 ureq = "3"
 rustfft = "6"
 
+# Dépendances du studio (`src/studio/`), toutes optionnelles : le feature
+# `studio` les active, le build par défaut ne les voit pas.
+gpui-kit = { version = "=0.6.6", optional = true }
+gpui-component = { version = "0.6.6", optional = true }
+smallvec = { version = "1", optional = true }
+tokio = { version = "1", features = ["time"], optional = true }
+rfd = { version = "0.17", optional = true }
+rodio = { version = "0.22", default-features = false, features = [
+    "playback",
+], optional = true }
+palette = { version = "0.7.6", default-features = false, features = [
+    "std",
+], optional = true }
+
 [features]
+## Compile et installe aussi le binaire `rustmotion-studio` :
+## `cargo install --git https://github.com/LeadcodeDev/rustmotion --features studio`.
+## Hors du build par défaut parce qu'il tire gpui et sa toolchain GUI, qui ne
+## compilent pas partout où le CLI compile.
+##
+## `serde_json/preserve_order` en fait partie parce que le studio réécrit les
+## fichiers de scénario de l'utilisateur et ne doit pas en réordonner les clés.
+## C'est aussi ce que voudrait `validate --fix`, mais l'activer par défaut
+## changerait l'ordre de ses réécritures : à décider ailleurs qu'ici.
+studio = [
+    "dep:gpui-kit",
+    "dep:gpui-component",
+    "dep:smallvec",
+    "dep:tokio",
+    "dep:rfd",
+    "dep:rodio",
+    "dep:palette",
+    "serde_json/preserve_order",
+]
 # Opt-in: integration tests that shell out to a real ffmpeg binary.
 ffmpeg_integration = []
 ## Re-expose native Lottie decoding (default-on). Activating this feature here

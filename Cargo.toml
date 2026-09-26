@@ -4,11 +4,10 @@ members = [
     "crates/rustmotion-core",
     "crates/rustmotion-components",
     "crates/rustmotion",
-    "crates/rustmotion-studio",
     "crates/rustmotion-html",
 ]
 
-# Les cinq crates avancent ensemble. La version se change ici, et nulle part
+# Les quatre crates avancent ensemble. La version se change ici, et nulle part
 # ailleurs : elle était auparavant répétée dix fois — une par manifeste, plus une
 # par dépendance interne — et une seule oubliée fait échouer la publication après
 # que les précédentes soient parties, ce qui ne se rattrape pas.
@@ -34,6 +33,7 @@ debug-assertions = false
 overflow-checks = false
 
 # The image crate's encoders are generic and monomorphize into the calling
-# crate, so the studio itself must be optimized for fast preview encoding.
-[profile.dev.package.rustmotion-studio]
+# crate, so the studio itself must be optimized for fast preview encoding. The
+# studio is a module of `rustmotion` now, so this covers the whole crate.
+[profile.dev.package.rustmotion]
 opt-level = 3
