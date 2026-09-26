@@ -13,8 +13,13 @@ use rustmotion_core::css::style::{
 use rustmotion_core::css::taffy_bridge::ConversionContext;
 use rustmotion_core::css::units::LengthPercentage;
 use rustmotion_core::engine::animator::safe_div;
+use rustmotion_core::engine::deps::ResolvedFrame;
 use rustmotion_core::engine::paint_pass::PlaneCamera;
 use rustmotion_core::engine::renderer::color4f_from_hex;
+use rustmotion_core::engine::shake::{shake_offset, ShakeOffset};
+use rustmotion_core::expr::Scope;
+use rustmotion_core::schema::time::TimeCtx;
+use rustmotion_core::vars::{VarScope, VarSet, VarTable};
 
 /// The single choke-point that turns "a frame of this scene" into the time
 /// value every render path in this file feeds into the background draw, the
@@ -113,15 +118,82 @@ fn scene_uses_depth(children: &[ChildComponent]) -> bool {
         .any(|c| c.component.as_styled().style_config().depth.is_some())
 }
 
+/// Evaluate `scene.shake` (issue #330) at scene-local `time`, additive over
+/// whatever the camera itself already resolves to — see
+/// [`crate::schema::shake::SceneShake`]'s doc for why "additive" rather than
+/// "instead of". `time` is the same scene-local clock every camera call
+/// site in this file already threads through `interpolate_camera_property`
+/// (`PaintCtx::time`'s own clock, already passed through the
+/// `SceneTime`/`freeze_at` clamp by every caller).
+///
+/// A scene with no `shake` returns [`ShakeOffset::default`] — all zero — so
+/// adding it to a camera's `x`/`y`/`rotation` never changes a byte of a
+/// scene that never opted in. On a [`rustmotion_core::schema::time::TimeError`]
+/// (e.g. a beat-unit impact with no scenario `bpm`), also degrades to zero
+/// rather than failing the render: the same best-effort posture
+/// `apply_flash` (`post_effects.rs`) already takes on the identical
+/// `TimePoint` resolution, and a scenario using beat-unit impacts with no
+/// `bpm` is already caught earlier by `validate`.
+fn scene_shake_offset(scene: &Scene, time: f32) -> ShakeOffset {
+    match &scene.shake {
+        Some(shake) => {
+            shake_offset(shake, &scene.resolved_time_ctx, time as f64).unwrap_or_default()
+        }
+        None => ShakeOffset::default(),
+    }
+}
+
+/// The neutral camera (no pan, no zoom, no rotation, no origin override, no
+/// keyframes) — `apply_camera_transform`/`resolve_plane_camera` applied
+/// with this is the identity transform. Stands in for `scene.camera` when
+/// a scene declares `shake` but no `camera` of its own: without this, the
+/// whole camera-transform code path (every call site below is gated on
+/// `scene.camera.is_some()`) would never run at all, and a shake-only
+/// scene would render with no shake — see [`effective_camera`].
+static IDENTITY_CAMERA: Camera = Camera {
+    x: 0.0,
+    y: 0.0,
+    zoom: 1.0,
+    rotation: 0.0,
+    origin: None,
+    keyframes: Vec::new(),
+};
+
+/// The camera this scene's render path should treat as active: its own
+/// declared `camera`, or [`IDENTITY_CAMERA`] when only `shake` is declared
+/// — so a shake-only scene (the common case: a beat-synced hit with no
+/// underlying pan) still enters the camera-transform code path and gets
+/// its shake applied, rather than requiring an otherwise-pointless
+/// `camera: {}` block just to opt in. `None` only when the scene declares
+/// neither `camera` nor `shake`, in which case every call site below skips
+/// the camera-transform code path exactly as it always has.
+fn effective_camera(scene: &Scene) -> Option<&Camera> {
+    if let Some(camera) = scene.camera.as_ref() {
+        Some(camera)
+    } else if scene.shake.is_some() {
+        Some(&IDENTITY_CAMERA)
+    } else {
+        None
+    }
+}
+
 /// Resolve the scene camera at `time` into the flat state consumed by the
-/// per-plane paint path.
-fn resolve_plane_camera(camera: &Camera, time: f32, vw: f32, vh: f32) -> PlaneCamera {
+/// per-plane paint path. `scene.shake` rides along additively on `pan_x`/
+/// `pan_y`/`rotation` — see [`scene_shake_offset`].
+fn resolve_plane_camera(
+    scene: &Scene,
+    camera: &Camera,
+    time: f32,
+    vw: f32,
+    vh: f32,
+) -> PlaneCamera {
     let (origin_x, origin_y) = resolve_camera_origin(camera, time, vw, vh);
+    let shake = scene_shake_offset(scene, time);
     PlaneCamera {
-        pan_x: interpolate_camera_property(camera, "x", time),
-        pan_y: interpolate_camera_property(camera, "y", time),
+        pan_x: interpolate_camera_property(camera, "x", time) + shake.x as f32,
+        pan_y: interpolate_camera_property(camera, "y", time) + shake.y as f32,
         zoom: interpolate_camera_property(camera, "zoom", time),
-        rotation: interpolate_camera_property(camera, "rotation", time),
+        rotation: interpolate_camera_property(camera, "rotation", time) + shake.rotation as f32,
         origin_x,
         origin_y,
     }
@@ -136,8 +208,10 @@ fn per_plane_camera(
     vw: f32,
     vh: f32,
 ) -> Option<PlaneCamera> {
-    match &scene.camera {
-        Some(cam) if scene_uses_depth(children) => Some(resolve_plane_camera(cam, time, vw, vh)),
+    match effective_camera(scene) {
+        Some(cam) if scene_uses_depth(children) => {
+            Some(resolve_plane_camera(scene, cam, time, vw, vh))
+        }
         _ => None,
     }
 }
@@ -336,11 +410,12 @@ pub fn render_frame_v2_scaled(
 
     // Apply the global virtual camera transform (skipped in per-plane mode —
     // the paint pass applies it per top-level plane, scaled by depth).
-    let camera_guard = match &scene.camera {
+    let camera_guard = match effective_camera(scene) {
         Some(camera) if plane_cam.is_none() => {
             let g = super::CanvasGuard::new(canvas);
             apply_camera_transform(
                 canvas,
+                scene,
                 camera,
                 time as f32,
                 config.width as f32,
@@ -368,6 +443,7 @@ pub fn render_frame_v2_scaled(
         config.height as f32,
         scene.layout.as_ref(),
         &ctx,
+        scene,
     );
 
     drop(clip_guard);
@@ -474,6 +550,45 @@ pub fn root_style(scene_layout: Option<&SceneLayout>, view_type: ViewType) -> Cs
     style
 }
 
+/// The per-frame [`Scope`](rustmotion_core::expr::Scope) `render_with_new_pipeline_iter`
+/// builds when a scene declares `vars` and/or at least one node `id` —
+/// [`rustmotion_core::css::ComposedScope`]'s `outer`. Composes a
+/// [`VarScope`] (declared scenario/scene variables, shadowed the way that
+/// type documents) with a [`ResolvedFrame`] (`node(...)` cross-node
+/// references, issue #328) exactly the way `rustmotion_core::vars::scope`'s
+/// own module doc prescribes for two `Scope`s that both need answering:
+/// held as fields, tried by delegating each trait method to whichever one
+/// actually implements it, rather than one wrapping the other — a `Scope`
+/// is only ever consumed behind `&dyn Scope`, and trait objects don't nest.
+struct EngineScope<'a> {
+    vars: VarScope<'a>,
+    frame: &'a ResolvedFrame,
+}
+
+impl Scope for EngineScope<'_> {
+    fn var(&self, name: &str) -> Option<f64> {
+        self.vars.resolve(name)
+    }
+
+    fn node_prop(&self, id: &str, prop: &str) -> Option<f64> {
+        self.frame.node_prop(id, prop)
+    }
+}
+
+/// Compile `vars` against `ctx`, falling back to an empty (always-`None`)
+/// [`VarTable`] and a stderr warning if it fails to compile (e.g. a `"b"`-unit
+/// keyframe with no `bpm` declared) — the same best-effort, named, never-fatal
+/// contract `resolve_computed_style` (`rustmotion-components/src/box_builder.rs`)
+/// already uses for a single bad expression, applied here to a whole
+/// `VarSet` instead of one property. `rustmotion validate`'s schema pass is
+/// where this should have been caught before it ever reaches a render.
+fn compile_var_table_or_warn(vars: &VarSet, ctx: &TimeCtx, which: &str) -> VarTable {
+    VarTable::compile(vars, ctx).unwrap_or_else(|e| {
+        eprintln!("warning: {which} `vars` failed to compile ({e}) — treated as empty this frame");
+        VarTable::compile(&VarSet::new(), ctx).expect("compiling an empty VarSet never fails")
+    })
+}
+
 /// Render `root_children` through the CSS-engine pipeline:
 /// build a `BoxNode` tree, run taffy to lay it out, then paint via
 /// `paint_tree` with the `LegacyPaintDispatcher` bridging to component
@@ -485,6 +600,7 @@ fn render_with_new_pipeline(
     viewport_h: f32,
     scene_layout: Option<&SceneLayout>,
     ctx: &RenderContext,
+    scene: &Scene,
 ) {
     render_with_new_pipeline_iter(
         canvas,
@@ -493,11 +609,22 @@ fn render_with_new_pipeline(
         viewport_h,
         scene_layout,
         ctx,
+        scene,
     );
 }
 
 /// Iterator-based variant for callers (like world rendering) that want to
 /// pass a filtered subset of children without cloning.
+///
+/// `scene` supplies the two ingredients `box_builder.rs`'s own `FrameClock`
+/// has no way to answer (see that file's "Per-frame expressions" doc
+/// section): `scene.vars`/`scene.resolved_scenario_vars` for a declared
+/// `$name`, and — indirectly, via a scan over the already-typed
+/// `root_children` — every declared node `id` for a `node(...)` reference
+/// (issue #328's join to #338/#329). A scene using neither takes exactly
+/// today's single-build path, with no [`rustmotion_core::expr::Scope`] built
+/// at all — see [`rustmotion_core::css::ComposedScope`]'s doc for why that
+/// keeps such a scenario's render byte-identical.
 fn render_with_new_pipeline_iter<'a, I>(
     canvas: &Canvas,
     root_children: I,
@@ -505,10 +632,14 @@ fn render_with_new_pipeline_iter<'a, I>(
     viewport_h: f32,
     scene_layout: Option<&SceneLayout>,
     ctx: &RenderContext,
+    scene: &Scene,
 ) where
     I: IntoIterator<Item = &'a ChildComponent>,
 {
-    use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
+    use rustmotion_components::box_builder::{
+        build_scene_from_refs_with_scope, build_scene_from_refs_with_scope_quiet,
+        collect_node_refs, scene_uses_node_refs, BuildAnimationCtx,
+    };
     use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
     use rustmotion_core::engine::layout_pass::run_layout;
     use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
@@ -530,12 +661,115 @@ fn render_with_new_pipeline_iter<'a, I>(
         scene_duration: ctx.scene_duration,
         fps: ctx.fps,
     });
-    let built = build_scene_from_refs(root_children, (viewport_w, viewport_h), root_css, anim);
-    let layout = run_layout(
-        &built.root,
-        (viewport_w, viewport_h),
-        &ConversionContext::for_viewport(viewport_w, viewport_h),
-    );
+    let viewport = (viewport_w, viewport_h);
+    let conversion = ConversionContext::for_viewport(viewport_w, viewport_h);
+
+    // Materialized once: the reference scan below and, when a second build
+    // pass turns out to be needed, that second pass both walk these
+    // children again — `I` makes no `Clone` guarantee.
+    let children_vec: Vec<&'a ChildComponent> = root_children.into_iter().collect();
+
+    // Whether *any* node anywhere in this scene makes a `node(...)` call —
+    // the referencer need not have a declared `id` of its own (only the
+    // node it points at does), so this is a separate, broader scan than
+    // `collect_node_refs` below: see `scene_uses_node_refs`'s own doc for
+    // why deriving it from `collect_node_refs`'s output instead would have
+    // silently missed the common shape (an unlabelled node reading
+    // `node("otherId", ...)`).
+    let has_node_refs = scene_uses_node_refs(children_vec.iter().copied());
+    let use_vars = !scene.resolved_scenario_vars.is_empty() || !scene.vars.is_empty();
+
+    let built = if !use_vars && !has_node_refs {
+        build_scene_from_refs_with_scope(
+            children_vec.iter().copied(),
+            viewport,
+            root_css,
+            anim,
+            None,
+        )
+    } else {
+        let scenario_table = compile_var_table_or_warn(
+            &scene.resolved_scenario_vars,
+            &scene.resolved_time_ctx,
+            "scenario-level",
+        );
+        let scene_table =
+            compile_var_table_or_warn(&scene.vars, &scene.resolved_time_ctx, "scene-level");
+
+        if !has_node_refs {
+            // `vars` only: a `VarTable` needs no layout to sample, so one
+            // build already sees the right values — no second pass.
+            let empty_frame = ResolvedFrame::new();
+            let engine_scope = EngineScope {
+                vars: VarScope::new(&scenario_table, Some(&scene_table), ctx.scenario_time),
+                frame: &empty_frame,
+            };
+            build_scene_from_refs_with_scope(
+                children_vec.iter().copied(),
+                viewport,
+                root_css,
+                anim,
+                Some(&engine_scope as &dyn Scope),
+            )
+        } else {
+            // At least one `node(...)` reference. `resolve_node_references`
+            // (issue #328) needs a laid-out tree to snapshot each
+            // referenced node from — but a node's *own* expressions must
+            // resolve before its snapshot is taken (that function's own
+            // doc). A first, throwaway build supplies that layout: any
+            // `node(...)` expression in it fails best-effort against an
+            // empty `ResolvedFrame` (same as an undeclared name today) and
+            // is corrected in the real build below, but a node with no
+            // reference of its own — including every node something else's
+            // `node(...)` call actually needs to read — is already fully
+            // correct here, `vars` included. `_quiet(..., false)`: this
+            // build's own failures don't describe the frame that actually
+            // gets painted, so they stay off stderr (see that function's
+            // doc) — the real build a few lines down warns normally.
+            let empty_frame = ResolvedFrame::new();
+            let base_engine_scope = EngineScope {
+                vars: VarScope::new(&scenario_table, Some(&scene_table), ctx.scenario_time),
+                frame: &empty_frame,
+            };
+            let base_built = build_scene_from_refs_with_scope_quiet(
+                children_vec.iter().copied(),
+                viewport,
+                root_css.clone(),
+                anim,
+                Some(&base_engine_scope as &dyn Scope),
+                false,
+            );
+            let base_layout = run_layout(&base_built.root, viewport, &conversion);
+            // Only declared ids need an entry here — see
+            // `collect_node_refs`'s own doc; a referencer with no `id` of
+            // its own (already accounted for by `has_node_refs` above)
+            // needs no entry of its own for `DepGraph::build` to place
+            // every id it can legally reach before it.
+            let refs_by_id = collect_node_refs(children_vec.iter().copied());
+            let resolved_frame =
+                resolve_node_references(&base_built, &base_layout, viewport, &refs_by_id)
+                    .unwrap_or_else(|e| {
+                        eprintln!(
+                            "warning: node(...) dependency graph: {e} — cross-node references unresolved this frame"
+                        );
+                        ResolvedFrame::new()
+                    });
+
+            let final_engine_scope = EngineScope {
+                vars: VarScope::new(&scenario_table, Some(&scene_table), ctx.scenario_time),
+                frame: &resolved_frame,
+            };
+            build_scene_from_refs_with_scope(
+                children_vec.iter().copied(),
+                viewport,
+                root_css,
+                anim,
+                Some(&final_engine_scope as &dyn Scope),
+            )
+        }
+    };
+
+    let layout = run_layout(&built.root, viewport, &conversion);
     let dispatcher = LegacyPaintDispatcher::for_scene(&built);
     let frame = PaintFrame {
         time: ctx.time.seconds(),
@@ -645,6 +879,158 @@ pub fn prepare_scene(scene: &Scene, _config: &VideoConfig) -> Vec<ChildComponent
     deserialize_children(scene)
 }
 
+/// The per-frame half of issue #328's `node("id", "prop")` cross-node
+/// references — `rustmotion_core::engine::deps` supplies *what* a resolved
+/// node looks like and how the dependency graph over declared ids is built
+/// and ordered; this function supplies *when* each piece runs against one
+/// real, already-built-and-laid-out scene.
+///
+/// `built`/`layout` must come from the same frame (same `time`) the
+/// `node(...)` references in `refs_by_id` are meant to resolve against.
+/// `refs_by_id` is every declared id's own references, keyed by id — see
+/// `rustmotion_components::box_builder::collect_node_refs`'s doc for how
+/// those are found (a tree walk over `rustmotion_core::css::computed::extract`'s
+/// already-scanned `node_refs`, not a fresh JSON scan per frame).
+///
+/// # Where this stands today
+///
+/// Wired and live: `render_with_new_pipeline_iter` — the per-frame path
+/// every render entry point in this file funnels through — calls this
+/// function whenever a scene's `collect_node_refs` finds at least one
+/// `node(...)` reference anywhere in it. Getting `built`/`layout` to hand
+/// it took a *second* box-tree build for such a scene: this function's own
+/// contract needs a fully laid-out tree to snapshot from, but a node's own
+/// expressions (which may themselves contain the `node(...)` call this
+/// function's caller is trying to resolve) must already be evaluated
+/// before its snapshot is taken — so a first, throwaway build (see
+/// `render_with_new_pipeline_iter`'s own doc) supplies the layout this
+/// function needs, and its result seeds the real build's `Scope`. A scene
+/// with no declared `id` at all — the overwhelming common case — never
+/// pays for any of this: `collect_node_refs` returns empty, and this
+/// function is never called.
+///
+/// One real limitation remains, undocumented until now: this two-pass
+/// scheme resolves a *direct* reference (`B` reads `node("A", ...)`, `A`
+/// makes no reference of its own) correctly, but not a transitive chain
+/// (`C` reads `node("B", ...)`, `B` reads `node("A", ...)`) — the
+/// throwaway first build resolves `B`'s own `node("A", ...)` against an
+/// *empty* frame (same as any other unresolved reference), so the
+/// [`ResolvedFrame`] entry this function snapshots for `B` in
+/// [`DepGraph::order`](rustmotion_core::engine::deps::DepGraph::order)
+/// still reflects that wrong, pre-correction value, and `C`'s own build
+/// reads it from there. Fixing this in general needs per-id, in-order
+/// re-resolution of each node's own `style.expr` against a progressively
+/// filled [`ResolvedFrame`] — walking [`DepGraph::order`] directly, rather
+/// than a second whole-tree build in ordinary document order — which is a
+/// larger change to `box_builder.rs`'s recursive walk than this join
+/// warranted on its own.
+///
+/// This function, the dependency graph it drives, and the [`ResolvedFrame`]
+/// it fills were already fully tested against this crate's real box tree
+/// and layout before this — `crates/rustmotion/src/tests.rs`'s
+/// `node_reference_resolution` module proves the "no one-frame-lag"
+/// property through this exact function, not in isolation.
+pub fn resolve_node_references(
+    built: &rustmotion_components::box_builder::BuiltScene<'_>,
+    layout: &rustmotion_core::engine::layout_pass::LayoutResult,
+    viewport: (f32, f32),
+    refs_by_id: &[(String, Vec<rustmotion_core::engine::deps::NodeRef>)],
+) -> std::result::Result<
+    rustmotion_core::engine::deps::ResolvedFrame,
+    rustmotion_core::engine::deps::DepsError,
+> {
+    use rustmotion_core::engine::box_tree::NodeId;
+    use rustmotion_core::engine::deps::{snapshot_node, DepGraph, ResolvedFrame};
+    use std::collections::{HashMap, HashSet};
+
+    // Single-scene scope: `node(...)` cannot reach another scene's id (see
+    // `DepsError::CrossScene`), but distinguishing "genuinely unknown" from
+    // "declared in a scene we didn't pass in" needs that other scene's ids
+    // in hand. No caller of this function crosses scene boundaries today,
+    // so an empty set is always correct here — it only ever costs a
+    // slightly less specific error message (`UnknownId` instead of
+    // `CrossScene`) if that ever changes.
+    let other_scene_ids: HashSet<String> = HashSet::new();
+    let graph = DepGraph::build(refs_by_id, &other_scene_ids)?;
+
+    // `built.components[id]` is `Some(&ChildComponent)` for every real node
+    // (component or ghost), keyed by the exact `NodeId` `BoxNode::id` and
+    // `LayoutResult::get` use — see `BuiltScene::components`'s own doc.
+    let id_index: HashMap<&str, NodeId> = built
+        .components
+        .iter()
+        .enumerate()
+        .filter_map(|(node_id, c)| {
+            let child = (*c)?;
+            let id = child.id.as_deref()?;
+            Some((id, node_id as NodeId))
+        })
+        .collect();
+
+    let text_provider = ResolvingTextMetrics {
+        components: &built.components,
+    };
+    let mut frame = ResolvedFrame::new();
+    for id in graph.order() {
+        let Some(&node_id) = id_index.get(id.as_str()) else {
+            continue;
+        };
+        let Some(box_node) = built.root.find(node_id) else {
+            continue;
+        };
+        if let Some(resolved) = snapshot_node(box_node, layout, viewport, &text_provider) {
+            frame.insert(id.clone(), resolved);
+        }
+    }
+    Ok(frame)
+}
+
+/// Bridges [`rustmotion_core::engine::deps::TextMetricsProvider`] to the real
+/// component behind a node — the fix issue #328's own agent flagged and left
+/// for this join: [`rustmotion_components::box_builder`] stores a `BoxNode`'s
+/// [`rustmotion_core::engine::box_tree::BoxKind::Component`] payload as
+/// `Arc::new(node_id)` (a plain [`NodeId`]), not the component itself, because
+/// [`rustmotion_components::legacy_dispatch::LegacyPaintDispatcher`] — the
+/// *only* other reader of that payload, and the one every one of this
+/// engine's 60 component types' painting already depends on — downcasts it
+/// back to a `NodeId` and looks the real component up in
+/// [`rustmotion_components::box_builder::BuiltScene::components`] by index.
+/// Retyping the payload to carry a component directly would fix
+/// [`rustmotion_components::intrinsic::ComponentTextMetrics`]'s `downcast_ref`
+/// (which expects exactly that) but break dispatch for every other
+/// component — out of this workstream's reach, and said so rather than
+/// touched.
+///
+/// This type does the same `NodeId`-then-lookup indirection
+/// `LegacyPaintDispatcher` already does, then hands the *actual* `&Text` /
+/// `&GradientText` off to [`rustmotion_components::intrinsic::ComponentTextMetrics`]
+/// — which already downcasts correctly, and needed no change — closing the
+/// gap entirely on this function's side, with no reshaping of
+/// `rustmotion-components` or the frozen `engine::deps` trait.
+struct ResolvingTextMetrics<'a> {
+    components: &'a [Option<&'a rustmotion_components::ChildComponent>],
+}
+
+impl rustmotion_core::engine::deps::TextMetricsProvider for ResolvingTextMetrics<'_> {
+    fn text_metrics(
+        &self,
+        payload: &(dyn std::any::Any + Send + Sync),
+        content_box_width: f32,
+    ) -> Option<rustmotion_core::engine::deps::TextMetrics> {
+        use rustmotion_components::intrinsic::ComponentTextMetrics;
+        use rustmotion_components::Component;
+        use rustmotion_core::engine::box_tree::NodeId;
+
+        let node_id = payload.downcast_ref::<NodeId>()?;
+        let child = (*self.components.get(*node_id as usize)?)?;
+        match &child.component {
+            Component::Text(t) => ComponentTextMetrics.text_metrics(t, content_box_width),
+            Component::GradientText(g) => ComponentTextMetrics.text_metrics(g, content_box_width),
+            _ => None,
+        }
+    }
+}
+
 /// Render a single frame using the v2 pipeline.
 /// This is the unified entry point for both single-frame and video encoding.
 pub fn render_scene_frame(
@@ -749,10 +1135,10 @@ pub fn render_scene_hits(
     // camera per top-level plane; the canvas matrix at each node then feeds
     // `local_to_device` so hit rects follow their plane automatically.
     let plane_cam = per_plane_camera(scene, &children, time as f32, vw, vh);
-    let _camera_guard = match &scene.camera {
+    let _camera_guard = match effective_camera(scene) {
         Some(camera) if plane_cam.is_none() => {
             let g = super::CanvasGuard::new(canvas);
-            apply_camera_transform(canvas, camera, time as f32, vw, vh);
+            apply_camera_transform(canvas, scene, camera, time as f32, vw, vh);
             Some(g)
         }
         _ => None,
@@ -1090,10 +1476,12 @@ pub fn render_world_frame_scaled(
             camera: None,
         };
 
-        // Apply per-scene camera if present
-        let has_camera = scene.camera.is_some();
-        if let Some(ref camera) = scene.camera {
-            apply_camera_transform(canvas, camera, anim_time as f32, vw, vh);
+        // Apply per-scene camera if present (or an identity one, if only
+        // `shake` is declared — see `effective_camera`'s doc).
+        let camera = effective_camera(scene);
+        let has_camera = camera.is_some();
+        if let Some(camera) = camera {
+            apply_camera_transform(canvas, scene, camera, anim_time as f32, vw, vh);
         }
 
         // World scenes: force content children into centered flex flow.
@@ -1121,6 +1509,7 @@ pub fn render_world_frame_scaled(
             vh,
             Some(scene_layout),
             &ctx,
+            scene,
         );
 
         if has_camera {
@@ -1323,10 +1712,11 @@ pub fn render_scene_fg_scaled(
         camera: plane_cam,
     };
 
-    let has_camera = scene.camera.is_some() && plane_cam.is_none();
-    if let (Some(camera), None) = (&scene.camera, plane_cam) {
+    let has_camera = effective_camera(scene).is_some() && plane_cam.is_none();
+    if let (Some(camera), None) = (effective_camera(scene), plane_cam) {
         apply_camera_transform(
             canvas,
+            scene,
             camera,
             time as f32,
             config.width as f32,
@@ -1348,6 +1738,7 @@ pub fn render_scene_fg_scaled(
         config.height as f32,
         scene.layout.as_ref(),
         &ctx,
+        scene,
     );
     canvas.restore();
 
@@ -1455,18 +1846,22 @@ pub(super) fn resolve_camera_origin(
 }
 
 /// Apply camera transform to the canvas: translate, zoom, rotate around the
-/// camera origin (default: scene centre).
+/// camera origin (default: scene centre). `scene.shake` (issue #330) rides
+/// additively on the pan (`x`/`y`) and `rotation` — see
+/// [`scene_shake_offset`]'s doc.
 pub(super) fn apply_camera_transform(
     canvas: &Canvas,
+    scene: &Scene,
     camera: &Camera,
     time: f32,
     width: f32,
     height: f32,
 ) {
-    let x = interpolate_camera_property(camera, "x", time);
-    let y = interpolate_camera_property(camera, "y", time);
+    let shake = scene_shake_offset(scene, time);
+    let x = interpolate_camera_property(camera, "x", time) + shake.x as f32;
+    let y = interpolate_camera_property(camera, "y", time) + shake.y as f32;
     let zoom = interpolate_camera_property(camera, "zoom", time);
-    let rotation = interpolate_camera_property(camera, "rotation", time);
+    let rotation = interpolate_camera_property(camera, "rotation", time) + shake.rotation as f32;
     let (cx, cy) = resolve_camera_origin(camera, time, width, height);
 
     canvas.save();

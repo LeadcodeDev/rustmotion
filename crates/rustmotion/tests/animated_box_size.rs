@@ -75,7 +75,7 @@ fn card_rect(frame: u32) -> (f32, f32) {
     let hits = render_scene_hits(&config(), &resizing_card_scene(), frame);
     let card = hits
         .iter()
-        .find(|h| h.kind == "card")
+        .find(|h| h.kind == "div")
         .expect("card hit present in render_scene_hits output");
     (card.rect.w, card.rect.h)
 }

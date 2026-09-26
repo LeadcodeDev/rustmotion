@@ -8,19 +8,20 @@
 //!   4. Deserialize into `Scenario`
 //!   5. Resolve includes → `ResolvedScenario`
 //!   6. Schema-level checks (file existence, dimensions, durations, etc.)
-//!   7. Geometry checks (viewport overflow, wrap, auto_scroll)
+//!   7. Geometry checks (viewport overflow, wrap)
 
 use rustmotion::engine;
 use rustmotion::error::{Result, RustmotionError};
 use rustmotion::expand;
-use rustmotion::include::{self, IncludeSource};
+use rustmotion::include::IncludeSource;
 use rustmotion::schema::{ResolvedScenario, Scenario};
 use rustmotion::variables;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::geometry::{
-    check_legibility, validate_geometry, validate_geometry_animated, GeometryViolation,
+    check_legibility, check_off_grid_cuts, validate_geometry, validate_geometry_animated,
+    validate_geometry_transitions, GeometryViolation,
 };
 use super::validate_schema::validate_scenario;
 
@@ -187,6 +188,20 @@ pub fn load_with_vars(
     // document would be validating something other than what actually
     // renders.
     expand::expand_directives(&mut json_value, &label)?;
+    // Same ordering rule, same reason, for `= ...` expressions: this is a
+    // second, independent load pipeline from `rustmotion::loader`'s (this
+    // crate's `validate`/`render` both go through *this* one, not that one —
+    // see `rustmotion_core::expr`'s module doc and `loader::fold_static_expressions`'s
+    // doc for why the fold must run right here, immediately after expansion
+    // and before `Scenario` deserialization: a `for-each`-authored template
+    // has its `$i`/`$index`/`$item`/`$count` already substituted to literal
+    // text by the expansion step just above, which is what lets a purely
+    // arithmetic expression like `cos($i / $count * TAU) * 600` fold to a
+    // plain number here rather than reach `Scenario` deserialization as a
+    // string where an `f32` is expected (which used to fail with a
+    // misleading "invalid type: string, expected f32" instead of the
+    // scenario simply working).
+    rustmotion::loader::fold_static_expressions(&mut json_value, &label)?;
 
     // Assets are relative to the scenario file, like `include` — and this must
     // happen before `raw` is captured, so the existence check below and the
@@ -196,7 +211,14 @@ pub fn load_with_vars(
     }
 
     let scenario: Scenario = serde_json::from_value(json_value.clone())?;
-    let resolved = include::resolve_includes(scenario, &include_source)?;
+    // `resolve_includes_and_synthesize_audio` is `include::resolve_includes`
+    // plus, when this scenario's own `audio` declares a synthesised score
+    // (issue #331), rendering it and appending it to the resolved
+    // scenario's `audio` as an ordinary `AudioTrack` — both `validate` and
+    // `render` go through this one shared function, not a bespoke call to
+    // `include::resolve_includes` that would silently skip that step.
+    let resolved =
+        rustmotion::loader::resolve_includes_and_synthesize_audio(scenario, &include_source)?;
 
     Ok(LoadedScenario {
         raw: json_value,
@@ -221,6 +243,12 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     let mut geom_violations = validate_geometry(&loaded.scenario);
     if strict_anim {
         geom_violations.extend(validate_geometry_animated(&loaded.scenario));
+        // Issue #334's second blind spot, closed: a `SlideTransition`/
+        // `ViewTransition` frame is a real, on-screen frame like any other —
+        // sampling only `[0, scene_duration]` (above) never looked at it, so
+        // text that only leaves the viewport mid-transition passed clean.
+        // Same `--strict-anim` gate, same cost trade, same `ViolationKind`.
+        geom_violations.extend(validate_geometry_transitions(&loaded.scenario));
     }
     let (mut schema_errors, mut warnings) = validate_scenario(&loaded.scenario);
     warnings.extend(warn_misplaced_animation(&loaded.raw));
@@ -228,6 +256,15 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
     // blocking (see `check_legibility`'s doc comment for the threshold
     // justification).
     warnings.extend(check_legibility(&loaded.scenario));
+    // Issue #336: off-grid cuts — always advisory, never blocking (see
+    // `check_off_grid_cuts`'s doc comment).
+    warnings.extend(check_off_grid_cuts(&loaded.scenario));
+    // Issue #328: a `node("id", "prop")` dependency graph error (a cycle, an
+    // unknown id, a duplicate id, or a reference crossing a scene boundary —
+    // `reference_cross_scene`) is a load-time structural mistake, the same
+    // category as `unresolved_beat_unit` above it — always blocking,
+    // unaffected by `--lenient` (see `check_node_references`'s doc comment).
+    schema_errors.extend(check_node_references(&loaded.scenario));
     let (attr_errors, mut attr_warnings) =
         super::validate_attrs::check_component_attrs(&loaded.scenario);
     schema_errors.extend(attr_errors);
@@ -249,6 +286,76 @@ pub fn run_checks(loaded: &LoadedScenario, strict_anim: bool) -> ValidationRepor
         warnings,
         attr_warnings,
     }
+}
+
+/// Issue #328's `node("id", "prop")` dependency graph, checked once per
+/// scene at `validate` time — a cycle, an undeclared id, a duplicate id, or
+/// a reference crossing a scene boundary (`reference_cross_scene`) are all
+/// decided by [`rustmotion::engine::deps::DepGraph::build`], reusing the
+/// exact `(String, Vec<NodeRef>)` list
+/// [`rustmotion::components::box_builder::collect_node_refs`] already builds
+/// for `rustmotion::engine::render::resolve_node_references`'s per-frame,
+/// single-scene call at render time.
+///
+/// That render-time call always passes an *empty* `other_scene_ids` (see its
+/// own doc comment: no caller crosses scene boundaries there), so
+/// `DepsError::CrossScene` can never actually fire from it — a reference to
+/// an id declared in a different scene is reported as a plain `UnknownId`
+/// instead, and only at render, never at `validate`. This is the gap issue
+/// #335 exists to close: here, every *other* scene's own declared ids are
+/// collected first, so a cross-scene reference is named for what it is
+/// (`reference_cross_scene`) before a single frame is ever rendered.
+///
+/// Static and cheap — no layout, no per-frame evaluation, just the
+/// `(id, refs)` list every declared id's own style expressions carry after
+/// ordinary deserialization — so this runs unconditionally, not gated behind
+/// `--strict-anim` the way the geometry sampler above is.
+///
+/// One limitation, inherited rather than introduced here: `collect_node_refs`
+/// only records an entry for a node that itself declares an `id` (see that
+/// function's own doc) — a *referencing* node with no `id` of its own is
+/// invisible to this check too, exactly as it already is to
+/// `resolve_node_references` at render time. Closing that needs a broader
+/// walk than this workstream's file scope reaches (see this workstream's
+/// report).
+fn check_node_references(scenario: &ResolvedScenario) -> Vec<String> {
+    use rustmotion::components::box_builder::collect_node_refs;
+    use rustmotion::engine::deps::DepGraph;
+    use std::collections::HashSet;
+
+    let per_scene: Vec<(
+        (usize, usize),
+        Vec<(String, Vec<rustmotion::engine::deps::NodeRef>)>,
+    )> = scenario
+        .views
+        .iter()
+        .enumerate()
+        .flat_map(|(vi, view)| {
+            view.scenes
+                .iter()
+                .enumerate()
+                .map(move |(si, scene)| (vi, si, scene))
+        })
+        .map(|(vi, si, scene)| {
+            let children = engine::render::deserialize_children(scene);
+            ((vi, si), collect_node_refs(&children))
+        })
+        .collect();
+
+    let mut errors = Vec::new();
+    for (i, (loc, nodes)) in per_scene.iter().enumerate() {
+        let other_scene_ids: HashSet<String> = per_scene
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .flat_map(|(_, (_, n))| n.iter().map(|(id, _)| id.clone()))
+            .collect();
+        if let Err(e) = DepGraph::build(nodes, &other_scene_ids) {
+            let (vi, si) = loc;
+            errors.push(format!("views[{vi}].scenes[{si}]: {e}"));
+        }
+    }
+    errors
 }
 
 /// Detect `animation` placed at a component's top level (a sibling of `style`).
@@ -307,6 +414,17 @@ pub fn warn_on_silent_defaults(loaded: &LoadedScenario) {
     if loaded.raw.get("composition").is_none() && loaded.raw.get("scenes").is_some() {
         eprintln!(
             "Warning: top-level `scenes` is legacy. Migrate to `composition: [{{ type: \"slide\", scenes: [...] }}]` for clarity."
+        );
+    }
+    // Issue #336: `timing` absent defaults to `v1` (today's semantics, which
+    // subtract every transition's duration from the total). Nudge authors
+    // who want beat-accurate cuts toward `v2` the same way the `scenes`
+    // check above nudges toward `composition`.
+    if loaded.raw.get("timing").is_none() {
+        eprintln!(
+            "Warning: `timing` not specified, using legacy v1 (transition durations are \
+             subtracted from the total). Set `\"timing\": \"v2\"` for absolute scene \
+             placement with a beat grid."
         );
     }
 }
@@ -642,6 +760,208 @@ mod expanded_tree_is_what_gets_validated {
             report.geom_violations[0].path.contains("children[1]"),
             "expected the violation to be attributed to the second expanded card: {}",
             report.geom_violations[0].path
+        );
+    }
+}
+
+/// `validation::load_with_vars` is a second, independent load pipeline from
+/// `rustmotion::loader`'s (see that module's `fold_static_expressions` doc)
+/// — `validate` and `render` (which validates first) both go through *this*
+/// one. Before the fold was wired in here too, a scenario using `= ...`
+/// expressions passed neither: a static expression reached `Scenario`
+/// deserialization as a bare string where a typed field (e.g. `x: f32`) was
+/// expected, and even a `$`-free expression that *would* have deserialized
+/// fine printed spurious "unresolved variable" warnings for `$W`/`$H`/etc
+/// (see `crate::variables::find_unresolved`'s doc on why an expression
+/// string is no longer scanned for `$name` content at all).
+#[cfg(test)]
+mod expr_fold_through_validation_pipeline {
+    use super::*;
+
+    /// The acceptance scenario this whole workstream exists for: a
+    /// `for-each` over 8 items placing badges on a circle via
+    /// `$W`/`$i`/`$count`, going through the exact pipeline `validate`/
+    /// `render` use — not `rustmotion::loader`'s.
+    #[test]
+    fn for_each_circle_of_expressions_validates_clean_through_this_pipeline() {
+        let json = serde_json::json!({
+            "video": { "width": 1080, "height": 1920, "fps": 30 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [{
+                    "for-each": [1,2,3,4,5,6,7,8],
+                    "template": {
+                        "type": "text",
+                        "content": "badge",
+                        "position": "absolute",
+                        "style": { "color": "#fff", "font-size": "40px", "white-space": "nowrap" },
+                        "x": "= $W/2 + cos($i / $count * TAU - PI/2) * 400 - 40",
+                        "y": "= $H/2 + sin($i / $count * TAU - PI/2) * 400 - 20"
+                    }
+                }]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads and folds");
+        let children = &loaded.raw["scenes"][0]["children"];
+        let children = children.as_array().expect("8 expanded children");
+        assert_eq!(children.len(), 8);
+        for (i, child) in children.iter().enumerate() {
+            assert!(
+                child["x"].is_number() && child["y"].is_number(),
+                "child {i}'s x/y must be folded to plain numbers, got {child}"
+            );
+        }
+
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.is_empty(),
+            "an expression-driven component must deserialize, not be dropped: {:?}",
+            report.schema_errors
+        );
+        assert!(
+            report.unresolved_vars.is_empty(),
+            "$W/$H/$i/$count must not be reported as unresolved variables: {:?}",
+            report.unresolved_vars
+        );
+        assert!(!report.is_blocking(false));
+    }
+
+    /// A fully `$`-free static expression (no scope variable at all) used to
+    /// be the sharpest repro of the missing fold: nothing about it looks
+    /// like a `$variable`, so it reached `Scenario` deserialization as a
+    /// plain string exactly once, with no other symptom.
+    #[test]
+    fn dollar_free_static_expression_folds_and_deserializes() {
+        let json = serde_json::json!({
+            "video": { "width": 200, "height": 200 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [
+                    { "type": "text", "content": "c", "position": "absolute",
+                      "x": "= 960 + cos(5.0 / 8.0 * TAU - PI/2) * 600 - 60" }
+                ]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads and folds");
+        assert!(loaded.raw["scenes"][0]["children"][0]["x"].is_number());
+        let report = run_checks(&loaded, false);
+        assert!(
+            report.schema_errors.is_empty(),
+            "must not be silently dropped at render: {:?}",
+            report.schema_errors
+        );
+    }
+}
+
+/// Issue #328/#335: `reference_cross_scene` (and the rest of
+/// `DepGraph::build`'s error surface) reachable from `validate`, not only
+/// from `render`'s single-scene call site — see `check_node_references`'s
+/// own doc comment for why the render-time call could never actually
+/// produce `CrossScene` at all.
+#[cfg(test)]
+mod node_reference_checks {
+    use super::*;
+
+    fn scene_with_id_and_transform_ref(id: &str, target_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "duration": 1.0,
+            "children": [{
+                "type": "shape", "shape": "circle", "id": id,
+                "position": "absolute", "x": 0, "y": 0,
+                "style": {
+                    "width": "20px", "height": "20px",
+                    "transform": [
+                        { "fn": "translate", "x": format!("= node(\"{target_id}\", \"tx\")"), "y": 0 }
+                    ]
+                }
+            }]
+        })
+    }
+
+    #[test]
+    fn a_reference_to_an_id_in_another_scene_is_reported_as_reference_cross_scene() {
+        let json = serde_json::json!({
+            "video": { "width": 320, "height": 240, "fps": 30 },
+            "scenes": [
+                { "duration": 1.0, "children": [
+                    { "type": "shape", "shape": "circle", "id": "anchor",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": { "width": "20px", "height": "20px" } }
+                ] },
+                scene_with_id_and_transform_ref("follower", "anchor")
+            ]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report
+                .schema_errors
+                .iter()
+                .any(|e| e.contains("reference_cross_scene")),
+            "expected a reference_cross_scene schema error: {:?}",
+            report.schema_errors
+        );
+        assert!(report.is_blocking(false), "must block, lenient or not");
+        assert!(
+            report.is_blocking(true),
+            "a structural reference error is not a geometry violation — --lenient must not \
+             downgrade it"
+        );
+    }
+
+    #[test]
+    fn a_reference_to_an_id_in_the_same_scene_validates_clean() {
+        let json = serde_json::json!({
+            "video": { "width": 320, "height": 240, "fps": 30 },
+            "scenes": [{
+                "duration": 1.0,
+                "children": [
+                    { "type": "shape", "shape": "circle", "id": "anchor",
+                      "position": "absolute", "x": 0, "y": 0,
+                      "style": { "width": "20px", "height": "20px" } },
+                    scene_with_id_and_transform_ref("follower", "anchor")["children"][0].clone()
+                ]
+            }]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report
+                .schema_errors
+                .iter()
+                .all(|e| !e.contains("reference_cross_scene") && !e.contains("node(")),
+            "a same-scene reference must not be flagged: {:?}",
+            report.schema_errors
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_genuinely_unknown_id_is_reported() {
+        let json = serde_json::json!({
+            "video": { "width": 320, "height": 240, "fps": 30 },
+            "scenes": [
+                scene_with_id_and_transform_ref("follower", "does_not_exist_anywhere")
+            ]
+        })
+        .to_string();
+
+        let loaded = load(ValidationSource::Inline(&json)).expect("scenario loads");
+        let report = run_checks(&loaded, false);
+        assert!(
+            report
+                .schema_errors
+                .iter()
+                .any(|e| e.contains("unknown id")),
+            "expected an unknown-id schema error: {:?}",
+            report.schema_errors
         );
     }
 }

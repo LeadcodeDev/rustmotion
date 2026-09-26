@@ -30,15 +30,23 @@ use rustmotion::schema::ResolvedScenario;
 
 /// Keys accepted on any component object but absent from the per-variant
 /// schema properties:
-/// - `position`, `x`, `y`, `z-index`: `ChildComponent` wrapper fields
-///   (flattened around the component itself).
+/// - `position`, `x`, `y`, `z-index`, `id`: `ChildComponent` wrapper fields
+///   (flattened around the component itself). `id` is what a sibling node's
+///   expression addresses through `node("id", "prop")`.
 /// - `animation`: top-level `animation` is ignored by the engine and already
 ///   reported by the dedicated misplaced-animation warning — flagging it here
 ///   too would double-report.
-const WRAPPER_KEYS: &[&str] = &["position", "x", "y", "z-index", "animation", "bleed"];
+const WRAPPER_KEYS: &[&str] = &["position", "x", "y", "z-index", "animation", "bleed", "id"];
 
 /// Serde enum aliases that schemars does not know about: alias tag → schema tag.
-const TAG_ALIASES: &[(&str, &str)] = &[("container", "div"), ("progress_bar", "progress")];
+const TAG_ALIASES: &[(&str, &str)] = &[
+    ("container", "div"),
+    ("progress_bar", "progress"),
+    ("card", "div"),
+    ("flex", "div"),
+    ("grid", "div"),
+    ("positioned", "div"),
+];
 
 /// Lazily-built map: component tag ("counter") → set of known top-level
 /// property names, extracted from the schemars `oneOf` variants. Flattened

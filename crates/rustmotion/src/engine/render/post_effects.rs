@@ -12,16 +12,22 @@
 //!   when encoding offline; avoid on the studio preview hot path if performance matters.
 
 use rustmotion_core::schema::scenario::{BlurDirection, PostEffect};
+use rustmotion_core::schema::time::{TimeCtx, TimePoint};
 
 /// Apply a sequence of post-processing effects in order to an RGBA frame buffer.
 ///
 /// `buf` must be exactly `w * h * 4` bytes (RGBA8888, row-major).
+///
+/// `time` is the scene-local instant this buffer represents, in seconds. Only
+/// `Flash` reads it; every other effect is time-invariant and depends on
+/// `frame_index` alone.
 pub fn apply_post_effects(
     buf: &mut [u8],
     w: u32,
     h: u32,
     effects: &[PostEffect],
     frame_index: u32,
+    time: f64,
 ) {
     for effect in effects {
         match effect {
@@ -45,8 +51,64 @@ pub fn apply_post_effects(
             } => {
                 apply_progressive_blur(buf, w, h, direction, *start, *max_radius);
             }
+            PostEffect::Flash {
+                at,
+                color,
+                intensity,
+                duration,
+            } => {
+                apply_flash(buf, at, color, *intensity, *duration, time);
+            }
         }
     }
+}
+
+/// Blend a full-frame colour over the buffer, at full `intensity` on the
+/// flash's own instant and decaying linearly to nothing over `duration`.
+///
+/// Outside `[at, at + duration)` this is a no-op, so an effect list carrying
+/// several flashes costs one comparison each on every other frame.
+pub fn apply_flash(
+    buf: &mut [u8],
+    at: &TimePoint,
+    color: &str,
+    intensity: f32,
+    duration: f32,
+    time: f64,
+) {
+    if duration <= 0.0 || intensity <= 0.0 {
+        return;
+    }
+    let ctx = TimeCtx::default();
+    let Ok(start) = at.resolve_relative(&ctx) else {
+        return;
+    };
+    let dt = time - start;
+    if dt < 0.0 || dt >= duration as f64 {
+        return;
+    }
+    let alpha = intensity.clamp(0.0, 1.0) * (1.0 - (dt / duration as f64) as f32);
+    let (fr, fg, fb) = parse_hex_rgb(color);
+    for px in buf.chunks_exact_mut(4) {
+        px[0] = blend(px[0], fr, alpha);
+        px[1] = blend(px[1], fg, alpha);
+        px[2] = blend(px[2], fb, alpha);
+    }
+}
+
+fn blend(dst: u8, src: u8, a: f32) -> u8 {
+    (dst as f32 + (src as f32 - dst as f32) * a)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+fn parse_hex_rgb(hex: &str) -> (u8, u8, u8) {
+    let h = hex.trim_start_matches('#');
+    if h.len() < 6 {
+        return (255, 255, 255);
+    }
+    let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(255);
+    (byte(0), byte(2), byte(4))
 }
 
 // ─── Grain ───────────────────────────────────────────────────────────────────
@@ -625,6 +687,7 @@ mod tests {
                 PostEffect::Pixelate { size: 4 },
             ],
             0,
+            0.0,
         );
 
         let mut b = base_buf.clone();
@@ -641,6 +704,7 @@ mod tests {
                 },
             ],
             0,
+            0.0,
         );
 
         assert_ne!(a, b, "grain+pixelate must differ from pixelate+grain");
@@ -652,7 +716,27 @@ mod tests {
     fn no_effects_is_identity() {
         let orig = solid(4, 4, 200, 150, 100);
         let mut buf = orig.clone();
-        apply_post_effects(&mut buf, 4, 4, &[], 0);
+        apply_post_effects(&mut buf, 4, 4, &[], 0, 0.0);
         assert_eq!(buf, orig);
+    }
+
+    #[test]
+    fn a_flash_peaks_on_its_own_instant_and_is_gone_after_its_duration() {
+        let flash = PostEffect::Flash {
+            at: TimePoint::Seconds(1.0),
+            color: "#FF0000".to_string(),
+            intensity: 1.0,
+            duration: 0.2,
+        };
+        let sample = |t: f64| {
+            let mut buf = vec![0u8; 4 * 4];
+            apply_post_effects(&mut buf, 2, 2, std::slice::from_ref(&flash), 0, t);
+            buf[0]
+        };
+        assert_eq!(sample(0.5), 0, "before its instant, nothing");
+        assert_eq!(sample(1.0), 255, "on its instant, full intensity");
+        assert!(sample(1.1) > 0 && sample(1.1) < 255, "mid-decay");
+        assert_eq!(sample(1.2), 0, "after its duration, nothing");
+        assert_eq!(sample(5.0), 0, "long after, nothing");
     }
 }

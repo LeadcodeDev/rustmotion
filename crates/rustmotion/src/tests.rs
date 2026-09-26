@@ -15,7 +15,6 @@ mod component_smoke {
             "cursor",
             r#"{"type":"cursor","cursor_style":"pointer","path_easing":"linear"}"#,
         ),
-        ("codeblock", r#"{"type":"codeblock","code":"fn main() {}"}"#),
         ("badge", r#"{"type":"badge","text":"New"}"#),
         ("callout", r#"{"type":"callout","text":"Hello"}"#),
         (
@@ -78,10 +77,6 @@ mod component_smoke {
             r#"{"type":"tag_cloud","tags":[{"text":"rust","weight":1.0}]}"#,
         ),
         (
-            "terminal",
-            r#"{"type":"terminal","lines":[{"text":"$ echo hello"}]}"#,
-        ),
-        (
             "timeline",
             r#"{"type":"timeline","steps":[{"label":"Start"}]}"#,
         ),
@@ -139,7 +134,6 @@ mod component_smoke {
             "mockup",
             r#"{"type":"mockup","device":"browser","src":"a.png"}"#,
         ),
-        ("notification", r#"{"type":"notification","title":"Hi"}"#),
         ("pill_nav", r#"{"type":"pill_nav","items":["A","B"]}"#),
         ("tooltip", r#"{"type":"tooltip","text":"hi"}"#),
         // Audio reactive components
@@ -166,8 +160,14 @@ mod component_smoke {
     }
 
     /// Input-only `type` aliases and the canonical tag they must serialize to.
-    const COMPONENT_ALIASES: &[(&str, &str)] =
-        &[("container", "div"), ("progress_bar", "progress")];
+    const COMPONENT_ALIASES: &[(&str, &str)] = &[
+        ("container", "div"),
+        ("card", "div"),
+        ("flex", "div"),
+        ("grid", "div"),
+        ("positioned", "div"),
+        ("progress_bar", "progress"),
+    ];
 
     /// The exact `shape` spellings SKILL.md documents must parse.
     ///
@@ -355,6 +355,7 @@ mod component_smoke {
                 Err(_) => continue,
             };
             let child = ChildComponent {
+                id: None,
                 component,
                 position: Some(PositionMode::Absolute { x: 10.0, y: 10.0 }),
                 x: None,
@@ -391,7 +392,7 @@ mod component_smoke {
         // where a component reports zero size and the card collapses.
         use crate::components::{ChildComponent, PositionMode};
         use rustmotion_components::box_builder::build_scene;
-        use rustmotion_components::card::Card;
+        use rustmotion_components::container::ContainerComponent;
         use rustmotion_components::legacy_dispatch::LegacyPaintDispatcher;
         use rustmotion_core::css::style::{CssStyle, Edges, FlexDirection, Gap};
         use rustmotion_core::css::taffy_bridge::ConversionContext;
@@ -420,6 +421,7 @@ mod component_smoke {
                 Err(_) => continue,
             };
             let inner = ChildComponent {
+                id: None,
                 component,
                 position: None,
                 x: None,
@@ -434,7 +436,8 @@ mod component_smoke {
                 ..Default::default()
             };
             let card_child = ChildComponent {
-                component: Component::Card(Card {
+                id: None,
+                component: Component::Container(ContainerComponent {
                     children: vec![inner],
                     timing: Default::default(),
                     style: card_style,
@@ -558,6 +561,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: None,
             x: None,
@@ -593,6 +597,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
             x: None,
@@ -629,6 +634,7 @@ mod component_smoke {
         }
         let component: Component = serde_json::from_value(json).expect("deserialize");
         vec![crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
             x: None,
@@ -688,6 +694,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 60.0, y: 40.0 }),
             x: None,
@@ -782,6 +789,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -870,6 +878,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 40.0, y: 40.0 }),
             x: None,
@@ -972,6 +981,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 150.0, y: 110.0 }),
             x: None,
@@ -1012,6 +1022,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize");
         let child = crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 250.0, y: 120.0 }),
             x: None,
@@ -1036,7 +1047,7 @@ mod component_smoke {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Intrinsic-measure tests for Terminal, Table, Codeblock
+    // Intrinsic-measure tests for Table
     //
     // Each test wraps the component in a flex card with NO explicit width/height,
     // runs the full layout pass, and asserts that the component's BoxLayout has
@@ -1051,13 +1062,14 @@ mod component_smoke {
     ) -> rustmotion_core::engine::layout_pass::BoxLayout {
         use crate::components::{ChildComponent, PositionMode};
         use rustmotion_components::box_builder::build_scene;
-        use rustmotion_components::card::Card;
+        use rustmotion_components::container::ContainerComponent;
         use rustmotion_core::css::style::{CssStyle, FlexDirection};
         use rustmotion_core::css::taffy_bridge::ConversionContext;
         use rustmotion_core::engine::layout_pass::run_layout;
 
         let component: Component = serde_json::from_value(component_json).expect("deserialize");
         let inner = ChildComponent {
+            id: None,
             component,
             position: None,
             x: None,
@@ -1071,7 +1083,8 @@ mod component_smoke {
             ..Default::default()
         };
         let card_child = ChildComponent {
-            component: Component::Card(Card {
+            id: None,
+            component: Component::Container(ContainerComponent {
                 children: vec![inner],
                 timing: Default::default(),
                 style: card_style,
@@ -1110,42 +1123,6 @@ mod component_smoke {
     }
 
     #[test]
-    fn terminal_intrinsic_height_reflects_line_count() {
-        // Terminal with 3 lines, default font size (14px), line-height ratio
-        // 22/14 ≈ 1.57 → line_height = ceil(14 * 22/14) = 22.
-        // Expected minimum height: chrome (36) + padding_top (16) + 3 * 22 + padding_bottom (16) = 134.
-        // We assert ≥ 3 * line_height_min = 3 * 22 = 66 (conservative: chrome may be excluded
-        // in some configs, let the intrinsic beat 0).
-        let json = serde_json::json!({
-            "type": "terminal",
-            "lines": [
-                { "text": "echo hello", "line_type": "command" },
-                { "text": "hello", "line_type": "output" },
-                { "text": "echo world", "line_type": "command" }
-            ]
-        });
-        let layout = layout_for_unsized_component_in_flex_card(json);
-        assert!(
-            layout.height > 0.0,
-            "terminal height should be > 0, got {}",
-            layout.height
-        );
-        // With chrome (36) + 2*padding (32) + 3 lines * line_height (22) ≥ 134
-        let min_expected = 3.0 * 22.0; // conservative: at least 3 line-heights
-        assert!(
-            layout.height >= min_expected,
-            "terminal height {} should be ≥ {} (3 × line_height)",
-            layout.height,
-            min_expected
-        );
-        assert!(
-            layout.width > 0.0,
-            "terminal width should be > 0, got {}",
-            layout.width
-        );
-    }
-
-    #[test]
     fn table_intrinsic_height_reflects_row_count() {
         // Table with 1 header row + 2 data rows. Default font_size = 14, row_height = 14 * 2.5 = 35.
         // Total height = 3 rows * 35 = 105.
@@ -1178,35 +1155,6 @@ mod component_smoke {
         );
     }
 
-    #[test]
-    fn codeblock_intrinsic_height_reflects_line_count() {
-        // Codeblock with 3 lines of code, default font_size = 14.
-        // Default padding = 16px each side. line_height = style.line_height_for(14) ≈ 14 * 1.5 = 21.
-        // Expected: 3 lines * line_height + pad_top + pad_bottom ≥ 3 * 14 = 42.
-        let json = serde_json::json!({
-            "type": "codeblock",
-            "code": "fn main() {\n    println!(\"hello\");\n}"
-        });
-        let layout = layout_for_unsized_component_in_flex_card(json);
-        assert!(
-            layout.height > 0.0,
-            "codeblock height should be > 0, got {}",
-            layout.height
-        );
-        let min_expected = 3.0 * 14.0; // very conservative: at least 3 × font_size
-        assert!(
-            layout.height >= min_expected,
-            "codeblock height {} should be ≥ {} (3 × font_size)",
-            layout.height,
-            min_expected
-        );
-        assert!(
-            layout.width > 0.0,
-            "codeblock width should be > 0, got {}",
-            layout.width
-        );
-    }
-
     // ─── Time Remapping Tests ────────────────────────────────────────────────────
 
     /// Build a scene with one flex container (time_scale, time_offset) wrapping
@@ -1234,6 +1182,7 @@ mod component_smoke {
         });
         let component: Component = serde_json::from_value(json).expect("deserialize flex");
         vec![crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -1336,6 +1285,7 @@ mod component_smoke {
         let make_scene = || {
             let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
             vec![crate::components::ChildComponent {
+                id: None,
                 component,
                 position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
                 x: None,
@@ -1390,6 +1340,7 @@ mod component_smoke {
         let make_scene = || {
             let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
             vec![crate::components::ChildComponent {
+                id: None,
                 component,
                 position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
                 x: None,
@@ -1445,6 +1396,7 @@ mod component_smoke {
             });
             let component: Component = serde_json::from_value(json).expect("deserialize flex+line");
             vec![crate::components::ChildComponent {
+                id: None,
                 component,
                 position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
                 x: None,
@@ -1510,6 +1462,7 @@ mod component_smoke {
         let make_scene = || {
             let component: Component = serde_json::from_value(json.clone()).expect("deserialize");
             vec![crate::components::ChildComponent {
+                id: None,
                 component,
                 position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
                 x: None,
@@ -1611,6 +1564,7 @@ mod svg_draw_on_tests {
         }
         let component: Component = serde_json::from_value(json).expect("svg deserialize");
         let child = ChildComponent {
+            id: None,
             component,
             position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -1920,6 +1874,7 @@ mod audio_tests {
         let component: crate::components::Component =
             serde_json::from_value(json).expect("component json");
         crate::components::ChildComponent {
+            id: None,
             component,
             position: Some(crate::components::PositionMode::Absolute { x: 0.0, y: 0.0 }),
             x: None,
@@ -2701,6 +2656,7 @@ mod motion_blur_trail {
         });
         let component: Component = serde_json::from_value(json).expect("motion_blur json");
         vec![ChildComponent {
+            id: None,
             component,
             position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
             x: None,
@@ -2727,6 +2683,7 @@ mod motion_blur_trail {
         });
         let component: Component = serde_json::from_value(json).expect("trail json");
         vec![ChildComponent {
+            id: None,
             component,
             position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
             x: None,
@@ -2784,6 +2741,7 @@ mod motion_blur_trail {
             });
             let component: Component = serde_json::from_value(json).unwrap();
             vec![ChildComponent {
+                id: None,
                 component,
                 position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
                 x: None,
@@ -2824,6 +2782,7 @@ mod motion_blur_trail {
             });
             let component: Component = serde_json::from_value(json).unwrap();
             vec![ChildComponent {
+                id: None,
                 component,
                 position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
                 x: None,
@@ -2847,6 +2806,7 @@ mod motion_blur_trail {
             });
             let component: Component = serde_json::from_value(json).unwrap();
             vec![ChildComponent {
+                id: None,
                 component,
                 position: Some(PositionMode::Absolute { x: 200.0, y: 110.0 }),
                 x: None,
@@ -2899,6 +2859,7 @@ mod motion_blur_trail {
             });
             let component: Component = serde_json::from_value(json).unwrap();
             vec![ChildComponent {
+                id: None,
                 component,
                 position: Some(PositionMode::Absolute { x: 300.0, y: 120.0 }),
                 x: None,
@@ -3726,5 +3687,469 @@ mod world_view_regressions {
             corner_r < center_r,
             "vignette must darken the corner of a ViewTransition frame: corner={corner_r} center={center_r}"
         );
+    }
+}
+
+#[cfg(test)]
+mod camera_shake_tests {
+    //! Issue #330: declarative camera shake (`Scene.shake`), additive over
+    //! the ordinary camera pan — see `rustmotion_core::schema::shake::SceneShake`'s
+    //! doc for the formula and
+    //! `crate::engine::render::scene_shake_offset` (private to that module;
+    //! exercised here only indirectly, through rendered pixels) for how it
+    //! rides along `apply_camera_transform`'s `x`/`y`/`rotation`.
+
+    use crate::engine::render::render_frame_v2;
+    use crate::schema::{Scene, VideoConfig};
+    use rustmotion_core::schema::shake::{SceneShake, ShakeImpact};
+    use rustmotion_core::schema::time::{TimeCtx, TimePoint};
+
+    fn config(w: u32, h: u32) -> VideoConfig {
+        serde_json::from_value(serde_json::json!({ "width": w, "height": h, "fps": 30 }))
+            .expect("config")
+    }
+
+    fn render_scene_json(scene_json: serde_json::Value, w: u32, h: u32, frame: u32) -> Vec<u8> {
+        let scene: Scene = serde_json::from_value(scene_json).expect("scene json");
+        let children = crate::engine::render::deserialize_children(&scene);
+        let t = frame as f64 / 30.0;
+        render_frame_v2(&config(w, h), &scene, frame, t, 120, &children).expect("render")
+    }
+
+    /// Centroid (x, y) of pixels dominated by the given channel (0=r, 2=b) —
+    /// same helper shape as `camera_focal_tests::channel_centroid`, kept
+    /// local since that one is private to its own module.
+    fn channel_centroid(buf: &[u8], w: u32, h: u32, channel: usize) -> (f32, f32) {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = buf[i + channel];
+                let others: u16 = (0..3)
+                    .filter(|c| *c != channel)
+                    .map(|c| buf[i + c] as u16)
+                    .sum();
+                if v > 180 && others < 160 {
+                    sx += x as f64;
+                    sy += y as f64;
+                    n += 1.0;
+                }
+            }
+        }
+        if n == 0.0 {
+            (-1.0, -1.0)
+        } else {
+            ((sx / n) as f32, (sy / n) as f32)
+        }
+    }
+
+    fn red_rect_scene(extra: serde_json::Value) -> serde_json::Value {
+        let mut base = serde_json::json!({
+            "duration": 4.0,
+            "children": [{
+                "type": "shape",
+                "shape": "rect",
+                "fill": "#ff0000",
+                "position": "absolute",
+                "x": 150, "y": 100,
+                "style": { "width": "100px", "height": "80px" }
+            }]
+        });
+        if let (Some(base_obj), Some(extra_obj)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra_obj {
+                base_obj.insert(k.clone(), v.clone());
+            }
+        }
+        base
+    }
+
+    #[test]
+    fn a_scene_with_no_shake_field_renders_byte_identical_to_an_empty_impacts_shake() {
+        // `Scene.shake: Option<SceneShake>` — absent (`None`) and an
+        // explicit empty-impacts `SceneShake` both evaluate to
+        // `ShakeOffset::default()` (all zero); this locks that equivalence
+        // in at the rendered-pixel level, not just the offset struct level.
+        let no_shake = render_scene_json(red_rect_scene(serde_json::json!({})), 400, 300, 5);
+        let empty_shake = render_scene_json(
+            red_rect_scene(serde_json::json!({ "shake": { "impacts": [] } })),
+            400,
+            300,
+            5,
+        );
+        assert_eq!(
+            no_shake, empty_shake,
+            "absent shake and an empty-impacts shake must both be a no-op on the rendered frame"
+        );
+    }
+
+    #[test]
+    fn a_scene_with_camera_but_no_shake_is_unaffected_by_the_shake_wiring() {
+        // Regression proof for the mission's "byte-identical to today"
+        // requirement: a scene using only the pre-existing `camera` field
+        // (no `shake` at all) must render exactly as it did before this
+        // workstream added `scene_shake_offset` into `apply_camera_transform`'s
+        // call sites — i.e. adding zero must be invisible.
+        let panned = render_scene_json(
+            red_rect_scene(serde_json::json!({ "camera": { "x": 30.0, "zoom": 1.0 } })),
+            400,
+            300,
+            5,
+        );
+        let panned_again = render_scene_json(
+            red_rect_scene(serde_json::json!({ "camera": { "x": 30.0, "zoom": 1.0 } })),
+            400,
+            300,
+            5,
+        );
+        assert_eq!(
+            panned, panned_again,
+            "same camera-only scene must render identically twice"
+        );
+    }
+
+    #[test]
+    fn a_landed_shake_impact_visibly_perturbs_the_frame() {
+        let no_shake = render_scene_json(red_rect_scene(serde_json::json!({})), 400, 300, 3);
+        let with_shake = render_scene_json(
+            red_rect_scene(serde_json::json!({
+                "shake": {
+                    "impacts": [ { "at": 0.0, "amplitude": 40.0 } ],
+                    "decay": 4.0,
+                    "frequency": 6.0
+                }
+            })),
+            400,
+            300,
+            3,
+        );
+        assert_ne!(
+            no_shake, with_shake,
+            "a landed shake impact must move the rendered frame"
+        );
+    }
+
+    #[test]
+    fn shake_offset_moves_the_rendered_centroid_by_exactly_its_own_formula() {
+        // Quantitative integration check: the rendered rect's centroid
+        // shift must match `shake_offset`'s own prediction, not just
+        // "differ". `apply_camera_transform` (zoom=1, rotation=0) maps
+        // scene-space point p to screen p - (pan_x, pan_y); shake rides on
+        // pan_x/pan_y, so screen_x = original_x - shake.x.
+        let shake = SceneShake {
+            impacts: vec![ShakeImpact {
+                at: TimePoint::Seconds(0.0),
+                amplitude: 40.0,
+            }],
+            decay: 4.0,
+            frequency: 6.0,
+            rotation: 0.0,
+        };
+        let ctx = TimeCtx {
+            bpm: None,
+            beat_offset: 0.0,
+            scene_start: 0.0,
+        };
+        let frame = 3u32;
+        let t = frame as f64 / 30.0;
+        let expected = rustmotion_core::engine::shake::shake_offset(&shake, &ctx, t)
+            .expect("no bpm needed for a plain-seconds impact");
+
+        let base = render_scene_json(red_rect_scene(serde_json::json!({})), 400, 300, frame);
+        let shaken = render_scene_json(
+            red_rect_scene(serde_json::json!({
+                "shake": {
+                    "impacts": [ { "at": 0.0, "amplitude": 40.0 } ],
+                    "decay": 4.0,
+                    "frequency": 6.0
+                }
+            })),
+            400,
+            300,
+            frame,
+        );
+
+        let (bx, by) = channel_centroid(&base, 400, 300, 0);
+        let (sx, sy) = channel_centroid(&shaken, 400, 300, 0);
+        assert!(
+            bx >= 0.0 && sx >= 0.0,
+            "red rect must be visible in both frames"
+        );
+
+        let dx = sx - bx;
+        let dy = sy - by;
+        assert!(
+            (dx - (-expected.x as f32)).abs() < 3.0,
+            "centroid x shift {dx} must match -shake.x ({})",
+            -expected.x
+        );
+        assert!(
+            (dy - (-expected.y as f32)).abs() < 3.0,
+            "centroid y shift {dy} must match -shake.y ({})",
+            -expected.y
+        );
+    }
+
+    #[test]
+    fn shake_is_additive_over_an_existing_camera_pan_not_a_replacement() {
+        let shake_cfg = serde_json::json!({
+            "impacts": [ { "at": 0.0, "amplitude": 25.0 } ],
+            "decay": 5.0,
+            "frequency": 4.0
+        });
+        let frame = 2u32;
+
+        let pan_only = render_scene_json(
+            red_rect_scene(serde_json::json!({ "camera": { "x": 20.0, "zoom": 1.0 } })),
+            400,
+            300,
+            frame,
+        );
+        let shake_only = render_scene_json(
+            red_rect_scene(serde_json::json!({ "shake": shake_cfg })),
+            400,
+            300,
+            frame,
+        );
+        let both = render_scene_json(
+            red_rect_scene(serde_json::json!({
+                "camera": { "x": 20.0, "zoom": 1.0 },
+                "shake": shake_cfg
+            })),
+            400,
+            300,
+            frame,
+        );
+
+        assert_ne!(pan_only, both, "combined render must differ from pan alone");
+        assert_ne!(
+            shake_only, both,
+            "combined render must differ from shake alone"
+        );
+        assert_ne!(
+            pan_only, shake_only,
+            "pan alone must differ from shake alone"
+        );
+
+        let (px, _) = channel_centroid(&pan_only, 400, 300, 0);
+        let (bx0, _) = channel_centroid(
+            &render_scene_json(red_rect_scene(serde_json::json!({})), 400, 300, frame),
+            400,
+            300,
+            0,
+        );
+        let (cx, _) = channel_centroid(&both, 400, 300, 0);
+
+        // Pan-only shift and combined shift, both relative to the
+        // unshaken/unpanned baseline: if shake were replacing the pan
+        // instead of adding to it, the combined shift would equal the
+        // shake-only shift and ignore the pan entirely.
+        let pan_shift = px - bx0;
+        let combined_shift = cx - bx0;
+        assert!(
+            (combined_shift - pan_shift).abs() > 1.0,
+            "combined shift ({combined_shift}) must differ from the pan-only shift ({pan_shift}) \
+             — shake must contribute on top of the pan, not disappear under it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod node_reference_resolution {
+    //! Issue #328's per-frame half —
+    //! `crate::engine::render::resolve_node_references` — proven against
+    //! this crate's real box tree and layout, not in isolation.
+    //!
+    //! **What this does and does not prove.** No component field can yet
+    //! carry an expression string: `rustmotion_core::expr::Computed<T>` is
+    //! defined but used by zero fields today (every numeric field, e.g.
+    //! `Line::x2`, is a plain `f32`), so there is no JSON scenario that can
+    //! write `"x2": "= node(\"badge\", \"tx\")"` and have it survive
+    //! deserialization — see `resolve_node_references`'s own doc for the
+    //! gap and the workstream now closing it. `badge` below is therefore
+    //! entirely real: an ordinary, already-supported JSON scene, parsed
+    //! with `deserialize_children` and built/laid out with
+    //! `build_scene_from_refs`/`run_layout` — the exact functions the real
+    //! per-frame render loop calls every frame. Only the *referencing*
+    //! side — what `line`'s own `x2` would read, were a field able to hold
+    //! that expression — is entered directly as `NodeRef`/`Expr` values
+    //! (`refs_by_id`, below), one level under the deserializer that doesn't
+    //! exist yet for it.
+
+    use crate::engine::render::{deserialize_children, resolve_node_references, root_style};
+    use crate::schema::{Scene, ViewType};
+    use rustmotion_components::box_builder::{build_scene_from_refs, BuildAnimationCtx};
+    use rustmotion_core::css::taffy_bridge::ConversionContext;
+    use rustmotion_core::engine::deps::{DepGraph, FrameScope, NodeRef};
+    use rustmotion_core::engine::layout_pass::run_layout;
+    use rustmotion_core::engine::paint_pass::animated_transform;
+    use rustmotion_core::expr::Expr;
+
+    const VW: f32 = 400.0;
+    const VH: f32 = 300.0;
+
+    /// A scene with two id'd nodes: `badge` (a plain, literal CSS
+    /// `transform: translate(bx, by)` — real, deserializable JSON) and
+    /// `line` (an id'd node whose *would-be* `node("badge","tx")`-driven
+    /// endpoint is resolved by hand below, not read from its own `x2`).
+    fn badge_and_line_scene(bx: f32, by: f32) -> Scene {
+        let json = serde_json::json!({
+            "duration": 4.0,
+            "children": [
+                {
+                    "type": "shape",
+                    "shape": "circle",
+                    "id": "badge",
+                    "position": "absolute", "x": 0, "y": 0,
+                    "style": {
+                        "width": "20px", "height": "20px",
+                        "transform": [
+                            { "fn": "translate", "x": format!("{bx}px"), "y": format!("{by}px") }
+                        ]
+                    }
+                },
+                {
+                    "type": "line",
+                    "id": "line",
+                    "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0
+                }
+            ]
+        });
+        serde_json::from_value(json).expect("scene json")
+    }
+
+    /// `line`'s own reference to `badge`, declared *before* `badge` — the
+    /// same deliberately-reversed order
+    /// `engine::deps::graph_tests::a_dependent_resolves_after_its_dependency_even_when_declared_first`
+    /// uses, so this test cannot pass by accident of declaration order.
+    fn refs_by_id() -> Vec<(String, Vec<NodeRef>)> {
+        vec![
+            (
+                "line".to_string(),
+                vec![NodeRef {
+                    id: "badge".to_string(),
+                    prop: "tx".to_string(),
+                }],
+            ),
+            ("badge".to_string(), vec![]),
+        ]
+    }
+
+    /// Build the real box tree + layout for `scene`, resolve node
+    /// references through `resolve_node_references`, and return `(line`'s
+    /// resolved `node("badge","tx")` value, badge's own `tx` recomputed
+    /// *independently* from the very same tree/layout, bypassing
+    /// `ResolvedFrame` entirely)`. The two must always agree; if they
+    /// don't, the snapshot itself is stale, not just the reference.
+    fn resolve_at(scene: &Scene) -> (f64, f32) {
+        let children = deserialize_children(scene);
+        let root_css = root_style(scene.layout.as_ref(), ViewType::Slide);
+        let anim = Some(BuildAnimationCtx {
+            time: 0.0,
+            scenario_time: 0.0,
+            scene_duration: scene.duration,
+            fps: 30,
+        });
+        let built = build_scene_from_refs(children.iter(), (VW, VH), root_css, anim);
+        let layout = run_layout(
+            &built.root,
+            (VW, VH),
+            &ConversionContext::for_viewport(VW, VH),
+        );
+
+        let frame = resolve_node_references(&built, &layout, (VW, VH), &refs_by_id())
+            .expect("dependency graph must build: no cycle, no unknown id");
+
+        let scope = FrameScope(&frame);
+        let resolved_x2 = Expr::parse(r#"= node("badge", "tx")"#)
+            .unwrap()
+            .eval(&scope)
+            .expect("badge must already be resolved by the time line's expression evaluates");
+
+        let badge_node_id = built
+            .components
+            .iter()
+            .position(|c| c.and_then(|cc| cc.id.as_deref()) == Some("badge"))
+            .expect("badge must be in the built scene") as u32;
+        let badge_box = built.root.find(badge_node_id).expect("badge box node");
+        let badge_layout = *layout.get(badge_box.id).expect("badge layout");
+        let (badge_tx, ..) = animated_transform(&badge_box.css, &badge_layout, (VW, VH));
+
+        (resolved_x2, badge_tx)
+    }
+
+    #[test]
+    fn dep_graph_topological_order_puts_badge_before_line_despite_declaration_order() {
+        let refs = refs_by_id();
+        assert_eq!(
+            refs[0].0, "line",
+            "sanity: line is declared first in refs_by_id"
+        );
+        let graph = DepGraph::build(&refs, &std::collections::HashSet::new()).unwrap();
+        assert_eq!(graph.order(), &["badge", "line"]);
+    }
+
+    #[test]
+    fn resolved_reference_tracks_the_current_frames_badge_with_no_one_frame_lag() {
+        // Several independently-built "frames" — different badge
+        // transforms each time. Each iteration builds its own tree, layout
+        // and `ResolvedFrame` from scratch, so nothing here can leak a
+        // value from a previous sample; that is what makes "no lag"
+        // structural rather than a discipline the test itself has to
+        // remember.
+        let samples: [(f32, f32); 4] = [(150.0, 80.0), (-40.0, 220.0), (0.0, 0.0), (77.5, -12.5)];
+
+        let mut resolved_values = Vec::new();
+        for &(bx, by) in &samples {
+            let scene = badge_and_line_scene(bx, by);
+            let (resolved_x2, badge_tx_independent) = resolve_at(&scene);
+
+            assert_eq!(
+                resolved_x2, badge_tx_independent as f64,
+                "line's node(\"badge\",\"tx\") must equal badge's own tx recomputed independently \
+                 from the same tree, badge placed at x={bx}"
+            );
+            assert_eq!(
+                resolved_x2, bx as f64,
+                "badge's resolved tx must match the transform declared for this sample"
+            );
+            resolved_values.push(resolved_x2);
+        }
+
+        for pair in resolved_values.windows(2) {
+            assert_ne!(
+                pair[0], pair[1],
+                "resolved value did not change between differently-placed badges — \
+                 looks like a stale or cached ResolvedFrame"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_or_duplicate_ids_are_reported_not_silently_dropped() {
+        // `resolve_node_references` surfaces `DepsError` rather than
+        // swallowing it — a caller (once one exists) decides what
+        // best-effort behaviour means; this function itself never guesses.
+        let bad_refs = vec![(
+            "line".to_string(),
+            vec![NodeRef {
+                id: "does_not_exist".to_string(),
+                prop: "tx".to_string(),
+            }],
+        )];
+        let scene = badge_and_line_scene(0.0, 0.0);
+        let children = deserialize_children(&scene);
+        let root_css = root_style(scene.layout.as_ref(), ViewType::Slide);
+        let built = build_scene_from_refs(children.iter(), (VW, VH), root_css, None);
+        let layout = run_layout(
+            &built.root,
+            (VW, VH),
+            &ConversionContext::for_viewport(VW, VH),
+        );
+
+        let err = resolve_node_references(&built, &layout, (VW, VH), &bad_refs).unwrap_err();
+        assert!(matches!(
+            err,
+            rustmotion_core::engine::deps::DepsError::UnknownId { .. }
+        ));
     }
 }

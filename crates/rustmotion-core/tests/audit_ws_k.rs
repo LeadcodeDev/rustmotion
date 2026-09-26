@@ -135,6 +135,27 @@ const KNOWN_INERT_FIELDS: &[(&str, &str)] = &[
          Allowlisted rather than asserted dead; flagged in the workstream K report for a human to \
          confirm one way or the other.",
     ),
+    (
+        "scene_start",
+        "Issue #336: TimeCtx.scene_start IS read — every time, unconditionally — but only from \
+         inside TimePoint::resolve_relative/resolve_absolute's own body (crates/rustmotion-core/\
+         src/schema/time.rs, `ctx.scene_start`), which is itself inside crates/rustmotion-core/\
+         src/schema/ and so invisible to this grep. Every external caller (crates/rustmotion/src/\
+         encode/video/tasks.rs, cli/commands/validate_schema.rs, cli/commands/geometry.rs) goes \
+         through those two methods and never types `.scene_start` directly — by design: the type \
+         is meant to be consumed through its API, not by reaching into the context struct. Same \
+         shape of false positive as the `target` entry above, different mechanical reason.",
+    ),
+    (
+        "param_type",
+        "Issue #336 follow-up: ComponentTemplateParam.param_type exists purely so `rustmotion \
+         schema` declares the real shape of a `components[name].params` entry — the field is \
+         never populated in practice (Scenario.components itself is always empty by the time \
+         any Rust code could read it; see that field's doc comment) and so is never read via \
+         `.param_type` anywhere, by the same design as the `components`/`params`/`template`/ \
+         `default`/`description` fields it sits beside — those simply share a name with an \
+         already-read field elsewhere and so don't trip this grep, `param_type` doesn't.",
+    ),
 ];
 
 /// `crates/rustmotion-core` -> `crates` -> `<workspace root>`.

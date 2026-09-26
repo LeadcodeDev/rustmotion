@@ -177,13 +177,8 @@ fn collect_text_measurements_in_children(
             }
             _ => {}
         }
-        match &child.component {
-            Component::Card(c) => collect_text_measurements_in_children(&c.children, &p, out),
-            Component::Flex(c) => collect_text_measurements_in_children(&c.children, &p, out),
-            Component::Grid(c) => collect_text_measurements_in_children(&c.children, &p, out),
-            Component::Positioned(c) => collect_text_measurements_in_children(&c.children, &p, out),
-            Component::Container(c) => collect_text_measurements_in_children(&c.children, &p, out),
-            _ => {}
+        if let Component::Container(c) = &child.component {
+            collect_text_measurements_in_children(&c.children, &p, out)
         }
     }
 }
@@ -267,13 +262,8 @@ fn collect_springs_in_children(
                 }
             }
         }
-        match &child.component {
-            Component::Card(c) => collect_springs_in_children(&c.children, &p, out),
-            Component::Flex(c) => collect_springs_in_children(&c.children, &p, out),
-            Component::Grid(c) => collect_springs_in_children(&c.children, &p, out),
-            Component::Positioned(c) => collect_springs_in_children(&c.children, &p, out),
-            Component::Container(c) => collect_springs_in_children(&c.children, &p, out),
-            _ => {}
+        if let Component::Container(c) = &child.component {
+            collect_springs_in_children(&c.children, &p, out)
         }
     }
 }
@@ -487,12 +477,18 @@ fn collect_media_assets_in_children(
                 status: probe_local_video(&c.src),
                 src: c.src.clone(),
             }),
+            // `Avatar`/`AvatarGroup` are two of issue #333's eleven
+            // frozen-composition components: deprecating the struct
+            // deprecates every field read on it, and asset probing reads
+            // `src`/`avatars` directly.
+            #[allow(deprecated)]
             Component::Avatar(c) => out.push(MediaAssetReport {
                 label: p.clone(),
                 kind: "avatar",
                 status: probe_local_image(&c.src),
                 src: c.src.clone(),
             }),
+            #[allow(deprecated)]
             Component::AvatarGroup(c) => {
                 for (ai, avatar) in c.avatars.iter().enumerate() {
                     out.push(MediaAssetReport {
@@ -503,6 +499,7 @@ fn collect_media_assets_in_children(
                     });
                 }
             }
+            #[allow(deprecated)]
             Component::Mockup(c) => out.push(MediaAssetReport {
                 label: p.clone(),
                 kind: "mockup",
@@ -511,13 +508,8 @@ fn collect_media_assets_in_children(
             }),
             _ => {}
         }
-        match &child.component {
-            Component::Card(c) => collect_media_assets_in_children(&c.children, &p, out),
-            Component::Flex(c) => collect_media_assets_in_children(&c.children, &p, out),
-            Component::Grid(c) => collect_media_assets_in_children(&c.children, &p, out),
-            Component::Positioned(c) => collect_media_assets_in_children(&c.children, &p, out),
-            Component::Container(c) => collect_media_assets_in_children(&c.children, &p, out),
-            _ => {}
+        if let Component::Container(c) = &child.component {
+            collect_media_assets_in_children(&c.children, &p, out)
         }
     }
 }
