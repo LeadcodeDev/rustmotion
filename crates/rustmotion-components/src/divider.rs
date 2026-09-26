@@ -28,6 +28,14 @@ pub enum DividerLineStyle {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`divider` is a frozen composition (issue #333). Compose a separator from a \
+            single thin `shape` (`rect`), full width or full height, instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct Divider {
     #[serde(default)]
     pub direction: DividerDirection,

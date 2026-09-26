@@ -37,6 +37,14 @@ impl Default for SizeRange {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`particle` is a frozen composition. Compose a `for-each` over N items with \
+            `rand(seed, $i)` for placement and `sin($t)` for drift instead — deterministic \
+            by construction. See crates/rustmotion/skills/rules/composition-recipes.md. \
+            Kept for compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Particle {
     pub particle_type: ParticleType,
     #[serde(default = "default_count")]

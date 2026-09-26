@@ -27,6 +27,7 @@ const H: u32 = 300;
 fn paint(json: serde_json::Value, time: f64) {
     let component: Component = serde_json::from_value(json).expect("component is schema-valid");
     let children = vec![ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
         x: None,
@@ -152,36 +153,4 @@ fn dot_map_terminates_on_a_zero_dot_spacing() {
         Duration::from_secs(10),
         "dot_map with dot_spacing: 0",
     );
-}
-
-#[test]
-fn codeblock_diff_survives_multibyte_text() {
-    // The edit script counts bytes while the reveal interpolates a fraction of
-    // that count, so mid-animation offsets landed inside a multi-byte character
-    // and `replace_range` aborted with "not a char boundary".
-    for (from, to) in [
-        ("let a = 1;", "let café = «héllo→»;"),
-        ("let x = 1;", "let y = \"éàü\";"),
-        ("a", "日本語のテキスト"),
-        ("ok", "🎬 clap"),
-    ] {
-        // Sweep the reveal: the panic only fires on the frames where progress
-        // lands part-way through a glyph.
-        for step in 0..=20 {
-            paint(
-                serde_json::json!({
-                    "type": "codeblock",
-                    "code": from,
-                    "language": "rust",
-                    "diff": true,
-                    "states": [
-                        { "code": from, "at": 0.0 },
-                        { "code": to, "at": 0.4, "cursor": { "enabled": true } }
-                    ],
-                    "style": { "width": 380, "height": 120 }
-                }),
-                f64::from(step) * 0.1,
-            );
-        }
-    }
 }

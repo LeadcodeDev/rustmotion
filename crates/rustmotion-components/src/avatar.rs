@@ -35,6 +35,13 @@ impl AvatarStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`avatar` is a frozen composition (issue #333). Compose a circular avatar from a \
+            `shape` (`circle`) or a circle-clipped `image` instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Avatar {
     pub src: String,
     #[serde(default = "default_avatar_size")]

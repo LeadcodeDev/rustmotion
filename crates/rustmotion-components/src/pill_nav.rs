@@ -44,6 +44,14 @@ pub struct PillTransition {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`pill_nav` is a frozen composition (issue #333). Compose tabs from a row of \
+            `text`/`div` items plus a `shape` pill animated between their positions instead \
+            — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct PillNav {
     pub items: Vec<String>,
     #[serde(default)]

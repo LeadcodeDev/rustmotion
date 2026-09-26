@@ -22,6 +22,7 @@ const H: u32 = 300;
 fn render(json: serde_json::Value) -> Vec<u8> {
     let component: Component = serde_json::from_value(json).expect("deserialize component");
     let child = ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: 20.0, y: 20.0 }),
         x: None,

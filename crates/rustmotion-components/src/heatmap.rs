@@ -40,6 +40,13 @@ fn default_color_scale() -> Vec<String> {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`heatmap` is a frozen composition. Compose a `for-each` over the cells with a \
+            computed `fill` expression per cell instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Heatmap {
     /// 2D array of values (rows x columns).
     pub data: Vec<Vec<f64>>,

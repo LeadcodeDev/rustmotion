@@ -51,6 +51,14 @@ pub struct StatTrend {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`stat` is a frozen composition (issue #333). Compose a `card` + `icon` + \
+            `text` (value, large) + `text` (label, small) instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md's \"KPI card\" recipe \
+            and examples/composition-kpi-row.json. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Stat {
     pub value: String,
     #[serde(default)]

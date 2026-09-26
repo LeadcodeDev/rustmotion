@@ -49,6 +49,13 @@ pub struct ListItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`list` is a frozen composition (issue #333). Compose each row from `icon` + \
+            `text` inside a `for-each` instead of the dedicated list — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct List {
     pub items: Vec<ListItem>,
     #[serde(default)]

@@ -1,3 +1,28 @@
+// Issue #333 (phase B): the twenty-seven frozen-composition components
+// (`stat`, `badge`, `gauge`, ... — see each type's own `#[deprecated]` note
+// for its replacement recipe) carry a `#[deprecated]` attribute so a Rust
+// consumer of this crate who writes `Badge { .. }`/`Stat { .. }`/etc. by hand
+// is told, at their own call site, what to compose instead.
+//
+// That attribute also fires for every internal reference to the same type —
+// the struct's own derive-generated impls, its `impl Painter`, every field
+// read in `box_builder`'s intrinsic-sizing/style-extraction match arms, and
+// the `Component` enum's own tagged-variant plumbing in this file — because
+// deprecating a struct deprecates its fields too, and Rust does not
+// distinguish "the engine implementing this component" from "an author
+// constructing one". None of that internal traffic is an authoring site:
+// rendering an existing `badge`/`stat`/... scenario byte-identically
+// requires touching every one of those fields exactly as before, and a JSON
+// scenario is deserialized through this crate's own generated
+// `Deserialize` impls, never through hand-written Rust at the call site — so
+// `serde_json::from_str::<Component>(..)` in `rustmotion`'s render path
+// never lints here regardless of this attribute. This single crate-root
+// allow silences only that internal noise; it does not extend to any other
+// crate, so a hand-written construction in `rustmotion-html`,
+// `rustmotion-studio`, or this crate's own `tests/` integration suite (each
+// a separate compilation unit) still warns. Verified empirically before
+// relying on it: see the phase-B report for issue #333.
+#![allow(deprecated)]
 pub mod box_builder;
 pub mod intrinsic;
 pub mod legacy_dispatch;
@@ -9,9 +34,7 @@ pub mod avatar_group;
 pub mod badge;
 pub mod callout;
 pub mod caption;
-pub mod card;
 pub mod chart;
-pub mod codeblock;
 pub mod comparison;
 pub mod connector;
 pub mod container;
@@ -20,11 +43,9 @@ pub mod counter;
 pub mod cursor;
 pub mod divider;
 pub mod dot_map;
-pub mod flex;
 pub mod gauge;
 pub mod gif;
 pub mod gradient_text;
-pub mod grid;
 pub mod heatmap;
 pub mod icon;
 pub mod image;
@@ -34,12 +55,10 @@ pub mod list;
 pub mod lottie;
 pub mod marquee;
 pub mod mockup;
-pub mod notification;
 pub mod number_wheel;
 pub mod particle;
 pub mod pill_nav;
 pub mod pointer;
-pub mod positioned;
 pub mod progress;
 pub mod qrcode;
 pub mod rating;
@@ -55,7 +74,6 @@ pub mod svg;
 pub mod switch;
 pub mod table;
 pub mod tag_cloud;
-pub mod terminal;
 pub mod text;
 pub mod timeline;
 pub mod tooltip;
@@ -77,9 +95,7 @@ pub use avatar_group::AvatarGroup;
 pub use badge::Badge;
 pub use callout::Callout;
 pub use caption::Caption;
-pub use card::Card;
 pub use chart::Chart;
-pub use codeblock::Codeblock;
 pub use comparison::Comparison;
 pub use connector::Connector;
 pub use container::ContainerComponent;
@@ -88,11 +104,9 @@ pub use counter::Counter;
 pub use cursor::Cursor;
 pub use divider::Divider;
 pub use dot_map::DotMap;
-pub use flex::Flex;
 pub use gauge::Gauge;
 pub use gif::Gif;
 pub use gradient_text::GradientText;
-pub use grid::Grid;
 pub use heatmap::Heatmap;
 pub use icon::Icon;
 pub use image::Image;
@@ -102,12 +116,10 @@ pub use list::List;
 pub use lottie::Lottie;
 pub use marquee::Marquee;
 pub use mockup::Mockup;
-pub use notification::Notification;
 pub use number_wheel::NumberWheel;
 pub use particle::Particle;
 pub use pill_nav::PillNav;
 pub use pointer::Pointer;
-pub use positioned::Positioned;
 pub use progress::Progress;
 pub use qrcode::QrCode;
 pub use rating::Rating;
@@ -123,7 +135,6 @@ pub use svg::Svg;
 pub use switch::Switch;
 pub use table::Table;
 pub use tag_cloud::TagCloud;
-pub use terminal::Terminal;
 pub use text::Text;
 pub use timeline::Timeline;
 pub use tooltip::Tooltip;
@@ -315,6 +326,16 @@ pub struct ChildComponent {
     pub y: Option<f32>,
     #[serde(default, rename = "z-index")]
     pub z_index: Option<i32>,
+    /// Author-declared name for this node, unique within its own scene
+    /// (issue #328). Read back by other nodes' expressions through
+    /// `node("id", "prop")` — see `rustmotion_core::engine::deps`'s module
+    /// doc for the per-frame dependency graph this feeds, and the "unique
+    /// within its scene" constraint that graph enforces at build time
+    /// (`DepsError::DuplicateId`). Optional: a node with no `id` simply
+    /// cannot be referenced by another one's expressions, and is otherwise
+    /// unaffected.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Declares that this component's job is to extend past the frame edge
     /// (e.g. a radial glow used as a base layer). Top-level field, not a
     /// `style` property — `CssStyle` is `deny_unknown_fields` and belongs to
@@ -365,7 +386,6 @@ pub enum Component {
     Counter(Counter),
     Cursor(Cursor),
     Caption(Caption),
-    Codeblock(Codeblock),
     Connector(Connector),
     Avatar(Avatar),
     AvatarGroup(AvatarGroup),
@@ -386,7 +406,6 @@ pub enum Component {
     Lottie(Lottie),
     Marquee(Marquee),
     Mockup(Mockup),
-    Notification(Notification),
     Particle(Particle),
     PillNav(PillNav),
     #[serde(alias = "progress_bar")]
@@ -405,15 +424,17 @@ pub enum Component {
     RichText(RichText),
     Table(Table),
     TagCloud(TagCloud),
-    Terminal(Terminal),
     Timeline(Timeline),
     Tooltip(Tooltip),
     Treemap(Treemap),
-    Positioned(Positioned),
-    Flex(Flex),
-    Grid(Grid),
-    Card(Card),
-    #[serde(rename = "div", alias = "container")]
+    #[serde(
+        rename = "div",
+        alias = "container",
+        alias = "card",
+        alias = "flex",
+        alias = "grid",
+        alias = "positioned"
+    )]
     Container(ContainerComponent),
     Waveform(Waveform),
 }
@@ -435,7 +456,6 @@ impl Component {
             Component::Counter(c) => Some(c),
             Component::Cursor(c) => Some(c),
             Component::Caption(c) => Some(c),
-            Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
             Component::AvatarGroup(c) => Some(c),
             Component::Arrow(c) => Some(c),
@@ -456,7 +476,6 @@ impl Component {
             Component::Lottie(c) => Some(c),
             Component::Marquee(c) => Some(c),
             Component::Mockup(c) => Some(c),
-            Component::Notification(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::PillNav(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -474,15 +493,10 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::TagCloud(c) => Some(c),
-            Component::Terminal(c) => Some(c),
             Component::Timeline(c) => Some(c),
             Component::Tooltip(c) => Some(c),
             Component::Treemap(c) => Some(c),
-            Component::Flex(c) => Some(c),
-            Component::Grid(c) => Some(c),
-            Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
-            Component::Positioned(c) => Some(c),
         }
     }
 
@@ -499,7 +513,6 @@ impl Component {
             Component::Gif(c) => Some(c),
             Component::Counter(c) => Some(c),
             Component::Cursor(c) => Some(c),
-            Component::Codeblock(c) => Some(c),
             Component::Avatar(c) => Some(c),
             Component::AvatarGroup(c) => Some(c),
             Component::Arrow(c) => Some(c),
@@ -520,7 +533,6 @@ impl Component {
             Component::Lottie(c) => Some(c),
             Component::Marquee(c) => Some(c),
             Component::Mockup(c) => Some(c),
-            Component::Notification(c) => Some(c),
             Component::Particle(c) => Some(c),
             Component::PillNav(c) => Some(c),
             Component::Progress(c) => Some(c),
@@ -538,16 +550,11 @@ impl Component {
             Component::RichText(c) => Some(c),
             Component::Table(c) => Some(c),
             Component::TagCloud(c) => Some(c),
-            Component::Terminal(c) => Some(c),
             Component::Timeline(c) => Some(c),
             Component::Tooltip(c) => Some(c),
             Component::Treemap(c) => Some(c),
-            Component::Flex(c) => Some(c),
-            Component::Grid(c) => Some(c),
-            Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
             Component::Caption(c) => Some(c),
-            Component::Positioned(c) => Some(c),
         }
     }
 
@@ -565,7 +572,6 @@ impl Component {
             Component::Counter(c) => c,
             Component::Cursor(c) => c,
             Component::Caption(c) => c,
-            Component::Codeblock(c) => c,
             Component::Avatar(c) => c,
             Component::AvatarGroup(c) => c,
             Component::Arrow(c) => c,
@@ -586,7 +592,6 @@ impl Component {
             Component::Lottie(c) => c,
             Component::Marquee(c) => c,
             Component::Mockup(c) => c,
-            Component::Notification(c) => c,
             Component::Particle(c) => c,
             Component::PillNav(c) => c,
             Component::Progress(c) => c,
@@ -604,14 +609,9 @@ impl Component {
             Component::RichText(c) => c,
             Component::Table(c) => c,
             Component::TagCloud(c) => c,
-            Component::Terminal(c) => c,
             Component::Timeline(c) => c,
             Component::Tooltip(c) => c,
             Component::Treemap(c) => c,
-            Component::Positioned(c) => c,
-            Component::Flex(c) => c,
-            Component::Grid(c) => c,
-            Component::Card(c) => c,
             Component::Container(c) => c,
         }
     }
@@ -625,11 +625,7 @@ impl Component {
         match self {
             Component::AudioSpectrum(c) => Some(c),
             Component::Waveform(c) => Some(c),
-            Component::Card(c) => Some(c),
             Component::Container(c) => Some(c),
-            Component::Flex(c) => Some(c),
-            Component::Grid(c) => Some(c),
-            Component::Positioned(c) => Some(c),
             Component::Divider(c) => Some(c),
             Component::Shape(c) => Some(c),
             Component::Image(c) => Some(c),
@@ -659,7 +655,6 @@ impl Component {
             Component::Rating(c) => Some(c),
             Component::Stepper(c) => Some(c),
             Component::Comparison(c) => Some(c),
-            Component::Notification(c) => Some(c),
             Component::Tooltip(c) => Some(c),
             Component::PillNav(c) => Some(c),
             Component::List(c) => Some(c),
@@ -677,8 +672,6 @@ impl Component {
             Component::Treemap(c) => Some(c),
             Component::DotMap(c) => Some(c),
             Component::Table(c) => Some(c),
-            Component::Codeblock(c) => Some(c),
-            Component::Terminal(c) => Some(c),
             Component::Chart(c) => Some(c),
             Component::Line(c) => Some(c),
             Component::Arrow(c) => Some(c),
@@ -700,9 +693,9 @@ impl Component {
     /// `font_weight`/`font_style` read with no cascade in between — not by
     /// guessing from the component's name. Several read only `font-size`/
     /// `font-family` and keep their own dedicated field for text colour
-    /// (`Kbd::text_color`, `PillNav::text_color`, `Terminal`'s theme) —
-    /// still members, since those two properties alone are enough for the
-    /// same defect: a `font-size` set on a card never reaching the child.
+    /// (`Kbd::text_color`, `PillNav::text_color`) — still members, since
+    /// those two properties alone are enough for the same defect: a
+    /// `font-size` set on a card never reaching the child.
     ///
     /// Exhaustive on purpose, no wildcard arm: adding a new `Component`
     /// variant is a compile error here until this match says whether it
@@ -737,11 +730,9 @@ impl Component {
             | Component::Kbd(_)
             | Component::List(_)
             | Component::Marquee(_)
-            | Component::Notification(_)
             | Component::NumberWheel(_)
             | Component::PillNav(_)
             | Component::Table(_)
-            | Component::Terminal(_)
             | Component::Tooltip(_) => true,
             Component::AudioSpectrum(_)
             | Component::Shape(_)
@@ -750,7 +741,6 @@ impl Component {
             | Component::Video(_)
             | Component::Gif(_)
             | Component::Cursor(_)
-            | Component::Codeblock(_)
             | Component::Connector(_)
             | Component::Avatar(_)
             | Component::AvatarGroup(_)
@@ -779,10 +769,6 @@ impl Component {
             | Component::TagCloud(_)
             | Component::Timeline(_)
             | Component::Treemap(_)
-            | Component::Positioned(_)
-            | Component::Flex(_)
-            | Component::Grid(_)
-            | Component::Card(_)
             | Component::Container(_)
             | Component::Waveform(_) => false,
         };
@@ -804,11 +790,9 @@ impl Component {
             Component::Kbd(c) => c.style_config_mut(),
             Component::List(c) => c.style_config_mut(),
             Component::Marquee(c) => c.style_config_mut(),
-            Component::Notification(c) => c.style_config_mut(),
             Component::NumberWheel(c) => c.style_config_mut(),
             Component::PillNav(c) => c.style_config_mut(),
             Component::Table(c) => c.style_config_mut(),
-            Component::Terminal(c) => c.style_config_mut(),
             Component::Tooltip(c) => c.style_config_mut(),
             _ => unreachable!("classified as typographic by the match above"),
         };

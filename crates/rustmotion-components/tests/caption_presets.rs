@@ -27,6 +27,7 @@ fn render_caption(json: serde_json::Value, time: f64) -> Vec<u8> {
 fn render_caption_at(json: serde_json::Value, time: f64, y: f32) -> Vec<u8> {
     let component: Component = serde_json::from_value(json).expect("deserialize caption");
     let child = ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: 0.0, y }),
         x: None,

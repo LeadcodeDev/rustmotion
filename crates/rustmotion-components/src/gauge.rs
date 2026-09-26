@@ -45,6 +45,16 @@ fn default_animation_duration() -> f64 {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`gauge` is a frozen composition (issue #333). The closest primitive recipe is \
+            an `svg` arc path animated with `draw_progress`; \
+            crates/rustmotion/skills/rules/composition-recipes.md flags this one (with \
+            `number_wheel`) as a reasonable exception to keep using directly, since the \
+            arc is mechanically harder to reproduce than a card/text/shape composition. \
+            Kept for compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Gauge {
     #[serde(default)]
     pub value: f64,

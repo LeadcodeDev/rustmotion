@@ -44,6 +44,14 @@ impl BadgeSize {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`badge` is a frozen composition (issue #333). Compose a rounded `div`/`card` \
+            pill + `icon` + `text` instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md and \
+            examples/composition-pill-row.json. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Badge {
     pub text: String,
     #[serde(default)]

@@ -20,6 +20,7 @@ use rustmotion_core::engine::paint_pass::{paint_tree, PaintFrame};
 fn single_child_scene(json: serde_json::Value) -> ChildComponent {
     let component: Component = serde_json::from_value(json).expect("deserialize component");
     ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
         x: None,
@@ -324,9 +325,9 @@ fn cascaded_components_match_the_verified_set() {
     // guarantee says nothing about an *existing* variant silently drifting
     // (a copy-paste that drops one into the wrong arm, or a "cleanup" that
     // moves one back) — this test is what catches that, by covering all
-    // sixty variants directly rather than a sample.
+    // fifty-seven variants directly rather than a sample.
     //
-    // The eighteen `true` cases (beyond `text`, already fixed by a prior
+    // The sixteen `true` cases (beyond `text`, already fixed by a prior
     // pass) were found by reading every `impl Painter for X` in this crate
     // for a direct `self.style.color`/`font_family`/`font_size`/
     // `font_weight`/`font_style` read with no cascade in between — not by
@@ -398,11 +399,6 @@ fn cascaded_components_match_the_verified_set() {
             serde_json::json!({"type":"marquee","content":"x"}),
         ),
         (
-            "notification",
-            true,
-            serde_json::json!({"type":"notification","title":"x"}),
-        ),
-        (
             "number_wheel",
             true,
             serde_json::json!({"type":"number_wheel","value":"1"}),
@@ -416,11 +412,6 @@ fn cascaded_components_match_the_verified_set() {
             "table",
             true,
             serde_json::json!({"type":"table","headers":["A"],"rows":[]}),
-        ),
-        (
-            "terminal",
-            true,
-            serde_json::json!({"type":"terminal","lines":[]}),
         ),
         (
             "tooltip",
@@ -454,11 +445,6 @@ fn cascaded_components_match_the_verified_set() {
             serde_json::json!({"type":"gif","src":"x.gif"}),
         ),
         ("cursor", false, serde_json::json!({"type":"cursor"})),
-        (
-            "codeblock",
-            false,
-            serde_json::json!({"type":"codeblock","code":"x"}),
-        ),
         (
             "connector",
             false,
@@ -577,8 +563,8 @@ fn cascaded_components_match_the_verified_set() {
 
     assert_eq!(
         cases.len(),
-        60,
-        "this table must cover every Component variant (currently 60) — the \
+        57,
+        "this table must cover every Component variant (currently 57) — the \
          compiler enforces that with_cascaded_style itself classifies every \
          variant, but only this list enforces that the classification stays \
          the one this workstream verified"
@@ -767,10 +753,6 @@ fn newly_cascaded_components_inherit_unset_typography_from_the_parent() {
             serde_json::json!({"type":"marquee","content":"x"}),
         ),
         (
-            "notification",
-            serde_json::json!({"type":"notification","title":"x"}),
-        ),
-        (
             "number_wheel",
             serde_json::json!({"type":"number_wheel","value":"1"}),
         ),
@@ -781,10 +763,6 @@ fn newly_cascaded_components_inherit_unset_typography_from_the_parent() {
         (
             "table",
             serde_json::json!({"type":"table","headers":["A"],"rows":[]}),
-        ),
-        (
-            "terminal",
-            serde_json::json!({"type":"terminal","lines":[]}),
         ),
         ("tooltip", serde_json::json!({"type":"tooltip","text":"x"})),
     ];

@@ -39,6 +39,15 @@ fn default_check_duration() -> f64 {
 
 /// A checkmark that draws itself inside a halo.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`success_check` is a frozen composition (issue #333). Compose an `svg` \
+            checkmark (`reveal: \"stroke\"` draw-on) inside a `shape` circle halo with a \
+            pop-in scale instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md. Kept for compatibility; \
+            scheduled for removal in a future major version via `rustmotion migrate` \
+            (#335)."
+)]
 pub struct SuccessCheck {
     /// Diameter of the halo in px. The stroke scales with it.
     #[serde(default = "default_check_size")]

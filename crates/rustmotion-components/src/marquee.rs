@@ -35,6 +35,14 @@ pub enum MarqueeDirection {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`marquee` is a frozen composition (issue #333). Compose continuous scroll from a \
+            `text`/`flex` row whose translate is keyframed/looped past the frame edge instead \
+            — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Marquee {
     pub content: String,
     #[serde(default = "default_speed")]

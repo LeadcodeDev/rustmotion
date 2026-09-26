@@ -37,6 +37,14 @@ pub enum SkeletonVariant {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[deprecated(
+    since = "0.7.1",
+    note = "`skeleton` is a frozen composition (issue #333). Compose a loading placeholder \
+            from a plain `shape`/`card` with a `shimmer` finish instead — see \
+            crates/rustmotion/skills/rules/composition-recipes.md and \
+            rules/text-polish.md's `shimmer`. Kept for compatibility; scheduled for \
+            removal in a future major version via `rustmotion migrate` (#335)."
+)]
 pub struct Skeleton {
     #[serde(default)]
     pub variant: SkeletonVariant,

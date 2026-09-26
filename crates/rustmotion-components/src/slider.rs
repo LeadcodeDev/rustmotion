@@ -52,6 +52,14 @@ fn default_thumb_color() -> String {
 /// treating local (0,0) as the thumb's top-left.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "SliderRaw")]
+#[deprecated(
+    since = "0.7.1",
+    note = "`slider` is a frozen composition (issue #333), the same recipe as `switch`: \
+            compose two `shape`s (track + thumb) with the thumb's position keyframed \
+            instead — see crates/rustmotion/skills/rules/composition-recipes.md. Kept for \
+            compatibility; scheduled for removal in a future major version via \
+            `rustmotion migrate` (#335)."
+)]
 pub struct Slider {
     #[serde(default = "default_slider_value")]
     pub value: f64,

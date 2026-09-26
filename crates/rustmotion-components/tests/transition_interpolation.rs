@@ -45,6 +45,7 @@ fn div_with_transition(
 fn css_at(json: serde_json::Value, time: f64) -> CssStyle {
     let component: Component = serde_json::from_value(json).expect("deserialize component");
     let child = ChildComponent {
+        id: None,
         component,
         position: Some(PositionMode::Absolute { x: 0.0, y: 0.0 }),
         x: None,
