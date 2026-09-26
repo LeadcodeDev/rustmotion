@@ -208,7 +208,6 @@ pub fn css_effective_default(prop: &str) -> Option<Value> {
 pub fn text_default_font_size(tag: &str) -> Option<f64> {
     match tag {
         "text" | "caption" | "gradient_text" => Some(48.0),
-        "terminal" | "codeblock" => Some(14.0),
         _ => None,
     }
 }
@@ -584,9 +583,7 @@ pub enum CssFamily {
 pub fn css_family(tag: &str) -> CssFamily {
     match tag {
         "text" | "caption" | "gradient_text" | "rich_text" | "counter" | "kbd" | "badge"
-        | "marquee" | "callout" | "tooltip" | "codeblock" | "terminal" | "list" | "tag_cloud" => {
-            CssFamily::TextLike
-        }
+        | "marquee" | "callout" | "tooltip" | "list" | "tag_cloud" => CssFamily::TextLike,
         "container" | "div" | "card" | "flex" | "grid" | "positioned" => CssFamily::Container,
         _ => CssFamily::Plain,
     }
@@ -649,7 +646,7 @@ mod tests {
 
     #[test]
     fn excluded_fields_never_appear() {
-        for tag in ["text", "counter", "card", "chart", "rich_text"] {
+        for tag in ["text", "counter", "div", "chart", "rich_text"] {
             let Some(props) = component_props(tag) else {
                 panic!("{tag} missing from schema registry");
             };
@@ -843,13 +840,11 @@ mod tests {
 
     #[test]
     fn font_size_default_is_per_component() {
-        assert_eq!(text_default_font_size("terminal"), Some(14.0));
-        assert_eq!(text_default_font_size("codeblock"), Some(14.0));
         assert_eq!(text_default_font_size("text"), Some(48.0));
         assert_eq!(text_default_font_size("made_up_tag"), None);
         assert_eq!(
-            css_display_default("terminal", "font-size"),
-            Some(Value::from(14.0))
+            css_display_default("text", "font-size"),
+            Some(Value::from(48.0))
         );
         assert_eq!(
             css_display_default("text", "color"),
