@@ -217,28 +217,51 @@ fn linear_to_srgb(c: f32) -> f32 {
 }
 
 fn draw_bg_halo(canvas: &Canvas, cfg: &HaloConfig, speed: f32, time: f32, width: f32, height: f32) {
+    let scale = width.max(height);
     for (i, zone) in cfg.zones.iter().enumerate() {
         let cx = zone.x * width;
         let cy = zone.y * height;
-        let base_radius = zone.radius * width.max(height);
         let phase =
             (zone.x * 17.3 + zone.y * 31.7 + i as f32 * 0.73).fract() * std::f32::consts::TAU;
         const BREATH_RATE: f32 = 0.02;
         let freq = speed * BREATH_RATE * (0.7 + (zone.x * 13.1 + zone.y * 7.9).fract() * 0.6);
         let breath = 1.0 + 0.15 * (time * freq + phase).sin();
-        let radius = base_radius * breath;
 
         let mut color = color4f_from_hex(&zone.color);
         color.a *= zone.opacity.clamp(0.0, 1.0);
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color4f(color, None);
+
+        let radius_x = zone.effective_radius_x() * scale * breath;
+        let radius_y = zone.effective_radius_y() * scale * breath;
+
+        if zone.is_circular() {
+            paint.set_mask_filter(skia_safe::MaskFilter::blur(
+                skia_safe::BlurStyle::Normal,
+                radius_x * 0.15,
+                false,
+            ));
+            canvas.draw_circle((cx, cy), radius_x, &paint);
+            continue;
+        }
+
         paint.set_mask_filter(skia_safe::MaskFilter::blur(
             skia_safe::BlurStyle::Normal,
-            radius * 0.15,
+            radius_x.min(radius_y) * 0.15,
             false,
         ));
-        canvas.draw_circle((cx, cy), radius, &paint);
+
+        canvas.save();
+        canvas.translate((cx, cy));
+        if zone.rotation != 0.0 {
+            canvas.rotate(zone.rotation, None);
+        }
+        canvas.draw_oval(
+            skia_safe::Rect::from_xywh(-radius_x, -radius_y, radius_x * 2.0, radius_y * 2.0),
+            &paint,
+        );
+        canvas.restore();
     }
 }
 
@@ -627,6 +650,9 @@ pub(super) fn interpolate_animated_bg(
                         x: lerp(za.x, zb.x),
                         y: lerp(za.y, zb.y),
                         radius: lerp(za.radius, zb.radius),
+                        radius_x: Some(lerp(za.effective_radius_x(), zb.effective_radius_x())),
+                        radius_y: Some(lerp(za.effective_radius_y(), zb.effective_radius_y())),
+                        rotation: lerp(za.rotation, zb.rotation),
                         opacity: lerp(za.opacity, zb.opacity),
                     });
                 }
@@ -867,6 +893,168 @@ mod halo_opacity_tests {
             (0, 0, 0),
             "negative opacity must clamp to fully transparent"
         );
+    }
+}
+
+#[cfg(test)]
+mod halo_ellipse_shape_tests {
+    use crate::encode::video::{build_frame_tasks, render_frame_task, FrameTask};
+    use crate::loader::load_scenario_from_source;
+
+    fn render_first_frame(json: &str) -> Vec<u8> {
+        let scenario = load_scenario_from_source(None, Some(json)).expect("load");
+        let tasks = build_frame_tasks(&scenario);
+        let task = tasks
+            .iter()
+            .find(|t| matches!(t, FrameTask::Normal { .. }))
+            .expect("normal task");
+        render_frame_task(&scenario.video, &scenario, task).expect("render")
+    }
+
+    fn halo_scenario(zone_fields: &str) -> String {
+        format!(
+            r##"{{"video":{{"width":200,"height":200,"background":"#000000"}},
+                "scenes":[{{"duration":1.0,
+                    "background":{{"preset":"halo","speed":0,
+                        "zones":[{{"color":"#FFFFFF","x":0.5,"y":0.5{zone_fields}}}]}}
+                    ,"children":[]}}]}}"##
+        )
+    }
+
+    fn red_at(buf: &[u8], width: u32, x: u32, y: u32) -> u8 {
+        buf[((y * width + x) * 4) as usize]
+    }
+
+    #[test]
+    fn radius_only_zone_renders_byte_identically_to_explicit_equal_radius_x_radius_y() {
+        let radius_only = render_first_frame(&halo_scenario(r#","radius":0.3"#));
+        let explicit_axes = render_first_frame(&halo_scenario(
+            r#","radius":0.3,"radius_x":0.3,"radius_y":0.3"#,
+        ));
+        assert_eq!(
+            radius_only, explicit_axes,
+            "a radius-only zone must render exactly like radius_x == radius_y == radius"
+        );
+    }
+
+    #[test]
+    fn an_explicit_zero_rotation_on_a_radius_only_zone_is_a_true_noop() {
+        let without_field = render_first_frame(&halo_scenario(r#","radius":0.25"#));
+        let with_field = render_first_frame(&halo_scenario(r#","radius":0.25,"rotation":0.0"#));
+        assert_eq!(
+            without_field, with_field,
+            "rotation: 0.0 must be pixel-identical to omitting rotation"
+        );
+    }
+
+    #[test]
+    fn a_wide_ellipse_reaches_further_horizontally_than_vertically() {
+        let buf = render_first_frame(&halo_scenario(
+            r#","radius":0.3,"radius_x":0.45,"radius_y":0.05"#,
+        ));
+        assert!(
+            red_at(&buf, 200, 180, 100) > 200,
+            "a radius_x=0.45 ellipse should still be near full brightness 80px from center"
+        );
+        assert!(
+            red_at(&buf, 200, 100, 180) < 10,
+            "a radius_y=0.05 ellipse should not reach 80px vertically from center"
+        );
+    }
+
+    #[test]
+    fn rotating_the_ellipse_changes_which_pixels_it_covers() {
+        let unrotated = render_first_frame(&halo_scenario(
+            r#","radius":0.3,"radius_x":0.4,"radius_y":0.08"#,
+        ));
+        let rotated = render_first_frame(&halo_scenario(
+            r#","radius":0.3,"radius_x":0.4,"radius_y":0.08,"rotation":90.0"#,
+        ));
+        assert_ne!(
+            unrotated, rotated,
+            "a 90-degree rotation on a non-circular zone must change the render"
+        );
+    }
+
+    #[test]
+    fn rotation_has_no_effect_on_a_circular_zone() {
+        let unrotated = render_first_frame(&halo_scenario(r#","radius":0.3"#));
+        let rotated = render_first_frame(&halo_scenario(r#","radius":0.3,"rotation":37.0"#));
+        assert_eq!(
+            unrotated, rotated,
+            "rotating a circle (radius_x == radius_y) must not change the render"
+        );
+    }
+}
+
+#[cfg(test)]
+mod halo_zone_transition_interpolation_tests {
+    use super::*;
+    use crate::schema::HaloConfig;
+
+    fn halo_bg(zones: Vec<HaloZone>) -> AnimatedBackground {
+        AnimatedBackground {
+            preset: BackgroundPreset::Halo(HaloConfig { zones }),
+            x: 0.0,
+            y: 0.0,
+            speed: 0.0,
+            direction: None,
+        }
+    }
+
+    fn zone(radius_x: f32, radius_y: f32, rotation: f32) -> HaloZone {
+        HaloZone {
+            color: "#FFFFFF".to_string(),
+            x: 0.5,
+            y: 0.5,
+            radius: radius_x,
+            radius_x: Some(radius_x),
+            radius_y: Some(radius_y),
+            rotation,
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_halo_transition_interpolates_ellipse_axes_and_rotation_instead_of_snapping() {
+        let a = halo_bg(vec![zone(0.2, 0.05, 0.0)]);
+        let b = halo_bg(vec![zone(0.6, 0.5, 90.0)]);
+
+        let mid = interpolate_animated_bg(&a, &b, 0.5);
+        match mid.preset {
+            BackgroundPreset::Halo(cfg) => {
+                let z = &cfg.zones[0];
+                assert_eq!(z.effective_radius_x(), 0.4);
+                assert_eq!(z.effective_radius_y(), 0.275);
+                assert_eq!(z.rotation, 45.0);
+            }
+            other => panic!("expected Halo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpolation_still_falls_back_through_radius_when_a_zone_only_set_it() {
+        let legacy_zone = HaloZone {
+            color: "#FFFFFF".to_string(),
+            x: 0.5,
+            y: 0.5,
+            radius: 0.2,
+            radius_x: None,
+            radius_y: None,
+            rotation: 0.0,
+            opacity: 1.0,
+        };
+        let a = halo_bg(vec![legacy_zone]);
+        let b = halo_bg(vec![zone(0.6, 0.6, 0.0)]);
+
+        let mid = interpolate_animated_bg(&a, &b, 0.5);
+        match mid.preset {
+            BackgroundPreset::Halo(cfg) => {
+                assert_eq!(cfg.zones[0].effective_radius_x(), 0.4);
+                assert_eq!(cfg.zones[0].effective_radius_y(), 0.4);
+            }
+            other => panic!("expected Halo, got {other:?}"),
+        }
     }
 }
 
