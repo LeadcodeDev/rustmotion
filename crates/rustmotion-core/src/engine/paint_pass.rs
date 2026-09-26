@@ -7,8 +7,8 @@ use skia_safe::{
 };
 
 use crate::css::style::{
-    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, Color,
-    CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
+    Background, BackgroundLayer, BorderEdges, BorderRadius, BorderStyle, BoxShadow, ClipPath,
+    Color, CssStyle, Edges, Overflow, TransformFn, TransformOrigin,
 };
 use crate::css::units::{parse_origin_component, LengthContext, LengthPercentage, ParsedLength};
 use crate::engine::box_tree::{BoxKind, BoxNode, NodeId};
@@ -308,6 +308,18 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         false
     };
 
+    let opened_clip_path = match node.css.clip_path.as_ref() {
+        Some(clip) => match clip_path_to_skia(clip, box_layout, &length_ctx) {
+            Some(path) => {
+                canvas.save();
+                canvas.clip_path(&path, ClipOp::Intersect, true);
+                true
+            }
+            None => false,
+        },
+        None => false,
+    };
+
     if let Some(shadows) = node.css.box_shadow.as_ref() {
         for shadow in shadows {
             if shadow.inset.unwrap_or(false) {
@@ -389,6 +401,9 @@ fn paint_node(canvas: &Canvas, node: &BoxNode, ctx: &PaintContext, tree_depth: u
         paint_shimmer_band(canvas, box_layout, cfg, progress);
     }
     if opened_shimmer_layer {
+        canvas.restore();
+    }
+    if opened_clip_path {
         canvas.restore();
     }
 
@@ -1245,6 +1260,113 @@ fn paint_gradient_border(
     paint.set_style(PaintStyle::Fill);
     paint.set_shader(shader);
     canvas.draw_drrect(outer, inner, &paint);
+}
+
+fn clip_path_to_skia(
+    clip: &ClipPath,
+    layout: &BoxLayout,
+    ctx: &LengthContext,
+) -> Option<skia_safe::Path> {
+    let ctx_w = LengthContext {
+        parent_size: layout.width,
+        ..*ctx
+    };
+    let ctx_h = LengthContext {
+        parent_size: layout.height,
+        ..*ctx
+    };
+
+    match clip {
+        ClipPath::None => None,
+
+        ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            radius,
+        } => {
+            let t = top.resolve(&ctx_h);
+            let r = right.resolve(&ctx_w);
+            let b = bottom.resolve(&ctx_h);
+            let l = left.resolve(&ctx_w);
+            let width = (layout.width - l - r).max(0.0);
+            let height = (layout.height - t - b).max(0.0);
+            let rect = Rect::from_xywh(layout.x + l, layout.y + t, width, height);
+            let corners = radius
+                .as_ref()
+                .map(|br| resolve_border_radius(br, layout, ctx))
+                .unwrap_or([0.0; 4]);
+            let mut builder = PathBuilder::new();
+            builder.add_rrect(rrect_from_corners(rect, corners), None, None);
+            Some(builder.detach())
+        }
+
+        ClipPath::Circle { radius, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let reference = LengthContext {
+                parent_size: (layout.width.powi(2) + layout.height.powi(2)).sqrt()
+                    / std::f32::consts::SQRT_2,
+                ..*ctx
+            };
+            let r = radius.resolve(&reference);
+            if r <= 0.0 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            builder.add_circle((cx, cy), r, None);
+            Some(builder.detach())
+        }
+
+        ClipPath::Ellipse { rx, ry, origin } => {
+            let (cx, cy, _) = resolve_origin(origin.as_ref(), layout, ctx);
+            let a = rx.resolve(&ctx_w);
+            let b = ry.resolve(&ctx_h);
+            if a <= 0.0 || b <= 0.0 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            builder.add_oval(
+                Rect::from_xywh(cx - a, cy - b, a * 2.0, b * 2.0),
+                None,
+                None,
+            );
+            Some(builder.detach())
+        }
+
+        ClipPath::Polygon { points } => {
+            if points.len() < 3 {
+                return Some(PathBuilder::new().detach());
+            }
+            let mut builder = PathBuilder::new();
+            for (i, (px, py)) in points.iter().enumerate() {
+                let x = layout.x + px.resolve(&ctx_w);
+                let y = layout.y + py.resolve(&ctx_h);
+                if i == 0 {
+                    builder.move_to((x, y));
+                } else {
+                    builder.line_to((x, y));
+                }
+            }
+            builder.close();
+            Some(builder.detach())
+        }
+
+        ClipPath::Path { d } => {
+            let parsed = skia_safe::Path::from_svg(d)?;
+            Some(parsed.with_offset((layout.x, layout.y)))
+        }
+
+        ClipPath::NodePath { id } => {
+            eprintln!(
+                "rustmotion: clip-path {{ kind: node-path, id: \"{id}\" }} is not implemented \
+                 yet — reading another node's geometry needs a resolved-path lookup the paint \
+                 pass does not have. Nothing is clipped. Use kind: path with the same data, or \
+                 follow the tracking issue."
+            );
+            None
+        }
+    }
 }
 
 fn border_rrect(layout: &BoxLayout, radius: [f32; 4]) -> RRect {
@@ -2510,8 +2632,8 @@ mod paint_order_tests {
     use super::*;
 
     use crate::css::style::{
-        Background, BoxShadow, Color as CssColor, CssStyle, Display, FilterFn, FlexDirection,
-        Overflow, Position, Size as CSize,
+        Background, BoxShadow, ClipPath, Color as CssColor, CssStyle, Display, FilterFn,
+        FlexDirection, Overflow, Position, Size as CSize,
     };
     use crate::css::taffy_bridge::ConversionContext;
     use crate::css::units::{Length, LengthPercentage as CLP};
@@ -2583,6 +2705,170 @@ mod paint_order_tests {
             }
         }
         n
+    }
+
+    fn clipped_square(clip: Option<ClipPath>) -> BoxNode {
+        BoxNode {
+            id: 0,
+            kind: BoxKind::Container,
+            css: CssStyle {
+                position: Some(Position::Absolute),
+                left: Some(CLP::Px(0.0)),
+                top: Some(CLP::Px(0.0)),
+                width: Some(CSize::Length(CLP::Px(400.0))),
+                height: Some(CSize::Length(CLP::Px(400.0))),
+                background: Some(Background::Color(CssColor::String("#ff0000".into()))),
+                clip_path: clip,
+                ..Default::default()
+            },
+            children: vec![],
+            intrinsic: None,
+            source_path: None,
+            window: None,
+        }
+    }
+
+    fn is_red_at(clip: Option<ClipPath>, x: u32, y: u32) -> bool {
+        let mut root = root_node(400.0, 400.0, "#000000", vec![clipped_square(clip)]);
+        let buf = render_pixels(&mut root, 400, 400);
+        let i = ((y * 400 + x) * 4) as usize;
+        buf[i] > 200 && buf[i + 1] < 50 && buf[i + 2] < 50
+    }
+
+    #[test]
+    fn clip_path_inset_removes_the_region_outside_it() {
+        assert!(
+            is_red_at(None, 350, 200),
+            "sanity: unclipped, x=350 is inside the square"
+        );
+        let inset = ClipPath::Inset {
+            top: CLP::Px(0.0),
+            right: CLP::Px(120.0),
+            bottom: CLP::Px(0.0),
+            left: CLP::Px(0.0),
+            radius: None,
+        };
+        assert!(
+            is_red_at(Some(inset.clone()), 200, 200),
+            "inside the inset box must still paint"
+        );
+        assert!(
+            !is_red_at(Some(inset), 330, 200),
+            "inset right:120 must remove x=330 — this is the sample from the issue that \
+             stayed painted while clip-path was read by nothing"
+        );
+    }
+
+    #[test]
+    fn clip_path_circle_keeps_the_centre_and_drops_the_corner() {
+        let circle = ClipPath::Circle {
+            radius: CLP::Px(100.0),
+            origin: None,
+        };
+        assert!(
+            is_red_at(Some(circle.clone()), 200, 200),
+            "the centre is inside a centred r=100 circle"
+        );
+        assert!(
+            !is_red_at(Some(circle), 20, 20),
+            "the top-left corner is outside a centred r=100 circle"
+        );
+    }
+
+    #[test]
+    fn clip_path_ellipse_is_wider_than_it_is_tall() {
+        let ellipse = ClipPath::Ellipse {
+            rx: CLP::Px(180.0),
+            ry: CLP::Px(40.0),
+            origin: None,
+        };
+        assert!(
+            is_red_at(Some(ellipse.clone()), 360, 200),
+            "x=360 is within rx=180 of the centre"
+        );
+        assert!(
+            !is_red_at(Some(ellipse), 200, 360),
+            "y=360 is outside ry=40 of the centre"
+        );
+    }
+
+    #[test]
+    fn clip_path_polygon_cuts_a_triangle() {
+        let triangle = ClipPath::Polygon {
+            points: vec![
+                (CLP::Px(200.0), CLP::Px(0.0)),
+                (CLP::Px(400.0), CLP::Px(400.0)),
+                (CLP::Px(0.0), CLP::Px(400.0)),
+            ],
+        };
+        assert!(
+            is_red_at(Some(triangle.clone()), 200, 300),
+            "low centre is inside the triangle"
+        );
+        assert!(
+            !is_red_at(Some(triangle), 20, 20),
+            "the top-left corner is outside the triangle"
+        );
+    }
+
+    #[test]
+    fn clip_path_path_takes_svg_data_relative_to_the_box() {
+        let left_half = ClipPath::Path {
+            d: "M0 0 L200 0 L200 400 L0 400 Z".to_string(),
+        };
+        assert!(
+            is_red_at(Some(left_half.clone()), 100, 200),
+            "the left half stays"
+        );
+        assert!(
+            !is_red_at(Some(left_half), 300, 200),
+            "the right half is clipped away"
+        );
+    }
+
+    #[test]
+    fn clip_path_none_paints_exactly_as_no_clip_path_at_all() {
+        for (x, y) in [(20, 20), (200, 200), (380, 380)] {
+            assert_eq!(
+                is_red_at(Some(ClipPath::None), x, y),
+                is_red_at(None, x, y),
+                "clip-path: none must be indistinguishable from absent at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn clip_path_clips_the_background_and_the_outset_shadow_too() {
+        let mut node = clipped_square(Some(ClipPath::Inset {
+            top: CLP::Px(0.0),
+            right: CLP::Px(200.0),
+            bottom: CLP::Px(0.0),
+            left: CLP::Px(0.0),
+            radius: None,
+        }));
+        node.css.width = Some(CSize::Length(CLP::Px(200.0)));
+        node.css.height = Some(CSize::Length(CLP::Px(200.0)));
+        node.css.left = Some(CLP::Px(100.0));
+        node.css.top = Some(CLP::Px(100.0));
+        node.css.background = Some(Background::Color(CssColor::String("#ffffff".into())));
+        node.css.box_shadow = Some(vec![BoxShadow {
+            offset_x: Length::Px(0.0),
+            offset_y: Length::Px(0.0),
+            blur: None,
+            spread: Some(Length::Px(40.0)),
+            color: Some(CssColor::String("#ff0000".into())),
+            inset: None,
+        }]);
+
+        let mut root = root_node(400.0, 400.0, "#000000", vec![node]);
+        let buf = render_pixels(&mut root, 400, 400);
+
+        let right_of_the_cut = count_red_in(&buf, 400, 260, 100, 400, 300);
+        assert_eq!(
+            right_of_the_cut, 0,
+            "clip-path clips the element itself, shadow included — unlike overflow:hidden, \
+             which clips only the content and deliberately spares the node's own outset shadow"
+        );
     }
 
     fn card_with_shadow(overflow_hidden: bool) -> BoxNode {
