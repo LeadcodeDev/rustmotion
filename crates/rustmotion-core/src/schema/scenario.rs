@@ -8,7 +8,9 @@ use super::background::{
     deserialize_animated_backgrounds, deserialize_background_value, AnimatedBackground,
     BackgroundValue, ResolvedBackground,
 };
+use super::shake::SceneShake;
 use super::style::{CardAlign, CardDirection, CardJustify};
+use super::time::TimePoint;
 
 /// Definition of a variable in a structural component.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -32,14 +34,65 @@ pub enum VariableType {
     Array,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+/// One entry of [`Scenario::components`] — a named, reusable template.
+///
+/// Schema-only twin of `rustmotion_core::expand::ComponentDefinition`
+/// (private to that module — this type exists so `components` has a real,
+/// documented shape in the exported schema; see [`Scenario::components`]'s
+/// doc for why it can't just reuse that private struct, and why this one is
+/// never populated in practice).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentTemplateDef {
+    /// Parameters this template accepts. Same shape as
+    /// [`ComponentTemplateParam`] — *not* [`VariableDefinition`] (the
+    /// scenario-level `config` entry shape): a template parameter's
+    /// `default` is itself optional, and omitting it is what makes the
+    /// parameter required at every `use` site. `config`'s `default` has no
+    /// such omission story — it is always required there.
+    #[serde(default)]
+    pub params: HashMap<String, ComponentTemplateParam>,
+    /// The subtree to instantiate: a single component object, or an array
+    /// of sibling component objects (a fragment spliced in place). May
+    /// itself contain nested `for-each`/`use` directives.
+    pub template: serde_json::Value,
+}
+
+/// One parameter declared by a [`ComponentTemplateDef`]. See
+/// [`ComponentTemplateDef::params`] for how this differs from
+/// [`VariableDefinition`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentTemplateParam {
+    #[serde(rename = "type")]
+    pub param_type: VariableType,
+    /// Omitting this makes the parameter required at every `use` site.
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Deliberately **not** `#[derive(Deserialize)]` — see
+/// [`ScenarioDe`]/`impl From<ScenarioDe> for Scenario` just below for why:
+/// this type needs a post-deserialize pass (propagating `bpm`/`beat_offset`/
+/// `timing`/`snap` down onto every reachable [`Scene`]) that a plain derive
+/// can't express, and every call site that builds a `Scenario` from JSON
+/// (`loader.rs`, `include.rs`'s own included-file loading) is outside this
+/// workstream's owned files this wave — the propagation has to happen
+/// *inside* `Scenario::deserialize` itself so those callers need no changes.
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
     #[serde(default = "default_version")]
     pub version: String,
     pub video: VideoConfig,
+    /// File-based tracks (`"audio": [...]`, unchanged since before issue
+    /// #331) or, for a scenario that synthesises its own soundtrack, a
+    /// single object carrying both (`"audio": {"tracks": [...], "voices":
+    /// {...}, "score": [...], "master": {...}}`) — see [`AudioValue`].
     #[serde(default)]
-    pub audio: Vec<AudioTrack>,
+    pub audio: AudioValue,
     #[serde(default)]
     pub fonts: Vec<FontEntry>,
     #[serde(default, deserialize_with = "deserialize_scene_entries")]
@@ -53,10 +106,220 @@ pub struct Scenario {
     /// Named background templates that scenes can reference via `$ref`.
     #[serde(default)]
     pub backgrounds: HashMap<String, serde_json::Value>,
+    /// Reusable component template definitions — `"components": { "name": {
+    /// "params": {...}, "template": {...} } }`, instantiated from a
+    /// `children` entry via `{"use": "name", "props": {...}}` (see
+    /// [`ComponentTemplateDef`]). Documented in `CLAUDE.md`'s
+    /// "Factorisation" section.
+    ///
+    /// This field exists so the exported JSON Schema (`rustmotion schema`)
+    /// declares the shape the engine actually accepts — it is **not** how
+    /// `components` is consumed at runtime. `rustmotion_core::expand::
+    /// expand_directives` (a sibling workstream's file, outside this one's
+    /// scope) resolves every `for-each`/`use` against this block and then
+    /// *removes the key entirely*, before this struct is ever deserialized
+    /// — the same way `variables::apply_variables` consumes `config`'s
+    /// `$name` placeholders without `config` disappearing from the struct.
+    /// The practical difference: `config` stays meaningful after expansion
+    /// (`Scenario::config` is read elsewhere), while `components` is spent
+    /// in full during expansion, so this field is always empty by the time
+    /// any code outside `schema/` could read it.
+    #[serde(default)]
+    pub components: HashMap<String, ComponentTemplateDef>,
     /// Studio feedback annotations. Persisted in the scenario but never read by
     /// the renderer or the geometry validator. Skipped on serialization when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
+    /// Beats per minute for this scenario's beat grid (issue #336). `None`
+    /// (default) means no grid exists: any [`TimePoint`] beat (`b`) unit
+    /// then fails to resolve with `unresolved_beat_unit` (schema:
+    /// [`crate::schema::TimeError::NoBpm`]).
+    #[serde(default)]
+    pub bpm: Option<f64>,
+    /// Where beat 0 sits on the scenario's absolute timeline, in seconds.
+    /// The grid is `beat_offset + n * 60 / bpm` — not decoration: a reel
+    /// whose first beat lands at 2.2s anchors its grid there, not at 0.
+    #[serde(default)]
+    pub beat_offset: f64,
+    /// Optional override of the scenario's total rendered duration, in
+    /// seconds. Reserved for downstream consumers (audio/export tooling);
+    /// the frame-task scheduler in `rustmotion`'s `encode` module does not
+    /// read it — under `timing: "v2"` the total is always `at_last +
+    /// duration_last`, computed from the scenes themselves.
+    #[serde(default)]
+    pub duration: Option<f64>,
+    /// Scene-placement semantics. See [`TimingMode`].
+    #[serde(default)]
+    pub timing: TimingMode,
+    /// Rounds resolved times onto a grid before scheduling. See [`SnapMode`].
+    #[serde(default)]
+    pub snap: Option<SnapMode>,
+    /// Scenario-level variables (issue #329): a scalar declared once,
+    /// animated on the scenario's absolute timeline, and readable from any
+    /// expression in any scene as `$name`. Visible everywhere; shadowed by
+    /// a scene's own [`Scene::vars`] of the same name. See
+    /// `rustmotion_core::vars` for the resolver and the `Scope`
+    /// implementation that reads this.
+    #[serde(default)]
+    pub vars: crate::vars::VarSet,
+}
+
+/// The wire shape of [`Scenario`] — identical field-for-field, attribute-for-
+/// attribute — used only to give `Scenario` a `Deserialize` impl that runs
+/// [`Scenario::propagate_time_ctx`] before handing the value to its caller.
+/// Kept private: nothing outside this module should ever construct or see
+/// one directly.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScenarioDe {
+    #[serde(default = "default_version")]
+    version: String,
+    video: VideoConfig,
+    #[serde(default)]
+    audio: AudioValue,
+    #[serde(default)]
+    fonts: Vec<FontEntry>,
+    #[serde(default, deserialize_with = "deserialize_scene_entries")]
+    scenes: Vec<SceneEntry>,
+    #[serde(default)]
+    composition: Option<Vec<View>>,
+    #[serde(default)]
+    config: Option<HashMap<String, VariableDefinition>>,
+    #[serde(default)]
+    backgrounds: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    components: HashMap<String, ComponentTemplateDef>,
+    #[serde(default)]
+    annotations: Vec<Annotation>,
+    #[serde(default)]
+    bpm: Option<f64>,
+    #[serde(default)]
+    beat_offset: f64,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    timing: TimingMode,
+    #[serde(default)]
+    snap: Option<SnapMode>,
+    #[serde(default)]
+    vars: crate::vars::VarSet,
+}
+
+impl<'de> Deserialize<'de> for Scenario {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = ScenarioDe::deserialize(deserializer)?;
+        let mut scenario = Scenario {
+            version: raw.version,
+            video: raw.video,
+            audio: raw.audio,
+            fonts: raw.fonts,
+            scenes: raw.scenes,
+            composition: raw.composition,
+            config: raw.config,
+            backgrounds: raw.backgrounds,
+            components: raw.components,
+            annotations: raw.annotations,
+            bpm: raw.bpm,
+            beat_offset: raw.beat_offset,
+            duration: raw.duration,
+            timing: raw.timing,
+            snap: raw.snap,
+            vars: raw.vars,
+        };
+        scenario.propagate_time_ctx();
+        Ok(scenario)
+    }
+}
+
+impl Scenario {
+    /// Stamps every scene reachable from this `Scenario` — its own
+    /// top-level `scenes`, and every view's `scenes` under `composition` —
+    /// with this scenario's own `bpm`/`beat_offset`/`timing`/`snap`, via
+    /// [`Scene::resolved_time_ctx`]/[`Scene::resolved_timing`]/
+    /// [`Scene::resolved_snap`], and (issue #329) with this scenario's own
+    /// `vars` via [`Scene::resolved_scenario_vars`] — same reasoning, same
+    /// mechanism, reused rather than duplicated. Runs once, inside
+    /// [`Scenario::deserialize`], so it applies uniformly whether the
+    /// scenario came from a file, a remote `include`, or an inline `--json`
+    /// string.
+    ///
+    /// An `include`d file is deserialized as its own `Scenario` (see
+    /// `include.rs`), so this only ever propagates a scenario's own
+    /// declared grid — and its own `vars` — to its own scenes: an included
+    /// file that wants beat-synced content must declare its own `bpm`, and
+    /// one that wants scenario-level variables must declare its own `vars`.
+    fn propagate_time_ctx(&mut self) {
+        let ctx = super::time::TimeCtx {
+            bpm: self.bpm,
+            beat_offset: self.beat_offset,
+            scene_start: 0.0,
+        };
+        let timing = self.timing;
+        let snap = self.snap;
+        let scenario_vars = self.vars.clone();
+        stamp_entries(&mut self.scenes, ctx, timing, snap, &scenario_vars);
+        if let Some(views) = &mut self.composition {
+            for view in views {
+                stamp_entries(&mut view.scenes, ctx, timing, snap, &scenario_vars);
+            }
+        }
+    }
+}
+
+/// Stamps every [`Scene`] in `entries` (skipping `Include` directives, which
+/// carry no `Scene` yet) with the given beat-grid context and scenario-level
+/// variables. Free function rather than a closure over `&mut self` so it can
+/// be called once for the top-level `scenes` and once per `composition` view
+/// without fighting the borrow checker over `self`.
+fn stamp_entries(
+    entries: &mut [SceneEntry],
+    ctx: super::time::TimeCtx,
+    timing: TimingMode,
+    snap: Option<SnapMode>,
+    scenario_vars: &crate::vars::VarSet,
+) {
+    for entry in entries {
+        if let SceneEntry::Scene(scene) = entry {
+            scene.resolved_time_ctx = ctx;
+            scene.resolved_timing = timing;
+            scene.resolved_snap = snap;
+            scene.resolved_scenario_vars = scenario_vars.clone();
+        }
+    }
+}
+
+/// Scene-placement semantics for a scenario (issue #336). See
+/// [`Scene::at`] and [`Scene::tail`] for what `"v2"` unlocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingMode {
+    /// Today's behaviour, byte-identical for every scenario that predates
+    /// issue #336: a transition's frames *replace* frames at the tail of
+    /// the outgoing scene and the head of the incoming one, so the
+    /// scenario's rendered length is `sum(scene durations) - sum(transition
+    /// durations)`.
+    #[default]
+    V1,
+    /// Absolute scene placement with a declared overlap: scene *i* occupies
+    /// `[at_i, at_i + duration_i)`, and a transition entering it
+    /// additionally renders the *previous* scene during `[at_i, at_i +
+    /// transition duration)` — past its own end, per that scene's
+    /// [`SceneTail`]. Total duration is `at_last + duration_last`: no
+    /// subtraction anywhere.
+    V2,
+}
+
+/// What `Scenario.snap` rounds resolved times onto. Currently only the beat
+/// grid; the variant exists so the field reads as intent (`"beat"`) rather
+/// than a bare boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapMode {
+    /// Round to the nearest point on `beat_offset + n * 60 / bpm`.
+    Beat,
 }
 
 /// Lifecycle of a studio annotation.
@@ -157,6 +420,16 @@ pub struct View {
 }
 
 /// A scenario with all includes expanded — safe to pass to the rendering pipeline.
+///
+/// Deliberately does **not** carry `bpm`/`beat_offset`/`timing`/`snap`
+/// itself (issue #336): `include.rs`, which builds this struct, is a file
+/// no single workstream owns in this wave, so those scenario-level values
+/// are threaded through per-[`Scene`] instead —
+/// [`Scene::resolved_time_ctx`], [`Scene::resolved_timing`],
+/// [`Scene::resolved_snap`] — populated once, for every scene reachable
+/// from a `Scenario` (including through `composition`), by
+/// `Scenario`'s own `Deserialize` impl. That happens before `include.rs`
+/// ever runs, so it needs no cooperation from that file.
 #[derive(Debug)]
 pub struct ResolvedScenario {
     pub video: VideoConfig,
@@ -291,6 +564,120 @@ pub struct FontEntry {
     pub weights: Option<Vec<u16>>,
 }
 
+/// `Scenario::audio`'s wire shape (issue #331): either the legacy bare
+/// array of file-based [`AudioTrack`]s, or a single object that can carry
+/// both file tracks *and* a synthesised score, mixed into one bus. Which
+/// shape a given `"audio"` value is is unambiguous from its JSON kind
+/// (array vs. object), so `#[serde(untagged)]` needs no help distinguishing
+/// them.
+///
+/// An old scenario using the bare-array form is unaffected byte-for-byte —
+/// [`AudioValue::Tracks`] round-trips through exactly the type `audio` used
+/// to be, and the `rustmotion` crate's include-resolution pass (outside
+/// this crate) never has to look past [`AudioValue::into_tracks`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AudioValue {
+    Tracks(Vec<AudioTrack>),
+    Config(Box<AudioConfig>),
+}
+
+/// Not derivable: `#[derive(Default)]`'s `#[default]` attribute only
+/// accepts a unit variant, and [`AudioValue::Tracks`] carries a `Vec`.
+impl Default for AudioValue {
+    fn default() -> Self {
+        AudioValue::Tracks(Vec::new())
+    }
+}
+
+impl AudioValue {
+    /// The file-based tracks this value carries — all of them for
+    /// [`AudioValue::Tracks`], just the `tracks` field for
+    /// [`AudioValue::Config`]. What `include::resolve_includes` (outside
+    /// this workstream's owned files) merges across `include`d scenarios;
+    /// the object form's `voices`/`score`/`master` are deliberately not
+    /// part of that merge — see [`AudioValue::config`]'s doc.
+    pub fn tracks(&self) -> &[AudioTrack] {
+        match self {
+            AudioValue::Tracks(tracks) => tracks,
+            AudioValue::Config(config) => &config.tracks,
+        }
+    }
+
+    pub fn into_tracks(self) -> Vec<AudioTrack> {
+        match self {
+            AudioValue::Tracks(tracks) => tracks,
+            AudioValue::Config(config) => config.tracks,
+        }
+    }
+
+    /// The object form's full config, when `audio` is one — `None` for the
+    /// legacy array form. A synthesised score only ever comes from the
+    /// *root* scenario's own `audio`: `include.rs` merges `tracks()` across
+    /// `include`d files (same as before this issue), but has no equivalent
+    /// merge for a score, the same boundary `Scenario::bpm`/`beat_offset`
+    /// already draw (see `Scenario::propagate_time_ctx`'s doc) — an
+    /// included file that wants its own synthesised audio would need its
+    /// own render pass, out of scope here.
+    pub fn config(&self) -> Option<&AudioConfig> {
+        match self {
+            AudioValue::Tracks(_) => None,
+            AudioValue::Config(config) => Some(config),
+        }
+    }
+}
+
+/// The object form of [`AudioValue`] — file tracks plus, optionally, a
+/// synthesised score (issue #331's `voices`/`score`/`master`, matching the
+/// issue body's example verbatim). `bpm`/`beat_offset` default to the
+/// *scenario's* own [`Scenario::bpm`]/[`Scenario::beat_offset`] when
+/// absent here — see `AudioConfig::as_score`'s caller in `rustmotion`'s
+/// `encode` crate, which is where that fallback is actually applied (this
+/// crate only carries the override, it does not resolve it: `Scenario`
+/// alone does not know its own `bpm` by the time `include::resolve_includes`
+/// has consumed it — the caller captures both before that happens).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AudioConfig {
+    #[serde(default)]
+    pub tracks: Vec<AudioTrack>,
+    /// Overrides the scenario's own `bpm` for this score only. Normally
+    /// left absent — sharing the scenario's real grid (deliverable #1's
+    /// whole point) is the common case, not the exception.
+    #[serde(default)]
+    pub bpm: Option<f64>,
+    #[serde(default)]
+    pub beat_offset: Option<f64>,
+    #[serde(default)]
+    pub voices: HashMap<String, crate::audio::Voice>,
+    #[serde(default)]
+    pub score: Vec<crate::audio::ScoreEvent>,
+    #[serde(default)]
+    pub master: crate::audio::MasterBus,
+}
+
+impl AudioConfig {
+    /// Whether this config declares anything to synthesise — `false` for a
+    /// value that only uses the object form to carry `tracks` (e.g. to set
+    /// `bpm` alongside a purely file-based scenario, before `voices`/
+    /// `score` are ever added).
+    pub fn has_synth(&self) -> bool {
+        !self.voices.is_empty() || !self.score.is_empty()
+    }
+
+    /// Packages `voices`/`score`/`master` into a [`crate::audio::Score`]
+    /// for [`crate::audio::synth::render`]. Does not resolve `bpm`/
+    /// `beat_offset` — see this struct's doc for why that fallback lives
+    /// with the caller instead.
+    pub fn as_score(&self) -> crate::audio::Score {
+        crate::audio::Score {
+            voices: self.voices.clone(),
+            score: self.score.clone(),
+            master: self.master.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AudioTrack {
     pub src: String,
@@ -374,6 +761,14 @@ pub struct Scene {
     /// Virtual camera with animatable x, y, zoom, rotation.
     #[serde(default)]
     pub camera: Option<Camera>,
+    /// Declarative camera shake (issue #330): a list of beat-synced
+    /// impacts, each a damped harmonic oscillator, summed and **additive**
+    /// over `camera` above — a pan and a shake ride the same frame instead
+    /// of fighting over one keyframe track. See [`SceneShake`] for the
+    /// formula and `crate::engine::shake::shake_offset` for the function
+    /// that evaluates it.
+    #[serde(default)]
+    pub shake: Option<SceneShake>,
     /// Position of this scene in the 2D world (used by world views).
     #[serde(default, rename = "world-position")]
     pub world_position: Option<WorldPosition>,
@@ -384,10 +779,158 @@ pub struct Scene {
     /// Effects are additive and applied in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<PostEffect>,
+    /// Where this scene starts, on the scenario's absolute timeline (issue
+    /// #336). `at` is absolute by definition — see the anchoring rule
+    /// documented once on [`TimePoint`]. Defaults to [`SceneStart::Auto`]:
+    /// immediately after the previous scene's own window ends. Only
+    /// consulted by `rustmotion`'s frame-task scheduler under
+    /// `Scenario.timing = "v2"`; a `"v1"` scenario places scenes
+    /// back-to-back regardless of what this field says.
+    #[serde(default, skip_serializing_if = "SceneStart::is_auto")]
+    pub at: SceneStart,
+    /// How this scene behaves when the *next* scene's transition overlaps
+    /// into it, rendering it past its own `duration` (issue #336, `timing:
+    /// "v2"` only). Defaults to [`SceneTail::Freeze`].
+    #[serde(default, skip_serializing_if = "SceneTail::is_default_freeze")]
+    pub tail: SceneTail,
     /// Post-resolution background (populated by include.rs, ignored by serde).
     #[serde(skip)]
     #[schemars(skip)]
     pub resolved_background: ResolvedBackground,
+    /// The beat-grid context (`bpm`/`beat_offset`) of the `Scenario` this
+    /// scene was declared in — populated by [`Scenario`]'s own
+    /// `Deserialize` impl, *before* `include.rs` resolution ever runs, not
+    /// by `include.rs` itself (issue #336; see the doc on
+    /// [`ResolvedScenario`] for why). `scene_start` is always `0.0` here:
+    /// [`Scene::at`] is resolved with
+    /// [`TimePoint::resolve_absolute`](super::time::TimePoint::resolve_absolute),
+    /// which ignores it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_time_ctx: super::time::TimeCtx,
+    /// The `Scenario.timing` this scene was declared under. Same
+    /// populate-at-deserialize-time note as [`Scene::resolved_time_ctx`].
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_timing: TimingMode,
+    /// The `Scenario.snap` this scene was declared under. Same
+    /// populate-at-deserialize-time note as [`Scene::resolved_time_ctx`].
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_snap: Option<SnapMode>,
+    /// This scene's own declared variables (issue #329): shadow a
+    /// same-named scenario-level variable ([`Scenario::vars`]) for
+    /// expressions evaluated inside this scene, and are themselves
+    /// invisible from any other scene — see `rustmotion_core::vars::VarScope`
+    /// for the shadowing rule and why that isolation needs no special-case
+    /// error handling. A variable with no `animation` here is a constant,
+    /// same as at the scenario level.
+    #[serde(default)]
+    pub vars: crate::vars::VarSet,
+    /// The enclosing [`Scenario::vars`] this scene was declared under —
+    /// populated by `Scenario`'s own `Deserialize` impl, *before*
+    /// `include.rs` resolution ever runs, not by `include.rs` itself. Same
+    /// populate-at-deserialize-time note as [`Scene::resolved_time_ctx`]:
+    /// [`ResolvedScenario`] carries no scenario-level fields of its own, so
+    /// anything a scene needs to remember about its enclosing `Scenario`
+    /// has to already be sitting on the `Scene` by the time `include.rs` —
+    /// a file no single workstream owns — merges included scenes in.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_scenario_vars: crate::vars::VarSet,
+}
+
+/// The literal string `"auto"` — the only value [`SceneStart::Auto`] can
+/// hold. Its own tiny externally-tagged enum so it round-trips as the bare
+/// string `"auto"` (serde's default representation for a fieldless
+/// variant), matching every other `snake_case` string enum in this file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneStartAuto {
+    Auto,
+}
+
+/// When a scene starts, on the scenario's absolute timeline. See
+/// [`Scene::at`].
+///
+/// Not `#[derive(Deserialize)]` (see [`SceneStartDe`] / its manual
+/// `Deserialize` impl just below): a syntactically malformed `at` — `"at":
+/// "banana"` — must be rejected the moment the scenario is deserialized,
+/// not discovered later as a silent fallback to automatic placement. A
+/// derive can't express that extra grammar check, only the untagged
+/// try-`"auto"`-then-`TimePoint` shape.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SceneStart {
+    /// Immediately after the previous scene's own window ends. Serializes
+    /// and deserializes as the bare string `"auto"`.
+    Auto(SceneStartAuto),
+    /// An explicit point on the scenario's absolute timeline. Grammar is
+    /// validated at deserialize time via
+    /// [`TimePoint::validate_grammar`](super::time::TimePoint::validate_grammar)
+    /// — resolving it (which additionally needs `bpm` for a beat unit) is a
+    /// separate, later step: `rustmotion validate`'s schema pass, which can
+    /// name the offending scene and report `unresolved_beat_unit` — see
+    /// `crates/rustmotion/src/cli/commands/validate_schema.rs`.
+    At(TimePoint),
+}
+
+/// The wire shape of [`SceneStart`] — see that type's doc for why this
+/// exists instead of a derive. Kept private: nothing outside this module
+/// should ever see one directly.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SceneStartDe {
+    Auto(SceneStartAuto),
+    At(TimePoint),
+}
+
+impl<'de> Deserialize<'de> for SceneStart {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        match SceneStartDe::deserialize(deserializer)? {
+            SceneStartDe::Auto(a) => Ok(SceneStart::Auto(a)),
+            SceneStartDe::At(tp) => {
+                tp.validate_grammar().map_err(D::Error::custom)?;
+                Ok(SceneStart::At(tp))
+            }
+        }
+    }
+}
+
+impl Default for SceneStart {
+    fn default() -> Self {
+        SceneStart::Auto(SceneStartAuto::Auto)
+    }
+}
+
+impl SceneStart {
+    fn is_auto(&self) -> bool {
+        matches!(self, SceneStart::Auto(_))
+    }
+}
+
+/// How a scene behaves when it is rendered past its own `duration` because
+/// the *next* scene's transition overlaps into it. See [`Scene::tail`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTail {
+    /// Hold the scene's last frame for the overlap — the same
+    /// fixed-non-advancing-time effect `freeze_at` produces.
+    #[default]
+    Freeze,
+    /// Let the scene's own animations keep running past its declared
+    /// `duration` for the overlap.
+    Continue,
+}
+
+impl SceneTail {
+    fn is_default_freeze(&self) -> bool {
+        matches!(self, SceneTail::Freeze)
+    }
 }
 
 /// Virtual camera for pan/zoom/rotation effects at the scene level.
@@ -550,6 +1093,27 @@ pub enum PostEffect {
         #[serde(default = "default_blur_max_radius")]
         max_radius: f32,
     },
+    /// A full-frame flash that decays from `intensity` to zero over
+    /// `duration`, starting at `at` — issue #330's companion to
+    /// [`super::shake::SceneShake`]: the reference reel this pair was
+    /// built for lights one of these on every shake impact, so a beat-grid
+    /// `at` can share the same value the matching
+    /// [`super::shake::ShakeImpact::at`] uses. `at` is a [`TimePoint`],
+    /// resolved the same way as any other in-scene time (relative to the
+    /// scene's own start unless `@`-prefixed).
+    Flash {
+        /// When the flash starts, on the scene's own timeline.
+        at: TimePoint,
+        /// Flash colour as a hex string. Default: `"#FFFFFF"`.
+        #[serde(default = "default_flash_color")]
+        color: String,
+        /// Peak strength, clamped to 0..1, at `t = at`. Default: 0.6.
+        #[serde(default = "default_flash_intensity")]
+        intensity: f32,
+        /// How long the flash takes to decay to zero, in seconds. Default: 0.15.
+        #[serde(default = "default_flash_duration")]
+        duration: f32,
+    },
 }
 
 fn default_grain_intensity() -> f32 {
@@ -575,6 +1139,15 @@ fn default_blur_start() -> f32 {
 }
 fn default_blur_max_radius() -> f32 {
     12.0
+}
+fn default_flash_color() -> String {
+    "#FFFFFF".to_string()
+}
+fn default_flash_intensity() -> f32 {
+    0.6
+}
+fn default_flash_duration() -> f32 {
+    0.15
 }
 
 /// Scene-level flex layout configuration
@@ -1092,5 +1665,202 @@ mod camera_keyframe_property_tests {
             msg.contains("origin.x"),
             "expected a did-you-mean nudge toward origin.x, got: {msg}"
         );
+    }
+}
+
+/// Issue #336 follow-up: an unresolvable `Scene.at` must be a hard,
+/// located error, not a silent fallback — grammar at deserialize time,
+/// `unresolved_beat_unit` (needs `bpm`) at `rustmotion validate`'s schema
+/// pass (`crates/rustmotion/src/cli/commands/validate_schema.rs`, not
+/// exercised from this crate).
+#[cfg(test)]
+mod scene_at_grammar_tests {
+    use super::*;
+
+    fn scenario_with_at(at: &str) -> String {
+        format!(
+            r#"{{
+                "video": {{ "width": 100, "height": 100 }},
+                "scenes": [
+                    {{ "duration": 1.0, "children": [] }},
+                    {{ "duration": 1.0, "children": [], "at": {at} }}
+                ]
+            }}"#
+        )
+    }
+
+    #[test]
+    fn syntactically_malformed_at_is_rejected_at_deserialize_time() {
+        let json = scenario_with_at(r#""banana""#);
+        let err = serde_json::from_str::<Scenario>(&json)
+            .expect_err("a malformed `at` must fail to deserialize, not fall back silently");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot parse time"),
+            "expected the grammar error to surface, got: {msg}"
+        );
+        assert!(msg.contains("banana"), "got: {msg}");
+    }
+
+    #[test]
+    fn grammatically_valid_beat_unit_deserializes_even_with_no_bpm() {
+        // Resolving "@8b" needs `bpm`; the grammar alone does not, and
+        // resolution is a separate, later step (validate's schema pass).
+        let json = scenario_with_at(r#""@8b""#);
+        let scenario: Scenario =
+            serde_json::from_str(&json).expect("grammar-valid `at` must deserialize");
+        let SceneEntry::Scene(ref scene) = scenario.scenes[1] else {
+            panic!("expected a Scene entry");
+        };
+        assert!(matches!(scene.at, SceneStart::At(TimePoint::Spec(ref s)) if s == "@8b"));
+    }
+
+    #[test]
+    fn auto_and_plain_seconds_still_deserialize() {
+        let json = scenario_with_at(r#""auto""#);
+        let scenario: Scenario = serde_json::from_str(&json).expect("auto must deserialize");
+        let SceneEntry::Scene(ref scene) = scenario.scenes[1] else {
+            panic!("expected a Scene entry");
+        };
+        assert!(matches!(scene.at, SceneStart::Auto(_)));
+
+        let json = scenario_with_at("2.5");
+        let scenario: Scenario = serde_json::from_str(&json).expect("bare number must deserialize");
+        let SceneEntry::Scene(ref scene) = scenario.scenes[1] else {
+            panic!("expected a Scene entry");
+        };
+        assert!(matches!(scene.at, SceneStart::At(TimePoint::Seconds(s)) if s == 2.5));
+    }
+}
+
+/// Issue #330: `Scene.shake` and `PostEffect::Flash`.
+#[cfg(test)]
+mod scene_shake_and_flash_tests {
+    use super::*;
+
+    #[test]
+    fn scene_shake_is_absent_by_default() {
+        let json = r#"{ "duration": 1.0, "children": [] }"#;
+        let scene: Scene = serde_json::from_str(json).unwrap();
+        assert!(scene.shake.is_none());
+    }
+
+    #[test]
+    fn scene_shake_deserializes_with_six_impacts_on_the_beat_grid() {
+        let json = r##"{
+            "duration": 4.0,
+            "children": [],
+            "shake": {
+                "impacts": [
+                    { "at": "0b", "amplitude": 24.0 },
+                    { "at": "4b", "amplitude": 20.0 },
+                    { "at": "8b", "amplitude": 20.0 },
+                    { "at": "12b", "amplitude": 16.0 },
+                    { "at": "16b", "amplitude": 16.0 },
+                    { "at": "20b", "amplitude": 12.0 }
+                ],
+                "decay": 12.0,
+                "frequency": 22.0,
+                "rotation": 0.3
+            }
+        }"##;
+        let scene: Scene = serde_json::from_str(json).unwrap();
+        let shake = scene.shake.expect("shake must deserialize");
+        assert_eq!(shake.impacts.len(), 6);
+        assert_eq!(shake.decay, 12.0);
+        assert_eq!(shake.frequency, 22.0);
+        assert_eq!(shake.rotation, 0.3);
+    }
+
+    #[test]
+    fn scene_shake_and_camera_coexist_on_the_same_scene() {
+        // Additive over `camera` (issue #330's own requirement): a scene
+        // must be able to declare both without either being rejected or
+        // silently dropping the other.
+        let json = r#"{
+            "duration": 2.0,
+            "children": [],
+            "camera": { "zoom": 1.2 },
+            "shake": { "impacts": [ { "at": 0.5, "amplitude": 10.0 } ] }
+        }"#;
+        let scene: Scene = serde_json::from_str(json).unwrap();
+        assert!(scene.camera.is_some());
+        assert!(scene.shake.is_some());
+    }
+
+    #[test]
+    fn misspelled_shake_field_is_rejected() {
+        let json = r#"{
+            "video": { "width": 100, "height": 100 },
+            "scenes": [ {
+                "duration": 1.0,
+                "children": [],
+                "shake": { "impacts": [], "decayy": 5.0 }
+            } ]
+        }"#;
+        let err = serde_json::from_str::<Scenario>(json).expect_err("must fail");
+        assert!(err.to_string().contains("decayy"), "got: {err}");
+    }
+
+    #[test]
+    fn post_effect_flash_deserializes_and_defaults() {
+        let json = r#"{ "type": "flash", "at": "4b" }"#;
+        let effect: PostEffect = serde_json::from_str(json).unwrap();
+        match effect {
+            PostEffect::Flash {
+                at,
+                color,
+                intensity,
+                duration,
+            } => {
+                assert_eq!(at, TimePoint::Spec("4b".to_string()));
+                assert_eq!(color, "#FFFFFF");
+                assert_eq!(intensity, 0.6);
+                assert_eq!(duration, 0.15);
+            }
+            other => panic!("expected Flash, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn post_effect_flash_accepts_every_known_field() {
+        let json = r##"{
+            "type": "flash",
+            "at": 1.2,
+            "color": "#FF3300",
+            "intensity": 0.9,
+            "duration": 0.08
+        }"##;
+        let effect: PostEffect = serde_json::from_str(json).unwrap();
+        match effect {
+            PostEffect::Flash {
+                at,
+                color,
+                intensity,
+                duration,
+            } => {
+                assert_eq!(at, TimePoint::Seconds(1.2));
+                assert_eq!(color, "#FF3300");
+                assert_eq!(intensity, 0.9);
+                assert_eq!(duration, 0.08);
+            }
+            other => panic!("expected Flash, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scene_effects_accept_a_flash_alongside_other_post_effects() {
+        let json = r#"{
+            "duration": 1.0,
+            "children": [],
+            "effects": [
+                { "type": "flash", "at": "0b" },
+                { "type": "grain", "intensity": 0.1 }
+            ]
+        }"#;
+        let scene: Scene = serde_json::from_str(json).unwrap();
+        assert_eq!(scene.effects.len(), 2);
+        assert!(matches!(scene.effects[0], PostEffect::Flash { .. }));
+        assert!(matches!(scene.effects[1], PostEffect::Grain { .. }));
     }
 }
